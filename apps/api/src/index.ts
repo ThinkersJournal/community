@@ -1,5 +1,6 @@
 import { handleTestRoute } from "./routes/__test";
 import { handleCreatePost, handleListPosts } from "./routes/posts";
+import { handleSignup } from "./routes/signup";
 import { handleVerifyEmail } from "./routes/verify-email";
 
 export { UserSecurityDO } from "./durable-objects/UserSecurityDO";
@@ -19,6 +20,10 @@ export default {
 
     if (request.method === "GET" && pathname === "/health") {
       return new Response("ok", { status: 200 });
+    }
+
+    if (request.method === "POST" && pathname === "/auth/signup") {
+      return await handleSignup(request, env, ctx);
     }
 
     if (request.method === "GET" && pathname === "/verify-email") {
