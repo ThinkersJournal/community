@@ -1,4 +1,5 @@
 import { handleTestRoute } from "./routes/__test";
+import { handleCreatePost, handleListPosts } from "./routes/posts";
 import { handleVerifyEmail } from "./routes/verify-email";
 
 export { UserSecurityDO } from "./durable-objects/UserSecurityDO";
@@ -22,6 +23,16 @@ export default {
 
     if (request.method === "GET" && pathname === "/verify-email") {
       return await handleVerifyEmail(request, env, ctx);
+    }
+
+    // Content routes (M1 stub — Task 13 wires just enough to exercise the
+    // soft email-verification gate; Task 16 replaces this with the full
+    // mutating pipeline). GET is deliberately NOT gated: reads stay open.
+    if (request.method === "GET" && pathname === "/posts") {
+      return await handleListPosts();
+    }
+    if (request.method === "POST" && pathname === "/posts") {
+      return await handleCreatePost(request, env, ctx);
     }
 
     // TEST-ONLY routes. `handleTestRoute` returns null when `TEST_ROUTES` is
