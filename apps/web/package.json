@@ -1,0 +1,7 @@
+{
+  "name": "@thinkersjournal/web",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

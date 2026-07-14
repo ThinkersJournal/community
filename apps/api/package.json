@@ -1,0 +1,7 @@
+{
+  "name": "@thinkersjournal/api",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}
