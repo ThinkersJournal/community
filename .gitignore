@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.astro/
+.output/
+build/
+
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Test artifacts
+coverage/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Brainstorm/SDD scratch (session-local; contains keys)
+/.superpowers/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
