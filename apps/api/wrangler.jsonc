@@ -35,6 +35,14 @@
       "id": "PLACEHOLDER_SESSIONS_KV_ID_SET_AT_DEPLOY"
     }
   ],
+  // Per-user monotonic "security epoch" counter (logout-all / password-change
+  // revocation, Tasks 16-17). New DO namespaces must use `new_sqlite_classes`
+  // (KV-backed `new_classes` is blocked for new namespaces as of July 2026);
+  // the migration `tag` is mandatory or the first dev/test run fails.
+  "durable_objects": {
+    "bindings": [{ "name": "USER_SECURITY", "class_name": "UserSecurityDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserSecurityDO"] }],
   "observability": {
     "enabled": true
   }

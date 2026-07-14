@@ -1,3 +1,5 @@
+export { UserSecurityDO } from "./durable-objects/UserSecurityDO";
+
 export default {
   fetch(request: Request, _env: Env, _ctx: ExecutionContext): Response {
     const { pathname } = new URL(request.url);
