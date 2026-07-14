@@ -13,11 +13,11 @@
     "@types/node": "26.1.1",
     "@types/pg": "^8.20.0",
     "node-pg-migrate": "8.0.4",
-    "pg": "8.22.0",
     "vitest": "4.1.10",
     "wrangler": "4.110.0"
   },
   "dependencies": {
-    "argon2id": "^1.0.1"
+    "argon2id": "^1.0.1",
+    "pg": "8.22.0"
   }
 }

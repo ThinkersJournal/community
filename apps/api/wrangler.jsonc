@@ -5,6 +5,27 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-13",
   "compatibility_flags": ["nodejs_compat"],
+  // Dual Hyperdrive bindings over the same Postgres.
+  //   HYPERDRIVE_FRESH  = cache-disabled (`--caching-disabled`) — used for ALL
+  //     auth / session / permission / dup-email / verify / read-after-write
+  //     reads. Hyperdrive never invalidates on write, so a cached auth/verify
+  //     read is a real security bug.
+  //   HYPERDRIVE_CACHED = 60s cache — ONLY public feeds/listings.
+  // The `id`s are FAKE PLACEHOLDERS until Task 6b, which creates the real
+  // configs at first deploy (`wrangler hyperdrive create tj-cached ...` and
+  // `... tj-fresh ... --caching-disabled`) and pastes the returned ids here.
+  // Local tests resolve both bindings to the test DB via `miniflare.hyperdrives`
+  // in vitest.config.ts, so these ids are never dereferenced in tests.
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE_CACHED",
+      "id": "PLACEHOLDER_CACHED_ID_SET_IN_TASK_6B"
+    },
+    {
+      "binding": "HYPERDRIVE_FRESH",
+      "id": "PLACEHOLDER_FRESH_ID_SET_IN_TASK_6B"
+    }
+  ],
   "observability": {
     "enabled": true
   }
