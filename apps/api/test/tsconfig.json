@@ -1,0 +1,12 @@
+{
+  // Test project: extends the source project's options and adds the pool's
+  // test-only types. `@cloudflare/vitest-pool-workers/types` declares the
+  // `cloudflare:test` module (env, createExecutionContext, waitOnExecutionContext,
+  // ...). Runtime globals + `Cloudflare.Env` still come from the generated
+  // `../src/worker-configuration.d.ts`, which is included explicitly.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/vitest-pool-workers/types"]
+  },
+  "include": ["./**/*.ts", "../src/worker-configuration.d.ts"]
+}
