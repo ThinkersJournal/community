@@ -103,6 +103,16 @@ export default defineConfig({
                 HYPERDRIVE_CACHED: TEST_DATABASE_URL,
                 HYPERDRIVE_FRESH: TEST_DATABASE_URL,
               },
+              // `TURNSTILE_SECRET_KEY` is a SECRET (see src/auth/turnstile.ts):
+              // real values live in the gitignored `apps/api/.dev.vars`, so
+              // CI checkouts never have one. Supply Cloudflare's published
+              // dummy "always passes" secret directly here so `test/
+              // turnstile.test.ts` (and any test touching `env.
+              // TURNSTILE_SECRET_KEY`) is CI-safe without depending on
+              // `.dev.vars` existing at test-run time.
+              bindings: {
+                TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
+              },
             },
           }),
         ],
