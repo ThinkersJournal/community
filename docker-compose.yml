@@ -1,0 +1,37 @@
+# Local development + test database for the Thinker's Journal `api` Worker.
+#
+# Brings up a single Postgres 16 server exposing two databases:
+#   - `thinkersjournal`      (dev DB, created by POSTGRES_DB)
+#   - `thinkersjournal_test` (test DB, created by db/init/01-create-test-db.sql)
+#
+# Usage:
+#   docker compose up -d          # start, creating both databases
+#   docker compose exec -T db pg_isready -U postgres   # readiness probe
+#   docker compose down           # stop (keeps the named volume)
+#   docker compose down -v        # stop and wipe data
+services:
+  db:
+    image: postgres:16
+    container_name: thinkersjournal-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: thinkersjournal
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Init scripts run ONLY on first boot of an empty data directory. The test
+      # DB is created here (postgres has no multi-db env var).
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # `pg_isready` against the default DB; the container is only "healthy"
+      # once Postgres accepts connections.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d thinkersjournal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:

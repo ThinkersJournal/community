@@ -1,0 +1,12 @@
+{
+  // Node test project: type-checks the DB migration test (`*.db.test.ts`) and
+  // the migration globalSetup (`global-setup.ts`). These run in a plain Node
+  // environment with a direct `pg` connection — NOT in workerd — so they use
+  // Node types (`process.env`, `node:url`) and the `pg` / `node-pg-migrate`
+  // module types, kept separate from the workerd `cloudflare:test` scope.
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["./**/*.db.test.ts", "./global-setup.ts"]
+}

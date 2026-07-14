@@ -3,11 +3,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json",
-    "test": "vitest run"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json && tsc --noEmit -p test/tsconfig.node.json",
+    "test": "vitest run",
+    "migrate": "node scripts/migrate.mjs dev up",
+    "migrate:test": "node scripts/migrate.mjs test up"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.18.4",
+    "@types/node": "26.1.1",
+    "@types/pg": "^8.20.0",
+    "node-pg-migrate": "8.0.4",
+    "pg": "8.22.0",
     "vitest": "4.1.10",
     "wrangler": "4.110.0"
   },

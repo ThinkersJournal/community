@@ -1,16 +1,45 @@
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
-// `@cloudflare/vitest-pool-workers@0.18.x` (Vitest 4) exposes its integration as
-// the `cloudflareTest()` Vite plugin. The older `defineWorkersConfig` /
-// `defineWorkersProject` exports from `@cloudflare/vitest-pool-workers/config`
-// were removed in this line — there is no `./config` subpath in the installed
-// package. Options previously nested under `test.poolOptions.workers` are now
-// passed directly to `cloudflareTest()`.
+// The api package runs tests in TWO environments from a single `vitest run`:
+//
+//   1. "pool"  — the existing Worker tests (health, password) run inside REAL
+//                workerd via `@cloudflare/vitest-pool-workers` (the
+//                `cloudflareTest()` plugin, scoped to this project).
+//   2. "node"  — this task's migration/schema test (`*.db.test.ts`) runs in a
+//                plain Node environment with a direct `pg` TCP connection to
+//                Postgres. It cannot run in workerd (needs node-pg-migrate + pg
+//                + information_schema, and there is no Hyperdrive binding yet).
+//
+// `cloudflareTest()` is a Vitest plugin whose `configureVitest` hook sets the
+// pool on `context.project` only, so placing it in the pool project's `plugins`
+// keeps workerd out of the Node project.
 export default defineConfig({
-  plugins: [
-    cloudflareTest({
-      wrangler: { configPath: "./wrangler.jsonc" },
-    }),
-  ],
+  test: {
+    // Applies the DB migrations ONCE in Node before any project runs. Idempotent
+    // (node-pg-migrate's `pgmigrations` table). Declared at the root so it also
+    // covers Task 6's pool DB tests (Hyperdrive → same test DB).
+    globalSetup: ["./test/global-setup.ts"],
+    projects: [
+      {
+        plugins: [
+          cloudflareTest({
+            wrangler: { configPath: "./wrangler.jsonc" },
+          }),
+        ],
+        test: {
+          name: "pool",
+          include: ["test/**/*.test.ts"],
+          exclude: [...configDefaults.exclude, "test/**/*.db.test.ts"],
+        },
+      },
+      {
+        test: {
+          name: "node",
+          environment: "node",
+          include: ["test/**/*.db.test.ts"],
+        },
+      },
+    ],
+  },
 });
