@@ -103,15 +103,24 @@ export default defineConfig({
                 HYPERDRIVE_CACHED: TEST_DATABASE_URL,
                 HYPERDRIVE_FRESH: TEST_DATABASE_URL,
               },
-              // `TURNSTILE_SECRET_KEY` is a SECRET (see src/auth/turnstile.ts):
-              // real values live in the gitignored `apps/api/.dev.vars`, so
-              // CI checkouts never have one. Supply Cloudflare's published
-              // dummy "always passes" secret directly here so `test/
-              // turnstile.test.ts` (and any test touching `env.
-              // TURNSTILE_SECRET_KEY`) is CI-safe without depending on
+              // Values for vars/secrets that live in the gitignored
+              // `apps/api/.dev.vars`, so CI checkouts never have them. Supplied
+              // directly here to keep the suite CI-safe without depending on
               // `.dev.vars` existing at test-run time.
               bindings: {
+                // A SECRET (see src/auth/turnstile.ts). Cloudflare's published
+                // dummy "always passes" secret.
                 TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
+                // A SECRET (see src/auth/email-verify.ts). Never used against
+                // the real API: test/email-verify.test.ts stubs global `fetch`
+                // and asserts this exact value is sent as the Postmark header.
+                POSTMARK_SERVER_TOKEN: "test-postmark-token",
+                // Gates the TEST-ONLY `GET /__test/last-verify-token` route
+                // (src/routes/__test.ts). Set HERE (and in .dev.vars) but NEVER
+                // in wrangler.jsonc's `vars` — in production it must be unset,
+                // which makes that route 404 like any nonexistent path.
+                // test/email-verify.test.ts covers BOTH states.
+                TEST_ROUTES: "1",
               },
             },
           }),

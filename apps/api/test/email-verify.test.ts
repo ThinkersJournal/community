@@ -1,0 +1,296 @@
+import {
+  createExecutionContext,
+  env,
+  waitOnExecutionContext,
+} from "cloudflare:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import worker from "../src";
+import {
+  consumeVerificationToken,
+  createVerificationToken,
+  sendVerificationEmail,
+  TEST_LAST_TOKEN_KEY,
+} from "../src/auth/email-verify";
+import { withClient } from "../src/db/client";
+
+/**
+ * Task 12 — email verification: one-time tokens, the Postmark send, the
+ * `GET /verify-email` route, and the TEST-ONLY token-exposure route.
+ *
+ * Runs in the POOL project (real workerd) because it needs the `SESSIONS` KV
+ * and `HYPERDRIVE_FRESH` bindings, plus the Worker's `fetch` handler.
+ *
+ * `cloudflare:test` does NOT export undici's `fetchMock` in the installed
+ * `@cloudflare/vitest-pool-workers@0.18.4` (see test/turnstile.test.ts for the
+ * verification), so the Postmark test stubs the global `fetch` with
+ * `vi.stubGlobal` and restores it in `afterEach` — otherwise the stub leaks
+ * into sibling pool test files sharing this workerd isolate.
+ */
+
+// `users.password_hash` is NOT NULL — a valid PHC-encoded argon2id string.
+const PASSWORD_HASH = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$ZGlnZXN0";
+
+/** Rows created by a test, deleted in `afterEach`. */
+const createdUserIds: string[] = [];
+
+/** INSERT a user with a per-run-unique email; returns its generated id. */
+async function insertUser(): Promise<string> {
+  const ctx = createExecutionContext();
+  const email = `t12_${crypto.randomUUID()}@example.com`;
+  const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query(
+      "INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id",
+      [email, PASSWORD_HASH],
+    );
+    return rows[0].id as string;
+  });
+  await waitOnExecutionContext(ctx);
+  createdUserIds.push(id);
+  return id;
+}
+
+/** Read a user's `email_verified_at` through the FRESH (cache-disabled) binding. */
+async function readVerifiedAt(userId: string): Promise<Date | null> {
+  const ctx = createExecutionContext();
+  const value = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query(
+      "SELECT email_verified_at FROM users WHERE id = $1",
+      [userId],
+    );
+    return (rows[0]?.email_verified_at ?? null) as Date | null;
+  });
+  await waitOnExecutionContext(ctx);
+  return value;
+}
+
+beforeEach(async () => {
+  // Verification tokens AND the `__test:` stash both live in SESSIONS; clear it
+  // so each case is independent of the last.
+  let cursor: string | undefined;
+  do {
+    const result = await env.SESSIONS.list(cursor ? { cursor } : undefined);
+    await Promise.all(result.keys.map((k) => env.SESSIONS.delete(k.name)));
+    cursor = result.list_complete ? undefined : result.cursor;
+  } while (cursor !== undefined);
+});
+
+afterEach(async () => {
+  // Restore the global `fetch` so the Postmark stub never leaks into sibling
+  // pool test files.
+  vi.unstubAllGlobals();
+
+  if (createdUserIds.length > 0) {
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query("DELETE FROM users WHERE id = ANY($1::uuid[])", [createdUserIds]),
+    );
+    await waitOnExecutionContext(ctx);
+    createdUserIds.length = 0;
+  }
+});
+
+describe("verification tokens", () => {
+  it("consumes a token exactly once (a replay returns null)", async () => {
+    const userId = crypto.randomUUID();
+    const token = await createVerificationToken(env, userId);
+
+    expect(await consumeVerificationToken(env, token)).toBe(userId);
+    // ONE-TIME: the first consume deleted the key, so a replay finds nothing.
+    expect(await consumeVerificationToken(env, token)).toBeNull();
+  });
+
+  it("returns null for an unknown token", async () => {
+    expect(await consumeVerificationToken(env, "not-a-real-token")).toBeNull();
+  });
+
+  it("stores the token HASHED — KV never holds the raw token", async () => {
+    const userId = crypto.randomUUID();
+    const token = await createVerificationToken(env, userId);
+
+    // The raw token must not be a KV key ...
+    expect(await env.SESSIONS.get(`verify-email:${token}`)).toBeNull();
+
+    // ... and the only `verify-email:` key present is the sha256 hex of it.
+    const { keys } = await env.SESSIONS.list({ prefix: "verify-email:" });
+    expect(keys).toHaveLength(1);
+    expect(keys[0]!.name).toMatch(/^verify-email:[0-9a-f]{64}$/);
+  });
+
+  it("stores the token with a 24h TTL", async () => {
+    const before = Math.floor(Date.now() / 1000);
+    await createVerificationToken(env, crypto.randomUUID());
+
+    const { keys } = await env.SESSIONS.list({ prefix: "verify-email:" });
+    const expiration = keys[0]!.expiration;
+    expect(expiration).toBeDefined();
+    // 86_400s from now, allowing a couple of seconds of clock slop.
+    expect(expiration!).toBeGreaterThanOrEqual(before + 86_400 - 5);
+    expect(expiration!).toBeLessThanOrEqual(before + 86_400 + 5);
+  });
+});
+
+describe("GET /verify-email", () => {
+  it("consumes the token and sets email_verified_at", async () => {
+    const userId = await insertUser();
+    expect(await readVerifiedAt(userId)).toBeNull();
+
+    const token = await createVerificationToken(env, userId);
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(
+        `https://api.test/verify-email?token=${encodeURIComponent(token)}`,
+      ),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(200);
+    // Read back through FRESH (cache-disabled) — a CACHED read-after-write here
+    // would be a security bug.
+    expect(await readVerifiedAt(userId)).not.toBeNull();
+  });
+
+  it("rejects an unknown token with a 400 (not a 500)", async () => {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/verify-email?token=bogus"),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a missing token with a 400 (not a 500)", async () => {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/verify-email"),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(400);
+  });
+
+  it("does not re-verify on a replayed token", async () => {
+    const userId = await insertUser();
+    const token = await createVerificationToken(env, userId);
+    const url = `https://api.test/verify-email?token=${encodeURIComponent(token)}`;
+
+    const ctx = createExecutionContext();
+    const first = await worker.fetch(new Request(url), env, ctx);
+    const second = await worker.fetch(new Request(url), env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(400);
+  });
+});
+
+describe("sendVerificationEmail", () => {
+  it("POSTs the Postmark request with the documented shape", async () => {
+    let capturedUrl: string | undefined;
+    let capturedInit: RequestInit | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        capturedUrl = String(input);
+        capturedInit = init;
+        return new Response(JSON.stringify({ ErrorCode: 0 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    const url = "https://thinkersjournal.com/verify-email?token=abc123";
+    await sendVerificationEmail(env, "reader@example.com", url);
+
+    expect(capturedUrl).toBe("https://api.postmarkapp.com/email");
+    expect(capturedInit?.method).toBe("POST");
+
+    const headers = new Headers(capturedInit?.headers);
+    expect(headers.get("X-Postmark-Server-Token")).toBe(
+      env.POSTMARK_SERVER_TOKEN,
+    );
+    expect(headers.get("content-type")).toBe("application/json");
+
+    const body = JSON.parse(String(capturedInit?.body)) as Record<
+      string,
+      unknown
+    >;
+    // `From` MUST be the confirmed sender — a non-confirmed sender fails
+    // silently in production.
+    expect(body.From).toBe("noreply@thinkersjournal.com");
+    expect(body.To).toBe("reader@example.com");
+    expect(body.MessageStream).toBe("outbound");
+    expect(body.Subject).toEqual(expect.any(String));
+    expect(String(body.TextBody)).toContain(url);
+    expect(String(body.HtmlBody)).toContain(url);
+  });
+});
+
+describe("GET /__test/last-verify-token", () => {
+  it("returns the last raw token when TEST_ROUTES is set", async () => {
+    const userId = crypto.randomUUID();
+    const token = await createVerificationToken(env, userId);
+
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/__test/last-verify-token"),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(token);
+  });
+
+  it("stashes the raw token under the fixed TEST key", async () => {
+    const token = await createVerificationToken(env, crypto.randomUUID());
+    expect(await env.SESSIONS.get(TEST_LAST_TOKEN_KEY)).toBe(token);
+  });
+
+  // THE GATE. This route hands out a token that verifies an arbitrary account;
+  // reaching production it would be a full account-takeover vector. With
+  // TEST_ROUTES unset it must be indistinguishable from a nonexistent route.
+  it("404s when TEST_ROUTES is unset — same as a nonexistent route", async () => {
+    await createVerificationToken(env, crypto.randomUUID());
+
+    // The pool sets TEST_ROUTES via `miniflare.bindings`; simulate production
+    // (where the var is simply absent) by overriding it to undefined. The cast
+    // is required because `wrangler types` types every var as a plain `string`.
+    const prodEnv = { ...env, TEST_ROUTES: undefined } as unknown as Env;
+
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/__test/last-verify-token"),
+      prodEnv,
+      ctx,
+    );
+    const nonexistent = await worker.fetch(
+      new Request("https://api.test/does-not-exist"),
+      prodEnv,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(404);
+    // Byte-for-byte identical to a genuine 404: the gate leaks nothing, not
+    // even the route's existence.
+    expect(await response.text()).toBe(await nonexistent.text());
+  });
+
+  it("does not stash the raw token when TEST_ROUTES is unset", async () => {
+    const prodEnv = { ...env, TEST_ROUTES: undefined } as unknown as Env;
+
+    await createVerificationToken(prodEnv, crypto.randomUUID());
+
+    expect(await env.SESSIONS.get(TEST_LAST_TOKEN_KEY)).toBeNull();
+  });
+});
