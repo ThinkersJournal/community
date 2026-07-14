@@ -1,4 +1,6 @@
 {
+  // After changing bindings in this file, run 'wrangler types' and commit the
+  // regenerated src/worker-configuration.d.ts (it types both Env and Cloudflare.Env).
   "name": "thinkersjournal-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-13",
