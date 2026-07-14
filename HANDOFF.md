@@ -8,6 +8,17 @@ This repo is **self-contained**: everything needed to continue is committed here
 
 **Status:** design complete + approved; implementation begins at **M0**. Private repo; kept quiet until launch scope (M0–M4) is done.
 
+## Documentation map — everything lives in THIS repo
+
+All Thinker's Journal **Community** documentation lives here (not in the sibling marketing-site project). The design is written **once for the whole platform**; implementation plans are added **one per milestone** as we build.
+
+- `docs/superpowers/specs/2026-07-13-community-platform-design.md` — **the whole-platform design (M0 → M4 + post-launch):** product, all decisions, architecture, cost model, cost-recovery/legal, and the full build sequence. The reference for planning *every* milestone.
+- `docs/superpowers/specs/2026-07-13-community-platform-architecture-research.md` — the deep research + adversarial review behind the design.
+- `docs/superpowers/plans/` — **one implementation plan per milestone.** `2026-07-13-m0-foundations.md` exists now; **M1–M4 plans get written here** (via `superpowers:writing-plans` against the design spec) as each milestone is reached, then built.
+- `HANDOFF.md` (this file) — session entry point + carry-over context.
+
+**Pattern for every milestone after M0:** open a session in this repo → read the design spec → run `superpowers:writing-plans` for that milestone → the new plan lands in `docs/superpowers/plans/` → build it (subagent-driven). Nothing depends on the other project; this repo also grows its own Claude memory as you work.
+
 ## ▶ To build M0 (the next action)
 
 1. Read the design spec + the M0 plan:
