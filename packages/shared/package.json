@@ -1,5 +1,6 @@
 {
   "name": "@thinkersjournal/shared",
+  "private": true,
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit"

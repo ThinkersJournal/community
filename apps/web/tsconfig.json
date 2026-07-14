@@ -1,5 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
   "include": ["src", "test"],
+  // "files": [] lets an empty package (no src/test yet) typecheck cleanly;
+  // without it tsc errors TS18003 "No inputs were found". "include" still
+  // governs what gets checked once later tasks add sources.
   "files": []
 }
