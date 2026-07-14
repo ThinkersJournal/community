@@ -43,6 +43,29 @@
     "bindings": [{ "name": "USER_SECURITY", "class_name": "UserSecurityDO" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserSecurityDO"] }],
+  // Brute-force defense for signup/login (see src/auth/ratelimit.ts). This is a
+  // TOP-LEVEL wrangler key (not `unsafe.bindings` — that shape is stale/legacy).
+  // NOTE: the key is the PLURAL "ratelimits" — verified against the installed
+  // wrangler 4.110.0's config schema (validateRateLimitBinding /
+  // normalizeAndValidateConfig in wrangler-dist/cli.js), which registers this
+  // field as `ratelimits` and rejects singular "ratelimit" with "Unexpected
+  // fields found in top-level field: 'ratelimit'". `period` MUST be `10` or
+  // `60`; no other value is accepted (enforced by the same validator).
+  // `namespace_id` just needs to be unique per binding within this Worker
+  // (arbitrary small strings are fine — Cloudflare doesn't provision anything
+  // from it for the `simple` algorithm).
+  "ratelimits": [
+    {
+      "name": "SIGNUP_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 5, "period": 60 }
+    },
+    {
+      "name": "LOGIN_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 10, "period": 60 }
+    }
+  ],
   "observability": {
     "enabled": true
   }
