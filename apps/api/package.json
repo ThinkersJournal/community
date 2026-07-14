@@ -17,6 +17,7 @@
     "wrangler": "4.110.0"
   },
   "dependencies": {
+    "@thinkersjournal/shared": "workspace:*",
     "argon2id": "^1.0.1",
     "pg": "8.22.0"
   }

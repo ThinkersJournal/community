@@ -26,6 +26,15 @@
       "id": "PLACEHOLDER_FRESH_ID_SET_IN_TASK_6B"
     }
   ],
+  // Opaque session tokens keyed by `sess:<sha256hex(token)>` (see src/auth/session.ts).
+  // The `id` is a FAKE PLACEHOLDER until the real KV namespace is created at
+  // first deploy (`wrangler kv namespace create SESSIONS`).
+  "kv_namespaces": [
+    {
+      "binding": "SESSIONS",
+      "id": "PLACEHOLDER_SESSIONS_KV_ID_SET_AT_DEPLOY"
+    }
+  ],
   "observability": {
     "enabled": true
   }
