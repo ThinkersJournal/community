@@ -2,6 +2,8 @@
 
 The flagship of [Thinker's Journal](https://thinkersjournal.com): a public **social publishing platform for thinkers** with **live, precise @-references** into their work (the exact file + lines, CI check, PR, or issue on GitHub/GitLab, plus web/YouTube/X).
 
+> **▶ New session / new agent?** Start with **[`HANDOFF.md`](HANDOFF.md)** — the self-contained entry point (this repo's Claude memory is separate from the marketing-site project).
+
 > **Status:** pre-development. The full architecture is designed; implementation begins at milestone **M0**. This repository is **private** and stays quiet until the launch scope (M0–M4) is complete.
 
 ## Two pillars
