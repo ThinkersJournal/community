@@ -11,12 +11,12 @@
  *   1. `TEST_ROUTES` is set ONLY in the gitignored `.dev.vars` (local dev) and
  *      in `miniflare.bindings` in vitest.config.ts (tests). It is deliberately
  *      NOT in wrangler.jsonc's `vars`, so a deploy cannot carry it along.
- *   2. This handler refuses to match at all unless `env.TEST_ROUTES` is truthy,
- *      returning `null` so the caller falls through to its ordinary 404 —
+ *   2. This handler refuses to match at all unless `env.TEST_ROUTES` is exactly
+ *      `"1"`, returning `null` so the caller falls through to its ordinary 404 —
  *      making the route byte-for-byte indistinguishable from a path that does
  *      not exist. It does not 403, which would confirm the route exists.
- *   3. `createVerificationToken` only writes the stash when `TEST_ROUTES` is
- *      set, so in production the KV key this route reads never exists anyway.
+ *   3. `createVerificationToken` only writes the stash under the same `=== "1"`
+ *      condition, so in production the KV key this route reads never exists.
  *
  * test/email-verify.test.ts covers both states, including the unset-TEST_ROUTES
  * 404.
@@ -32,8 +32,15 @@ export async function handleTestRoute(
   request: Request,
   env: Env,
 ): Promise<Response | null> {
-  // THE GATE. Unset TEST_ROUTES ⇒ these routes do not exist.
-  if (!env.TEST_ROUTES) {
+  // THE GATE. Anything other than exactly "1" ⇒ these routes do not exist.
+  //
+  // An EXPLICIT allowlist, NOT a truthiness check: wrangler vars are always
+  // strings, so `TEST_ROUTES="0"` and `TEST_ROUTES="false"` are both TRUTHY —
+  // someone setting "0" to mean "off" would have switched this token-exposure
+  // route ON. Given the blast radius (full account takeover), the only value
+  // that enables these routes is the literal "1". Fail closed on everything
+  // else. Keep this identical to the stash gate in auth/email-verify.ts.
+  if (env.TEST_ROUTES !== "1") {
     return null;
   }
 

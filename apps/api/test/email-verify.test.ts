@@ -77,8 +77,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
   // Restore the global `fetch` so the Postmark stub never leaks into sibling
-  // pool test files.
+  // pool test files, and any `console.error` spy so expected error logs don't
+  // pollute the run.
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 
   if (createdUserIds.length > 0) {
     const ctx = createExecutionContext();
@@ -232,6 +234,142 @@ describe("sendVerificationEmail", () => {
     expect(String(body.TextBody)).toContain(url);
     expect(String(body.HtmlBody)).toContain(url);
   });
+
+  it("escapes the url before interpolating it into HtmlBody", async () => {
+    let capturedInit: RequestInit | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        capturedInit = init;
+        return new Response(JSON.stringify({ ErrorCode: 0 }), { status: 200 });
+      }),
+    );
+
+    // A later task builds this url from a request Host/Origin header, so treat
+    // it as attacker-controlled: it must not be able to break out of the href
+    // attribute and inject markup into mail from our confirmed sender.
+    const hostile =
+      'https://evil.test/verify-email?token=t"><script>alert(1)</script><a href="';
+    await sendVerificationEmail(env, "reader@example.com", hostile);
+
+    const body = JSON.parse(String(capturedInit?.body)) as Record<
+      string,
+      unknown
+    >;
+    const html = String(body.HtmlBody);
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+    // The href attribute is not broken out of: no raw `"` survives from the url.
+    expect(html).toContain("&quot;");
+    // TextBody is not HTML, so it carries the url verbatim.
+    expect(String(body.TextBody)).toContain(hostile);
+  });
+
+  // A failed send must NEVER throw: it is a side effect of signup (Task 14), and
+  // the account already exists by the time it runs. Throwing would 500 a signup
+  // that actually succeeded.
+  it("resolves (does not throw) on a non-2xx response, and logs the status", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Unauthorized", { status: 401 })),
+    );
+
+    await expect(
+      sendVerificationEmail(env, "reader@example.com", "https://x.test/v?t=1"),
+    ).resolves.toBeUndefined();
+
+    expect(errorLog).toHaveBeenCalledWith(
+      "postmark send failed",
+      expect.objectContaining({ status: 401 }),
+    );
+  });
+
+  it("resolves and logs when Postmark returns 200 with a non-zero ErrorCode", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    // How the unconfirmed-sender misconfiguration actually surfaces: HTTP 200,
+    // ErrorCode 400. Previously this was discarded and the send looked fine.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ErrorCode: 400,
+              Message: "Sender signature not confirmed",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+
+    await expect(
+      sendVerificationEmail(env, "reader@example.com", "https://x.test/v?t=1"),
+    ).resolves.toBeUndefined();
+
+    expect(errorLog).toHaveBeenCalledWith(
+      "postmark rejected send",
+      expect.objectContaining({
+        ErrorCode: 400,
+        Message: "Sender signature not confirmed",
+      }),
+    );
+  });
+
+  it("resolves (does not throw) when the fetch itself rejects", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network failure");
+      }),
+    );
+
+    await expect(
+      sendVerificationEmail(env, "reader@example.com", "https://x.test/v?t=1"),
+    ).resolves.toBeUndefined();
+
+    expect(errorLog).toHaveBeenCalledWith(
+      "postmark request threw",
+      expect.any(TypeError),
+    );
+  });
+
+  it("does not log the email or the url — the url embeds the raw token", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("boom", { status: 500 })),
+    );
+
+    const url = "https://x.test/verify-email?token=SUPER-SECRET-TOKEN";
+    await sendVerificationEmail(env, "reader@example.com", url);
+
+    // Logging the url would write an account-takeover credential to the logs.
+    const logged = JSON.stringify(errorLog.mock.calls);
+    expect(logged).not.toContain("SUPER-SECRET-TOKEN");
+    expect(logged).not.toContain("reader@example.com");
+  });
+
+  it("resolves normally on a successful send without logging", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ErrorCode: 0, Message: "OK" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    await expect(
+      sendVerificationEmail(env, "reader@example.com", "https://x.test/v?t=1"),
+    ).resolves.toBeUndefined();
+
+    expect(errorLog).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /__test/last-verify-token", () => {
@@ -293,4 +431,36 @@ describe("GET /__test/last-verify-token", () => {
 
     expect(await env.SESSIONS.get(TEST_LAST_TOKEN_KEY)).toBeNull();
   });
+
+  // Wrangler vars are ALWAYS strings, so "0"/"false" are truthy. A truthiness
+  // gate would read `TEST_ROUTES="0"` — someone's idea of "off" — as ON and
+  // start serving tokens. Only the literal "1" may enable these routes.
+  it.each(["0", "false", "", "no", "true"])(
+    "404s when TEST_ROUTES is %j — only the literal \"1\" enables the route",
+    async (value) => {
+      await createVerificationToken(env, crypto.randomUUID());
+      const otherEnv = { ...env, TEST_ROUTES: value };
+
+      const ctx = createExecutionContext();
+      const response = await worker.fetch(
+        new Request("https://api.test/__test/last-verify-token"),
+        otherEnv,
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(response.status).toBe(404);
+    },
+  );
+
+  it.each(["0", "false"])(
+    "does not stash the raw token when TEST_ROUTES is %j",
+    async (value) => {
+      const otherEnv = { ...env, TEST_ROUTES: value };
+
+      await createVerificationToken(otherEnv, crypto.randomUUID());
+
+      expect(await env.SESSIONS.get(TEST_LAST_TOKEN_KEY)).toBeNull();
+    },
+  );
 });
