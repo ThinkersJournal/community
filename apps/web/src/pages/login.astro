@@ -1,0 +1,108 @@
+---
+/**
+ * `POST /auth/login` through the Service Binding.
+ *
+ * Supports `?next=` so `verify-email.astro` can bounce an unauthenticated user
+ * here and send them straight back to their verification link afterwards (see
+ * that page's LOGIN_REQUIRED handling).
+ */
+import { apiFetch, applyCookies } from "../lib/api";
+
+/**
+ * Where to send the user after a successful login — an OPEN-REDIRECT guard.
+ * `next` is attacker-controllable (it is just a query param, and this page's
+ * link is emailed around by verify-email.astro), so a hostile value must never
+ * reach `Location:`. Anything not provably on THIS origin degrades to "/".
+ *
+ * ⚠️ RESOLVE, don't pattern-match. The obvious guard — "starts with a single
+ * `/`" — is broken: `/\evil.com` satisfies it, yet browsers normalize `\` to
+ * `/` in special schemes (WHATWG URL), so it navigates to `//evil.com`, i.e.
+ * host `evil.com`. Verified: `new URL("/\\evil.com", "http://good.test").host`
+ * === "evil.com". Any regex here is a guess about the browser's parser; running
+ * the SAME parser the browser will run and comparing the resulting origin is
+ * not a guess. Re-serializing from the parsed URL also strips anything clever
+ * in the original spelling.
+ */
+function resolveNext(raw: string | null, base: URL): string {
+  if (raw === null) {
+    return "/";
+  }
+  try {
+    const target = new URL(raw, base);
+    if (target.origin !== base.origin) {
+      return "/";
+    }
+    return target.pathname + target.search;
+  } catch {
+    return "/";
+  }
+}
+
+const next = resolveNext(Astro.url.searchParams.get("next"), Astro.url);
+
+let error: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+
+  const response = await apiFetch("/auth/login", {
+    method: "POST",
+    body: { email: form.get("email"), password: form.get("password") },
+    origin: new URL(Astro.request.url).origin,
+  });
+
+  if (response.status === 200) {
+    // ⚠️ DO NOT REPLACE THIS WITH `Astro.redirect(next)`. That helper returns a
+    // response it builds ITSELF, which does not carry `Astro.response.headers`
+    // — the api's `Set-Cookie` is silently dropped and the user lands back on
+    // the site with no session, i.e. login "succeeds" and leaves them logged
+    // out. (Verified against the running Worker: the 302 came back with a
+    // `Location` and no `Set-Cookie` at all.) Building the redirect here lets
+    // the cookie ride on the very response that performs it.
+    const redirect = new Response(null, {
+      status: 302,
+      headers: { Location: next },
+    });
+    applyCookies(redirect.headers, response.setCookies);
+    return redirect;
+  }
+
+  // Non-200: no redirect, so the page renders below and `Astro.response` IS the
+  // outgoing response. Propagate any cookie the api sent (e.g. a cleared one).
+  applyCookies(Astro.response.headers, response.setCookies);
+
+  // The api answers 401 with a GENERIC failure for both "no such user" and
+  // "wrong password" (it must not confirm which addresses are registered), so
+  // this message stays generic too. Do not "improve" it.
+  error =
+    response.status === 429
+      ? "Too many attempts. Please wait and try again."
+      : "Invalid email or password.";
+}
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Log in</title>
+  </head>
+  <body>
+    <h1>Log in</h1>
+
+    {error !== null && <p id="error">{error}</p>}
+
+    <form method="POST">
+      <label>
+        Email
+        <input type="email" name="email" required />
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" required />
+      </label>
+      <button type="submit">Log in</button>
+    </form>
+
+    <p><a href="/signup">Need an account? Sign up</a></p>
+  </body>
+</html>

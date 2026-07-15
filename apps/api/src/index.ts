@@ -1,4 +1,5 @@
 import { handleTestRoute } from "./routes/__test";
+import { handleCsrf } from "./routes/csrf";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleCreatePost, handleListPosts } from "./routes/posts";
@@ -45,6 +46,14 @@ export default {
 
     if (request.method === "POST" && pathname === "/auth/logout-all") {
       return await handleLogoutAll(request, env, ctx);
+    }
+
+    // Delivers the CSRF token for the caller's session to the `web` Worker,
+    // which embeds it in the HTML it renders. NOT the pipeline (and it must not
+    // be): the pipeline's CSRF step would require the very token this route
+    // issues. See src/routes/csrf.ts for why a GET is the right shape here.
+    if (request.method === "GET" && pathname === "/auth/csrf") {
+      return await handleCsrf(request, env);
     }
 
     // Likewise NOT the pipeline: a GET carries no session/CSRF/epoch

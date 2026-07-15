@@ -1,8 +1,38 @@
 {
-  "extends": "../../tsconfig.base.json",
-  "include": ["src", "test"],
-  // "files": [] lets an empty package (no src/test yet) typecheck cleanly;
-  // without it tsc errors TS18003 "No inputs were found". "include" still
-  // governs what gets checked once later tasks add sources.
-  "files": []
+  // ⚠️ DELIBERATELY EXTENDS ASTRO'S PRESET, NOT ../../tsconfig.base.json.
+  //
+  // This is the one package in the repo that does not extend the repo base, so
+  // here is the reasoning (do not "fix" it back without reading this):
+  //
+  // Astro type-checks `.astro` files through its own language tooling, which
+  // imposes compiler options the repo base neither sets nor wants globally:
+  // `jsx: "preserve"` (an .astro template is internally JSX), `allowJs`,
+  // `isolatedModules`, `allowImportingTsExtensions`, and the `${configDir}`
+  // include of `.astro/types.d.ts` — the GENERATED file that declares
+  // `Astro.locals.runtime.env` (our `API` Service Binding) and is produced by
+  // `astro sync`. Extending the base and re-adding all of that by hand would be
+  // a strictly worse copy of `astro/tsconfigs/strict`, and would drift.
+  //
+  // Nothing is given up by doing this. The base's substantive guarantees are
+  // `strict`, `verbatimModuleSyntax`, and `moduleResolution: "bundler"` — and
+  // `astro/tsconfigs/strict` sets all three identically (it is `base.json` +
+  // `strict: true`). The only real differences are `target: ESNext` vs the
+  // base's ES2022, which is irrelevant under `noEmit`, and the base's
+  // `types: []`, which would be actively wrong here: it exists to keep stray
+  // `@types/*` out of the Workers runtime, whereas this package NEEDS Astro's
+  // ambient client types to resolve `Astro.locals`.
+  //
+  // The base's former `"files": []` is gone on purpose too — it was a
+  // placeholder so an empty `apps/web` could typecheck (TS18003) before this
+  // task added any source. There are real sources now, and leaving it would
+  // silently check NOTHING.
+  //
+  // Relatedly, this package's `typecheck` script is `astro check`, NOT the
+  // `tsc --noEmit` every other package runs: `tsc` does not recognize the
+  // `.astro` extension, so it would quietly check `src/lib/api.ts` alone and
+  // pass while every page went unexamined. `astro check` type-checks the
+  // templates and their frontmatter, and implies `astro sync`.
+  "extends": "astro/tsconfigs/strict",
+  "include": [".astro/types.d.ts", "**/*"],
+  "exclude": ["dist"]
 }

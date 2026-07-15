@@ -1,0 +1,58 @@
+---
+/**
+ * Home page — and the Task 18 ACCEPTANCE PROOF.
+ *
+ * It calls `GET /health` on the `api` Worker through the `API` Service Binding
+ * and renders what came back. That is deliberately more than decoration: if the
+ * binding is misconfigured (wrong `service` name, or the api not passed as a
+ * second `-c` to `wrangler dev`), this page cannot render
+ * "api-status: 200 / ok" — it throws or shows the error branch. So this page
+ * rendering correctly IS the end-to-end evidence that the two-Worker topology
+ * works.
+ */
+import { apiFetch } from "../lib/api";
+
+let status: number | null = null;
+let payload = "";
+let error: string | null = null;
+
+try {
+  // `GET /health` is public — no cookie forwarding needed, so no `request`.
+  // The api answers 200 with the plain-text body "ok" (not JSON), which is
+  // exactly why `apiFetch` must not assume a parseable body: `data` is null
+  // here and that is a SUCCESS.
+  const response = await apiFetch("/health");
+  status = response.status;
+  // ⚠️ Render the api's ACTUAL body, never a hardcoded "ok". This page IS the
+  // Service-Binding proof; printing a literal that happens to match what the
+  // api says would let it "pass" even if the api answered something else
+  // entirely — precisely the self-fulfilling check this page exists not to be.
+  payload = response.text;
+} catch (e) {
+  error = e instanceof Error ? e.message : String(e);
+}
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Thinkers Journal</title>
+  </head>
+  <body>
+    <h1>Thinkers Journal</h1>
+
+    {
+      error === null ? (
+        <p id="api-status">api-status: {status} / {payload}</p>
+      ) : (
+        <p id="api-error">api-error: {error}</p>
+      )
+    }
+
+    <ul>
+      <li><a href="/signup">Sign up</a></li>
+      <li><a href="/login">Log in</a></li>
+      <li><a href="/new-post">New post</a></li>
+    </ul>
+  </body>
+</html>

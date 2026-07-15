@@ -1,0 +1,66 @@
+{
+  // The `web` Worker — server-rendered Astro (see astro.config.mjs). It owns NO
+  // data of its own: every stateful operation is delegated to the `api` Worker
+  // over the `API` Service Binding below. Deliberately no KV / Hyperdrive / DO
+  // bindings here; if this Worker ever needs one, that is a design smell.
+  //
+  // ⚠️ THIS FILE IS NOT DIRECTLY RUNNABLE BY WRANGLER — and that is by design,
+  // not an omission. It has no `main`, and its `assets` has no `directory`,
+  // because @astrojs/cloudflare@14 supplies BOTH at build time (its config
+  // customizer does `main: config.main ?? "@astrojs/cloudflare/entrypoints/
+  // server"` and points assets at the emitted client dir). Adding them here by
+  // hand breaks the build instead of helping: they would reference `dist/`,
+  // which does not exist on a clean checkout, and the Cloudflare Vite plugin
+  // resolves `main` while CONFIGURING — so `astro build`/`astro sync` would die
+  // with "The provided Wrangler config main field ... doesn't point to an
+  // existing file" before it could ever create it.
+  //
+  // So this file is the DESIGN (identity, compat, bindings); `astro build`
+  // merges the mechanical bits in and emits the runnable/deployable config at
+  // `dist/server/wrangler.json`. Point wrangler at THAT:
+  //
+  //   pnpm --filter @thinkersjournal/web exec astro build
+  //   pnpm --filter @thinkersjournal/web exec wrangler dev \
+  //     -c dist/server/wrangler.json -c ../api/wrangler.jsonc --port 8787
+  //
+  // Running `wrangler dev -c apps/web/wrangler.jsonc` directly fails with
+  // "The `assets` property in your configuration is missing the required
+  // `directory` property." That is expected. Edit bindings HERE (they are
+  // inherited by the generated config); never edit dist/server/wrangler.json,
+  // which is build output.
+  "name": "thinkersjournal-web",
+  "compatibility_date": "2026-07-13",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    // Astro's client-side assets. The binding name `ASSETS` is not arbitrary:
+    // the adapter's generated Worker entry looks up `env.ASSETS` to serve
+    // static files and to fall back for 404s. Declared explicitly (rather than
+    // left to the adapter, which would inject exactly this) so the binding is
+    // visible where the rest of the Worker's surface is declared.
+    "binding": "ASSETS"
+  },
+  // ⚠️ THE POINT OF THIS WORKER'S TOPOLOGY.
+  // `service` is the api Worker's NAME (its `name` field in
+  // apps/api/wrangler.jsonc), NOT a URL and NOT a hostname. Requests through
+  // `env.API.fetch(...)` are dispatched Worker-to-Worker inside Cloudflare:
+  // they never traverse the public internet, cost no extra subrequest billing,
+  // and — the security property we actually want — mean the `api` Worker does
+  // not need a public route at all. The browser only ever talks to `web`, so
+  // every mutating request is same-origin by construction (which is what makes
+  // the api's Origin allowlist in apps/api/src/auth/csrf.ts meaningful).
+  //
+  // In local dev this binding is resolved by running BOTH configs in ONE
+  // wrangler process:
+  //   wrangler dev -c apps/web/wrangler.jsonc -c apps/api/wrangler.jsonc
+  // The FIRST -c is the primary Worker (web, on the served port); every
+  // subsequent -c is an auxiliary Worker reachable ONLY via a Service Binding.
+  "services": [
+    {
+      "binding": "API",
+      "service": "thinkersjournal-api"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

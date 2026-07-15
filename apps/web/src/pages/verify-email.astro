@@ -1,0 +1,97 @@
+---
+/**
+ * `GET /verify-email?token=…` through the Service Binding.
+ *
+ * ⚠️ THE LOGIN_REQUIRED RIPPLE — the reason this page is not a one-liner.
+ *
+ * The api requires a valid, non-stale session belonging to the token's OWN user
+ * before it will verify (see apps/api/src/routes/verify-email.ts — it closes an
+ * account-takeover chain where clicking an emailed link would verify an account
+ * whose password an attacker had since replaced). So the single most ORDINARY
+ * path — a user clicks the link from their email client, in a browser with no
+ * session — arrives here and gets a 401 `{"code":"LOGIN_REQUIRED"}`.
+ *
+ * That is not an error to report; it is a step in the flow. The api PEEKS at
+ * the token rather than consuming it on every auth failure, precisely so the
+ * link SURVIVES this rejection. So we tell the user to log in and send them
+ * back to this exact URL (`?next=`), where the same token still works.
+ *
+ * Getting this wrong (rendering "invalid link") would strand every new user:
+ * there is no resend endpoint until M1, and the token they hold is fine.
+ */
+import { apiFetch } from "../lib/api";
+
+const token = Astro.url.searchParams.get("token");
+
+type Outcome = "verified" | "login-required" | "invalid" | "missing";
+let outcome: Outcome;
+
+if (token === null || token === "") {
+  outcome = "missing";
+} else {
+  const response = await apiFetch<{ code?: string }>(
+    `/verify-email?token=${encodeURIComponent(token)}`,
+    {
+      // ⚠️ Load-bearing: forwards the browser's `Cookie` so the api can resolve
+      // the session. Without it EVERY visit is a 401, including from a
+      // logged-in user — the flow would be unusable.
+      request: Astro.request,
+    },
+  );
+
+  if (response.status === 200) {
+    outcome = "verified";
+  } else if (response.data?.code === "LOGIN_REQUIRED") {
+    // 401 (no session / stale session) and 403 (token belongs to someone else)
+    // share this code and an identical body — deliberately, so the api never
+    // reveals whose token it is. Both mean the same thing to the user: sign in
+    // as the account that owns this link, then re-open it.
+    outcome = "login-required";
+  } else {
+    // A genuinely bad token: unknown, expired, or already redeemed. The api
+    // returns one generic 400 for all three (it must not confirm that a guessed
+    // token was ever real).
+    outcome = "invalid";
+  }
+}
+
+/**
+ * Return here after logging in, token and all. Built from the CURRENT url's
+ * path+query rather than reassembled, so the token survives verbatim.
+ */
+const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Verify email</title>
+  </head>
+  <body>
+    <h1>Verify email</h1>
+
+    {outcome === "verified" && <p id="verified">Your email is verified.</p>}
+
+    {
+      outcome === "login-required" && (
+        <div id="login-required">
+          <p>
+            Please log in to verify this email address, then open the link from
+            your email again. The link is still valid.
+          </p>
+          <p>
+            <a href={loginHref}>Log in and continue</a>
+          </p>
+        </div>
+      )
+    }
+
+    {
+      outcome === "invalid" && (
+        <p id="invalid">This verification link is invalid or has expired.</p>
+      )
+    }
+
+    {outcome === "missing" && <p id="invalid">No verification token supplied.</p>}
+  </body>
+</html>
