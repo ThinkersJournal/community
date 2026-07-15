@@ -402,6 +402,30 @@ Verified against the **installed astro@7.0.9 + @astrojs/cloudflare@14.1.3**. Mos
 
 Two further build-order traps are documented at length in `playwright.config.ts` and `scripts/build-web.mjs`: never run `astro build` while a `wrangler dev` is alive (the Service Binding then reports `[connected]` while every dispatch fails with `Network connection lost`), and always build via `pnpm --filter @thinkersjournal/web build`, never `astro build` directly.
 
+### H. Signature + step-order drifts the first reconciliation missed
+
+*Added 2026-07-15 from M0's final whole-branch review. Four places where the built code differs from the task steps above and the earlier pass did not record it. None was a defect; each is a deviation someone reading the plan would otherwise trip over.*
+
+1. **`withClient` takes `ctx` (Task 6).** Planned as `withClient(hd, fn)`; **as built `withClient(hd, ctx, fn)`**. The `ExecutionContext` is threaded through so the client can be closed via `ctx.waitUntil(client.end())` — the connection is released after the response is returned rather than blocking it, and without `ctx` there is nowhere to hang that work. This is the root deviation the next one inherits.
+
+2. **`requireVerifiedEmail` takes `ctx` (Task 13).** Planned as `requireVerifiedEmail(env, session)`; **as built `requireVerifiedEmail(env, ctx, session)`**, purely to satisfy (1) — it reads `users.email_verified_at` and therefore needs `withClient`'s 3-arg form. `ctx` is the SECOND parameter (`env, ctx, session`), matching the argument order every other DB-touching helper in the Worker uses. Noted in the function's own header; recorded here because the plan's signature is what a reader would otherwise write.
+
+3. **The ROUTER does not apply the pipeline — each HANDLER does (Task 16, Step 3).** The step says "the router applies the pipeline to all non-GET routes". **As built `src/index.ts` only dispatches**, and each handler calls `runMutatingPipeline` itself. That is deliberate: it is what lets a route own its own opt-ins (`requireVerifiedEmail` for `POST /posts`, deliberately NOT for logout), which a blanket router-level wrap could not express. Its cost is that "every mutating route is protected" became a **convention** rather than a structural guarantee — a future route that forgets the call ships an unauthenticated mutation with every test still green.
+
+   **Compensating control: `apps/api/test/route-protection.test.ts`.** It reads the router's own source, enumerates the non-GET (method, path) pairs it matches, and asserts default-deny on each (no `Origin` → 403; no session → 401/403). A new mutating route is covered the moment it is added to the router, with no one having to remember this file. Signup and login are the only exemptions (`PIPELINE_EXEMPT`), and they still get asserted — that they enforce `checkOrigin` **inline**, which is their entire CSRF defense given they have no session. Adding to that set is a reviewable security decision, not a way to quiet a red test.
+
+4. **Signup/login check the origin BEFORE the rate limiter.** Both routes' step lists put rate limiting first. **As built `checkOrigin` runs first**, matching the rule `src/auth/pipeline.ts` states for every other mutating route: *"rate limit last: quota is spent only by a request that is otherwise fully entitled to proceed, so unauthenticated noise cannot burn a real user's budget."* The old order inverted that and was exploitable: a page on evil.com makes a victim's browser POST `/auth/login` with the victim's address (a `text/plain` body dodges the CORS preflight, so the request is really sent), each one burns a slot in the **victim's own** bucket before 403ing, and ~10 of them deny the victim login for up to 60s. `checkOrigin` is a pure header comparison with **zero I/O**, so nothing is lost by moving it up, and **both orders satisfy the binding Global Constraint** ("`checkOrigin` before touching the DB") — which is why this is a deviation and not a correction to the constraint. Pinned by a "spends NO quota on an origin-rejected request" test in both `test/login.test.ts` and `test/signup.test.ts`.
+
+### I. The limiter keys, and what a limiter key can actually buy
+
+*Added 2026-07-15 from the same review.*
+
+Both auth routes were built with a **single** `${ip}:${email}` limiter key, commented as giving two properties: that one address cannot be attacked from many IPs, and that one IP cannot spray many addresses. **The first was never true.** Putting the IP *in* the key gives every IP its own bucket, so N IPs against one address get N × the limit per window — and on `/auth/login`, which has **no Turnstile**, the limiter is the entire brute-force defense.
+
+**As built (final):** each route consumes **two** buckets — the original `${ip}:${email}` **plus** an email-only `email:${email}` — so an address has a ceiling regardless of source IP. Both are keyed on the schema-lowercased email (see `NormalizedEmail`; that coupling is itself a security control), and either bucket's 429 short-circuits.
+
+**And the honest bound:** Cloudflare's rate-limiting binding is documented as a unique limit per key **per Cloudflare location**, and as *"permissive, eventually consistent, and intentionally designed to not be used as an accurate accounting system."* So the email-only bucket is a real ceiling **per location**, not a global one. It is worth having anyway — it collapses an *unbounded* per-IP multiplier into a *bounded* per-location one — but no key design can make this binding an exact counter. Anything needing that wants a Durable Object. Recorded in `src/auth/ratelimit.ts`'s header, whose earlier "the binding owns all counting/window logic" read stronger than reality.
+
 ---
 
 ## Deploy-gate checklist (from the risk analysis)
@@ -410,9 +434,9 @@ Two further build-order traps are documented at length in `playwright.config.ts`
 - [ ] Neon connection string is the **direct** (non-pooled) host (`sslmode=require`), not the PgBouncer endpoint.
 - [ ] Postmark `From` is a **confirmed** sender signature / verified domain (silent failure otherwise).
 - [ ] Real Turnstile keys set as api secrets; dummy keys never deployed.
-- [ ] **`TEST_ROUTES` is unset in prod** and the `__test` route is unreachable — assert this with a deploy check (token-exposure = account-takeover).
+- [ ] **`TEST_ROUTES` is unset in prod** and the `__test` route is unreachable (token-exposure = account-takeover) — the deploy check this line asked for now EXISTS: `pnpm smoke:deploy <deployed-api-url>` (`scripts/deploy-smoke.mjs`).
 - [ ] Pin `wrangler` + `@cloudflare/vitest-pool-workers` versions; re-verify the `ratelimits`/hyperdrive/DO config shapes against the installed version.
-- [ ] Run at least one pre-launch pass on **real** infra (`wrangler dev --remote` / deployed staging) — local dev has no real Hyperdrive caching or true rate-limit thresholds.
+- [ ] Run at least one pre-launch pass on **real** infra — local dev has no real Hyperdrive caching or true rate-limit thresholds. `pnpm smoke:deploy`'s signup step is that pass (Postgres + argon2 + KV + DO in one request).
 
 > **The live, maintained deploy gate is `README.md`'s** — it carries this list plus everything learned during M0 (the `TEST_ROUTES`-gates-two-things check, the api's public `workers.dev` URL, Postmark alerting, the argon2id `.wasm` bundling). Use that one.
 

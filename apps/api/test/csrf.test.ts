@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import type { SessionData } from "@thinkersjournal/shared";
@@ -9,6 +10,22 @@ import { checkCsrf, checkOrigin, csrfTokenFor } from "../src/auth/csrf";
  * global in this POOL project, so `csrfTokenFor`/`checkCsrf` exercise the real
  * SHA-256 digest + timing-safe compare rather than a stub.
  */
+
+/**
+ * `checkOrigin`'s allowlist is `TEST_ROUTES`-gated (src/auth/csrf.ts), so every
+ * call needs an `env`. These two stand in for the two deploy states:
+ *
+ *   • DEV/CI  — `TEST_ROUTES === "1"`: production origins PLUS localhost.
+ *   • PROD    — `TEST_ROUTES` unset: production origins ONLY.
+ *
+ * ⚠️ The suite itself runs with `TEST_ROUTES="1"` (vitest.config.ts's
+ * `miniflare.bindings`), so `env` alone can only ever exercise the DEV shape —
+ * the PRODUCTION allowlist would go completely untested without `PROD_ENV`.
+ * That is the same reason test/session.test.ts pins both cookie modes.
+ */
+const DEV_ENV = env;
+const PROD_ENV = { ...env, TEST_ROUTES: undefined } as unknown as Env;
+
 const sampleSession: SessionData = {
   userId: "11111111-1111-1111-1111-111111111111",
   roles: ["member"],
@@ -41,17 +58,17 @@ const UNSAFE_METHODS = ["POST", "PUT", "PATCH", "DELETE"] as const;
 describe("checkOrigin", () => {
   it("allows a POST from an allowed Origin", () => {
     const request = postRequest({ Origin: "https://thinkersjournal.com" });
-    expect(checkOrigin(request)).toBe(true);
+    expect(checkOrigin(DEV_ENV, request)).toBe(true);
   });
 
   it("allows a POST from the www subdomain Origin", () => {
     const request = postRequest({ Origin: "https://www.thinkersjournal.com" });
-    expect(checkOrigin(request)).toBe(true);
+    expect(checkOrigin(DEV_ENV, request)).toBe(true);
   });
 
   it("rejects a POST from a disallowed Origin", () => {
     const request = postRequest({ Origin: "https://evil.com" });
-    expect(checkOrigin(request)).toBe(false);
+    expect(checkOrigin(DEV_ENV, request)).toBe(false);
   });
 
   /**
@@ -73,25 +90,25 @@ describe("checkOrigin", () => {
       Origin: "https://evil.com",
       Referer: "https://thinkersjournal.com/x",
     });
-    expect(checkOrigin(request)).toBe(false);
+    expect(checkOrigin(DEV_ENV, request)).toBe(false);
   });
 
   it("falls back to a valid allowed Referer when Origin is absent", () => {
     const request = postRequest({
       Referer: "https://thinkersjournal.com/some/page?query=1",
     });
-    expect(checkOrigin(request)).toBe(true);
+    expect(checkOrigin(DEV_ENV, request)).toBe(true);
   });
 
   it("rejects a malformed Referer without throwing", () => {
     const request = postRequest({ Referer: "not a url at all" });
-    expect(() => checkOrigin(request)).not.toThrow();
-    expect(checkOrigin(request)).toBe(false);
+    expect(() => checkOrigin(DEV_ENV, request)).not.toThrow();
+    expect(checkOrigin(DEV_ENV, request)).toBe(false);
   });
 
   it("fails closed when both Origin and Referer are missing on a non-GET", () => {
     const request = postRequest({});
-    expect(checkOrigin(request)).toBe(false);
+    expect(checkOrigin(DEV_ENV, request)).toBe(false);
   });
 
   it("always allows GET regardless of headers", () => {
@@ -99,14 +116,14 @@ describe("checkOrigin", () => {
       method: "GET",
       headers: { Origin: "https://evil.com" },
     });
-    expect(checkOrigin(request)).toBe(true);
+    expect(checkOrigin(DEV_ENV, request)).toBe(true);
   });
 
   it("always allows HEAD regardless of headers", () => {
     const request = new Request("https://api.test/some-endpoint", {
       method: "HEAD",
     });
-    expect(checkOrigin(request)).toBe(true);
+    expect(checkOrigin(DEV_ENV, request)).toBe(true);
   });
 
   /**
@@ -124,7 +141,63 @@ describe("checkOrigin", () => {
   it.each(["http://localhost:8787", "http://127.0.0.1:8787"])(
     "allows the localhost dev origin %s",
     (origin) => {
-      expect(checkOrigin(postRequest({ Origin: origin }))).toBe(true);
+      expect(checkOrigin(DEV_ENV, postRequest({ Origin: origin }))).toBe(true);
+    },
+  );
+});
+
+/**
+ * THE `TEST_ROUTES` GATE ON THE DEV ORIGINS (src/auth/csrf.ts).
+ *
+ * BOTH modes are pinned, and the PRODUCTION one is the whole point of this
+ * block: the suite runs with `TEST_ROUTES="1"`, so every other `checkOrigin`
+ * case above exercises the DEV allowlist only. Without these cases the
+ * production allowlist — the one that actually ships — would never be evaluated
+ * at all, and a regression that widened it back to include localhost would go
+ * completely unnoticed. (Exactly the argument test/session.test.ts makes for
+ * pinning both cookie modes, and it is the same gate.)
+ *
+ * The gate is an explicit `=== "1"`, never truthiness: wrangler vars are always
+ * strings, so `"0"` and `"false"` are TRUTHY and would otherwise widen the
+ * production allowlist for anyone who set "0" to mean "off". Pinned below.
+ */
+describe("checkOrigin — the TEST_ROUTES gate on the dev origins", () => {
+  it.each(["http://localhost:8787", "http://127.0.0.1:8787"])(
+    "REJECTS the dev origin %s in production (TEST_ROUTES unset)",
+    (origin) => {
+      expect(checkOrigin(PROD_ENV, postRequest({ Origin: origin }))).toBe(false);
+    },
+  );
+
+  it.each(["https://thinkersjournal.com", "https://www.thinkersjournal.com"])(
+    "still allows the production origin %s in production (TEST_ROUTES unset)",
+    (origin) => {
+      expect(checkOrigin(PROD_ENV, postRequest({ Origin: origin }))).toBe(true);
+    },
+  );
+
+  it("rejects a dev-origin Referer fallback in production too (not just the Origin header)", () => {
+    // The gate must apply to BOTH branches of `checkOrigin`. A fix that only
+    // guarded the `Origin` path would leave `Referer: http://localhost:8787/x`
+    // as a live bypass of exactly the thing being gated.
+    const request = postRequest({ Referer: "http://localhost:8787/signup" });
+    expect(checkOrigin(PROD_ENV, request)).toBe(false);
+    // ...and the same request IS accepted in dev, so the case above is the gate
+    // biting rather than the Referer fallback being broken outright.
+    expect(checkOrigin(DEV_ENV, request)).toBe(true);
+  });
+
+  it.each(["0", "false", "", "true", "yes"])(
+    "treats TEST_ROUTES=%j as OFF — only the literal \"1\" widens the allowlist",
+    (value) => {
+      const weirdEnv = { ...env, TEST_ROUTES: value } as unknown as Env;
+      expect(
+        checkOrigin(weirdEnv, postRequest({ Origin: "http://localhost:8787" })),
+      ).toBe(false);
+      // Production origins are unaffected by the gate in every mode.
+      expect(
+        checkOrigin(weirdEnv, postRequest({ Origin: "https://thinkersjournal.com" })),
+      ).toBe(true);
     },
   );
 });
@@ -141,18 +214,18 @@ describe("checkOrigin across unsafe methods", () => {
     const request = requestWithMethod(method, {
       Origin: "https://thinkersjournal.com",
     });
-    expect(checkOrigin(request)).toBe(true);
+    expect(checkOrigin(DEV_ENV, request)).toBe(true);
   });
 
   it.each(UNSAFE_METHODS)("rejects %s from a disallowed Origin", (method) => {
     const request = requestWithMethod(method, { Origin: "https://evil.com" });
-    expect(checkOrigin(request)).toBe(false);
+    expect(checkOrigin(DEV_ENV, request)).toBe(false);
   });
 
   it.each(UNSAFE_METHODS)(
     "fails closed on %s with neither Origin nor Referer",
     (method) => {
-      expect(checkOrigin(requestWithMethod(method, {}))).toBe(false);
+      expect(checkOrigin(DEV_ENV, requestWithMethod(method, {}))).toBe(false);
     },
   );
 });

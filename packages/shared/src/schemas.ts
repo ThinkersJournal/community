@@ -5,14 +5,16 @@ import { z } from 'zod';
  *
  * ⚠️ THE `.toLowerCase()` IS A SECURITY CONTROL, not cosmetics. `users.email`
  * is `citext`, so `WHERE email = $1` matches case-INsensitively — but the
- * auth routes build their rate-limiter key out of the PARSED email
- * (`${ip}:${email}`, see src/routes/login.ts and src/routes/signup.ts in
- * apps/api). Without normalization those two disagree: `victim@example.com`
- * and `Victim@example.com` resolve to the SAME user row but DIFFERENT limiter
- * buckets, so an attacker case-rotates the address (~2^16 variants for a
- * typical address) and harvests 10 attempts PER VARIANT from a single IP —
- * turning LOGIN_LIMITER's 10/60s ceiling into ~650k/60s against one account
- * and nullifying the only brute-force defense on the route.
+ * auth routes build their rate-limiter keys out of the PARSED email
+ * (`${ip}:${email}` AND `email:${email}` — see src/routes/login.ts and
+ * src/routes/signup.ts in apps/api). Without normalization those disagree with
+ * the lookup: `victim@example.com` and `Victim@example.com` resolve to the SAME
+ * user row but DIFFERENT limiter buckets, so an attacker case-rotates the
+ * address (~2^16 variants for a typical address) and harvests 10 attempts PER
+ * VARIANT — turning LOGIN_LIMITER's 10/60s ceiling into ~650k/60s against one
+ * account and nullifying the only brute-force defense on the route. Note this
+ * bypass defeats BOTH buckets at once: they are both keyed on this value, so
+ * the email-only ceiling is no more immune to case-rotation than the per-IP one.
  *
  * Normalizing HERE (at the schema) rather than at each call site is what makes
  * the key and the citext lookup agree BY CONSTRUCTION for every current and

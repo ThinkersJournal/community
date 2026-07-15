@@ -19,8 +19,9 @@ import { withClient } from "../src/db/client";
  *
  * ⚠️ Emails are UNIQUE PER RUN (`crypto.randomUUID()`): the test DB persists
  * across runs, and a fixed address would collide with the previous run's row.
- * Uniqueness doubles as rate-limit isolation — `SIGNUP_LIMITER`'s key is
- * `ip + ':' + email` and the limiter is REAL here (5/60s), so a shared email
+ * Uniqueness doubles as rate-limit isolation — the route consumes TWO
+ * `SIGNUP_LIMITER` buckets, `<ip>:<email>` and `email:<email>`, both keyed on
+ * the email, and the limiter is REAL here (5/60s each), so a shared address
  * would let one test's requests exhaust another's quota.
  */
 
@@ -544,6 +545,93 @@ describe("POST /auth/signup", () => {
 
     expect((await signup(body)).status).toBe(429);
   });
+
+  /**
+   * ⚠️ THE MULTI-IP CEILING — the reason signup consumes TWO limiter buckets
+   * (`ip:email` AND `email`), not one.
+   *
+   * The `ip:email` key alone gives every IP its OWN bucket, so it bounds nothing
+   * about a single ADDRESS: N IPs = N × 5 signups per window against one victim
+   * address. Every one of those is a real verification email sent to a real
+   * inbox from our confirmed sender — i.e. we become the mail-bomb — and, while
+   * the address stays unverified, each also takes the account over and revokes
+   * the previous claimant's sessions.
+   *
+   * Here every request carries a DIFFERENT `CF-Connecting-IP`, so the `ip:email`
+   * bucket is FRESH each time and can never be what returns the 429. Only the
+   * email-only bucket can.
+   *
+   * Turnstile is stubbed to BLOCK so each allowed request costs a cheap 403 (no
+   * hashing, no DB, no mail) — the limiter counts it either way.
+   *
+   * Removing the `email:${email}` `enforceRateLimit` call from
+   * src/routes/signup.ts must turn this test RED (mutation-verified).
+   */
+  it(
+    "429s a single email signup-bombed from MANY DIFFERENT IPs (the ip:email bucket alone would not)",
+    async () => {
+      stubFetch(false);
+      const email = uniqueEmail();
+      const body = validBody(email);
+
+      // 5 attempts, each from a different IP => 5 distinct `ip:email` buckets,
+      // each still holding 4 unused slots.
+      for (let i = 0; i < 5; i++) {
+        const response = await signup(body, {
+          Origin: ORIGIN,
+          "CF-Connecting-IP": `198.51.100.${i}`,
+        });
+        expect(
+          response.status,
+          `attempt ${i + 1} from a fresh IP should still reach Turnstile's 403`,
+        ).toBe(403);
+      }
+
+      // The 6th, from yet another brand-new IP: its `ip:email` bucket is
+      // untouched, so a 429 can ONLY come from the email-only bucket.
+      const blocked = await signup(body, {
+        Origin: ORIGIN,
+        "CF-Connecting-IP": "198.51.100.99",
+      });
+      expect(
+        blocked.status,
+        "an address must have a ceiling regardless of source IP — the email-only limiter bucket is missing",
+      ).toBe(429);
+    },
+    60_000,
+  );
+
+  /**
+   * ⚠️ ORDER: origin check BEFORE the limiter (src/routes/signup.ts's header),
+   * matching the rule src/auth/pipeline.ts states — quota is spent only by a
+   * request otherwise entitled to proceed. The inverse order let a cross-site
+   * page burn a victim's signup quota before the 403 it was always going to get.
+   */
+  it(
+    "spends NO rate-limit quota on a request rejected by the origin check",
+    async () => {
+      stubFetch(false);
+      const email = uniqueEmail();
+      const body = validBody(email);
+
+      // 10 cross-site attempts — twice SIGNUP_LIMITER's 5/60s. If the limiter
+      // ran first, these would exhaust both of this email's buckets.
+      for (let i = 0; i < 10; i++) {
+        expect((await signup(body, { Origin: "https://evil.test" })).status).toBe(
+          403,
+        );
+      }
+
+      // The victim's own next attempt must still be evaluated on its merits.
+      // Turnstile is stubbed to block, so the honest answer here is 403 — the
+      // assertion is that it is NOT a 429.
+      expect(
+        (await signup(body)).status,
+        "a cross-site POST burned the victim's signup quota — checkOrigin must run before the limiter",
+      ).toBe(403);
+    },
+    60_000,
+  );
 
   it("400s a malformed JSON body (not a 500)", async () => {
     stubFetch(true);

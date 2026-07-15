@@ -163,7 +163,7 @@ export async function runMutatingPipeline(
   opts: MutatingPipelineOptions = {},
 ): Promise<Response | { session: SessionData }> {
   // ---- 1. Origin — before any I/O -----------------------------------------
-  if (!checkOrigin(request)) {
+  if (!checkOrigin(env, request)) {
     return forbidden();
   }
 

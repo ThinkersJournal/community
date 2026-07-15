@@ -17,3 +17,22 @@
 declare namespace Cloudflare {
   interface Env {}
 }
+
+/**
+ * Vite's `?raw` suffix — `import src from "../src/index.ts?raw"` yields the
+ * file's TEXT rather than its exports.
+ *
+ * Used by test/route-protection.test.ts, which reads the ROUTER'S OWN SOURCE to
+ * enumerate the routes it dispatches. That is the point of that suite: a list of
+ * routes maintained by hand would not notice the failure it exists to catch (a
+ * new mutating route that forgot the pipeline), because whoever forgot the
+ * pipeline would equally have forgotten the list.
+ *
+ * Declared here rather than pulling in `vite/client`: that would drag Vite's
+ * whole ambient surface (import.meta.env, every asset type, CSS modules) into
+ * the Worker test scope to obtain one string type.
+ */
+declare module "*?raw" {
+  const content: string;
+  export default content;
+}

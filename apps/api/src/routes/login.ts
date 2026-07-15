@@ -4,10 +4,11 @@
  * ORDER is load-bearing, same discipline as src/routes/signup.ts:
  *
  *   1. zod validation      — reject garbage before spending any quota.
- *   2. rate limit          — bounds every step below, including the Argon2id
+ *   2. origin check        — CSRF. A pure header check with ZERO I/O, so it is
+ *                            free to run first — and it must, see below.
+ *   3. rate limit          — bounds every step below, including the Argon2id
  *                            verify, which is deliberately expensive and
  *                            therefore a DoS lever if unbounded.
- *   3. origin check        — CSRF, BEFORE any DB touch.
  *   4. lookup (FRESH)      — `SELECT id, password_hash`.
  *   5. verify              — generic 401 on ANY failure (see below).
  *   6. rehash-on-upgrade   — ONLY after a successful verify.
@@ -22,12 +23,28 @@
  * route. Login has no session yet at request time, so only `checkOrigin`
  * (the Origin/Referer allowlist) applies — there is no `csrfSecret` to echo
  * back yet, so the double-submit `checkCsrf` does not apply here either
- * (same reasoning as signup's step 4).
+ * (same reasoning as signup's origin step).
+ *
+ * ⚠️ ORIGIN BEFORE THE LIMITER — a DELIBERATE deviation from the brief's literal
+ * step order, matching the rule src/auth/pipeline.ts states for every other
+ * mutating route: "rate limit last: quota is spent only by a request that is
+ * otherwise fully entitled to proceed, so unauthenticated noise cannot burn a
+ * real user's budget." Spending quota BEFORE the origin check inverted that, and
+ * on THIS route the consequence is a working denial-of-login: a page on evil.com
+ * makes a victim's browser POST here with the victim's address (a `text/plain`
+ * body dodges the CORS preflight, so the request really is sent even though the
+ * attacker cannot read the reply), and each one burns a slot in that victim's
+ * OWN bucket before 403ing — ~10 of them and the victim cannot log in for up to
+ * 60s. The origin check is a pure header comparison with no I/O, so nothing is
+ * lost by moving it up, and both orders satisfy the binding constraint that
+ * `checkOrigin` run before the DB is touched.
  *
  * ⚠️ NO TURNSTILE: unlike signup, login has no Turnstile step in either the
  * brief or the REUSE list — `enforceRateLimit` is the only bot/brute-force
  * defense here, matching the reuse contract exactly (YAGNI: do not invent a
- * step the task did not ask for).
+ * step the task did not ask for). That makes the limiter's keying (step 3)
+ * load-bearing rather than merely defensive: it is the WHOLE brute-force
+ * defense on this route.
  *
  * ⚠️ Every DB access goes through `HYPERDRIVE_FRESH` (cache-disabled) for the
  * same reason as signup: this is an auth read/write, and Hyperdrive never
@@ -150,31 +167,59 @@ export async function handleLogin(
   }
   const { email, password } = parsed.data;
 
-  // ---- 2. Rate limit ---------------------------------------------------------
-  // Keyed on ip + email so one address cannot be credential-stuffed from many
-  // IPs and one IP cannot brute-force many addresses. `CF-Connecting-IP` is
-  // absent off Cloudflare (and in tests), hence the stable placeholder.
+  // ---- 2. Origin (CSRF) — before the limiter, and before any I/O -------------
+  // See the file header's CHECKORIGIN RECONCILIATION and ORIGIN BEFORE THE
+  // LIMITER notes.
+  if (!checkOrigin(env, request)) {
+    return json({ error: "Forbidden" }, 403);
+  }
+
+  // ---- 3. Rate limit ---------------------------------------------------------
+  // TWO buckets, and BOTH are required — they bound different attacks:
+  //
+  //   (a) `ip:email` — one IP cannot brute-force many addresses.
+  //   (b) `email`    — one ADDRESS has a ceiling no matter how many IPs the
+  //                    attempts come from. This is the credential-stuffing case.
+  //
+  // ⚠️ (b) IS NOT REDUNDANT, and (a) DOES NOT IMPLY IT. Putting the IP IN the
+  // key gives every IP its own private bucket, so N IPs against one address get
+  // N × 10 attempts per window — a botnet trivially defeats (a) alone, and with
+  // NO Turnstile on this route (see above) the limiter is the only thing
+  // standing between an attacker and unlimited password guesses. Only a key
+  // WITHOUT the IP in it can bound the total against a single address. (This
+  // file used to claim the single `ip:email` key gave both properties; it never
+  // did — only the "one IP cannot spray many addresses" half was ever true.)
+  //
+  // `CF-Connecting-IP` is absent off Cloudflare (and in tests), hence the
+  // stable placeholder. The `email:` prefix on (b) cannot practically collide
+  // with (a)'s `<ip>:<email>` shape: Cloudflare sets `CF-Connecting-IP` itself,
+  // so it is never the literal string "email" — and were it ever spoofed to
+  // collide, the two keys would merely SHARE a bucket, which is stricter.
   //
   // ⚠️ `email` here is the PARSED value, which `LoginInput` has already
-  // lowercased — do NOT rebuild this key from the raw request body. The DB
+  // lowercased — do NOT rebuild either key from the raw request body. The DB
   // lookup below is citext (case-INsensitive), so a case-sensitive key would
   // let `Victim@…` and `victim@…` hit the same user row via DIFFERENT limiter
   // buckets: case-rotating the address then multiplies the 10/60s ceiling by
   // the number of variants and nullifies this defense entirely. See the
   // NormalizedEmail note in packages/shared/src/schemas.ts.
+  //
+  // ⚠️ THE BINDING IS NOT AN ACCURATE COUNTER — see src/auth/ratelimit.ts's
+  // header. Cloudflare's limit is per key PER LOCATION and eventually
+  // consistent, so (b) is a real ceiling per Cloudflare location, not a global
+  // one. It still collapses an unbounded per-IP multiplier down to a bounded
+  // per-location one, which is the property being bought here.
   const clientIp = request.headers.get("CF-Connecting-IP");
-  const limited = await enforceRateLimit(
+  const ipLimited = await enforceRateLimit(
     env.LOGIN_LIMITER,
     `${clientIp ?? "unknown"}:${email}`,
   );
-  if (limited !== null) {
-    return limited;
+  if (ipLimited !== null) {
+    return ipLimited;
   }
-
-  // ---- 3. Origin (CSRF) — still before any DB touch --------------------------
-  // See the file header's CHECKORIGIN RECONCILIATION note.
-  if (!checkOrigin(request)) {
-    return json({ error: "Forbidden" }, 403);
+  const emailLimited = await enforceRateLimit(env.LOGIN_LIMITER, `email:${email}`);
+  if (emailLimited !== null) {
+    return emailLimited;
   }
 
   // ---- 4. Lookup (FRESH) ------------------------------------------------------

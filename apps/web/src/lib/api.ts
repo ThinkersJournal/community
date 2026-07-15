@@ -99,8 +99,19 @@ export interface ApiFetchOptions {
    * Forward what the browser sent and let the api decide; a cross-site POST
    * then correctly 403s at the api.
    *
-   * An empty string (browser sent no Origin) is fine and intended: `checkOrigin`
-   * falls back to `Referer`, then fails closed.
+   * An empty string (browser sent no Origin) is fine and intended, but NOT for
+   * the reason it might look like: it does NOT reach `checkOrigin`'s `Referer`
+   * fallback. The pages pass `?? ""`, so this option is DEFINED and `apiFetch`
+   * sets a present-but-empty `Origin` header — `headers.get("Origin")` on the
+   * api side then returns `""`, not null, taking the non-null branch, where
+   * `""` is not in the allowlist. The request 403s at the Origin check and the
+   * `Referer` fallback is never consulted at all.
+   *
+   * That is the CORRECT outcome (it fails CLOSED — a browser that sent no
+   * Origin on a cross-origin POST cannot mutate anything), and it is why this
+   * option is safe to pass through verbatim. Do not "fix" it into an accept
+   * path: `?? undefined` here would omit the header and hand the decision to
+   * `Referer`, a strictly weaker signal.
    */
   origin?: string;
   /** The api's per-session CSRF token, echoed as `X-CSRF-Token`. */

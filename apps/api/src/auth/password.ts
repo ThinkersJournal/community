@@ -11,6 +11,27 @@
  * Hashes are stored as PHC strings:
  *   `$argon2id$v=19$m=<KiB>,t=<iter>,p=<lanes>$<b64(salt)>$<b64(digest)>`
  * using the standard base64 alphabet WITHOUT padding (Argon2 PHC convention).
+ *
+ * ⚠️ THE `argon2(...)` CALL IS SYNCHRONOUS, AND THAT IS LOAD-BEARING — NOT AN
+ * INCIDENTAL DETAIL OF THE LIBRARY'S API. The WASM instance is memoized
+ * (`getArgon2`) and therefore SHARED by every concurrent hash and verify in the
+ * isolate, and so is its linear memory — the ~19MiB scratch buffer each
+ * derivation scribbles over. Nothing here partitions that memory per caller. The
+ * ONLY thing keeping two concurrent `hashPassword` calls from interleaving
+ * inside that shared buffer is JavaScript's single-threaded event loop: the
+ * `argon2()` call contains no `await`, so once it starts it runs to completion
+ * before any other continuation can be scheduled. It is an accidental critical
+ * section, held by the runtime rather than by any lock in this file.
+ *
+ * If that call ever becomes asynchronous — a library version that returns a
+ * Promise, an `await` introduced inside it, a move to a worker/threaded build —
+ * this file's correctness silently collapses: two overlapping signups would
+ * interleave in one scratch buffer and corrupt each other's derivations,
+ * producing garbage hashes (and, on the verify path, spurious failures) with no
+ * error raised anywhere. The failure is data-dependent and load-dependent, so it
+ * would pass every test in this repo and surface only under real concurrency.
+ * Do not make it async without ALSO adding real serialization (a promise chain /
+ * mutex around the shared instance) or a per-call instance.
  */
 import setupWasm from "argon2id/lib/setup.js";
 // Statically-imported, precompiled `WebAssembly.Module`s (bundled by wrangler).

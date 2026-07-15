@@ -27,10 +27,12 @@ import { DUMMY_HASH } from "../src/routes/login";
  *
  * ⚠️ Emails are UNIQUE PER RUN (`crypto.randomUUID()`) — the test DB persists
  * across runs, and a fixed address would collide with a previous run's row.
- * Uniqueness also gives natural rate-limit isolation: `LOGIN_LIMITER`'s key is
- * `ip + ':' + email` (real limiter here, 10/60s), and no test in this file sets
- * `CF-Connecting-IP`, so every request's key collapses to `unknown:<email>` —
- * unique as long as the email is.
+ * Uniqueness also gives natural rate-limit isolation: the route consumes TWO
+ * `LOGIN_LIMITER` buckets (real limiter here, 10/60s each), `<ip>:<email>` and
+ * `email:<email>`, and BOTH are keyed on the email — so a unique address means
+ * a private pair of buckets per test. Most tests set no `CF-Connecting-IP`, so
+ * their first key collapses to `unknown:<email>`; the multi-IP case below sets
+ * it deliberately, which is the entire point of that test.
  */
 
 const ORIGIN = "https://thinkersjournal.com";
@@ -394,6 +396,89 @@ describe("POST /auth/login", () => {
       // The UPPERCASE spelling must already be exhausted — it shares the bucket.
       // Without normalization this would be a 401 (a fresh bucket) instead.
       expect((await login(validBody(rotated))).status).toBe(429);
+    },
+    60_000,
+  );
+
+  /**
+   * ⚠️ THE CREDENTIAL-STUFFING CEILING — the reason `POST /auth/login` consumes
+   * TWO limiter buckets (`ip:email` AND `email`), not one.
+   *
+   * The `ip:email` key alone gives every IP its OWN bucket, so it bounds nothing
+   * about a single ADDRESS: N IPs against one victim = N × 10 password guesses
+   * per window, which a botnet (or anything with a proxy pool) supplies for
+   * free. This route has NO Turnstile, so the limiter is its entire brute-force
+   * defense — an unbounded multiplier on it is the whole ballgame.
+   *
+   * Here every request carries a DIFFERENT `CF-Connecting-IP`, so the `ip:email`
+   * bucket is FRESH each time and can never be what returns the 429. Only the
+   * email-only bucket can. Before that bucket existed this test's final request
+   * was a 401 — an attacker just kept going.
+   *
+   * Removing the `email:${email}` `enforceRateLimit` call from
+   * src/routes/login.ts must turn this test RED (mutation-verified).
+   */
+  it(
+    "429s a single email attacked from MANY DIFFERENT IPs (the ip:email bucket alone would not)",
+    async () => {
+      const email = uniqueEmail();
+      const body = validBody(email);
+
+      // 10 attempts, each from a different IP => 10 distinct `ip:email` buckets,
+      // every one of them holding 9 unused slots. These are nonexistent-user
+      // 401s, which is all the limiter needs to count.
+      for (let i = 0; i < 10; i++) {
+        const response = await login(body, {
+          Origin: ORIGIN,
+          "CF-Connecting-IP": `203.0.113.${i}`,
+        });
+        expect(
+          response.status,
+          `attempt ${i + 1} from a fresh IP should still be allowed through to a 401`,
+        ).toBe(401);
+      }
+
+      // The 11th, from yet another brand-new IP. Its `ip:email` bucket is
+      // untouched, so a 429 here can ONLY come from the email-only bucket.
+      const blocked = await login(body, {
+        Origin: ORIGIN,
+        "CF-Connecting-IP": "203.0.113.99",
+      });
+      expect(
+        blocked.status,
+        "an address must have a ceiling regardless of source IP — the email-only limiter bucket is missing",
+      ).toBe(429);
+    },
+    60_000,
+  );
+
+  /**
+   * ⚠️ ORDER: origin check BEFORE the limiter (src/routes/login.ts's header).
+   *
+   * The inverse order let a cross-site page burn a victim's login quota: it
+   * cannot read the reply, but the request is still SENT, and if quota is spent
+   * before the 403 then ~10 of them lock the victim out for up to 60s. This
+   * pins that a rejected origin costs NO quota — the same address, from the same
+   * (absent) IP, must still have its full allowance afterwards.
+   */
+  it(
+    "spends NO rate-limit quota on a request rejected by the origin check",
+    async () => {
+      const email = uniqueEmail();
+      const body = validBody(email);
+
+      // 15 cross-site attempts — comfortably past LOGIN_LIMITER's 10/60s. If the
+      // limiter ran first these would exhaust both of this email's buckets.
+      for (let i = 0; i < 15; i++) {
+        expect((await login(body, { Origin: "https://evil.test" })).status).toBe(403);
+      }
+
+      // The victim's own next attempt must still be evaluated on its merits
+      // (a 401 for a nonexistent user), not turned away with a 429.
+      expect(
+        (await login(body)).status,
+        "a cross-site POST burned the victim's login quota — checkOrigin must run before the limiter",
+      ).toBe(401);
     },
     60_000,
   );

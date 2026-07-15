@@ -3,11 +3,12 @@
  * far. The ORDER of its steps is load-bearing and must not be rearranged:
  *
  *   1. zod validation      — reject garbage before spending any quota.
- *   2. rate limit          — bounds every step below (incl. the Turnstile call
+ *   2. origin check        — CSRF. A pure header check with ZERO I/O, so it is
+ *                            free to run first — and it must, see below.
+ *   3. rate limit          — bounds every step below (incl. the Turnstile call
  *                            and the Argon2id hash, which is deliberately
  *                            expensive and therefore a DoS lever if unbounded).
- *   3. Turnstile           — bot defense.
- *   4. origin check        — CSRF, BEFORE any DB touch.
+ *   4. Turnstile           — bot defense.
  *   5. dup check (FRESH)   — verified dup -> 409; unverified dup -> re-signup.
  *   6. epoch bump          — re-signup ONLY: revoke every session on the account
  *                            being taken over, BEFORE its password changes.
@@ -16,6 +17,20 @@
  *   9. security epoch      — read AFTER step 6, stamped into the session.
  *  10. session             — opaque KV token.
  *  11. 201 + Set-Cookie.
+ *
+ * ⚠️ ORIGIN BEFORE THE LIMITER — this is a DELIBERATE deviation from the task
+ * brief's literal step order, and it matches the rule src/auth/pipeline.ts
+ * states for every other mutating route: "rate limit last: quota is spent only
+ * by a request that is otherwise fully entitled to proceed, so unauthenticated
+ * noise cannot burn a real user's budget." Spending quota BEFORE the origin
+ * check inverted that. A page on evil.com can make a victim's browser POST here
+ * with the victim's address (a `text/plain` body dodges the CORS preflight, so
+ * the request is genuinely sent even though the attacker cannot read the reply);
+ * the request then 403s — but only AFTER burning a slot in that victim's own
+ * bucket, so a few of them lock the victim out of signing up for up to 60s. The
+ * origin check is a pure header comparison with no I/O, so nothing is lost by
+ * moving it up, and both orders satisfy the binding constraint that `checkOrigin`
+ * run before the DB is touched.
  *
  * Only `checkOrigin` applies here, not the double-submit `checkCsrf`: there is
  * no session yet at signup time, so there is no `csrfSecret` to echo back.
@@ -63,7 +78,7 @@ const CANONICAL_ORIGIN = "https://thinkersjournal.com";
 /**
  * The ONLY origins an emailed verification link may point at.
  *
- * ⚠️ Deliberately NARROWER than `ALLOWED_ORIGINS` in src/auth/csrf.ts, and
+ * ⚠️ Deliberately NARROWER than `checkOrigin`'s allowlist (src/auth/csrf.ts), and
  * deliberately a SEPARATE list rather than an import — the two answer different
  * questions and must be free to diverge. `checkOrigin` asks "may this browser
  * submit this form?", for which allowing `http://localhost:8787` is fine: a
@@ -246,29 +261,62 @@ export async function handleSignup(
   }
   const { email, password, turnstileToken } = parsed.data;
 
-  // ---- 2. Rate limit -------------------------------------------------------
-  // Keyed on ip + email so one address cannot be signup-bombed from many IPs and
-  // one IP cannot enumerate many addresses. `CF-Connecting-IP` is absent off
-  // Cloudflare (and in tests), hence the stable placeholder for the KEY — but
-  // `undefined`, not the placeholder, is what reaches Turnstile below, which
-  // expects a real IP or none at all.
+  // ---- 2. Origin (CSRF) — before the limiter, and before any I/O -----------
+  // See the file header's ORIGIN BEFORE THE LIMITER note: quota must only ever
+  // be spent by a request that is otherwise entitled to proceed.
+  if (!checkOrigin(env, request)) {
+    return forbidden();
+  }
+
+  // ---- 3. Rate limit -------------------------------------------------------
+  // TWO buckets, and BOTH are required — they bound different attacks:
+  //
+  //   (a) `ip:email` — one IP cannot enumerate/signup-bomb many addresses.
+  //   (b) `email`    — one ADDRESS has a ceiling no matter how many IPs it is
+  //                    attacked from.
+  //
+  // ⚠️ (b) IS NOT REDUNDANT, and (a) DOES NOT IMPLY IT. Putting the IP IN the
+  // key gives every IP its own private bucket, so N IPs against one address get
+  // N × the limit per window — a botnet trivially defeats (a) alone. Only a key
+  // WITHOUT the IP in it can bound the total against a single address. (This
+  // file used to claim the single `ip:email` key gave both properties; it never
+  // did — only the "one IP cannot spray many addresses" half was ever true.)
+  //
+  // `CF-Connecting-IP` is absent off Cloudflare (and in tests), hence the stable
+  // placeholder for the KEY — but `undefined`, not the placeholder, is what
+  // reaches Turnstile below, which expects a real IP or none at all.
+  //
+  // The `email:` prefix on (b) cannot practically collide with (a)'s
+  // `<ip>:<email>` shape: Cloudflare sets `CF-Connecting-IP` itself, so it is
+  // never the literal string "email" — and were it ever spoofed to collide, the
+  // two keys would merely SHARE a bucket, which is stricter, not weaker.
   //
   // ⚠️ `email` here is the PARSED value, which `SignupInput` has already
-  // lowercased — do NOT rebuild this key from the raw request body. The dup
+  // lowercased — do NOT rebuild either key from the raw request body. The dup
   // check below is citext (case-INsensitive), so a case-sensitive key would let
   // `Victim@…` and `victim@…` contend for the same row via DIFFERENT limiter
   // buckets, multiplying this limiter's ceiling by the number of case variants.
   // See the NormalizedEmail note in packages/shared/src/schemas.ts.
+  //
+  // ⚠️ THE BINDING IS NOT AN ACCURATE COUNTER — see src/auth/ratelimit.ts's
+  // header. Cloudflare's limit is per key PER LOCATION and eventually
+  // consistent, so (b) is a real ceiling per Cloudflare location, not a global
+  // one. It still collapses an unbounded per-IP multiplier down to a bounded
+  // per-location one, which is the property being bought here.
   const clientIp = request.headers.get("CF-Connecting-IP");
-  const limited = await enforceRateLimit(
+  const ipLimited = await enforceRateLimit(
     env.SIGNUP_LIMITER,
     `${clientIp ?? "unknown"}:${email}`,
   );
-  if (limited !== null) {
-    return limited;
+  if (ipLimited !== null) {
+    return ipLimited;
+  }
+  const emailLimited = await enforceRateLimit(env.SIGNUP_LIMITER, `email:${email}`);
+  if (emailLimited !== null) {
+    return emailLimited;
   }
 
-  // ---- 3. Turnstile --------------------------------------------------------
+  // ---- 4. Turnstile --------------------------------------------------------
   let turnstileOk: boolean;
   try {
     turnstileOk = await verifyTurnstile(env, turnstileToken, clientIp ?? undefined);
@@ -279,11 +327,6 @@ export async function handleSignup(
     turnstileOk = false;
   }
   if (!turnstileOk) {
-    return forbidden();
-  }
-
-  // ---- 4. Origin (CSRF) — still before any DB touch ------------------------
-  if (!checkOrigin(request)) {
     return forbidden();
   }
 

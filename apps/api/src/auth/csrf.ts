@@ -19,22 +19,65 @@ import { sha256Hex } from "./encoding";
 
 import type { SessionData } from "@thinkersjournal/shared";
 
-/**
- * Origins allowed to make non-GET requests. Production hosts plus a tight set
- * of local dev-server origins (both `localhost` and `127.0.0.1` spellings on
- * the wrangler dev port, 8787). Including localhost here is low-risk: a
- * remote attacker's browser cannot forge an `Origin: http://localhost:8787`
- * header for a request actually reaching a developer's machine, and even a
- * matching Origin is insufficient on its own — `checkCsrf`'s per-session
- * token is still required. This function takes no `env`, so the allowlist is
- * a single static set rather than gated by environment.
- */
-const ALLOWED_ORIGINS: Set<string> = new Set([
+/** The origins allowed to make non-GET requests in PRODUCTION. */
+const PRODUCTION_ORIGINS = [
   "https://thinkersjournal.com",
   "https://www.thinkersjournal.com",
-  "http://localhost:8787",
-  "http://127.0.0.1:8787",
+] as const;
+
+/**
+ * The local dev-server origins, added to the allowlist ONLY when
+ * `TEST_ROUTES === "1"`. Both spellings are required and are DIFFERENT origins:
+ * a browser sends whichever the developer typed. They are load-bearing for
+ * `wrangler dev` and for the E2E suite, which drives a real browser against
+ * `http://localhost:8787` / `http://127.0.0.1:8787`.
+ */
+const DEV_ORIGINS = ["http://localhost:8787", "http://127.0.0.1:8787"] as const;
+
+/**
+ * ⚠️ THE DEV ORIGINS ARE GATED, AND THE GATE IS THE POINT.
+ *
+ * Shipping `http://localhost:8787` in the PRODUCTION allowlist is low-risk but
+ * not zero: mutations still need `checkCsrf`'s per-session double-submit token,
+ * which a cross-site attacker cannot read, and a localhost login-CSRF cannot
+ * stick the resulting cookie because production scopes it to
+ * `Domain=.thinkersjournal.com`. It was, however, the ONE env-dependent security
+ * affordance in this Worker NOT behind `TEST_ROUTES` — inconsistent with the
+ * branch's own principle that dev-only relaxations must be unreachable in
+ * production for one reason, checked by one gate.
+ *
+ * So it reuses the EXISTING, already-deploy-gated `TEST_ROUTES` var rather than
+ * inventing a fourth flag — the same reasoning (spelled out at length) as
+ * src/auth/session.ts's environment-aware cookie: `TEST_ROUTES` is absent from
+ * wrangler.jsonc's `vars`, lives only in the gitignored `.dev.vars` and the test
+ * harnesses, and the deploy gate + scripts/deploy-smoke.mjs already assert its
+ * absence. One flag, one gate, cannot drift.
+ *
+ * An EXPLICIT `=== "1"` allowlist, NOT a truthiness check: wrangler vars are
+ * always strings, so `TEST_ROUTES="0"` and `"false"` are both TRUTHY and a
+ * truthiness check would widen the production allowlist for anyone who set "0"
+ * to mean "off". Fail closed on everything but the literal "1". Keep this
+ * condition identical to the gates in routes/__test.ts, auth/email-verify.ts
+ * and auth/session.ts.
+ *
+ * Both sets are built ONCE at module scope, not per request: this runs on the
+ * hot path of every mutating request, and a per-call `new Set([...])` would
+ * allocate on each one for no benefit. test/csrf.test.ts pins BOTH modes —
+ * including that the dev origins are REJECTED with `TEST_ROUTES` unset, which
+ * the suite would otherwise never exercise (it runs with `TEST_ROUTES="1"`).
+ */
+const PRODUCTION_ONLY_ORIGINS: ReadonlySet<string> = new Set(PRODUCTION_ORIGINS);
+const PRODUCTION_AND_DEV_ORIGINS: ReadonlySet<string> = new Set([
+  ...PRODUCTION_ORIGINS,
+  ...DEV_ORIGINS,
 ]);
+
+/** The allowlist in force for `env` — see the note above. */
+function allowedOrigins(env: Env): ReadonlySet<string> {
+  return env.TEST_ROUTES === "1"
+    ? PRODUCTION_AND_DEV_ORIGINS
+    : PRODUCTION_ONLY_ORIGINS;
+}
 
 /**
  * Constant-time string comparison: accumulates XOR differences over the
@@ -58,8 +101,9 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 /**
  * Origin/Referer allowlist check. Safe methods (GET/HEAD) always pass. For any
- * other method: the `Origin` header must be present and in `ALLOWED_ORIGINS`;
- * if `Origin` is absent, fall back to the origin parsed out of `Referer`.
+ * other method: the `Origin` header must be present and in the allowlist for
+ * `env` (see `allowedOrigins` — the dev origins are `TEST_ROUTES`-gated); if
+ * `Origin` is absent, fall back to the origin parsed out of `Referer`.
  * Missing BOTH headers, or a value not in the allowlist (including an
  * unparseable `Referer`), fails closed (`false`).
  *
@@ -80,14 +124,16 @@ function timingSafeEqual(a: string, b: string): boolean {
  * A future state-changing GET would NOT automatically inherit that reasoning.
  * Do not add one without redoing it.
  */
-export function checkOrigin(request: Request): boolean {
+export function checkOrigin(env: Env, request: Request): boolean {
   if (request.method === "GET" || request.method === "HEAD") {
     return true;
   }
 
+  const allowed = allowedOrigins(env);
+
   const origin = request.headers.get("Origin");
   if (origin !== null) {
-    return ALLOWED_ORIGINS.has(origin);
+    return allowed.has(origin);
   }
 
   const referer = request.headers.get("Referer");
@@ -96,7 +142,7 @@ export function checkOrigin(request: Request): boolean {
   }
 
   try {
-    return ALLOWED_ORIGINS.has(new URL(referer).origin);
+    return allowed.has(new URL(referer).origin);
   } catch {
     return false;
   }

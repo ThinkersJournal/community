@@ -156,8 +156,59 @@ invalidates on write, so a cached auth/dup-email/verify read is a real security 
 The `API` Service Binding resolves by Worker **name** (`thinkersjournal-api`), so the api
 must be deployed first. First deploy targets `*.workers.dev` — including the api's own
 `thinkersjournal-api.<subdomain>.workers.dev`, which is public by default (see the deploy
-gate). Smoke-hit the api's `/health` there and a rendered `web` page before pointing DNS
-at it.
+gate).
+
+### Post-deploy smoke check (`pnpm smoke:deploy`)
+
+**Run this against the deployed api before pointing DNS at it.** It is the concrete,
+runnable form of two gate items that used to be prose (`TEST_ROUTES` unset; "one pass on
+real infra"), and it exits non-zero with a named failure:
+
+```bash
+pnpm smoke:deploy https://thinkersjournal-api.<subdomain>.workers.dev \
+  --turnstile-token '<a freshly-solved Turnstile token>'
+```
+
+| # | Assertion | What a failure means |
+| --- | --- | --- |
+| 1 | `GET /__test/last-verify-token` → **404** | `TEST_ROUTES` leaked into prod — the route hands out a live verification token (account takeover). |
+| 2 | `GET /health` → **200** | The api is not serving. |
+| 3 | A real signup → **201** | Hyperdrive/Neon, the argon2id `.wasm` bundling, the KV write, or the DO round-trip is broken on real infra. |
+| 4 | That signup's `Set-Cookie` carries **`Secure`** *and* **`Domain=.thinkersjournal.com`** | `TEST_ROUTES` leaked — session tokens are riding plaintext http. |
+
+**Why a `curl`-shaped check and not a browser.** The first deploy is on `*.workers.dev`,
+which is **not** in `ALLOWED_ORIGINS`, and the session cookie is scoped to
+`Domain=.thinkersjournal.com` — so from a *browser* on the workers.dev URL every POST
+403s and the cookie is rejected. The browser path simply **cannot** be validated before
+cutover. But `checkOrigin` reads a *client-supplied* header and the api has a public URL,
+so a non-browser client closes the gap completely:
+
+```bash
+curl -X POST https://thinkersjournal-api.<sub>.workers.dev/auth/signup \
+  -H 'Origin: https://thinkersjournal.com' -H 'content-type: application/json' \
+  -d '{"email":"smoke-<uuid>@example.com","password":"<12+ chars>","turnstileToken":"<real>"}'
+```
+
+A **201** proves Hyperdrive connectivity **+** the argon2id `.wasm` bundling **+** the KV
+write **+** the DO round-trip, on **real** infra. That is not a bypass: the Origin
+allowlist defends *browsers* (a page on evil.com cannot forge the header), never scripts —
+the api's real guards against those are `TEST_ROUTES` unset, CSRF, and the session/epoch
+checks. `scripts/deploy-smoke.mjs` is exactly this request, plus the cookie assertion.
+
+> ⚠️ It writes a **real, unverified user** to the production DB (a per-run
+> `smoke-<uuid>@example.com`). That is the point — a dry run proves nothing about
+> Hyperdrive. Clean these up periodically.
+>
+> ⚠️ It needs a **real Turnstile token** (prod runs real keys, so the dummy secret is not
+> deployed): solve the widget on the real signup page and copy the
+> `cf-turnstile-response` value. Tokens are single-use and expire in ~300s.
+>
+> **To validate the BROWSER path too**, add a `staging.thinkersjournal.com` custom domain
+> to `ALLOWED_ORIGINS` (`apps/api/src/auth/csrf.ts`) — a real origin the cookie's
+> `Domain=.thinkersjournal.com` also covers, which makes a genuine browser signup
+> testable before cutover. Not required for M0.
+
+The `web` Worker has no equivalent script: smoke-hit a rendered page by hand.
 
 ### Deploy gate
 
@@ -169,9 +220,9 @@ Check every box before the first production deploy.
 - [ ] Neon connection string is the **direct** (non-pooled) host with `sslmode=require`, not the PgBouncer endpoint.
 - [ ] Postmark `From` is a **confirmed** sender signature / verified domain (silent failure otherwise).
 - [ ] Real Turnstile keys set as api secrets; dummy keys never deployed.
-- [ ] **`TEST_ROUTES` is unset in prod** and the `__test` route is unreachable — assert this with a deploy check (token exposure = account takeover).
+- [ ] **`TEST_ROUTES` is unset in prod** and the `__test` route is unreachable (token exposure = account takeover) — **asserted by `pnpm smoke:deploy` steps 1 + 4**, which is the deploy check this line used to only ask for. Run it; do not eyeball it.
 - [ ] Pin `wrangler` + `@cloudflare/vitest-pool-workers` versions; re-verify the `ratelimits`/hyperdrive/DO config shapes against the installed version.
-- [ ] Run at least one pre-launch pass on **real** infra (`wrangler dev --remote` / deployed staging) — local dev has no real Hyperdrive caching or true rate-limit thresholds.
+- [ ] Run at least one pre-launch pass on **real** infra — local dev has no real Hyperdrive caching or true rate-limit thresholds. **`pnpm smoke:deploy` step 3 IS this pass**: its signup is the smallest request that touches Postgres *and* argon2 *and* KV *and* the DO on live infrastructure. (`/health` + a rendered page touch **none** of them and prove nothing here.)
 
 **Learned during M0 — each of these cost real debugging time:**
 
@@ -181,7 +232,9 @@ Check every box before the first production deploy.
       **Verify against the deployed api that `Set-Cookie` really carries `Secure` and
       `Domain=.thinkersjournal.com`** — if it does not, `TEST_ROUTES` leaked into prod and
       session tokens are riding plaintext http. `apps/api/test/session.test.ts` pins both
-      modes, including the exact production string.
+      modes, including the exact production string, and **`pnpm smoke:deploy` step 4
+      asserts it on the real deploy** (two properties on one silent flag is exactly why
+      this is mechanical rather than a checkbox).
 - [ ] **Hyperdrive ids are real** (not the `PLACEHOLDER_*` values) and `HYPERDRIVE_FRESH` was
       created with `--caching-disabled`. Confirm on the created config, not from memory.
 - [ ] **Postmark alerting.** Sends fail **silently by design** — `sendVerificationEmail`
@@ -191,6 +244,8 @@ Check every box before the first production deploy.
       or the first symptom is users who never receive a verification link.
 - [ ] **argon2id `.wasm` bundles on a real `wrangler deploy`.** Only the vitest pool and a
       dry run have exercised it; a real deploy is the first true test of the wasm import.
+      **`pnpm smoke:deploy` step 3 exercises it** — its signup hashes a password, so a
+      `.wasm` that did not survive bundling surfaces there as a 500 rather than on a user.
 - [ ] **Confirm the Astro-403 → 503 quirk does not reproduce deployed.** Under `wrangler dev`
       an Astro origin-check 403 poisons the NEXT POST with a spurious 503 (deterministic,
       3/3; GETs unaffected). It looks dev-only — Astro's `createOriginCheckMiddleware`
@@ -200,12 +255,15 @@ Check every box before the first production deploy.
       sets neither `workers_dev: false` nor `routes`, so Cloudflare defaults `workers_dev`
       to true and the first `wrangler deploy` publishes
       `thinkersjournal-api.<subdomain>.workers.dev`, publicly addressable. That is expected
-      at first deploy (it is what the smoke test above hits), so **do not assume the api is
-      unreachable from the internet** — the real guards are `TEST_ROUTES` unset, the Origin
-      allowlist, CSRF, and the session/epoch checks. **Concrete check: `GET
-      /__test/last-verify-token` on the api's public URL must 404.** Once a custom domain
-      exists, hardening step: set `workers_dev: false` + custom `routes` so the only entry
-      is the Service Binding from `web`.
+      at first deploy — and it is what makes `pnpm smoke:deploy` possible at all — so **do
+      not assume the api is unreachable from the internet**; the real guards are
+      `TEST_ROUTES` unset, the Origin allowlist, CSRF, and the session/epoch checks.
+      **Concrete check: `GET /__test/last-verify-token` on the api's public URL must 404 —
+      that is `pnpm smoke:deploy` step 1.** Once a custom domain exists, hardening step:
+      set `workers_dev: false` + custom `routes` so the only entry is the Service Binding
+      from `web`. ⚠️ That hardening **also removes the smoke check's access** — run it (and
+      any real-infra validation) *before* closing the public URL, or against a staging
+      Worker that keeps one.
 - [ ] **The E2E's api-on-:8788 topology is DEV-ONLY.** It exists so the test can read the
       verification token off the api directly; a deployed environment has no reason to run
       the two-process split. Do not carry it forward.
