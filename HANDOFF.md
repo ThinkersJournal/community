@@ -33,7 +33,7 @@ All 19 tasks of `docs/superpowers/plans/2026-07-13-m0-foundations.md` are built 
 
 **The local loop needs three things** (all documented in `README.md` — read it for the dev loop *and* the deploy gate):
 
-1. **Docker** — `docker compose up -d` (Postgres 16: `thinkersjournal` + `thinkersjournal_test`).
+1. **Docker** — `docker compose up -d` (Postgres 18: `thinkersjournal` + `thinkersjournal_test`). Upgrading from an M0 checkout? `docker compose down -v` first — PG18 cannot read a PG16 data directory and there is no in-place major upgrade.
 2. **`apps/api/.dev.vars`** — **gitignored, so a fresh clone will not have it**; create it with `TURNSTILE_SECRET_KEY="1x0000000000000000000000000000000AA"` (Cloudflare's published always-pass dummy), `POSTMARK_SERVER_TOKEN=<any dummy>`, `TEST_ROUTES="1"`. Only `wrangler dev` by hand needs it — the test suites and the E2E supply the same values themselves.
 3. **Hyperdrive local overrides** — `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_FRESH` and `…_HYPERDRIVE_CACHED`, both pointed at the Docker Postgres.
 

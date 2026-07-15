@@ -33,9 +33,19 @@ The flagship of [Thinker's Journal](https://thinkersjournal.com): a public **soc
 ### Prerequisites
 
 ```bash
-docker compose up -d                 # Postgres 16: `thinkersjournal` (dev) + `thinkersjournal_test`
+docker compose up -d                 # Postgres 18: `thinkersjournal` (dev) + `thinkersjournal_test`
 pnpm install
 ```
+
+> Upgrading from an M0 checkout? `docker compose down -v` first — **the `-v` is
+> required**. PG18 cannot read PG16's data directory and there is no in-place
+> major upgrade (the same property that makes the Neon major choice permanent).
+> The `-v` wipes BOTH databases — the test one recreates its schema
+> automatically (vitest's `globalSetup` migrates `thinkersjournal_test` before
+> every run), but the **dev** DB does not: run
+> `pnpm --filter @thinkersjournal/api migrate` once afterward, or `wrangler
+> dev`/`pnpm test:e2e` will hit a real Postgres with no `users`/`profiles`
+> tables.
 
 ### `apps/api/.dev.vars` (gitignored — create it yourself)
 

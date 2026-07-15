@@ -1,6 +1,6 @@
 # Local development + test database for the Thinker's Journal `api` Worker.
 #
-# Brings up a single Postgres 16 server exposing two databases:
+# Brings up a single Postgres 18 server exposing two databases:
 #   - `thinkersjournal`      (dev DB, created by POSTGRES_DB)
 #   - `thinkersjournal_test` (test DB, created by db/init/01-create-test-db.sql)
 #
@@ -11,7 +11,15 @@
 #   docker compose down -v        # stop and wipe data
 services:
   db:
-    image: postgres:16
+    # ⚠️ 18, NOT 16 — and the data directory is NOT compatible across majors.
+    # Bumping this tag on an existing volume makes the container refuse to
+    # start ("database files are incompatible with server"). You must
+    # `docker compose down -v` (wiping the volume) and `up -d` again; local
+    # data is disposable. Chosen at M0/M1 because PG18 ships NATIVE uuidv7()
+    # (migrations/0002), it is already Neon's default for new projects, and
+    # Neon has NO in-place major upgrade — so this is the cheapest this
+    # decision will ever be. Do not downgrade.
+    image: postgres:18
     container_name: thinkersjournal-db
     environment:
       POSTGRES_USER: postgres
@@ -20,7 +28,17 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # ⚠️ Mounted at the PARENT dir, not `/var/lib/postgresql/data`. PG18's
+      # image made PGDATA version-specific (`/var/lib/postgresql/18/docker`)
+      # for pg_ctlcluster-style layout/upgrades (docker-library/postgres#1259).
+      # Mounting at `/data` like the old PG16 setup did makes the entrypoint
+      # refuse to start ("there appears to be PostgreSQL data in
+      # /var/lib/postgresql/data (unused mount/volume)") because it finds that
+      # path present-but-empty at the OLD expected location instead of the new
+      # versioned one. Mounting the parent is Docker's documented fix and is
+      # forward-compatible with future major bumps (each gets its own
+      # subdirectory under this same volume).
+      - pgdata:/var/lib/postgresql
       # Init scripts run ONLY on first boot of an empty data directory. The test
       # DB is created here (postgres has no multi-db env var).
       - ./db/init:/docker-entrypoint-initdb.d:ro
