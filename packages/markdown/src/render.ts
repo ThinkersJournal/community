@@ -21,6 +21,7 @@
  * is "silently become a pass-through" is disqualifying on this surface.
  * HTMLRewriter is not a sanitizer (per Cloudflare's own maintainer).
  */
+import rehypeShikiFromHighlighter from "@shikijs/rehype/core";
 import rehypeExternalLinks from "rehype-external-links";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeStringify from "rehype-stringify";
@@ -30,7 +31,11 @@ import remarkRehype from "remark-rehype";
 import { unified } from "unified";
 import { visit } from "unist-util-visit";
 
+import { getHighlighter, HIGHLIGHT_THEME } from "./highlight";
+import { rehypeLanguageAllowlist } from "./lang-allowlist";
+
 import type { Element, Root } from "hast";
+import type { HighlighterCore } from "shiki/core";
 
 /**
  * ⚠️ BUMP THIS AND EVERY CACHED RENDER IS INVALIDATED ON DEPLOY.
@@ -155,7 +160,7 @@ function rehypeLowercaseUrlScheme() {
   };
 }
 
-function buildRenderer() {
+function buildRenderer(highlighter: HighlighterCore) {
   return (
     unified()
       .use(remarkParse)
@@ -182,7 +187,14 @@ function buildRenderer() {
         target: "_blank",
         protocols: ["http", "https"],
       })
-      // Task 6 inserts Shiki here. M3 inserts the ref-card plugin here.
+      // ⚠️ ORDER: allowlist THEN Shiki. The allowlist reads the class the
+      // sanitizer decided to keep, and must run before Shiki can throw on it.
+      .use(rehypeLanguageAllowlist, { languages: highlighter.getLoadedLanguages() })
+      // ⚠️ AFTER rehypeSanitize, non-negotiably: defaultSchema allows no `style`,
+      // so a sanitizer running after this would strip every token colour. Safe
+      // because Shiki emits HAST — it never round-trips through a string parser.
+      .use(rehypeShikiFromHighlighter, highlighter, { theme: HIGHLIGHT_THEME })
+      // M3 inserts the ref-card plugin here.
       .use(rehypeStringify)
   );
 }
@@ -191,15 +203,36 @@ function buildRenderer() {
  * Memoized because Task 6 makes construction genuinely async (Shiki's
  * highlighter init). Declared async NOW so that task adds a step rather than
  * changing this module's signature and every call site with it.
+ *
+ * ⚠️ DOES NOT CACHE A REJECTED INIT — two layers deep. `rendererPromise ??= x`
+ * stores the PROMISE OBJECT synchronously, before it settles; a naive version
+ * of this would memoize a transient failure for the isolate's lifetime and
+ * every render would 500 forever (this is exactly the bug M0 hit with
+ * argon2's memoized WASM init). getHighlighter() already resets ITS OWN memo
+ * on rejection (src/highlight.ts) — but that alone is not enough, because
+ * `rendererPromise` here would still hold the outer, now-rejected
+ * buildRendererAsync() promise even after getHighlighter() has self-healed.
+ * So renderMarkdown() below resets `rendererPromise` too, on ITS rejection.
+ *
+ * No double-init race: the reset (`rendererPromise = null`) and the
+ * reassignment on the next call both happen synchronously within a single
+ * `??=` expression, with no `await` in between — JS never interleaves two
+ * synchronous sections, so two concurrent callers can never both observe
+ * `null` and each kick off their own independent build. Every caller that
+ * read the promise before a reset keeps awaiting that SAME promise object
+ * (and gets the SAME outcome); only the next call after a reset builds anew.
  */
-let rendererPromise: ReturnType<typeof buildRendererAsync> | null = null;
+let rendererPromise: Promise<ReturnType<typeof buildRenderer>> | null = null;
 async function buildRendererAsync(): Promise<ReturnType<typeof buildRenderer>> {
-  return buildRenderer();
+  return buildRenderer(await getHighlighter());
 }
 
 /** Render `markdown` to HTML that is safe to embed. */
 export async function renderMarkdown(markdown: string): Promise<string> {
-  rendererPromise ??= buildRendererAsync();
+  rendererPromise ??= buildRendererAsync().catch((error: unknown) => {
+    rendererPromise = null;
+    throw error;
+  });
   const renderer = await rendererPromise;
   return String(await renderer.process(markdown));
 }
