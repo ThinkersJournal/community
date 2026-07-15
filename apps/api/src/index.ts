@@ -1,5 +1,6 @@
 import { handleTestRoute } from "./routes/__test";
 import { handleLogin } from "./routes/login";
+import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleCreatePost, handleListPosts } from "./routes/posts";
 import { handleSignup } from "./routes/signup";
 import { handleVerifyEmail } from "./routes/verify-email";
@@ -33,6 +34,17 @@ export default {
 
     if (request.method === "POST" && pathname === "/auth/login") {
       return await handleLogin(request, env, ctx);
+    }
+
+    // Unlike signup/login, these DO run the mutating pipeline — they have a
+    // session — but WITHOUT `requireVerifiedEmail`: an unverified user must
+    // still be able to end their own session. See src/routes/logout.ts.
+    if (request.method === "POST" && pathname === "/auth/logout") {
+      return await handleLogout(request, env, ctx);
+    }
+
+    if (request.method === "POST" && pathname === "/auth/logout-all") {
+      return await handleLogoutAll(request, env, ctx);
     }
 
     // Likewise NOT the pipeline: a GET carries no session/CSRF/epoch
