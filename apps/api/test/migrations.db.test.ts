@@ -19,7 +19,13 @@ async function migrate(direction: "up" | "down"): Promise<void> {
     dir: migrationsDir,
     direction,
     migrationsTable: "pgmigrations",
-    count: direction === "down" ? 1 : Infinity,
+    // Infinity in BOTH directions: "down" must revert the ENTIRE applied
+    // stack, not just the most-recently-applied file. With count: 1, adding
+    // migrations/0002 on top of 0001 made "down" revert 0002 ONLY (posts +
+    // media), leaving users/profiles in place — this test would then assert
+    // those tables are gone and fail. Reverting the whole stack keeps this
+    // round-trip test correct regardless of how many migrations exist.
+    count: Infinity,
   });
 }
 

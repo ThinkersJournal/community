@@ -136,6 +136,17 @@ export default defineConfig({
           name: "node",
           environment: "node",
           include: ["test/**/*.db.test.ts"],
+          // migrations.db.test.ts's round-trip proves the SQL by actually
+          // running it: `down` (count: Infinity) drops every table in the
+          // stack, then `up` recreates them. That is only safe if no other
+          // file in this project is mid-query against those same tables at
+          // that instant. Vitest's default file parallelism runs `.db.test.ts`
+          // files concurrently in separate workers against the SAME live
+          // Postgres database, so posts-media-schema.db.test.ts's inserts can
+          // land in the drop/recreate window ("relation ... does not exist").
+          // Serializing this project's files avoids the race; it does not
+          // affect the "pool" project's parallelism/performance.
+          fileParallelism: false,
         },
       },
     ],
