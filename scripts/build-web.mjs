@@ -78,7 +78,19 @@ function sleepSync(ms) {
  *
  * Scoped by executable path so an unrelated Cloudflare project's workerd can
  * never enter the diff in the first place.
+ *
+ * ⚠️ THE TRAILING SEPARATOR IS THE WHOLE GUARANTEE. A bare
+ * `startsWith(repoRoot)` is a STRING prefix test, not a PATH-containment test,
+ * so it also matches any SIBLING checkout whose name merely starts with ours —
+ * `…\ThinkersJournal-Community-Backup\node_modules\…\workerd.exe` begins with
+ * `…\ThinkersJournal-Community`. That would let another project's workerd into
+ * the diff and, if it happened to start during our build, get SIGKILLed —
+ * exactly what the header promises can never happen. Appending `path.sep`
+ * forces the match to land on a directory boundary, which is what "under this
+ * repo" actually means.
  */
+const repoRootPrefix = repoRoot + path.sep;
+
 function repoWorkerdPids() {
   try {
     if (process.platform === "win32") {
@@ -102,7 +114,9 @@ function repoWorkerdPids() {
           .filter(
             (p) =>
               typeof p.ExecutablePath === "string" &&
-              p.ExecutablePath.toLowerCase().startsWith(repoRoot.toLowerCase()),
+              p.ExecutablePath.toLowerCase().startsWith(
+                repoRootPrefix.toLowerCase(),
+              ),
           )
           .map((p) => p.ProcessId),
       );
@@ -117,7 +131,11 @@ function repoWorkerdPids() {
       const match = /^\s*(\d+)\s+(.*)$/.exec(line);
       if (match === null) continue;
       const [, pid, args] = match;
-      if (args.includes("workerd") && args.includes(repoRoot)) {
+      // Same boundary reasoning as the win32 branch: `repoRootPrefix`, not
+      // `repoRoot`, so a sibling checkout sharing our name as a prefix cannot
+      // match. (A substring test is the best available here — the repo path can
+      // appear anywhere in the command line, not just at its start.)
+      if (args.includes("workerd") && args.includes(repoRootPrefix)) {
         pids.add(Number(pid));
       }
     }

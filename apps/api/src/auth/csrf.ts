@@ -15,6 +15,8 @@
  * elsewhere, or logging), it cannot be used to derive the secret or forge
  * anything beyond a matching CSRF header.
  */
+import { sha256Hex } from "./encoding";
+
 import type { SessionData } from "@thinkersjournal/shared";
 
 /**
@@ -33,17 +35,6 @@ const ALLOWED_ORIGINS: Set<string> = new Set([
   "http://localhost:8787",
   "http://127.0.0.1:8787",
 ]);
-
-/** Hex-encode the SHA-256 digest of `value`. */
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value),
-  );
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 /**
  * Constant-time string comparison: accumulates XOR differences over the
@@ -66,12 +57,28 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 /**
- * Origin/Referer allowlist check. Safe methods (GET/HEAD) always pass — they
- * carry no CSRF risk under this app's semantics (no state-changing GET/HEAD
- * endpoints). For any other method: the `Origin` header must be present and
- * in `ALLOWED_ORIGINS`; if `Origin` is absent, fall back to the origin parsed
- * out of `Referer`. Missing BOTH headers, or a value not in the allowlist
- * (including an unparseable `Referer`), fails closed (`false`).
+ * Origin/Referer allowlist check. Safe methods (GET/HEAD) always pass. For any
+ * other method: the `Origin` header must be present and in `ALLOWED_ORIGINS`;
+ * if `Origin` is absent, fall back to the origin parsed out of `Referer`.
+ * Missing BOTH headers, or a value not in the allowlist (including an
+ * unparseable `Referer`), fails closed (`false`).
+ *
+ * ⚠️ GET/HEAD PASSING IS NOT "GET IS ALWAYS SAFE" — there IS one state-changing,
+ * session-bearing GET in this app: `GET /verify-email` (src/routes/verify-email.ts)
+ * stamps `email_verified_at`. It is a DELIBERATE exception, and safe for reasons
+ * specific to it, not because of its method:
+ *   - The session cookie is `SameSite=Lax` (src/auth/session.ts), so it does NOT
+ *     ride along on cross-site SUB-RESOURCE GETs — an `<img>`/`fetch` from
+ *     evil.com reaches the route with no session and gets a 401. Lax attaches the
+ *     cookie only to TOP-LEVEL navigations, which is exactly the intended flow:
+ *     the user clicking the link in their own inbox.
+ *   - Even when forced, the EFFECT is not an attack. The route requires a session
+ *     that owns the token and matches the user's current security epoch, so the
+ *     most a cross-site trigger can accomplish is causing a user to verify their
+ *     OWN address with a token that was emailed to them — the thing they were
+ *     going to do anyway.
+ * A future state-changing GET would NOT automatically inherit that reasoning.
+ * Do not add one without redoing it.
  */
 export function checkOrigin(request: Request): boolean {
   if (request.method === "GET" || request.method === "HEAD") {

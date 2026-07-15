@@ -61,9 +61,20 @@ function invalidToken(): Response {
  * ⚠️ The body is IDENTICAL across all three cases on purpose: a distinct
  * "that token isn't yours" would let an attacker probe whose token they hold.
  * The status differs (401 = authenticate, 403 = authenticated but not permitted)
- * only to keep normal HTTP semantics for the client; it leaks nothing about the
- * token itself, because a caller reaching the 403 already holds a session and
- * merely learns the token is not their own.
+ * only to keep normal HTTP semantics for the client.
+ *
+ * ⚠️ BE HONEST ABOUT WHAT THE STATUS LEAKS. The identical body does NOT make this
+ * a non-oracle — the STATUS ITSELF is one. An authenticated caller submitting a
+ * guessed token learns, from the code alone, which of two worlds they are in:
+ * 403 means the token is REAL but belongs to someone else, while 400
+ * (`invalidToken`) means no such token exists. That distinction is exactly what a
+ * probe wants. It is unexploitable for ONE reason only: tokens are 256 bits of
+ * CSPRNG output (src/auth/email-verify.ts), so an attacker never gets a hit to
+ * read the oracle's answer about. The defense is the ENTROPY, not the response
+ * shape. If token generation is ever weakened — shorter, derived, sequential,
+ * user-influenced — this split becomes a live enumeration primitive and the two
+ * paths must collapse to one status. Do not cite the matching bodies as the
+ * reason this is safe.
  */
 function loginRequired(status: 401 | 403): Response {
   return new Response(JSON.stringify({ code: "LOGIN_REQUIRED" }), {

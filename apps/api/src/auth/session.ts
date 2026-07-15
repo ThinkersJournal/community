@@ -11,29 +11,11 @@
  */
 import { COOKIE_DOMAIN, SESSION_COOKIE_NAME } from "@thinkersjournal/shared";
 
+import { base64urlEncode, sha256Hex } from "./encoding";
+
 import type { SessionData } from "@thinkersjournal/shared";
 
 const SESSION_TTL_SECONDS = 2_592_000; // 30 days
-
-/** Base64url-encode (URL-safe, no padding) raw bytes — RFC 4648 §5. */
-function base64urlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]!);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-/** Hex-encode the SHA-256 digest of `value`, used as the KV key suffix. */
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value),
-  );
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 /** The KV key under which a session's data is stored, given its raw cookie token. */
 async function sessionKey(token: string): Promise<string> {
@@ -140,6 +122,16 @@ export async function createSession(
 /**
  * Read the session tied to the `tj_session` cookie on `request`, if any.
  * Returns `null` when there is no cookie or the token is unknown/expired.
+ *
+ * NEVER THROWS on a malformed KV value. Only `createSession` ever writes these
+ * records (always `JSON.stringify(data)`), so an unparseable one means the
+ * namespace was corrupted or tampered with — not a case any client can reach.
+ * But `JSON.parse` throwing here would escape a signature that promises
+ * `SessionData | null` and surface as a 500 on the auth hot path (every mutating
+ * request runs this at step 2 of src/auth/pipeline.ts). Treating it as "no
+ * session" fails CLOSED — the caller 401s and the user logs in again, minting a
+ * well-formed record — which is both the safe direction and the honest one: a
+ * record we cannot parse is a session we cannot authenticate.
  */
 export async function readSession(
   env: Env,
@@ -156,7 +148,11 @@ export async function readSession(
     return null;
   }
 
-  return JSON.parse(stored) as SessionData;
+  try {
+    return JSON.parse(stored) as SessionData;
+  } catch {
+    return null;
+  }
 }
 
 /**

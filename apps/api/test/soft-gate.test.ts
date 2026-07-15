@@ -173,7 +173,50 @@ describe("soft email-verification gate", () => {
     );
     await waitOnExecutionContext(ctx);
 
-    expect(response.status).not.toBe(403);
+    // ⚠️ The EXACT success status, not `not.toBe(403)`. This case is the gate's
+    // positive half — it must prove the request reached the handler, and only a
+    // 201 does. `not.toBe(403)` was satisfied by a 401 (a broken session or a
+    // stale epoch) and by a 500 (the DB read throwing) just as happily as by
+    // success, so the assertion would have stayed green while the thing it
+    // claims to test had stopped happening entirely.
+    expect(response.status).toBe(201);
+    // The handler's own stub body — proof this is `handleCreatePost`'s response
+    // and that the pipeline handed it the right validated session.
+    const body = (await response.json()) as { ok: boolean; authorId: string };
+    expect(body).toEqual({ ok: true, authorId: userId });
+  });
+
+  /**
+   * FAIL-CLOSED on a missing user row: a session that is entirely valid —
+   * well-formed, unrevoked (its epoch matches the DO's, which answers for any
+   * name whether or not a `users` row exists), CSRF-correct — but whose user has
+   * no row in Postgres.
+   *
+   * Reachable in practice: the account was deleted while a session was live.
+   * `requireVerifiedEmail` reads `rows[0]?.email_verified_at ?? null`, and the
+   * `?? null` is what turns "no row" into DENY rather than a crash — the row's
+   * ABSENCE and an unverified row take the identical path. This pins that the
+   * unknown user is refused (403), never let through, and never 500s: the
+   * dangerous refactor is `rows[0].email_verified_at`, which throws on undefined
+   * and would turn a deleted account into a 500 on every mutation.
+   */
+  it("POST /posts with a valid session whose user row is gone -> 403", async () => {
+    // Never inserted, so no `users` row exists for it — and deliberately NOT
+    // pushed to `createdUserIds`, since there is nothing to clean up.
+    const ghostUserId = crypto.randomUUID();
+    const authed = await sessionTokenFor(ghostUserId);
+
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      requestWithCookie("/posts", "POST", authed),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { code: string };
+    expect(body.code).toBe("EMAIL_NOT_VERIFIED");
   });
 
   it("GET /posts with the SAME unverified session -> 200 (reads are open)", async () => {

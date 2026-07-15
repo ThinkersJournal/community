@@ -21,6 +21,8 @@
  * rejected attempt. Do not recombine these into a single consume-on-lookup.
  */
 
+import { base64urlEncode, sha256Hex } from "./encoding";
+
 const VERIFY_TTL_SECONDS = 86_400; // 24h
 
 /**
@@ -32,26 +34,6 @@ const VERIFY_TTL_SECONDS = 86_400; // 24h
  * production path reads or writes it, because `TEST_ROUTES` is unset in prod.
  */
 export const TEST_LAST_TOKEN_KEY = "__test:last-verify-token";
-
-/** Base64url-encode (URL-safe, no padding) raw bytes — RFC 4648 §5. */
-function base64urlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]!);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-/** Hex-encode the SHA-256 digest of `value`, used as the KV key suffix. */
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value),
-  );
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 /** The KV key holding the user id for a given raw verification token. */
 async function verifyKey(token: string): Promise<string> {

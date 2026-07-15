@@ -80,8 +80,18 @@ function forbidden(): Response {
  * are deliberately indistinguishable to the client. The web app's handling is
  * the same either way (send the user to log in), so distinguishing them would
  * only tell a caller holding a stolen-but-revoked cookie that it was once real.
+ *
+ * ⚠️ `Record<string, string>`, DELIBERATELY NARROWER THAN `HeadersInit`. This
+ * parameter is SPREAD into the headers object below, and spreading is only
+ * meaningful for a plain object: spreading a `Headers` INSTANCE yields `{}`
+ * (its entries live behind an iterator, not on own enumerable properties) and
+ * spreading a `string[][]` yields index keys (`{"0": [...]}`). Both are valid
+ * `HeadersInit`, both type-check, and both would SILENTLY DROP the revocation
+ * path's `Set-Cookie` — leaving the browser replaying a dead session token with
+ * no error anywhere. The narrower type makes those two shapes unrepresentable
+ * rather than merely unused.
  */
-function unauthorized(extraHeaders: HeadersInit = {}): Response {
+function unauthorized(extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify({ error: "Unauthorized" }), {
     status: 401,
     headers: { "content-type": "application/json", ...extraHeaders },

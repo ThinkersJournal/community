@@ -1,7 +1,14 @@
 /**
  * Brute-force defense for the `api` Worker's signup/login flows, backed by
- * Cloudflare's `ratelimit` binding (see `SIGNUP_LIMITER` / `LOGIN_LIMITER` in
- * `wrangler.jsonc`, each a `simple` fixed-window limiter).
+ * Cloudflare's rate-limiting bindings (`SIGNUP_LIMITER` / `LOGIN_LIMITER`, each
+ * a `simple` fixed-window limiter).
+ *
+ * ⚠️ THE WRANGLER CONFIG KEY IS THE PLURAL `ratelimits`, and the distinction is
+ * load-bearing — the singular `ratelimit` is NOT a valid top-level key and does
+ * not declare anything. It is spelled `ratelimits` in `wrangler.jsonc`, whose
+ * own note records the verification against wrangler 4.110.0's config schema;
+ * that file, not this sentence, is the source of truth. Mentally search for the
+ * plural when tracing where `SIGNUP_LIMITER` comes from.
  *
  * Deliberately minimal (YAGNI): the binding itself owns all counting/window
  * logic, so this helper is just the request-shaped translation of its result

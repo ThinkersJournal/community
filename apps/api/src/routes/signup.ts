@@ -31,6 +31,7 @@ import {
   createVerificationToken,
   sendVerificationEmail,
 } from "../auth/email-verify";
+import { base64urlEncode } from "../auth/encoding";
 import { hashPassword } from "../auth/password";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { createSession } from "../auth/session";
@@ -100,15 +101,6 @@ function verificationLinkOrigin(request: Request): string {
   return origin !== null && VERIFICATION_LINK_ORIGINS.has(origin)
     ? origin
     : CANONICAL_ORIGIN;
-}
-
-/** Base64url-encode (URL-safe, no padding) raw bytes — RFC 4648 §5. */
-function base64urlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]!);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function json(body: unknown, status: number, headers: HeadersInit = {}): Response {

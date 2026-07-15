@@ -53,11 +53,36 @@ function moduleLoader(
  * Lazily initialize (and memoize) the argon2id WASM instance. The heavy
  * `setupWasm` work — allocating WASM memory and instantiating a module — runs
  * exactly once; every hash reuses the resulting compute function.
+ *
+ * ⚠️ SUCCESS IS MEMOIZED; FAILURE IS NOT. Memoizing the PROMISE (rather than the
+ * resolved value) is what gives the no-double-init property: concurrent callers
+ * racing a cold isolate all await the SAME in-flight promise, so `setupWasm`
+ * runs once no matter how many requests arrive at once. But that same memo
+ * applied to a REJECTED promise would cache the failure for the isolate's whole
+ * lifetime: one transient init error and every subsequent hash/verify rejects
+ * forever, with no retry — an unrecoverable per-isolate outage (fail-closed, so
+ * not a security hole, but an availability one that only a redeploy clears).
+ * So the memo is cleared on rejection and the next caller retries from scratch.
+ *
+ * The `argon2Promise === attempt` guard makes the clear idempotent under a race:
+ * it ensures a late rejection can only ever clear ITS OWN memo, never a newer
+ * attempt a subsequent caller has already installed. The error still propagates
+ * to everyone awaiting the failed attempt — `hashPassword` lets it surface, and
+ * `verifyPassword`'s try/catch turns it into a `false`, both unchanged.
  */
 let argon2Promise: Promise<computeHash> | undefined;
 function getArgon2(): Promise<computeHash> {
   if (argon2Promise === undefined) {
-    argon2Promise = setupWasm(moduleLoader(simdWasm), moduleLoader(nonSimdWasm));
+    const attempt: Promise<computeHash> = setupWasm(
+      moduleLoader(simdWasm),
+      moduleLoader(nonSimdWasm),
+    ).catch((err: unknown) => {
+      if (argon2Promise === attempt) {
+        argon2Promise = undefined;
+      }
+      throw err;
+    });
+    argon2Promise = attempt;
   }
   return argon2Promise;
 }

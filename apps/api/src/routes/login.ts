@@ -54,6 +54,7 @@
 import { LoginInput } from "@thinkersjournal/shared";
 
 import { checkOrigin } from "../auth/csrf";
+import { base64urlEncode } from "../auth/encoding";
 import { hashPassword, needsRehash, verifyPassword } from "../auth/password";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { createSession } from "../auth/session";
@@ -116,15 +117,6 @@ function json(body: unknown, status: number, headers: HeadersInit = {}): Respons
  */
 function unauthorized(): Response {
   return json({ error: "Invalid email or password" }, 401);
-}
-
-/** Base64url-encode (URL-safe, no padding) raw bytes — RFC 4648 §5. */
-function base64urlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]!);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 /**
