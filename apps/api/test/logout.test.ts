@@ -6,6 +6,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import worker from "../src";
+import { envWithBrokenBump } from "./helpers/broken-bump";
 import { csrfTokenFor } from "../src/auth/csrf";
 import { createSession, readSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
@@ -119,6 +120,23 @@ async function fetchWorker(request: Request): Promise<Response> {
   const response = await worker.fetch(request, env, ctx);
   await waitOnExecutionContext(ctx);
   return response;
+}
+
+/**
+ * Drive the Worker against a PATCHED `env` — the seam used to fault-inject the
+ * `USER_SECURITY` DO. `src/index.ts` does not catch handler errors, so a route
+ * that throws REJECTS here rather than returning a 500.
+ */
+async function fetchWorkerWithEnv(
+  request: Request,
+  patchedEnv: Env,
+): Promise<Response> {
+  const ctx = createExecutionContext();
+  try {
+    return await worker.fetch(request, patchedEnv, ctx);
+  } finally {
+    await waitOnExecutionContext(ctx);
+  }
 }
 
 /** A bare probe request carrying only `token`'s cookie — no Origin/CSRF. */
@@ -242,6 +260,67 @@ describe("POST /auth/logout-all", () => {
       authedRequest("/auth/logout", sessionB),
     );
     expect(bResponse.status).toBe(401);
+  });
+
+  /**
+   * ⚠️ REVOKE-THEN-DESTROY — the ordering src/routes/logout.ts's header calls
+   * the fail-safe direction, and which until now was pinned by NOTHING.
+   *
+   * `logout-all` does two things that can fail INDEPENDENTLY: it bumps the epoch
+   * (a Durable Object call, revoking every session for the user) and it destroys
+   * the caller's own session (a KV delete). On the SUCCESS path both orderings
+   * are indistinguishable, so only a FAILING bump can tell them apart — which is
+   * why this test injects one. Inverting the route to destroy-then-bump left the
+   * whole file passing 9/9 before this existed.
+   *
+   * The two orderings under a failing bump:
+   *   • bump, then destroy (as built) -> nothing happened. The caller's session
+   *     is INTACT and still valid, the request visibly fails, and a retry can
+   *     still achieve the logout. Fail-safe.
+   *   • destroy, then bump (inverted) -> the caller's own session is gone, but
+   *     the bump never landed, so EVERY OTHER session — the entire point of "log
+   *     out everywhere" — survives. The user is told the request failed while
+   *     being left with the false impression they may be logged out, and the
+   *     sessions they were trying to kill are exactly the ones that lived.
+   *
+   * This is a LOWER class than signup's equivalent (there, the inverted order is
+   * a silent, permanent account takeover; here it is a visible 500 that grants an
+   * attacker nothing and is recoverable by retrying) — but it is the same
+   * structural blindness, and it is cheap to close.
+   *
+   * Swapping src/routes/logout.ts to destroy-then-bump must turn this RED
+   * (mutation-verified).
+   */
+  it("leaves the caller's session INTACT if logout-all's epoch bump fails", async () => {
+    const userId = await insertUser(true);
+    const authed = await authenticate(userId);
+    const epochBefore = await env.USER_SECURITY.getByName(userId).getEpoch();
+
+    // The failure is VISIBLE, not swallowed — and asserting on the INJECTED
+    // fault's own message is what stops this test passing vacuously: an
+    // unrelated error (or no error at all) would not match.
+    await expect(
+      fetchWorkerWithEnv(
+        authedRequest("/auth/logout-all", authed),
+        envWithBrokenBump(),
+      ),
+    ).rejects.toThrow(/bumpEpoch/);
+
+    // Nothing happened: the epoch did not move ...
+    expect(await env.USER_SECURITY.getByName(userId).getEpoch()).toBe(
+      epochBefore,
+    );
+
+    // ... and the caller's session still exists and still WORKS, so the logout
+    // they asked for is still achievable by retrying. Under destroy-then-bump
+    // this session is already gone while every OTHER session survives.
+    expect(
+      await readSession(env, cookieProbe(authed.token)),
+      "logout-all destroyed the caller's session before the bump that failed — the sessions it was meant to revoke are the ones that survived",
+    ).not.toBeNull();
+    expect((await fetchWorker(authedRequest("/auth/logout", authed))).status).toBe(
+      200,
+    );
   });
 
   it("an UNVERIFIED user can still log out everywhere -> 200, not 403 EMAIL_NOT_VERIFIED", async () => {

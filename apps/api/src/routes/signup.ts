@@ -52,7 +52,7 @@ import { hashPassword } from "../auth/password";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { createSession } from "../auth/session";
 import { verifyTurnstile } from "../auth/turnstile";
-import { withClient } from "../db/client";
+import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
 import { isUniqueViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
 import { randomSuffix } from "../util/random";
@@ -292,8 +292,24 @@ export async function handleSignup(
   //
   // `xmax = 0` is the standard way to ask "did this row come from the INSERT or
   // the UPDATE"; the bump below must fire ONLY on the takeover path.
+  //
+  // It is idiom rather than documented contract, but the SECURITY-RELEVANT
+  // direction is safe BY MECHANISM, not by luck: `ON CONFLICT DO UPDATE` always
+  // locks the conflicting tuple first, and `heap_update` carries that locker into
+  // the new tuple's `xmax` — so an UPDATED row's xmax is never 0, and an update
+  // can never be misreported as an insert. That is the direction that would skip
+  // the bump. It is additionally pinned by executable consequence, not just by
+  // reading: the re-signup epoch test and the account-takeover regression in
+  // test/signup.test.ts both depend on `inserted === false` firing the bump
+  // against real Postgres, so drift breaks them loudly. Residual gap:
+  // test/postgres-version.db.test.ts asserts `>= 18`, so it would not catch a
+  // behavior change on some FUTURE major — re-verify this idiom when upgrading.
   const upserted = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    await c.query("BEGIN");
+    // NOT a bare `BEGIN`: this transaction holds a row lock across the epoch
+    // bump's DO RPC below, so its lock hold is bounded database-side. See
+    // `BEGIN_BOUNDED_TX` in src/db/client.ts for the values and why they cannot
+    // live on the connection.
+    await c.query(BEGIN_BOUNDED_TX);
     try {
       const { rows } = await c.query<{ id: string; inserted: boolean }>(
         `INSERT INTO users (email, password_hash)

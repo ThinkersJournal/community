@@ -6,6 +6,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
+import { envWithBrokenBump } from "./helpers/broken-bump";
 import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 import { TEST_LAST_TOKEN_KEY } from "../src/auth/email-verify";
 import { withClient } from "../src/db/client";
@@ -140,26 +141,6 @@ async function signupWithEnv(body: unknown, patchedEnv: Env): Promise<Response> 
   }
 }
 
-/**
- * An `env` whose `bumpEpoch()` always throws, `getEpoch()` still real. Used to
- * prove the ordering of the epoch bump against the password write — the failure
- * mode only exists when the bump does not succeed, so it cannot be observed
- * without injecting the fault.
- */
-function envWithBrokenBump(): Env {
-  return {
-    ...env,
-    USER_SECURITY: {
-      getByName(name: string) {
-        const real = env.USER_SECURITY.getByName(name);
-        return {
-          bumpEpoch: () => Promise.reject(new Error("bumpEpoch is unavailable")),
-          getEpoch: () => real.getEpoch(),
-        };
-      },
-    },
-  } as unknown as Env;
-}
 
 function validBody(email: string, password: string = VALID_PASSWORD) {
   return { email, password, turnstileToken: "dummy-turnstile-token" };
