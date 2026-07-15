@@ -27,6 +27,7 @@ import {
   handlePublicProfile,
   handlePublicRecent,
 } from "./routes/public";
+import { handleResendVerification } from "./routes/resend-verification";
 import { handleSignup } from "./routes/signup";
 import { handleVerifyEmail } from "./routes/verify-email";
 
@@ -48,6 +49,11 @@ export const ROUTES: readonly RouteDef[] = [
   // end their own session. See src/routes/logout.ts.
   { method: "POST", pattern: "/auth/logout", handler: handleLogout },
   { method: "POST", pattern: "/auth/logout-all", handler: handleLogoutAll },
+
+  // Same story as logout: a session, but deliberately WITHOUT
+  // `requireVerifiedEmail` — this route exists FOR the unverified, so gating it
+  // on verification would be a catch-22. See src/routes/resend-verification.ts.
+  { method: "POST", pattern: "/auth/resend-verification", handler: handleResendVerification },
 
   // Delivers the CSRF token for the caller's session to the `web` Worker. NOT
   // the pipeline (and it must not be): the pipeline's CSRF step would require

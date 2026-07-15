@@ -1,6 +1,11 @@
 ---
 /**
- * `GET /verify-email?token=…` through the Service Binding.
+ * `GET /verify-email?token=…` through the Service Binding, PLUS
+ * `POST /auth/resend-verification` for a logged-in user whose link was lost,
+ * slow, or never arrived — see apps/api/src/routes/resend-verification.ts's
+ * header for why that route exists and why it requires a session rather than
+ * an email in the body (a `{email}` endpoint would be a mail-bombing gun aimed
+ * at any address an attacker names, and an enumeration oracle).
  *
  * ⚠️ THE LOGIN_REQUIRED RIPPLE — the reason this page is not a one-liner.
  *
@@ -16,48 +21,117 @@
  * link SURVIVES this rejection. So we tell the user to log in and send them
  * back to this exact URL (`?next=`), where the same token still works.
  *
- * Getting this wrong (rendering "invalid link") would strand every new user:
- * there is no resend endpoint until M1, and the token they hold is fine.
+ * ⚠️ THE RESEND FORM — same CSRF story as new-post.astro (see its header for
+ * the full "why a hidden input and not a cookie" reasoning, repeated here in
+ * brief): the api demands `X-CSRF-Token` = `sha256Hex(session.csrfSecret)`,
+ * computable only from the KV session record, so THIS Worker cannot compute it
+ * itself — it fetches it from `GET /auth/csrf` over the Service Binding and
+ * embeds the result as a hidden input. A non-HttpOnly cookie would defeat the
+ * whole point of a double-submit token (readable by an injected script, and
+ * riding along on cross-site requests automatically); rendered into the page
+ * body, the token is reachable only by someone who could already read an
+ * authenticated response from this origin. An HTML form cannot set a request
+ * HEADER either, so it posts back HERE (same origin, `action="/verify-email"`)
+ * and this component promotes the hidden field to a real `X-CSRF-Token` header
+ * on the Service-Binding call — that round trip is what makes it a genuine
+ * double-submit, since a cross-site attacker can make the browser POST here but
+ * cannot read the token out of the page to fill the field in.
  */
-import { apiFetch } from "../lib/api";
+import { apiErrorCode, apiFetch } from "../lib/api";
 
 // ⚠️ This page's own URL carries the verification token, and the rendered
-// login link echoes it back (`?next=`) — keep it out of shared/browser caches.
+// login link + hidden CSRF input both carry per-request secrets — keep it out
+// of shared/browser caches.
 Astro.response.headers.set("cache-control", "no-store");
 
 const token = Astro.url.searchParams.get("token");
 
-type Outcome = "verified" | "login-required" | "invalid" | "missing";
-let outcome: Outcome;
+type Outcome = "verified" | "login-required" | "invalid" | "missing" | null;
+let outcome: Outcome = null;
 
-if (token === null || token === "") {
-  outcome = "missing";
-} else {
-  const response = await apiFetch<{ code?: string }>(
-    `/verify-email?token=${encodeURIComponent(token)}`,
-    {
-      // ⚠️ Load-bearing: forwards the browser's `Cookie` so the api can resolve
-      // the session. Without it EVERY visit is a 401, including from a
-      // logged-in user — the flow would be unusable.
-      request: Astro.request,
-    },
-  );
-
-  if (response.status === 200) {
-    outcome = "verified";
-  } else if (response.data?.code === "LOGIN_REQUIRED") {
-    // 401 (no session / stale session) and 403 (token belongs to someone else)
-    // share this code and an identical body — deliberately, so the api never
-    // reveals whose token it is. Both mean the same thing to the user: sign in
-    // as the account that owns this link, then re-open it.
-    outcome = "login-required";
+// Only the ORDINARY "click the emailed link" visit is a GET; the resend form
+// below POSTs back to this same page and must not re-run the token check.
+if (Astro.request.method === "GET") {
+  if (token === null || token === "") {
+    outcome = "missing";
   } else {
-    // A genuinely bad token: unknown, expired, or already redeemed. The api
-    // returns one generic 400 for all three (it must not confirm that a guessed
-    // token was ever real).
-    outcome = "invalid";
+    const response = await apiFetch<{ code?: string }>(
+      `/verify-email?token=${encodeURIComponent(token)}`,
+      {
+        // ⚠️ Load-bearing: forwards the browser's `Cookie` so the api can resolve
+        // the session. Without it EVERY visit is a 401, including from a
+        // logged-in user — the flow would be unusable.
+        request: Astro.request,
+      },
+    );
+
+    if (response.status === 200) {
+      outcome = "verified";
+    } else if (response.data?.code === "LOGIN_REQUIRED") {
+      // 401 (no session / stale session) and 403 (token belongs to someone else)
+      // share this code and an identical body — deliberately, so the api never
+      // reveals whose token it is. Both mean the same thing to the user: sign in
+      // as the account that owns this link, then re-open it.
+      outcome = "login-required";
+    } else {
+      // A genuinely bad token: unknown, expired, or already redeemed. The api
+      // returns one generic 400 for all three (it must not confirm that a guessed
+      // token was ever real).
+      outcome = "invalid";
+    }
   }
 }
+
+/** What the resend form's submission produced, or `null` on a GET visit. */
+type ResendOutcome = "sent" | "already-verified" | "unauthenticated" | "error" | null;
+let resendOutcome: ResendOutcome = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+
+  const response = await apiFetch<{ code?: string }>("/auth/resend-verification", {
+    method: "POST",
+    // Forwards the session cookie — the api derives the address to mail from
+    // `session.userId`, never from anything the form submits.
+    request: Astro.request,
+    // ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own, which
+    // would launder a cross-site request into an allowlisted one. See
+    // new-post.astro's identical note.
+    origin: Astro.request.headers.get("Origin") ?? "",
+    // The hidden input, promoted back into the header the api demands.
+    csrfToken: String(form.get("csrfToken") ?? ""),
+  });
+
+  if (response.status === 202) {
+    resendOutcome = "sent";
+  } else if (apiErrorCode(response) === "ALREADY_VERIFIED") {
+    // The api's honest answer for a session that already verified: nothing to
+    // resend, and it leaks nothing here — the caller already IS that account.
+    resendOutcome = "already-verified";
+  } else if (response.status === 401) {
+    // The session expired between this page rendering the form and the click —
+    // e.g. "log out everywhere" from another tab. Send them to log back in.
+    resendOutcome = "unauthenticated";
+  } else {
+    resendOutcome = "error";
+  }
+}
+
+/**
+ * Fetch the CSRF token for the caller's session. Done on EVERY render — the GET
+ * visit and the re-render after a POST alike — so the freshly-rendered form
+ * always carries a token matching the CURRENT session (after a logout-all +
+ * re-login, a stale one would 403). Also what gates whether the resend form
+ * renders at all: only a session holder has anything to resend.
+ *
+ * 401 here simply means "not logged in": there is no session, so there is no
+ * token to issue. That is the ORDINARY state for a fresh emailed-link click,
+ * not a failure.
+ */
+const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", {
+  request: Astro.request,
+});
+const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
 
 /**
  * Return here after logging in, token and all. Built from the CURRENT url's
@@ -97,5 +171,43 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     }
 
     {outcome === "missing" && <p id="invalid">No verification token supplied.</p>}
+
+    {resendOutcome === "sent" && <p id="resend-sent">We've sent another link.</p>}
+    {
+      resendOutcome === "already-verified" && (
+        <p id="resend-already-verified">Your email is already verified.</p>
+      )
+    }
+    {
+      resendOutcome === "unauthenticated" && (
+        <div id="resend-unauthenticated">
+          <p>Your session has expired.</p>
+          <p>
+            <a href={loginHref}>Log in and continue</a>
+          </p>
+        </div>
+      )
+    }
+    {
+      resendOutcome === "error" && (
+        <p id="resend-error">
+          Could not send another link. Please try again in a minute.
+        </p>
+      )
+    }
+
+    {
+      csrfToken !== null && (
+        <form method="POST" action="/verify-email">
+          {/*
+            The api's per-session CSRF token. Promoted to the `X-CSRF-Token`
+            header server-side on submit (see the frontmatter) — a form cannot
+            set a header itself.
+          */}
+          <input type="hidden" name="csrfToken" value={csrfToken} />
+          <button type="submit">Resend verification email</button>
+        </form>
+      )
+    }
   </body>
 </html>

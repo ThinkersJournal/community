@@ -85,6 +85,16 @@
       "name": "MEDIA_LIMITER",
       "namespace_id": "1003",
       "simple": { "limit": 20, "period": 60 }
+    },
+    // Bounds `POST /auth/resend-verification` (see src/routes/resend-verification.ts).
+    // Keyed on the SESSION's user, same reasoning as MEDIA_LIMITER — the caller
+    // is always authenticated by the time this is consumed. Tighter than the
+    // others: this is a real mail SEND (Postmark cost + our sender reputation),
+    // not just a DB/CPU cost.
+    {
+      "name": "RESEND_LIMITER",
+      "namespace_id": "1004",
+      "simple": { "limit": 3, "period": 60 }
     }
   ],
   "observability": {
