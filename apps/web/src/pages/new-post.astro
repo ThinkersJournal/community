@@ -1,0 +1,149 @@
+---
+/**
+ * `POST /posts` through the Service Binding — the page that ties the CSRF story
+ * together.
+ *
+ * HOW THE TOKEN GETS HERE. The api requires `X-CSRF-Token` =
+ * `sha256Hex(session.csrfSecret)` on every mutating request. `csrfSecret` lives
+ * only in the api's KV session record, so THIS Worker cannot compute the token
+ * — it fetches it from `GET /auth/csrf` (apps/api/src/routes/csrf.ts) over the
+ * Service Binding, forwarding the browser's session cookie, and embeds the
+ * result in the HTML below as a hidden input.
+ *
+ * ⚠️ WHY A HIDDEN INPUT AND NOT A COOKIE. The Global Constraint is that the
+ * token is delivered "only via authenticated HTML/same-origin JSON, never a
+ * readable cookie". A non-HttpOnly cookie would be readable by any injected
+ * script AND would ride along on cross-site requests automatically — which is
+ * precisely the property the double-submit exists to deny. Rendered into the
+ * page body, the token is reachable only by someone who could already read an
+ * authenticated response from this origin.
+ *
+ * ⚠️ WHY THE FORM POSTS TO THIS PAGE RATHER THAN TO THE API. An HTML form
+ * cannot set a request HEADER — there is no markup for it — so a form could
+ * never satisfy `X-CSRF-Token` by itself, and the api accepts the token in NO
+ * other place (by design: a header is exactly what a cross-site form cannot
+ * forge). So the form posts back here same-origin, and this component promotes
+ * the hidden field to a real header on the Service-Binding call. The token
+ * still round-trips through the page, which is what makes it a genuine
+ * double-submit; a cross-site attacker can make the browser POST here, but
+ * cannot read the token out of the page to fill the field in.
+ */
+import { apiFetch, applyCookies } from "../lib/api";
+
+// ⚠️ Per-session secrets (the CSRF token below) are rendered into this page —
+// never let a shared/browser cache hold it.
+Astro.response.headers.set("cache-control", "no-store");
+
+type Outcome = "created" | "unauthenticated" | "unverified" | "error" | null;
+let outcome: Outcome = null;
+let message = "";
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+
+  const response = await apiFetch<{ code?: string }>("/posts", {
+    method: "POST",
+    body: { title: form.get("title"), body: form.get("body") },
+    // Forwards the session cookie — the api resolves the session from it and
+    // recomputes the expected token to compare against the header below.
+    request: Astro.request,
+    // ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own, which
+    // would launder a cross-site request into an allowlisted one. Here the
+    // double-submit token below is the primary defense and `checkOrigin` is
+    // defense-in-depth, but laundering it would still throw that layer away.
+    origin: Astro.request.headers.get("Origin") ?? "",
+    // The hidden input, promoted back into the header the api demands.
+    csrfToken: String(form.get("csrfToken") ?? ""),
+  });
+
+  // ⚠️ Load-bearing on the 401 path. The api's pipeline answers a REVOKED/stale
+  // session with 401 **plus a cleared cookie** (step 4, checkSecurityEpoch in
+  // apps/api/src/auth/pipeline.ts) — dropping that header leaves the dead
+  // cookie in the browser, so the user is stuck re-sending a session that can
+  // only ever 401 again instead of being cleanly logged out.
+  applyCookies(Astro.response.headers, response.setCookies);
+
+  if (response.status === 201) {
+    outcome = "created";
+  } else if (response.status === 401) {
+    // Either no session or a stale one (the epoch check — e.g. "log out
+    // everywhere" happened). The api has already cleared the cookie.
+    outcome = "unauthenticated";
+  } else if (response.data?.code === "EMAIL_NOT_VERIFIED") {
+    // The soft gate: authenticated, but content mutation needs a verified
+    // address. Distinct from a CSRF/origin 403, which shares the status.
+    outcome = "unverified";
+  } else {
+    outcome = "error";
+    message = `Could not create the post (status ${response.status}).`;
+  }
+}
+
+/**
+ * Fetch the CSRF token for the caller's session. Done on every render — GET and
+ * the re-render after a POST alike — so the freshly-rendered form always
+ * carries a token matching the CURRENT session (after a logout-all + re-login,
+ * a stale one would 403).
+ *
+ * 401 here simply means "not logged in": there is no session, so there is no
+ * token to issue. That is a normal state for this page, not a failure.
+ */
+const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", {
+  request: Astro.request,
+});
+const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
+
+/** Come back here once logged in. */
+const loginHref = `/login?next=${encodeURIComponent("/new-post")}`;
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>New post</title>
+  </head>
+  <body>
+    <h1>New post</h1>
+
+    {outcome === "created" && <p id="created">Post created.</p>}
+    {
+      outcome === "unverified" && (
+        <p id="unverified">
+          Please verify your email address before posting.
+        </p>
+      )
+    }
+    {outcome === "error" && <p id="error">{message}</p>}
+    {
+      outcome === "unauthenticated" && (
+        <p id="session-expired">Your session has expired. Please log in again.</p>
+      )
+    }
+
+    {
+      csrfToken === null ? (
+        <p id="login-required">
+          <a href={loginHref}>Log in to write a post</a>
+        </p>
+      ) : (
+        <form method="POST">
+          {/*
+            The api's per-session CSRF token. Promoted to the `X-CSRF-Token`
+            header server-side on submit (see the frontmatter) — a form cannot
+            set a header itself.
+          */}
+          <input type="hidden" name="csrfToken" value={csrfToken} />
+          <label>
+            Title
+            <input type="text" name="title" required />
+          </label>
+          <label>
+            Body
+            <textarea name="body" required></textarea>
+          </label>
+          <button type="submit">Publish</button>
+        </form>
+      )
+    }
+  </body>
+</html>

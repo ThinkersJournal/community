@@ -1,0 +1,91 @@
+---
+/**
+ * `POST /auth/login` through the Service Binding.
+ *
+ * Supports `?next=` so `verify-email.astro` can bounce an unauthenticated user
+ * here and send them straight back to their verification link afterwards (see
+ * that page's LOGIN_REQUIRED handling).
+ */
+import { apiFetch, applyCookies } from "../lib/api";
+import { resolveNext } from "../lib/next-url";
+
+/**
+ * Where to send the user after a successful login. `next` is
+ * attacker-controllable (it is just a query param, and this page's link is
+ * emailed around by verify-email.astro), so it goes through the open-redirect
+ * guard, which returns an ABSOLUTE same-origin URL — see src/lib/next-url.ts
+ * for why absolute is load-bearing and why a regex cannot do this job.
+ */
+const next = resolveNext(Astro.url.searchParams.get("next"), Astro.url);
+
+let error: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+
+  const response = await apiFetch("/auth/login", {
+    method: "POST",
+    body: { email: form.get("email"), password: form.get("password") },
+    // ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own.
+    // `checkOrigin` is the ENTIRE CSRF defense for login (no session yet, so no
+    // double-submit token exists to check). Substituting our always-allowlisted
+    // origin here would launder a cross-site `Origin: evil.com` into a trusted
+    // one and let evil.com log a victim into the ATTACKER's account.
+    origin: Astro.request.headers.get("Origin") ?? "",
+  });
+
+  if (response.status === 200) {
+    // ⚠️ DO NOT REPLACE THIS WITH `Astro.redirect(next)`. That helper returns a
+    // response it builds ITSELF, which does not carry `Astro.response.headers`
+    // — the api's `Set-Cookie` is silently dropped and the user lands back on
+    // the site with no session, i.e. login "succeeds" and leaves them logged
+    // out. (Verified against the running Worker: the 302 came back with a
+    // `Location` and no `Set-Cookie` at all.) Building the redirect here lets
+    // the cookie ride on the very response that performs it.
+    const redirect = new Response(null, {
+      status: 302,
+      headers: { Location: next },
+    });
+    applyCookies(redirect.headers, response.setCookies);
+    return redirect;
+  }
+
+  // Non-200: no redirect, so the page renders below and `Astro.response` IS the
+  // outgoing response. Propagate any cookie the api sent (e.g. a cleared one).
+  applyCookies(Astro.response.headers, response.setCookies);
+
+  // The api answers 401 with a GENERIC failure for both "no such user" and
+  // "wrong password" (it must not confirm which addresses are registered), so
+  // this message stays generic too. Do not "improve" it.
+  error =
+    response.status === 429
+      ? "Too many attempts. Please wait and try again."
+      : "Invalid email or password.";
+}
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Log in</title>
+  </head>
+  <body>
+    <h1>Log in</h1>
+
+    {error !== null && <p id="error">{error}</p>}
+
+    <form method="POST">
+      <label>
+        Email
+        <input type="email" name="email" required />
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" required />
+      </label>
+      <button type="submit">Log in</button>
+    </form>
+
+    <p><a href="/signup">Need an account? Sign up</a></p>
+  </body>
+</html>

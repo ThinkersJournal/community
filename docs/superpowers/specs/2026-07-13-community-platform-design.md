@@ -24,7 +24,7 @@ A public **social publishing platform for thinkers** (starting with programmers)
 
 | # | Decision | Resolution |
 |---|---|---|
-| 1 | Backend language | **100% TypeScript** on Workers. Rust *not used* (workers-rs non-viable for our needs); Argon2id via the `hash-wasm` npm package. `auth-framework` = design reference + standalone crate, not a dependency. |
+| 1 | Backend language | **100% TypeScript** on Workers. Rust *not used* (workers-rs non-viable for our needs); Argon2id via the openpgpjs **`argon2id`** package (**corrected in M0** — `hash-wasm` is non-viable on Workers: it compiles embedded base64 wasm at runtime, which workerd forbids. See the M0 plan's *As-built deviations*). `auth-framework` = design reference + standalone crate, not a dependency. |
 | 2 | Launch sequencing | **Both pillars private until M0–M4 done, launch together.** |
 | 3 | Private-reference safety | Private refs **freeze to snapshot by default** (opt-in to keep live); private resources **never de-duped across authors**; kill-switch to snapshot-only on material change. |
 | 4 | Compute + DB | Cloudflare **Workers** + **Postgres on Neon** via **two Hyperdrive bindings** (cached + cache-disabled) + a **cron keep-warm ping** to blunt Neon cold-start on SEO pages. |
@@ -33,7 +33,7 @@ A public **social publishing platform for thinkers** (starting with programmers)
 | 7 | Feed | **Pull-on-read, reverse-chronological**, keyset pagination; fan-out-on-write is a later additive migration on measured evidence. |
 | 8 | Search | **Postgres FTS** (`tsvector` + `pg_trgm`); external engine deferred behind a concrete trigger. |
 | 9 | Realtime notifications | **Durable Object + WebSocket (Hibernation API)** push + REST/KV polling fallback. |
-| 10 | Sessions | **Own the primitive** (opaque cookie + KV), *not* Astro's experimental Sessions API. 30-day sliding, SameSite=Lax. **MFA deferred** post-launch. |
+| 10 | Sessions | **Own the primitive** (opaque cookie + KV), *not* Astro's Sessions API — which must be **actively disabled** in `astro.config.mjs` (leaving `session` unset silently opts into a KV session driver + provisions a `SESSION` binding; see the M0 plan's *As-built deviations*). 30-day sliding, SameSite=Lax. **MFA deferred** post-launch. |
 | 11 | Email-verification gate | **Soft gate** — browse unverified; verified email required to post/comment/follow. |
 | 12 | Reactions | **Small "thinker-tone" set** — proposed: **Insightful / Curious / Agree** (final wording TBD by founder). |
 | 13 | Tags | Free-form + a curated/promoted subset; tag *creation* gated to accounts >7 days. |
@@ -54,9 +54,9 @@ A public **social publishing platform for thinkers** (starting with programmers)
 
 *(Condensed; see the research doc §0–§12 for full rationale and sources.)*
 
-**Runtime & language.** Single **TypeScript `api` Worker**: routing, hand-rolled auth, Hyperdrive/Postgres (`pg` over `nodejs_compat`), R2, KV, connector modules, Durable Objects, Queue consumers, Cron handlers. Argon2id via `hash-wasm`. **Workers Paid ($5/mo) from day one** (Argon2 + image encode exceed the Free 10 ms CPU cap).
+**Runtime & language.** Single **TypeScript `api` Worker**: routing, hand-rolled auth, Hyperdrive/Postgres (`pg` over `nodejs_compat`), R2, KV, connector modules, Durable Objects, Queue consumers, Cron handlers. Argon2id via the openpgpjs **`argon2id`** package, driven by a **statically-imported `.wasm` module** (`hash-wasm` cannot run on Workers — decision #1). **Workers Paid ($5/mo) from day one** (Argon2 + image encode exceed the Free 10 ms CPU cap; any Argon2id on Workers requires Paid regardless).
 
-**Topology.** Two Workers joined by a Service Binding: **`web`** (Astro `output:'server'`, `@astrojs/cloudflare`, Workers Static Assets, Workers Builds git deploy) at apex/`www`; **`api`** at `api.thinkersjournal.com` and bound into `web` as `env.API`. Durable Objects require the dedicated `api` Worker. Session cookie scoped to `.thinkersjournal.com`, httpOnly/Secure/**SameSite=Lax**.
+**Topology.** Two Workers joined by a Service Binding: **`web`** (Astro `output:'server'`, `@astrojs/cloudflare`, Workers Static Assets, Workers Builds git deploy) at apex/`www`; **`api`** at `api.thinkersjournal.com` and bound into `web` as `env.API`. Durable Objects require the dedicated `api` Worker. Session cookie scoped to `.thinkersjournal.com`, httpOnly/Secure/**SameSite=Lax** — that is the **production** shape; local dev omits `Domain`+`Secure` (no browser stores them on `http://127.0.0.1`), gated on `TEST_ROUTES`, per the M0 plan's *Global Constraints*.
 
 **Rendering.** Per-route: prerender marketing/legal/logged-out home; **SSR** the SEO/unfurl-critical pages (`/@user`, `/@user/slug`, explore, tags, search, sitemap, RSS) with OG/JSON-LD, wrapped in short `max-age` + long `stale-while-revalidate` + `Cache-Tag` (purge on edit); **islands** for authed interactivity (editor + reference picker, feed, reactions/follow, notifications bell). Never bake per-viewer state into cached HTML.
 
@@ -95,7 +95,7 @@ At 1M users the optimized bill is **~$10–12k/year with no single runaway line*
 
 ## 4. Build sequence (internal milestones → one private→public launch)
 
-- **M0 — Foundations & spine:** Neon + two Hyperdrive bindings; two-Worker topology + Service Binding + Workers Builds deploy; domain/cookie layout; hand-rolled auth (signup/login/opaque-KV sessions, Argon2id-in-`hash-wasm`, soft email verification, Turnstile + ratelimit, `UserSecurityDO`, CSRF); `users`/`profiles` migrations. *Retires the biggest risk (auth on Workers) first.*
+- **M0 — Foundations & spine (BUILT, not yet deployed):** Neon + two Hyperdrive bindings; two-Worker topology + Service Binding + Workers Builds deploy; domain/cookie layout; hand-rolled auth (signup/login/opaque-KV sessions, Argon2id via the `argon2id` package, soft email verification, Turnstile + `ratelimits`, `UserSecurityDO`, CSRF); `users`/`profiles` migrations. *Retires the biggest risk (auth on Workers) first.* **What was actually built deviates from the plan in several places — see the M0 plan's *As-built deviations (M0)*.***
 - **M1 — Publishing & public web:** `posts` + Markdown editor island; media pipeline; SSR public post/profile pages (OG/JSON-LD, edge cache + `Cache-Tag` purge, sitemap/RSS). *End state: a working SEO-friendly publishing site.*
 - **M2 — Social graph & engagement:** follows; pull-on-read feed; comments (materialized-path); reactions; notifications (DO Hibernation WS + email + batching); Postgres search + explore/trending.
 - **M3 — Reference engine (the moat):** GitHub App + GitLab OAuth; connector interface + all launch connectors; snapshot capture; paste-to-enrich + @/slash picker; Cron+Queue live-refresh sweep; per-author rate-budget DO; envelope-encrypted `source_connections`; reference-change notifications reuse the M2 pipeline.

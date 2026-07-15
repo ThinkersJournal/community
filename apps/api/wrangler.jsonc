@@ -1,0 +1,72 @@
+{
+  // After changing bindings in this file, run 'wrangler types' and commit the
+  // regenerated src/worker-configuration.d.ts (it types both Env and Cloudflare.Env).
+  "name": "thinkersjournal-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-13",
+  "compatibility_flags": ["nodejs_compat"],
+  // Dual Hyperdrive bindings over the same Postgres.
+  //   HYPERDRIVE_FRESH  = cache-disabled (`--caching-disabled`) — used for ALL
+  //     auth / session / permission / dup-email / verify / read-after-write
+  //     reads. Hyperdrive never invalidates on write, so a cached auth/verify
+  //     read is a real security bug.
+  //   HYPERDRIVE_CACHED = 60s cache — ONLY public feeds/listings.
+  // The `id`s are FAKE PLACEHOLDERS until Task 6b, which creates the real
+  // configs at first deploy (`wrangler hyperdrive create tj-cached ...` and
+  // `... tj-fresh ... --caching-disabled`) and pastes the returned ids here.
+  // Local tests resolve both bindings to the test DB via `miniflare.hyperdrives`
+  // in vitest.config.ts, so these ids are never dereferenced in tests.
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE_CACHED",
+      "id": "PLACEHOLDER_CACHED_ID_SET_IN_TASK_6B"
+    },
+    {
+      "binding": "HYPERDRIVE_FRESH",
+      "id": "PLACEHOLDER_FRESH_ID_SET_IN_TASK_6B"
+    }
+  ],
+  // Opaque session tokens keyed by `sess:<sha256hex(token)>` (see src/auth/session.ts).
+  // The `id` is a FAKE PLACEHOLDER until the real KV namespace is created at
+  // first deploy (`wrangler kv namespace create SESSIONS`).
+  "kv_namespaces": [
+    {
+      "binding": "SESSIONS",
+      "id": "PLACEHOLDER_SESSIONS_KV_ID_SET_AT_DEPLOY"
+    }
+  ],
+  // Per-user monotonic "security epoch" counter (logout-all / password-change
+  // revocation, Tasks 16-17). New DO namespaces must use `new_sqlite_classes`
+  // (KV-backed `new_classes` is blocked for new namespaces as of July 2026);
+  // the migration `tag` is mandatory or the first dev/test run fails.
+  "durable_objects": {
+    "bindings": [{ "name": "USER_SECURITY", "class_name": "UserSecurityDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserSecurityDO"] }],
+  // Brute-force defense for signup/login (see src/auth/ratelimit.ts). This is a
+  // TOP-LEVEL wrangler key (not `unsafe.bindings` — that shape is stale/legacy).
+  // NOTE: the key is the PLURAL "ratelimits" — verified against the installed
+  // wrangler 4.110.0's config schema (validateRateLimitBinding /
+  // normalizeAndValidateConfig in wrangler-dist/cli.js), which registers this
+  // field as `ratelimits` and rejects singular "ratelimit" with "Unexpected
+  // fields found in top-level field: 'ratelimit'". `period` MUST be `10` or
+  // `60`; no other value is accepted (enforced by the same validator).
+  // `namespace_id` just needs to be unique per binding within this Worker
+  // (arbitrary small strings are fine — Cloudflare doesn't provision anything
+  // from it for the `simple` algorithm).
+  "ratelimits": [
+    {
+      "name": "SIGNUP_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 5, "period": 60 }
+    },
+    {
+      "name": "LOGIN_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 10, "period": 60 }
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

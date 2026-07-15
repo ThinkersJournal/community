@@ -6,22 +6,25 @@
 
 **Architecture:** A pnpm monorepo with two Cloudflare Workers joined by a Service Binding: `api` (TypeScript backend — auth, Postgres via Hyperdrive, KV sessions, a per-user `UserSecurityDO`, Turnstile, rate limiting) and `web` (Astro `output:'server'` via `@astrojs/cloudflare`). The whole inner loop runs locally on workerd/miniflare + a Docker Postgres; real cloud services are wired in only at deploy.
 
-**Tech Stack:** pnpm workspaces, TypeScript (strict), Cloudflare Workers (`wrangler`), `@astrojs/cloudflare`, `pg` (node-postgres over `nodejs_compat`) + Hyperdrive, Workers KV, Durable Objects (SQLite), `hash-wasm` (Argon2id), `zod`, Postmark, Turnstile; testing = Vitest 4 + `@cloudflare/vitest-pool-workers` (`cloudflareTest()` plugin) + Playwright + `node-pg-migrate`.
+**Tech Stack:** pnpm workspaces, TypeScript (strict, **pinned to exactly `6.0.3`** — see Global Constraints), Cloudflare Workers (`wrangler`), `@astrojs/cloudflare`, `pg` (node-postgres over `nodejs_compat`) + Hyperdrive, Workers KV, Durable Objects (SQLite), **`argon2id`** (the openpgpjs package — *not* `hash-wasm`, which cannot run on Workers; see *As-built deviations (M0)* → A), `zod`, Postmark, Turnstile; testing = Vitest 4 + `@cloudflare/vitest-pool-workers` (`cloudflareTest()` plugin) + Playwright + `node-pg-migrate`.
 
 ## Global Constraints
 
 *(Every task implicitly includes these. Exact values are load-bearing.)*
 
+> **Corrected against the as-built code** (2026-07-14). Where a rule below changed during M0, *As-built deviations (M0)* carries the evidence. **This section is current; the per-task step text below it is a historical record of what was planned.**
+
 - **Node ≥ 20; pnpm** (via `corepack enable`). TypeScript `strict`, `moduleResolution: "bundler"`, target `ES2022`. `compatibility_date: "2026-07-13"`, `compatibility_flags: ["nodejs_compat"]` on both Workers.
+- **TypeScript is pinned to EXACTLY `6.0.3` — do NOT "upgrade" to 7.x.** TypeScript **7.0** (GA 2026-07-08) is the Go-native rewrite and ships **without the programmatic Compiler API** until 7.1. Astro (`astro check`), vitest's TS integration, and typescript-eslint all require that API, so 7.x breaks the toolchain. `6.0.3` is the last JS-based line with the full API. Pinned exactly (no `^`) in the root `package.json`.
 - **Two Hyperdrive bindings, and the routing rule is a security invariant:** `HYPERDRIVE_FRESH` (cache-disabled) for **all** auth/session/permission reads, dup-email checks, email-verify reads, and any read-immediately-after-write; `HYPERDRIVE_CACHED` (60s) only for public feeds/listings. Hyperdrive never invalidates cache on write — a cached auth/dup/verify read is a real security bug.
 - **Postgres access:** `pg.Client` (NOT `Pool` — Hyperdrive *is* the pool), one per request, `end()` via `ctx.waitUntil`. Transaction-mode pooler: no cross-query session state / `LISTEN`/`NOTIFY` / session advisory locks; keep multi-statement atomicity inside a single `BEGIN/COMMIT`, don't wrap unrelated ops to fake session state.
 - **Durable Objects:** new DO namespaces MUST use `new_sqlite_classes` in the migration (KV-backed `new_classes` is blocked for new namespaces as of July 2026); the migrations `tag` is mandatory or the first `wrangler dev`/`deploy` fails.
-- **Argon2id params (OWASP):** `{ parallelism:1, iterations:2, memorySize:19456, hashLength:32 }`, `outputType:'encoded'` (PHC string, `$argon2id$v=19$…`).
-- **Session cookie:** name `tj_session`; value is a bare opaque random token; attributes `Path=/; Domain=.thinkersjournal.com; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`. Roles/`securityEpoch`/`csrfSecret` live in the KV value, **never** in the cookie. Do **not** use Astro's experimental Sessions API.
+- **Argon2id params (OWASP):** `{ parallelism:1, iterations:2, memorySize:19456, hashLength:32 }`, encoded as a PHC string (`$argon2id$v=19$…`). **The library is the openpgpjs `argon2id` package via a statically-imported `.wasm` module — NOT `hash-wasm`, which cannot run on Workers at all** (deviation A). Params, format and OWASP values are unchanged by that swap. Any Argon2id requires the Workers **Paid** plan.
+- **Session cookie:** name `tj_session`; value is a bare opaque random token. **Production attributes** (exact): `Path=/; Domain=.thinkersjournal.com; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`. **Dev/CI exception:** when `env.TEST_ROUTES === "1"` (an explicit `=== "1"` allowlist, never a truthiness check) the cookie **omits `Domain` and `Secure` and nothing else** — with them, no browser stores the cookie at `http://127.0.0.1:8787` and a real-browser E2E is impossible. Applies to both the set and the cleared cookie; both modes are pinned by tests (deviation F). Roles/`securityEpoch`/`csrfSecret` live in the KV value, **never** in the cookie. Do **not** use Astro's Sessions API — and note it must be **actively disabled**, not merely left unset (deviation G).
 - **Revocation:** per-user `UserSecurityDO` holds a monotonic `epoch`; the session snapshots it at login; a mismatch on a **mutating** request → 401 + clear cookie (checked on non-GET only).
 - **CSRF:** enforce BOTH an Origin/Referer allowlist check AND a per-session double-submit token (`X-CSRF-Token` header vs `sha256(session.csrfSecret)`, timing-safe) on every non-GET before touching the DB. Token delivered only via authenticated HTML/same-origin JSON, never a readable cookie.
 - **Soft email-verification gate:** unverified users may read/browse; posting/commenting/following require `email_verified_at`. Gate applies to content-mutation routes only.
-- **Tooling-shape pins (tutorials are stale):** `@cloudflare/vitest-pool-workers` uses the `cloudflareTest()` Vite plugin (Vitest 4; `isolatedStorage`/`singleWorker` removed); the `ratelimit` binding is a **top-level** wrangler key (not under `unsafe`); the Hyperdrive local override env var is `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`. Pin `wrangler` + `@cloudflare/vitest-pool-workers` versions and verify each config shape against the installed version before relying on it.
+- **Tooling-shape pins (tutorials are stale):** `@cloudflare/vitest-pool-workers` uses the `cloudflareTest()` Vite plugin (Vitest 4; `isolatedStorage`/`singleWorker` removed); the rate-limit binding is the **top-level, PLURAL `ratelimits`** key — **not** `ratelimit` (singular is *hard-rejected* by wrangler 4.110.0's config validator: `Unexpected fields found in top-level field: 'ratelimit'`) and **not** under `unsafe`; `simple.period` must be `10` or `60`, no other value. The Hyperdrive local override env var is `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`. Pin `wrangler` + `@cloudflare/vitest-pool-workers` versions and verify each config shape against the installed version before relying on it.
 - **`__test` routes** (which expose the last verification token to avoid real email in tests) are gated on `env.TEST_ROUTES`, set only in `.dev.vars`/CI. Their presence in prod is a full account-takeover vector — a deploy check must assert absence.
 
 ## Prerequisites (user-provisioned; local-first ordering)
@@ -35,6 +38,8 @@
 | Deploy (Task 19) | **Turnstile** site (real key+secret) — locally use dummy keys: always-pass secret `1x0000000000000000000000000000000AA`, always-block `2x0000000000000000000000000000000AA`. **Postmark** server token + a **CONFIRMED** sender signature/domain for `noreply@thinkersjournal.com`. The private GitHub repo already exists (`ThinkersJournal/community`) for Workers Builds. |
 
 ## File Structure
+
+*(As planned. The built tree matches closely, but the annotations here inherit the stale literals corrected in *As-built deviations (M0)* — notably `platformProxy` and the single-process `wrangler dev -c web -c api`.)*
 
 ```
 thinkersjournal-community/            (repo root)
@@ -78,7 +83,7 @@ thinkersjournal-community/            (repo root)
 
 - **api (bulk):** Vitest 4 + `@cloudflare/vitest-pool-workers` `cloudflareTest()` plugin — tests run in real workerd with real KV/DO and a Hyperdrive binding overridden via `miniflare.hyperdrives` to hit the local test Postgres. `import { env } from 'cloudflare:test'`; `createExecutionContext()`/`waitOnExecutionContext()`; `evictAllDurableObjects()` to prove DO persistence. Storage isolated per file.
 - **DB under test:** local Docker Postgres for the fast loop; a Neon ephemeral branch per CI run. Schema applied by `node-pg-migrate` in a Vitest `setupFiles`.
-- **E2E (thin):** Playwright driving `wrangler dev -c apps/web/... -c apps/api/...` (web primary at :8787; api reachable only via the Service Binding). Dummy Turnstile keys + the `__test/last-verify-token` route replace real Turnstile/Postmark.
+- **E2E (thin):** Playwright driving both Workers; dummy Turnstile keys + the `__test/last-verify-token` route replace real Turnstile/Postmark. *(As built: **two** processes — web primary on :8787, api its own primary on :8788 — not the single `wrangler dev -c web -c api` planned here, which cannot reach the `__test` route. See *As-built deviations (M0)* → **G6**.)*
 - **shared:** plain Vitest (node env).
 
 ---
@@ -126,6 +131,8 @@ thinkersjournal-community/            (repo root)
 - [ ] **Step 5: Commit.** `feat(m0): api Worker skeleton + vitest-pool-workers harness`
 
 ### Task 4: Argon2id password module (`hash-wasm`)
+
+> ⚠️ **AS BUILT, THIS TASK USED THE `argon2id` PACKAGE, NOT `hash-wasm`** — every `hash-wasm` mention in the steps below is a planning artifact and is now known wrong. See *As-built deviations (M0)* → **A**.
 
 **Files:** Create `apps/api/src/auth/password.ts`, `apps/api/test/password.test.ts`. Add `hash-wasm` dep.
 
@@ -204,6 +211,8 @@ thinkersjournal-community/            (repo root)
 
 ### Task 10: Rate-limit binding + enforce helper
 
+> ⚠️ **THE KEY IS THE PLURAL `ratelimits`** — the singular `ratelimit` written in the steps below is hard-rejected by wrangler. Still top-level. See *As-built deviations (M0)* → **B**.
+
 **Files:** Create `apps/api/src/auth/ratelimit.ts`, `apps/api/test/ratelimit.test.ts`; edit `wrangler.jsonc` (top-level `ratelimit`). Update `Env`.
 
 **Interfaces — Produces:** `enforceRateLimit(limiter, key:string):Promise<Response|null>` (429 or null); bindings `SIGNUP_LIMITER`, `LOGIN_LIMITER`.
@@ -228,6 +237,8 @@ thinkersjournal-community/            (repo root)
 
 ### Task 12: Email verification — token + Postmark + verify route
 
+> ⚠️ **THE UNAUTHENTICATED `GET /verify-email` BELOW IS AN ACCOUNT-TAKEOVER VECTOR AND WAS NOT BUILT AS SPECIFIED.** As built the route **requires an authenticated, epoch-current session**, and `consumeVerificationToken` was split into `peek` + `delete`. See *As-built deviations (M0)* → **D**.
+
 **Files:** Create `apps/api/src/auth/email-verify.ts`, `apps/api/src/routes/verify-email.ts`, `apps/api/src/routes/__test.ts`, `apps/api/test/email-verify.test.ts`; add `POSTMARK_SERVER_TOKEN` + `TEST_ROUTES=1` to `.dev.vars`. Update `Env`.
 
 **Interfaces — Produces:** `createVerificationToken(env, userId):Promise<string>` (raw token), `consumeVerificationToken(env, token):Promise<string|null>` (one-time), `sendVerificationEmail(env, email, url):Promise<void>`; route `GET /verify-email?token=…`; gated `GET /__test/last-verify-token`.
@@ -251,6 +262,8 @@ thinkersjournal-community/            (repo root)
 - [ ] **Step 5: Commit.** `feat(m0): soft email-verification gate`
 
 ### Task 14: Signup handler
+
+> ⚠️ **TWO GAPS IN THE STEPS BELOW HAD TO BE FILLED:** the handler must **generate** a `username` (the schema requires one; `SignupInput` has no such field), and an **unverified** duplicate email is a **re-signup** (not a fall-through to INSERT, which would 500 on the `users.email` unique index) whose `bumpEpoch()` is **security-load-bearing**. See *As-built deviations (M0)* → **E** and **D**.
 
 **Files:** Create `apps/api/src/routes/signup.ts`, `apps/api/test/signup.test.ts`; wire route in `src/index.ts`.
 
@@ -300,6 +313,8 @@ thinkersjournal-community/            (repo root)
 
 ### Task 18: `web` Astro app + Cloudflare adapter + Service Binding
 
+> ⚠️ **THE ASTRO LITERALS BELOW ARE STALE** — `platformProxy`, `Astro.locals.runtime.env` and `dist/_worker.js` do **not** exist in the installed Astro 7 / adapter 14, and "do not enable the Sessions API" is not achieved by leaving it unset. See *As-built deviations (M0)* → **G**.
+
 **Files:** Create `apps/web/astro.config.mjs`, `apps/web/wrangler.jsonc`, `apps/web/src/pages/{index,signup,login,verify-email,new-post}.astro`, `apps/web/src/lib/api.ts`, `apps/web/tsconfig.json`. Run `npx astro add cloudflare` in `apps/web`.
 
 **Interfaces — Consumes:** the `api` Worker via `env.API` Service Binding.
@@ -310,6 +325,8 @@ thinkersjournal-community/            (repo root)
 - [ ] **Step 4: Commit.** `feat(m0): web Astro app + Service Binding to api`
 
 ### Task 19: Playwright E2E across both Workers + Workers Builds deploy
+
+> ⚠️ **THE SINGLE-PROCESS `wrangler dev -c web -c api` BELOW CANNOT WORK** — an auxiliary Worker has no address, so the api's `__test` route is unreachable from the test. As built the api runs as its own primary on `:8788` with a cross-process Service Binding (DEV ONLY). See *As-built deviations (M0)* → **G6**.
 
 **Files:** Create `playwright.config.ts`, `e2e/signup.spec.ts`; document Workers Builds config in the repo README.
 
@@ -323,15 +340,105 @@ thinkersjournal-community/            (repo root)
 
 ---
 
+## As-built deviations (M0)
+
+*Written 2026-07-14, after M0 was built and reviewed. The task steps above are a record of what was **planned**; this section records where reality differed and is **authoritative where the two disagree**. Everything here was verified against the installed toolchain during the build. The Global Constraints + Tech Stack above have been corrected to match; the per-task steps have not been rewritten, only annotated.*
+
+### A. Argon2id library — `hash-wasm` is non-viable on Workers (Task 4)
+
+`hash-wasm` **cannot run in Cloudflare Workers at all.** It compiles its embedded base64 WASM at runtime via `WebAssembly.compile()`, and workerd forbids runtime Wasm code generation: `CompileError: Wasm code generation disallowed by embedder`. **This fails in production too, not just under test** — it is not a harness artifact.
+
+**As built:** the openpgpjs **`argon2id`** package (v1.0.1), driven by a **statically-imported `.wasm` module**. `WebAssembly.instantiate(module, …)` on an already-compiled `Module` *is* allowed, and a static `import mod from "*.wasm"` yields exactly that — wrangler auto-applies its default `**/*.wasm` → `CompiledWasm` rule, so **no explicit `rules` entry was needed**. See the header of `apps/api/src/auth/password.ts`.
+
+**Unchanged:** Argon2id itself, the PHC string format, and the OWASP params `{ parallelism:1, iterations:2, memorySize:19456, hashLength:32 }`.
+
+**Note:** any Argon2id on Workers requires the **Paid** plan (already implied by DO-SQLite + Hyperdrive).
+
+### B. The wrangler rate-limit key is the plural `ratelimits` (Task 10)
+
+Verified against **wrangler 4.110.0**: the correct config key is the top-level **`ratelimits`**. The singular `ratelimit` — as the original Global Constraint and Task 10 both said — is **hard-rejected** by wrangler's config validator (`Unexpected fields found in top-level field: 'ratelimit'`), so it is not a cosmetic difference: it fails the build. Still **top-level**, still **not** under `unsafe`. `simple.period` must be `10` or `60`. The verified note lives in `apps/api/wrangler.jsonc`.
+
+### C. TypeScript is pinned to exactly `6.0.3` (do not upgrade to 7.x)
+
+TypeScript **7.0** (GA 2026-07-08) is the Go-native rewrite and ships **without the programmatic Compiler API** until 7.1. Astro (`astro check`), vitest's TS integration, and typescript-eslint all need that API, so the whole toolchain breaks on 7.x. The repo pins **exactly `6.0.3`** (no caret) — the last JS-based line with the full API. Revisit no earlier than TS 7.1, and only by verifying each consumer.
+
+### D. Email verification now REQUIRES authentication — a security fix (Task 12)
+
+**The plan's unauthenticated `GET /verify-email?token=…` was an account-takeover vector** once signup allowed re-signup on an unverified duplicate (deviation E):
+
+> victim signs up (token **T1** mailed) → attacker re-signs-up the same address (the password becomes **the attacker's**) → victim clicks **T1** → the account is verified **with the attacker's password**.
+
+**As built:** `GET /verify-email` requires an authenticated session whose `userId` matches the token's **and** whose `securityEpoch` matches the DO's current epoch; otherwise **401 `{"code":"LOGIN_REQUIRED"}`**. The token is **not burned on an auth failure**, so a legitimate user who clicks the link before logging in can log in and re-click the same link. `consumeVerificationToken` was therefore split into **`peekVerificationToken`** + **`deleteVerificationToken`**, with the delete only on the successful verify path.
+
+**Companion change, mandatory:** re-signup calls **`bumpEpoch()`**. Without it the victim's surviving session satisfies the auth check by itself and the takeover stands. **These two changes are one fix — do not carry either forward alone.**
+
+**Residual, owner-accepted:** an attacker can still overwrite an **unverified** account's password, so the victim's password stops working (an annoyance). The victim recovers by re-signing-up to reclaim the row, then verifying. **The email owner always wins, because only they receive tokens.**
+
+### E. Signup — two gaps in the plan that had to be filled (Task 14)
+
+1. **Username generation.** `profiles.username` is `NOT NULL UNIQUE`, but `SignupInput` has **no username field** — so the handler **generates** one (sanitized email local-part + random suffix), retrying on a PG `23505` unique violation inside a **SAVEPOINT** (in Postgres any failed statement poisons the whole transaction, so the savepoint is what makes a retry possible). **User-chosen usernames are M1 profile editing — do not add a username field to signup.**
+2. **Unverified duplicates.** The plan 409s only on a **verified** duplicate, but `users.email` is `UNIQUE`, so an **unverified** duplicate would fall through to the INSERT and **500**. As built: verified dup → **409**; unverified dup → **re-signup** (in-transaction `UPDATE password_hash` on the same row + **`bumpEpoch()`**, see D) → **201**. It does not 409 on the unverified path deliberately — that would confirm the address to an enumerator.
+
+**Known follow-up:** the dup-check→INSERT sequence is **not atomic**. Concurrent same-email signups roll back cleanly but surface a **500**; the fix is an atomic guarded upsert.
+
+### F. The session cookie is environment-aware (Task 7)
+
+The original constraint pinned the cookie exactly: `Path=/; Domain=.thinkersjournal.com; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000`. That is correct **production** intent — but with `Domain` + `Secure`, **no browser will store the cookie at `http://127.0.0.1:8787`**, which makes a real-browser E2E (and hand-testing a login on localhost) impossible.
+
+**As built:** the attributes key on the **existing, already-deploy-gated `TEST_ROUTES`** var: when it is exactly `"1"` (dev/CI only) the cookie **omits `Domain` and `Secure` and nothing else**; otherwise it is the exact production string above. Applies to **both** the set and the cleared cookie. Both modes are pinned by `apps/api/test/session.test.ts`, including the literal production string — the suite itself runs with `TEST_ROUTES="1"`, so the production shape would otherwise never be exercised.
+
+**Why reuse that flag rather than add one:** `TEST_ROUTES` is already the most deploy-gated var in the system (it also gates the `__test` token route, an account-takeover vector), so the relaxed cookie is unreachable in production for the *same* reason the test route is, checked by the *same* gate. **One flag, one gate, cannot drift.** A second flag would be a second thing to get wrong, and its failure mode — a production cookie quietly losing `Secure` — is a plaintext-interception bug no test would catch. The check is an explicit `=== "1"` allowlist, never truthiness: wrangler vars are strings, so `"0"` and `"false"` are both truthy.
+
+### G. Web/Astro realities (Tasks 18–19)
+
+Verified against the **installed astro@7.0.9 + @astrojs/cloudflare@14.1.3**. Most adapter tutorials are written for v9–v12 and are wrong here.
+
+1. **`platformProxy` does not exist** in adapter v14 and passing it is a config error. It was the v9-era way to fake bindings inside a Node dev server; v14 runs `astro dev` inside **real workerd**, so bindings (including the `API` Service Binding) are genuine and there is no proxy to enable.
+2. **`Astro.locals.runtime.env` was REMOVED in Astro v6** and **throws** on access under the installed v7. Use **`import { env } from "cloudflare:workers"`** (done once, in `apps/web/src/lib/api.ts`).
+3. **The build emits `dist/server/`, not `dist/_worker.js`.**
+4. **`wrangler dev -c apps/web/wrangler.jsonc` cannot work** — the source config has no `main` and no `assets.directory` because the adapter injects both at build time. Point wrangler at the **generated** `apps/web/dist/server/wrangler.json`, which means **build first**.
+5. **Astro's Sessions API must be ACTIVELY disabled** — the Global Constraint says don't use it, and *leaving it unset does not achieve that*. Astro 7 has no `session: false`, and the adapter does `if (!session?.driver) { session = cloudflareKVBinding(...) }` — i.e. unset **silently opts into a KV session store and injects a `SESSION` KV binding** for Cloudflare to auto-provision. Setting any **non-KV** driver is what turns it off (the adapter gates the binding on the driver entrypoint). As built: a literal `{ entrypoint: "unstorage/drivers/memory" }`, which is inert and declares no binding. The full reasoning is in `apps/web/astro.config.mjs` — **do not remove that block.**
+6. **The E2E cannot use a single `wrangler dev -c web -c api` process.** An **auxiliary Worker has no address**, so the api's `GET /__test/last-verify-token` — which stands in for the email inbox — would be unreachable. As built the api runs as its **own primary on `:8788`** with a **cross-process Service Binding** from `web` on `:8787`. **This is DEV-ONLY**; the browser only ever touches `:8787`, and production keeps the api binding-only. Same category of affordance as `TEST_ROUTES` itself.
+
+Two further build-order traps are documented at length in `playwright.config.ts` and `scripts/build-web.mjs`: never run `astro build` while a `wrangler dev` is alive (the Service Binding then reports `[connected]` while every dispatch fails with `Network connection lost`), and always build via `pnpm --filter @thinkersjournal/web build`, never `astro build` directly.
+
+### H. Signature + step-order drifts the first reconciliation missed
+
+*Added 2026-07-15 from M0's final whole-branch review. Four places where the built code differs from the task steps above and the earlier pass did not record it. None was a defect; each is a deviation someone reading the plan would otherwise trip over.*
+
+1. **`withClient` takes `ctx` (Task 6).** Planned as `withClient(hd, fn)`; **as built `withClient(hd, ctx, fn)`**. The `ExecutionContext` is threaded through so the client can be closed via `ctx.waitUntil(client.end())` — the connection is released after the response is returned rather than blocking it, and without `ctx` there is nowhere to hang that work. This is the root deviation the next one inherits.
+
+2. **`requireVerifiedEmail` takes `ctx` (Task 13).** Planned as `requireVerifiedEmail(env, session)`; **as built `requireVerifiedEmail(env, ctx, session)`**, purely to satisfy (1) — it reads `users.email_verified_at` and therefore needs `withClient`'s 3-arg form. `ctx` is the SECOND parameter (`env, ctx, session`), matching the argument order every other DB-touching helper in the Worker uses. Noted in the function's own header; recorded here because the plan's signature is what a reader would otherwise write.
+
+3. **The ROUTER does not apply the pipeline — each HANDLER does (Task 16, Step 3).** The step says "the router applies the pipeline to all non-GET routes". **As built `src/index.ts` only dispatches**, and each handler calls `runMutatingPipeline` itself. That is deliberate: it is what lets a route own its own opt-ins (`requireVerifiedEmail` for `POST /posts`, deliberately NOT for logout), which a blanket router-level wrap could not express. Its cost is that "every mutating route is protected" became a **convention** rather than a structural guarantee — a future route that forgets the call ships an unauthenticated mutation with every test still green.
+
+   **Compensating control: `apps/api/test/route-protection.test.ts`.** It reads the router's own source, enumerates the non-GET (method, path) pairs it matches, and asserts default-deny on each (no `Origin` → 403; no session → 401/403). A new mutating route is covered the moment it is added to the router, with no one having to remember this file. Signup and login are the only exemptions (`PIPELINE_EXEMPT`), and they still get asserted — that they enforce `checkOrigin` **inline**, which is their entire CSRF defense given they have no session. Adding to that set is a reviewable security decision, not a way to quiet a red test.
+
+4. **Signup/login check the origin BEFORE the rate limiter.** Both routes' step lists put rate limiting first. **As built `checkOrigin` runs first**, matching the rule `src/auth/pipeline.ts` states for every other mutating route: *"rate limit last: quota is spent only by a request that is otherwise fully entitled to proceed, so unauthenticated noise cannot burn a real user's budget."* The old order inverted that and was exploitable: a page on evil.com makes a victim's browser POST `/auth/login` with the victim's address (a `text/plain` body dodges the CORS preflight, so the request is really sent), each one burns a slot in the **victim's own** bucket before 403ing, and ~10 of them deny the victim login for up to 60s. `checkOrigin` is a pure header comparison with **zero I/O**, so nothing is lost by moving it up, and **both orders satisfy the binding Global Constraint** ("`checkOrigin` before touching the DB") — which is why this is a deviation and not a correction to the constraint. Pinned by a "spends NO quota on an origin-rejected request" test in both `test/login.test.ts` and `test/signup.test.ts`.
+
+### I. The limiter keys, and what a limiter key can actually buy
+
+*Added 2026-07-15 from the same review.*
+
+Both auth routes were built with a **single** `${ip}:${email}` limiter key, commented as giving two properties: that one address cannot be attacked from many IPs, and that one IP cannot spray many addresses. **The first was never true.** Putting the IP *in* the key gives every IP its own bucket, so N IPs against one address get N × the limit per window — and on `/auth/login`, which has **no Turnstile**, the limiter is the entire brute-force defense.
+
+**As built (final):** each route consumes **two** buckets — the original `${ip}:${email}` **plus** an email-only `email:${email}` — so an address has a ceiling regardless of source IP. Both are keyed on the schema-lowercased email (see `NormalizedEmail`; that coupling is itself a security control), and either bucket's 429 short-circuits.
+
+**And the honest bound:** Cloudflare's rate-limiting binding is documented as a unique limit per key **per Cloudflare location**, and as *"permissive, eventually consistent, and intentionally designed to not be used as an accurate accounting system."* So the email-only bucket is a real ceiling **per location**, not a global one. It is worth having anyway — it collapses an *unbounded* per-IP multiplier into a *bounded* per-location one — but no key design can make this binding an exact counter. Anything needing that wants a Durable Object. Recorded in `src/auth/ratelimit.ts`'s header, whose earlier "the binding owns all counting/window logic" read stronger than reality.
+
+---
+
 ## Deploy-gate checklist (from the risk analysis)
 
 - [ ] `HYPERDRIVE_FRESH` (cache-disabled) is created and every auth/dup/verify/epoch read uses it — audit the routes.
 - [ ] Neon connection string is the **direct** (non-pooled) host (`sslmode=require`), not the PgBouncer endpoint.
 - [ ] Postmark `From` is a **confirmed** sender signature / verified domain (silent failure otherwise).
 - [ ] Real Turnstile keys set as api secrets; dummy keys never deployed.
-- [ ] **`TEST_ROUTES` is unset in prod** and the `__test` route is unreachable — assert this with a deploy check (token-exposure = account-takeover).
-- [ ] Pin `wrangler` + `@cloudflare/vitest-pool-workers` versions; re-verify the `ratelimit`/hyperdrive/DO config shapes against the installed version.
-- [ ] Run at least one pre-launch pass on **real** infra (`wrangler dev --remote` / deployed staging) — local dev has no real Hyperdrive caching or true rate-limit thresholds.
+- [ ] **`TEST_ROUTES` is unset in prod** and the `__test` route is unreachable (token-exposure = account-takeover) — the deploy check this line asked for now EXISTS: `pnpm smoke:deploy <deployed-api-url>` (`scripts/deploy-smoke.mjs`).
+- [ ] Pin `wrangler` + `@cloudflare/vitest-pool-workers` versions; re-verify the `ratelimits`/hyperdrive/DO config shapes against the installed version.
+- [ ] Run at least one pre-launch pass on **real** infra — local dev has no real Hyperdrive caching or true rate-limit thresholds. `pnpm smoke:deploy`'s signup step is that pass (Postgres + argon2 + KV + DO in one request).
+
+> **The live, maintained deploy gate is `README.md`'s** — it carries this list plus everything learned during M0 (the `TEST_ROUTES`-gates-two-things check, the api's public `workers.dev` URL, Postmark alerting, the argon2id `.wasm` bundling). Use that one.
 
 ## Self-Review
 

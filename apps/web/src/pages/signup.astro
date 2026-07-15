@@ -1,0 +1,109 @@
+---
+/**
+ * `POST /auth/signup` through the Service Binding.
+ *
+ * The form posts back to THIS page (same-origin), and this component forwards
+ * to the api. Doing it server-side rather than with client `fetch` is what
+ * keeps the api unreachable from the browser at all.
+ */
+import { apiFetch, applyCookies } from "../lib/api";
+
+/** Rendered outcome. `null` = first visit, nothing submitted yet. */
+let result: "created" | "error" | null = null;
+let message = "";
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+
+  const response = await apiFetch<{ code?: string; error?: string }>(
+    "/auth/signup",
+    {
+      method: "POST",
+      // The api validates all three with zod and 400s on anything malformed —
+      // no client-side validation here on purpose (it would only ever be a
+      // duplicate of the real check, and a bypassable one).
+      body: {
+        email: form.get("email"),
+        password: form.get("password"),
+        turnstileToken: form.get("turnstileToken"),
+      },
+      // ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own.
+      // Like login, signup has no session yet and so no double-submit token:
+      // `checkOrigin` is its ENTIRE CSRF defense. Substituting our own
+      // (always-allowlisted) origin would launder a cross-site request and let
+      // evil.com drive signups in a victim's browser. A Service-Binding request
+      // carries no Origin of its own, so this must be passed explicitly; an
+      // empty string is fine (the api falls back to Referer, then fails closed).
+      origin: Astro.request.headers.get("Origin") ?? "",
+      // No `request`/cookie: signup is how a session first comes to exist.
+    },
+  );
+
+  // ⚠️ The api mints the session cookie on 201. Without this the user would be
+  // signed up but not logged in.
+  applyCookies(Astro.response.headers, response.setCookies);
+
+  if (response.status === 201) {
+    result = "created";
+  } else {
+    result = "error";
+    // The api's statuses, surfaced as-is. 409 is only ever returned for an
+    // already-VERIFIED address (an unverified one is legitimately taken over
+    // by re-signup), so it is safe to say so; it reveals nothing that
+    // attempting a login would not.
+    message =
+      response.status === 409
+        ? "That email is already registered. Try logging in."
+        : response.status === 429
+          ? "Too many attempts. Please wait and try again."
+          : response.status === 403
+            ? "Rejected (failed bot check)."
+            : "Signup failed. Check your email and password and try again.";
+  }
+}
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign up</title>
+  </head>
+  <body>
+    <h1>Sign up</h1>
+
+    {
+      result === "created" ? (
+        <p id="check-email">
+          Check your email — we sent you a verification link.
+        </p>
+      ) : (
+        <>
+          {result === "error" && <p id="error">{message}</p>}
+          <form method="POST">
+            <label>
+              Email
+              <input type="email" name="email" required />
+            </label>
+            <label>
+              Password
+              <input type="password" name="password" required />
+            </label>
+            {/*
+              The Turnstile response token. A real widget (client-side script,
+              M1) populates this field; it stays a plain input here so the flow
+              is exercisable end-to-end in dev, where the api runs with
+              Cloudflare's dummy always-pass secret.
+            */}
+            <label>
+              Turnstile token
+              <input type="text" name="turnstileToken" value="dummy-token" />
+            </label>
+            <button type="submit">Sign up</button>
+          </form>
+        </>
+      )
+    }
+
+    <p><a href="/login">Already have an account? Log in</a></p>
+  </body>
+</html>

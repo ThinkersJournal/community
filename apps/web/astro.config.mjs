@@ -1,0 +1,122 @@
+// @ts-check
+import cloudflare from "@astrojs/cloudflare";
+import { defineConfig } from "astro/config";
+
+/**
+ * The `web` Worker: server-rendered Astro on Cloudflare, talking to the `api`
+ * Worker over the `API` Service Binding (see wrangler.jsonc + src/lib/api.ts).
+ *
+ * ⚠️ VERSION NOTES — verified against the INSTALLED astro@7.0.9 /
+ * @astrojs/cloudflare@14.1.3, not against tutorials, which are mostly still
+ * written for adapter v9–v12 and are wrong here:
+ *
+ *   • `platformProxy: { enabled: true }` DOES NOT EXIST in adapter v14 and
+ *     passing it is a config error. It was the v9-era mechanism for faking
+ *     bindings inside a Node dev server. v14 is built on
+ *     `@cloudflare/vite-plugin`, which runs `astro dev` inside REAL workerd, so
+ *     bindings (including the `API` Service Binding) are the genuine article
+ *     with no proxy to enable. The adapter's `Options` type is
+ *     `Pick<PluginConfig, 'auxiliaryWorkers'|'configPath'|'inspectorPort'
+ *     |'persistState'|'remoteBindings'>` + a few image/session keys — no
+ *     `platformProxy` among them.
+ *   • `configPath` defaults to this directory's `wrangler.jsonc`, so the
+ *     bindings declared there are what dev and build both see. Not set
+ *     explicitly — the default is already correct.
+ */
+export default defineConfig({
+  // Every page here is server-rendered: they read the session cookie and call
+  // the api per-request, so nothing may be baked at build time.
+  output: "server",
+
+  adapter: cloudflare({
+    // ⚠️ NOT the default. Left unset, `imageService` is `"cloudflare-binding"`,
+    // which makes the adapter declare an `images: { binding: "IMAGES" }` in the
+    // Worker config for Cloudflare to auto-provision at deploy. This app has no
+    // images at all in M0, so that would be live infrastructure supporting
+    // nothing. `passthrough` serves images as-is and declares no binding.
+    // Revisit if/when the app actually renders <Image>.
+    imageService: "passthrough",
+  }),
+
+  // ⚠️ DELIBERATELY NEUTERED — DO NOT REMOVE THIS BLOCK.
+  //
+  // Global Constraint: sessions live in the `api` Worker's KV (opaque token ->
+  // `sess:<sha256(token)>`, see apps/api/src/auth/session.ts). Astro must never
+  // own session state, or we would have two competing session stores and two
+  // cookies disagreeing about who is logged in.
+  //
+  // Astro 7 has NO `session: false` switch (`SessionSchema` is an object whose
+  // `driver` is merely optional), and @astrojs/cloudflare@14 does this in its
+  // `astro:config:setup` hook:
+  //
+  //     if (!session?.driver) { session = { driver: sessionDrivers.cloudflareKVBinding(...) } }
+  //
+  // i.e. leaving `session` unset does NOT mean "off" — it silently opts us into
+  // a Cloudflare KV session store AND makes the adapter inject a `SESSION` KV
+  // namespace binding into the Worker config, which Cloudflare would then
+  // auto-provision at deploy. That is exactly the constraint we are told not to
+  // violate.
+  //
+  // Setting ANY non-KV driver is what actually turns that off: the adapter gates
+  // the binding on `usesCloudflareKVSessionDriver(session)`, which compares the
+  // driver entrypoint against `unstorage/drivers/cloudflare-kv-binding`. The
+  // `memory` driver does not match, so no KV binding is declared and no
+  // namespace is provisioned (verified: the generated dist/server/wrangler.json
+  // has `"kv_namespaces":[]`). It is also inert by construction — per-isolate,
+  // non-persistent, and nothing in this app ever touches `Astro.session`.
+  //
+  // Spelled as a literal entrypoint rather than the tidier
+  // `sessionDrivers.memory()` because Astro 7.0.9's `sessionDrivers` TYPE omits
+  // `memory` (and `null`), even though its RUNTIME has them: the value is built
+  // by filtering unstorage's `builtinDrivers`, but the shipped .d.ts lists only
+  // a subset, so `sessionDrivers.memory()` is a ts(2339) error under
+  // `astro check`. This object is precisely what that call returns at runtime
+  // (`{ entrypoint: "unstorage/drivers/memory" }`) and matches Astro's own
+  // `SessionDriverConfig`, so it type-checks without a suppression. Revisit if
+  // the upstream types are fixed.
+  session: {
+    driver: { entrypoint: "unstorage/drivers/memory" },
+  },
+
+  vite: {
+    build: {
+      // ⚠️ NOT a preference — this DISABLES A BROKEN CODE PATH, and removing it
+      // makes `astro build` fail on the second and every later run on Windows
+      // with a message that names neither the cause nor the real file:
+      //
+      //     The property 'options.recursive' is no longer supported. Received true
+      //       at Object.rmdirSync (node:fs)
+      //       at emptyDir (astro/dist/core/fs/index.js:34)
+      //
+      // Two upstream defects compound to produce it:
+      //   1. `astro build` (via @astrojs/cloudflare -> @cloudflare/vite-plugin)
+      //      spawns workerd children and never reaps them. They outlive the
+      //      build, are orphaned, and keep open handles on `dist/`. Measured: a
+      //      clean build leaves 4 behind.
+      //   2. Astro's `emptyDir` therefore gets EPERM from `fs.rmSync` on the
+      //      locked dir, and its Windows EPERM fallback calls
+      //      `fs.rmdirSync(p, { recursive: true })` — which Node 26 REMOVED. So
+      //      the fallback throws a different error, masking the EPERM.
+      //
+      // Astro consults this exact flag before calling the broken function
+      // (`core/build/static-build.js`):
+      //
+      //     if (settings.config?.vite?.build?.emptyOutDir !== false) {
+      //       emptyDir(settings.config.outDir, new Set(".git"));
+      //     }
+      //
+      // so `false` means `emptyDir` is never reached. Neither defect is ours to
+      // fix: astro@7.0.9 is the latest release, and @cloudflare/vite-plugin is
+      // pinned to 1.44.0 by wrangler's peer range (task-18-report.md §1).
+      //
+      // ⚠️ THE OUTPUT IS STILL CLEANED — by `scripts/build-web.mjs`, which IS
+      // this package's `build` script (see package.json). It removes `dist`
+      // itself before building, and reaps the workerd processes astro leaks
+      // afterwards, so the build starts from a genuinely empty directory and
+      // leaves nothing holding it. Do not set this back to `true`, and do not
+      // bypass the `build` script by running `astro build` directly, or stale
+      // output silently survives between builds.
+      emptyOutDir: false,
+    },
+  },
+});
