@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
+import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 import { enforceRateLimit } from "../src/auth/ratelimit";
 
 import type { ApiErrorBody } from "@thinkersjournal/shared";
@@ -18,7 +19,13 @@ describe("enforceRateLimit", () => {
   it("returns null for calls within LOGIN_LIMITER's quota, then a 429 Response once exhausted", async () => {
     // Unique key per test run so this test never collides with quota consumed
     // by other tests/files sharing the same binding within the isolate.
+    //
+    // ⚠️ Uniqueness alone does NOT make this burst deterministic: the limiter
+    // wipes EVERY key when its wall-clock window rolls, so a burst straddling a
+    // minute boundary loses its count no matter how private its key is. See
+    // ./helpers/limiter-window.ts.
     const key = `login-${crypto.randomUUID()}`;
+    await awaitLimiterBurstWindow();
 
     for (let i = 0; i < 10; i++) {
       expect(await enforceRateLimit(env.LOGIN_LIMITER, key)).toBeNull();

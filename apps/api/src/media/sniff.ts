@@ -20,8 +20,35 @@
  *
  * ⚠️ WHAT THIS CANNOT DO. A signature answers "what does this claim to be",
  * never "what will a decoder do with it" — a JPEG-prefixed polyglot sniffs as
- * JPEG. The belt-and-braces is the FREE `env.IMAGES.info()` format cross-check
- * in src/routes/media.ts. Never rely on either alone.
+ * JPEG, and legitimately so: its first bytes really are a JPEG signature.
+ *
+ * ⚠️ AND `IMAGES.info()` IS *NOT* WHAT SAVES YOU THERE — do not build the media
+ * route believing it is. `.info()` is a MISMATCH detector: it catches "the sniff
+ * said A, the decoder says B". A polyglot worth worrying about is a WELL-FORMED,
+ * genuinely decodable JPEG that happens to carry an SVG/script payload somewhere
+ * a JPEG decoder ignores (a COM/EXIF segment, or bytes trailing EOI). The sniff
+ * says `image/jpeg`; `.info()` says `image/jpeg`. They AGREE, and the payload is
+ * still there — there is no mismatch for a cross-check to find.
+ *
+ * What actually neutralizes the polyglot is the pipeline's MANDATORY RE-ENCODE
+ * plus DISCARDING THE ORIGINAL:
+ *   • `.input(...).transform(...).output({ format: "image/webp" })` fully DECODES
+ *     the image to pixels and RE-ENCODES it. The bytes we serve are freshly
+ *     rasterized output, not the uploaded file, so a payload hiding in a metadata
+ *     segment or after EOI simply does not survive into them.
+ *   • The original is NEVER persisted and NEVER served (only the transform's
+ *     output goes to R2), so the polyglot's SVG-shaped bytes never reach any
+ *     parser again.
+ * If a future change ever serves original bytes, or skips the transform for
+ * "already-WebP" uploads, the polyglot defense is GONE — and neither this sniff
+ * nor `.info()` will notice.
+ *
+ * So the three do DIFFERENT jobs, and none substitutes for another:
+ *   this sniff  — rejects formats we never want at all (SVG above all).
+ *   `.info()`   — cross-checks the sniff against the decoder (catches a LYING
+ *                 signature, e.g. JPEG magic on something that decodes as
+ *                 another format) and bounds dimensions (pixel bombs).
+ *   re-encode   — neutralizes payloads smuggled inside a VALID image.
  */
 
 export type SniffedFormat = "image/jpeg" | "image/png" | "image/gif" | "image/webp";

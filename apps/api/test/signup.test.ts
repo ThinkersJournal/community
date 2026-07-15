@@ -6,6 +6,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
+import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 import { TEST_LAST_TOKEN_KEY } from "../src/auth/email-verify";
 import { withClient } from "../src/db/client";
 
@@ -534,17 +535,26 @@ describe("POST /auth/signup", () => {
    * — which also proves the limiter runs BEFORE Turnstile: the 6th request is
    * rejected by the limiter, not the (also-failing) challenge.
    */
-  it("429s once over the rate limit (5/60s per ip+email)", async () => {
-    stubFetch(false);
-    const email = uniqueEmail();
-    const body = validBody(email);
+  it(
+    "429s once over the rate limit (5/60s per ip+email)",
+    async () => {
+      stubFetch(false);
+      const email = uniqueEmail();
+      const body = validBody(email);
+      await awaitLimiterBurstWindow();
 
-    for (let i = 0; i < 5; i++) {
-      expect((await signup(body)).status).toBe(403);
-    }
+      for (let i = 0; i < 5; i++) {
+        expect((await signup(body)).status).toBe(403);
+      }
 
-    expect((await signup(body)).status).toBe(429);
-  });
+      expect((await signup(body)).status).toBe(429);
+    },
+    // `awaitLimiterBurstWindow` may hold the burst for up to ~10s waiting for a
+    // clean window, which does not fit vitest's 5s default. NOT a flake-hiding
+    // timeout bump: the wait is bounded and deliberate, and the burst it guards
+    // still takes well under a second.
+    60_000,
+  );
 
   /**
    * ⚠️ THE MULTI-IP CEILING — the reason signup consumes TWO limiter buckets
@@ -573,6 +583,7 @@ describe("POST /auth/signup", () => {
       stubFetch(false);
       const email = uniqueEmail();
       const body = validBody(email);
+      await awaitLimiterBurstWindow();
 
       // 5 attempts, each from a different IP => 5 distinct `ip:email` buckets,
       // each still holding 4 unused slots.

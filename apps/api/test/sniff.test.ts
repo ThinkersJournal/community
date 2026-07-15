@@ -62,12 +62,15 @@ describe("SVG fails BY CONSTRUCTION (this is the whole point)", () => {
 
 describe("everything else is rejected", () => {
   it.each([
+    // Lengths 0..3. The truncated-signature cases below ARE the 2- and 3-byte
+    // cases (a bare `bytes(0xff, 0xd8)` "two bytes" case was byte-for-byte the
+    // truncated JPEG, and `bytes(0x89, 0x50, 0x4e)` the truncated PNG) — the
+    // signature-prefix framing is the one that says why the length matters, so
+    // duplicating them under length-only names added a count, not coverage.
     ["empty", new Uint8Array(0)],
     ["one byte", bytes(0xff)],
-    ["two bytes", bytes(0xff, 0xd8)],
-    ["three bytes", bytes(0x89, 0x50, 0x4e)],
-    ["a truncated PNG signature", bytes(0x89, 0x50, 0x4e)],
-    ["a truncated JPEG signature", bytes(0xff, 0xd8)],
+    ["a truncated JPEG signature (2 bytes)", bytes(0xff, 0xd8)],
+    ["a truncated PNG signature (3 bytes)", bytes(0x89, 0x50, 0x4e)],
     ["HTML", ascii("<!DOCTYPE html><html>")],
     ["a PDF", ascii("%PDF-1.7")],
     ["a ZIP", bytes(0x50, 0x4b, 0x03, 0x04)],
@@ -112,13 +115,20 @@ describe("everything else is rejected", () => {
 });
 
 describe("polyglots", () => {
-  it("a JPEG-prefixed polyglot sniffs as JPEG — the .info() cross-check is what catches it", () => {
+  it("a JPEG-prefixed polyglot sniffs as JPEG — the mandatory re-encode + discarding the original is what neutralizes it, NOT this function and NOT .info()", () => {
     const poly = new Uint8Array(SNIFF_HEADER_BYTES);
     poly.set(JPEG, 0);
     poly.set(ascii("<svg"), 4);
     // Honest about the bound: a signature check answers "what does this claim
-    // to be", never "what will a decoder do with it". The belt-and-braces is
-    // Task 8's free IMAGES.info() format cross-check.
+    // to be", never "what will a decoder do with it" — and this really does
+    // claim to be a JPEG.
+    //
+    // ⚠️ `.info()` does NOT rescue this case, and the media route must not be
+    // built as though it does: a polyglot that is a genuinely decodable JPEG
+    // makes the sniff say jpeg AND `.info()` say jpeg — they agree, so the
+    // cross-check has no mismatch to find. What kills the payload is the
+    // pipeline's full decode + re-encode to WebP combined with never
+    // persisting or serving the original. See src/media/sniff.ts's header.
     expect(sniffImageFormat(poly)).toBe("image/jpeg");
   });
 });
