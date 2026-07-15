@@ -45,6 +45,7 @@ import { checkOrigin } from "../auth/csrf";
 import {
   createVerificationToken,
   sendVerificationEmail,
+  verificationLinkOrigin,
 } from "../auth/email-verify";
 import { base64urlEncode } from "../auth/encoding";
 import { hashPassword } from "../auth/password";
@@ -63,60 +64,6 @@ const USERNAME_BASE_MAX = 20;
 
 /** Attempts to place a generated username before giving up (see `insertProfile`). */
 const USERNAME_ATTEMPTS = 3;
-
-/**
- * The origin verification links point at unless the request proves it came from
- * another PRODUCTION origin (see `verificationLinkOrigin`).
- *
- * ⚠️ NOT `new URL(request.url).origin`: that is derived from the client-supplied
- * `Host` header, which would let an attacker point the verification link in mail
- * sent from OUR confirmed sender at a host they control — a phishing/token-theft
- * vector (see the escaping note in src/auth/email-verify.ts).
- */
-const CANONICAL_ORIGIN = "https://thinkersjournal.com";
-
-/**
- * The ONLY origins an emailed verification link may point at.
- *
- * ⚠️ Deliberately NARROWER than `checkOrigin`'s allowlist (src/auth/csrf.ts), and
- * deliberately a SEPARATE list rather than an import — the two answer different
- * questions and must be free to diverge. `checkOrigin` asks "may this browser
- * submit this form?", for which allowing `http://localhost:8787` is fine: a
- * remote attacker's browser cannot forge that Origin against a developer's
- * machine. This list asks "where may we send a real user's verification link?",
- * and localhost is NOT fine there, because a NON-BROWSER client (curl, a script)
- * can set any Origin it likes against production, pass `checkOrigin`, and get a
- * `http://localhost:8787/verify-email?token=…` link delivered into the victim's
- * inbox — a link that can never work, i.e. verification-denial griefing.
- *
- * Consequence for LOCAL DEV: a signup at localhost gets a link pointing at
- * production. That is intentional. Local flows use the gated
- * `GET /__test/last-verify-token` route (src/routes/__test.ts) to fetch the raw
- * token instead — do NOT re-add localhost here to make dev email links clickable.
- */
-const VERIFICATION_LINK_ORIGINS: Set<string> = new Set([
-  "https://thinkersjournal.com",
-  "https://www.thinkersjournal.com",
-]);
-
-/**
- * The origin to build this signup's verification link on: the request's `Origin`
- * when it is a production origin (so a signup on `www.` keeps the user on `www.`),
- * and `CANONICAL_ORIGIN` for EVERYTHING else — a missing Origin, a `Referer`-only
- * request, and any non-production origin `checkOrigin` tolerates.
- *
- * Fails SAFE by construction: the only values that can ever be returned are the
- * members of `VERIFICATION_LINK_ORIGINS` and `CANONICAL_ORIGIN`, none of which
- * are attacker-influenced. `Referer` is deliberately NOT consulted — it is a
- * weaker signal than `Origin` and every value it could contribute is already
- * covered by the canonical fallback.
- */
-function verificationLinkOrigin(request: Request): string {
-  const origin = request.headers.get("Origin");
-  return origin !== null && VERIFICATION_LINK_ORIGINS.has(origin)
-    ? origin
-    : CANONICAL_ORIGIN;
-}
 
 /**
  * The 403 returned for BOTH a failed Turnstile challenge and a rejected origin.

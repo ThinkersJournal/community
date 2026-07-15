@@ -26,19 +26,14 @@
  * epoch-current session for the token's OWN user (see its header).
  */
 import { runMutatingPipeline } from "../auth/pipeline";
-import { createVerificationToken, sendVerificationEmail } from "../auth/email-verify";
+import {
+  createVerificationToken,
+  sendVerificationEmail,
+  verificationLinkOrigin,
+} from "../auth/email-verify";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
-
-/**
- * The origin verification links point at. ⚠️ NOT `new URL(request.url).origin`,
- * which derives from the client-supplied Host header — that would let an
- * attacker have a link to a host they control mailed from OUR confirmed sender.
- * Kept identical to src/routes/signup.ts's constant, deliberately: this is the
- * same decision, and both are audited by grepping for the literal.
- */
-const CANONICAL_ORIGIN = "https://thinkersjournal.com";
 
 export async function handleResendVerification(
   request: Request,
@@ -71,9 +66,17 @@ export async function handleResendVerification(
   if (user.email_verified_at !== null) return errorResponse("ALREADY_VERIFIED", 409);
 
   const token = await createVerificationToken(env, userId);
+  // ⚠️ THE SAME `verificationLinkOrigin` SIGNUP USES — one function, one rule.
+  // It keeps a `www.` user on `www.` and falls back to the apex for everything
+  // else, and it is NEVER `new URL(request.url).origin` (Host-derived, i.e. a
+  // link to an attacker's host mailed from OUR confirmed sender). This route
+  // first shipped with a private `CANONICAL_ORIGIN` copy that matched signup's
+  // security property but not its behaviour — always mailing an apex link. See
+  // the function's own header in src/auth/email-verify.ts.
+  const verifyUrl = `${verificationLinkOrigin(request)}/verify-email?token=${encodeURIComponent(token)}`;
   // NEVER throws (src/auth/email-verify.ts) — a Postmark outage must not 500 a
   // request whose whole purpose is to work around a Postmark outage.
-  await sendVerificationEmail(env, user.email, `${CANONICAL_ORIGIN}/verify-email?token=${encodeURIComponent(token)}`);
+  await sendVerificationEmail(env, user.email, verifyUrl);
 
   // 202, not 200: the send is best-effort by construction, and claiming 200
   // would assert a delivery we deliberately do not verify.

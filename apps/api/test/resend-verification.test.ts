@@ -31,6 +31,14 @@ import type { Actor } from "./actor";
 /** An allowlisted origin (src/auth/csrf.ts) — the route 403s without one. */
 const ALLOWED_ORIGIN = "http://localhost:8787";
 
+/**
+ * The origin an emailed verification link must be built on when the request
+ * carries no PRODUCTION origin. See `verificationLinkOrigin`
+ * (src/auth/email-verify.ts) — shared with signup, and NOT derived from the
+ * request URL.
+ */
+const CANONICAL_ORIGIN = "https://thinkersjournal.com";
+
 /** Drive the Worker through a full request lifecycle. */
 async function fetchWorker(request: Request): Promise<Response> {
   const ctx = createExecutionContext();
@@ -39,13 +47,17 @@ async function fetchWorker(request: Request): Promise<Response> {
   return response;
 }
 
-/** `POST /auth/resend-verification` for `actor`: full Origin + session + CSRF. */
-async function resend(actor: Actor): Promise<Response> {
+/**
+ * `POST /auth/resend-verification` for `actor`: full Origin + session + CSRF.
+ * `origin` overrides the request's `Origin` — it must stay in `checkOrigin`'s
+ * allowlist or the route 403s before doing anything.
+ */
+async function resend(actor: Actor, origin: string = ALLOWED_ORIGIN): Promise<Response> {
   return fetchWorker(
     new Request("https://api.test/auth/resend-verification", {
       method: "POST",
       headers: {
-        Origin: ALLOWED_ORIGIN,
+        Origin: origin,
         Cookie: actor.cookie,
         "X-CSRF-Token": actor.csrfToken,
       },
@@ -88,18 +100,36 @@ async function unverifiedActorWithPendingToken(): Promise<{
  * Stub the global `fetch` so `sendVerificationEmail`'s Postmark call never
  * leaves the process — every case that reaches a successful resend triggers a
  * real send otherwise. Mirrors test/signup.test.ts and test/email-verify.test.ts.
+ *
+ * Returns the captured Postmark request inits, so a case can assert what was
+ * actually mailed rather than merely that a send happened.
  */
-function stubPostmark(): void {
+function stubPostmark(): RequestInit[] {
+  const postmarkCalls: RequestInit[] = [];
+
   vi.stubGlobal(
     "fetch",
-    vi.fn(
-      async () =>
-        new Response(JSON.stringify({ ErrorCode: 0 }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    ),
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!url.startsWith("https://api.postmarkapp.com/")) {
+        // Fail loudly rather than silently returning a bogus body: this route
+        // must make no outbound call other than the Postmark send.
+        throw new Error(`unexpected fetch to ${url}`);
+      }
+      postmarkCalls.push(init ?? {});
+      return new Response(JSON.stringify({ ErrorCode: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }),
   );
+
+  return postmarkCalls;
+}
+
+/** The parsed Postmark JSON body of the Nth captured send. */
+function postmarkBody(calls: RequestInit[], index = 0): Record<string, unknown> {
+  return JSON.parse(String(calls[index]!.body)) as Record<string, unknown>;
 }
 
 beforeEach(async () => {
@@ -159,6 +189,53 @@ describe("POST /auth/resend-verification", () => {
       ),
     );
     expect(verify.status).toBe(200);
+  });
+
+  /**
+   * ⚠️ Asserts the LINK, not just that a send happened — the same reasoning as
+   * test/signup.test.ts's equivalent case. `new URL(request.url).origin` would
+   * be the obvious "simplification" and it is Host-header controlled: an
+   * attacker could have a link to a host THEY control mailed from our own
+   * confirmed sender. A send-count assertion alone would not notice.
+   */
+  it("mails a link on the CANONICAL origin, never the request's Host", async () => {
+    const postmarkCalls = stubPostmark();
+    const { actor } = await unverifiedActorWithPendingToken();
+
+    expect((await resend(actor)).status).toBe(202);
+
+    expect(postmarkCalls).toHaveLength(1);
+    const body = postmarkBody(postmarkCalls);
+    expect(String(body.TextBody)).toContain(`${CANONICAL_ORIGIN}/verify-email?token=`);
+    expect(String(body.HtmlBody)).toContain(`${CANONICAL_ORIGIN}/verify-email?token=`);
+    // The Host of the request that triggered the send was `api.test` — it must
+    // appear nowhere in the mail. (`ALLOWED_ORIGIN` is localhost, which is
+    // allowlisted for CSRF but is NOT a production origin, so the link falls
+    // back to the apex — never to a link the user could not open.)
+    expect(String(body.TextBody)).not.toContain("api.test");
+    expect(String(body.TextBody)).not.toContain("localhost");
+    expect(String(body.HtmlBody)).not.toContain("api.test");
+    expect(String(body.HtmlBody)).not.toContain("localhost");
+  });
+
+  /**
+   * ⚠️ PARITY WITH SIGNUP, PINNED. Both routes mail the same link and so must
+   * answer "which origin?" the same way — they share `verificationLinkOrigin`
+   * (src/auth/email-verify.ts) for exactly that reason. This route first shipped
+   * with a private `CANONICAL_ORIGIN` copy that matched signup's SECURITY
+   * property but not its BEHAVIOUR: it always mailed an apex link, so a user
+   * browsing `www.` got a link to a different subdomain than the one they were
+   * on. Reverting to a bare constant must turn this RED.
+   */
+  it("keeps a www. user on www. — the same rule signup applies", async () => {
+    const postmarkCalls = stubPostmark();
+    const { actor } = await unverifiedActorWithPendingToken();
+
+    expect((await resend(actor, "https://www.thinkersjournal.com")).status).toBe(202);
+
+    expect(String(postmarkBody(postmarkCalls).TextBody)).toContain(
+      "https://www.thinkersjournal.com/verify-email?token=",
+    );
   });
 
   it("409s ALREADY_VERIFIED for a verified session", async () => {

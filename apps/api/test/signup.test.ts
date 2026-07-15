@@ -31,8 +31,9 @@ const ORIGIN = "https://thinkersjournal.com";
 
 /**
  * The origin every emailed verification link must be built on (production only —
- * see `verificationLinkOrigin` in src/routes/signup.ts). NOT derived from the
- * request URL, and NOT every origin `checkOrigin` accepts.
+ * see `verificationLinkOrigin` in src/auth/email-verify.ts, which BOTH mailing
+ * routes share). NOT derived from the request URL, and NOT every origin
+ * `checkOrigin` accepts.
  */
 const CANONICAL_ORIGIN = "https://thinkersjournal.com";
 

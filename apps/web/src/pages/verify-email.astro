@@ -37,7 +37,7 @@
  * double-submit, since a cross-site attacker can make the browser POST here but
  * cannot read the token out of the page to fill the field in.
  */
-import { apiErrorCode, apiFetch } from "../lib/api";
+import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 
 // ⚠️ This page's own URL carries the verification token, and the rendered
 // login link + hidden CSRF input both carry per-request secrets — keep it out
@@ -101,6 +101,22 @@ if (Astro.request.method === "POST") {
     // The hidden input, promoted back into the header the api demands.
     csrfToken: String(form.get("csrfToken") ?? ""),
   });
+
+  // ⚠️ LOAD-BEARING ON THE 401 PATH — the identical reasoning as
+  // new-post.astro:74, and the reason that comment exists. The api's pipeline
+  // answers a REVOKED/stale session with 401 **plus a cleared cookie** (step 4,
+  // checkSecurityEpoch in apps/api/src/auth/pipeline.ts, which calls
+  // `unauthorized({ "Set-Cookie": cookie })`). Dropping that header leaves the
+  // dead cookie in the browser, so the user keeps re-sending a session that can
+  // only ever 401 again instead of being cleanly logged out.
+  //
+  // This path is REACHABLE HERE, and narrowly so: `GET /auth/csrf` runs the epoch
+  // check too (`readCurrentSession`), so an ALREADY-stale session renders no form
+  // at all. The 401 below is specifically the session that died BETWEEN this page
+  // rendering the form and the click — the "log out everywhere from another tab"
+  // case named at the branch below. e2e/resend-verification.spec.ts constructs
+  // exactly that window, and fails on the cookie alone if this call is removed.
+  applyCookies(Astro.response.headers, response.setCookies);
 
   if (response.status === 202) {
     resendOutcome = "sent";
