@@ -11,6 +11,7 @@ import worker from "../src";
 // IMPORTS the table.
 import indexSource from "../src/index.ts?raw";
 import { ROUTES } from "../src/routes";
+import { findRoute } from "../src/routing";
 
 import type { RouteDef } from "../src/routing";
 
@@ -138,20 +139,63 @@ async function fetchWorker(request: Request): Promise<Response> {
   return response;
 }
 
+/**
+ * src/index.ts with block comments stripped and all whitespace collapsed — the
+ * form `the dispatcher is pinned` compares. Normalizing means reformatting or
+ * re-commenting the file does not fail the pin; changing what it DOES will.
+ */
+const DISPATCHER_BODY = indexSource
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/\s+/g, " ")
+  .trim();
+
+/**
+ * ⚠️ THE PINNED DISPATCHER — the exact normalized body of src/index.ts.
+ *
+ * This is a SNAPSHOT, deliberately hand-maintained. Do not "fix" a failure by
+ * pasting in the new value without reading the diff: the assertion exists to
+ * make you look.
+ */
+const EXPECTED_DISPATCHER_BODY =
+  'import { notFoundResponse } from "./http/errors"; ' +
+  'import { ROUTES } from "./routes"; ' +
+  'import { findRoute } from "./routing"; ' +
+  'export { UserSecurityDO } from "./durable-objects/UserSecurityDO"; ' +
+  "export default { async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> { " +
+  "const { pathname } = new URL(request.url); " +
+  "const match = findRoute(ROUTES, request.method, pathname); " +
+  "if (match === null) return notFoundResponse(); " +
+  "return await match.route.handler(request, env, ctx, match.params); " +
+  "}, } satisfies ExportedHandler<Env>;";
+
 describe("route inventory", () => {
-  it("the router dispatches ONLY through the ROUTES table", () => {
-    // ⚠️ THE TRIPWIRE. Every assertion below iterates over ROUTES, so a route
-    // dispatched by a hand-rolled `if` in index.ts would be invisible here and
-    // this suite would pass vacuously about it. This is the one thing that
-    // cannot be checked structurally, so it is checked textually.
+  it("index.ts dispatches ONLY through ROUTES — its whole body is pinned", () => {
+    // ⚠️ THE TRIPWIRE. Every assertion in this file enumerates ROUTES, so a
+    // route reachable any OTHER way is invisible here and this suite passes
+    // vacuously about it. That is the one property that cannot be checked
+    // structurally, so it is checked textually.
+    //
+    // ⚠️ WHY THE WHOLE BODY, AND NOT `toContain("findRoute(ROUTES,")` PLUS A
+    // BAN ON SOME IDIOM. Presence is not exclusivity. This passes both of
+    // those checks and serves /admin to the world, un-inventoried:
+    //
+    //     if (pathname.startsWith("/admin")) return handleAdmin(req, env, ctx, {});
+    //     const match = findRoute(ROUTES, request.method, pathname);
+    //
+    // So would `switch (pathname)`, `pathname.match(...)`, Yoda
+    // (`"/admin" === pathname`), aliasing (`const p = pathname`), or a second
+    // `findRoute(EXTRA, ...)`. A blocklist can only ban the idioms someone
+    // imagined; this file's own history proves that is not good enough —
+    // `startsWith` is the idiom M0's router ACTUALLY used for /__test/, and the
+    // one a dynamic route reaches for first. An allowlist of exactly one body
+    // inverts the burden: every unimagined idiom fails by default.
+    //
+    // This file is 20 lines and should essentially never change, so the cost of
+    // pinning it is ~zero and any edit becomes a deliberate, reviewed act.
     expect(
-      indexSource,
-      "src/index.ts no longer dispatches via findRoute(ROUTES, ...) — every assertion in this file enumerates ROUTES, so a route reachable any other way is NOT covered by the default-deny checks below.",
-    ).toContain("findRoute(ROUTES,");
-    expect(
-      indexSource,
-      "src/index.ts matches a path directly. Move that route into src/routes.ts — see this file's header.",
-    ).not.toMatch(/pathname === /);
+      DISPATCHER_BODY,
+      "src/index.ts changed. It is pinned because every assertion in this file enumerates ROUTES: a route reachable any other way is NOT covered by the default-deny checks below. If this change adds dispatch, move the route to src/routes.ts. If it is genuinely benign, update this snapshot deliberately.",
+    ).toBe(EXPECTED_DISPATCHER_BODY);
   });
 
   it("found at least one mutating route to check", () => {
@@ -172,6 +216,26 @@ describe("route inventory", () => {
       ).toContain(exempt);
     }
   });
+
+  /**
+   * ⚠️ A ROW IN ROUTES MUST MEAN WHAT IT SAYS. `findRoute` is first-match-wins,
+   * so an earlier pattern can SHADOW a later one (register `/posts/:id` before
+   * `/posts/new` and the literal is dead code). That is not a default-deny
+   * bypass — dispatch and the probes below both resolve through `findRoute`, so
+   * the shadowed path is still protected by whatever answers it. It is worse in
+   * a different way: the table is a SECURITY INVENTORY, and a shadowed row makes
+   * it attest to a handler that never runs, while every assertion "about" that
+   * row is really exercising the other route's handler. Green, and lying.
+   */
+  it.each(ROUTES.map((r) => [label(r), r] as const))(
+    "%s is reachable at its own path (not shadowed by an earlier pattern)",
+    (name, route) => {
+      expect(
+        findRoute(ROUTES, route.method, concretePath(route.pattern))?.route,
+        `${name} is shadowed by an earlier entry in ROUTES — it can never be served, and every assertion about it is actually testing the other route's handler. Register the more specific pattern first.`,
+      ).toBe(route);
+    },
+  );
 });
 
 /**

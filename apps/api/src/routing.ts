@@ -39,11 +39,22 @@ export interface RouteDef {
  * Match `pathname` against `pattern`, returning the captured params (`{}` when
  * there are none) or `null` for no match.
  *
- * Segment-count-exact and slash-exact: a `:param` NEVER spans a `/`. An empty
- * capture is a non-match rather than `""` — an empty id reaching a handler as a
- * real value produces a nonsense query rather than a 404. An undecodable
- * segment is likewise a non-match, never a throw: a malformed URL is a 404, not
- * a 500.
+ * Segment-count-exact and slash-exact: a `:param` never spans a `/` IN THE RAW
+ * PATH — `/posts/a/b` does not match `/posts/:id`, because the segment counts
+ * differ. An empty capture is a non-match rather than `""` — an empty id
+ * reaching a handler as a real value produces a nonsense query rather than a
+ * 404. An undecodable segment is likewise a non-match, never a throw: a
+ * malformed URL is a 404, not a 500.
+ *
+ * ⚠️ THE DECODED VALUE CAN STILL CONTAIN A `/`. Matching happens BEFORE
+ * decoding, so `/posts/a%2Fb` matches `/posts/:id` and delivers
+ * `{ id: "a/b" }` — one path segment on the wire, a slash-bearing string in the
+ * handler. This is deliberate (it is what every mainstream router does, and
+ * `%2F` is the only way to express a literal slash inside a segment), and
+ * test/routing.test.ts pins it. A HANDLER MUST NOT concatenate a param into a
+ * path, a KV key, or a cache key without escaping it, and must validate the
+ * value's shape (for `:id`, that it is a UUID) before use — `matchPattern`
+ * guarantees the value is one segment and non-empty, nothing more.
  */
 export function matchPattern(pattern: string, pathname: string): RouteParams | null {
   const expected = pattern.split("/");

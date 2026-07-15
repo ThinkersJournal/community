@@ -38,6 +38,16 @@ describe("matchPattern", () => {
   it("does not let a param swallow a slash", () => {
     expect(matchPattern("/posts/:id", "/posts/a/b")).toBeNull();
   });
+
+  it("DOES deliver a decoded '/' inside a single segment (%2F)", () => {
+    // ⚠️ The pattern is matched BEFORE decoding, so `%2F` is one segment on the
+    // wire and becomes a slash-bearing VALUE. "a :param never spans a /" is true
+    // of the raw path (see the case above) but NOT of what the handler receives.
+    // Pinned because it is the surprising half of that pair: a handler that
+    // concatenates this into a path or cache key without escaping is wrong, and
+    // src/routing.ts's header says so.
+    expect(matchPattern("/posts/:id", "/posts/a%2Fb")).toEqual({ id: "a/b" });
+  });
 });
 
 describe("findRoute", () => {

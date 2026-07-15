@@ -181,23 +181,65 @@ const CASES: readonly ErrorCase[] = [
 ];
 
 /**
- * Routes with NO reachable error path, each with the reason it has none.
+ * Routes with NO reachable error path, each with the reason it has none AND a
+ * pin of the handler source that reason was read from.
  *
  * ⚠️ AN ENTRY HERE IS A CLAIM, not a way to quiet `coverage`. It says: this
  * route cannot answer non-2xx, so there is no envelope to check. The moment it
  * grows a failure mode — a lookup, a validation, a binding that can be absent —
  * the entry is wrong and the route owes this file a `CASES` probe instead.
+ *
+ * ⚠️ WHY `handlerSource` EXISTS. "This route has no error path" is a claim about
+ * code, and the claim was true WHEN IT WAS WRITTEN. `GET /posts` is a literal
+ * `{posts: []}` stub today; the M1 task that gives it a real query makes this
+ * entry FALSE — and staleness/reason guards would not notice, because the route
+ * still exists and still states a reason. That is the "remembered, not checked"
+ * failure surviving inside the fix for it. So the claim is keyed to its premise:
+ * when the handler changes, the claim EXPIRES and someone must re-read it.
  */
-const ERROR_FREE: ReadonlyMap<string, string> = new Map([
+interface ErrorFreeClaim {
+  readonly reason: string;
+  /**
+   * `handler.toString()` with whitespace collapsed. Normalized because the pool
+   * serves these through vite/esbuild, which strips TS annotations and reflows —
+   * so the pin tracks what the handler DOES, not how it was formatted.
+   */
+  readonly handlerSource: string;
+}
+
+const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
   [
     "GET /health",
-    "A liveness probe with no input, no I/O and no branches: it returns a literal 200 'ok' (src/routes.ts) or the Worker is not running at all.",
+    {
+      reason:
+        "A liveness probe with no input, no I/O and no branches: it returns a literal 200 'ok' (src/routes.ts) or the Worker is not running at all.",
+      handlerSource: 'async () => new Response("ok", { status: 200 })',
+    },
   ],
   [
     "GET /posts",
-    "The stub feed — a literal `{posts: []}` 200, deliberately un-gated (reads stay open, so there is nothing to reject). When it grows a real query it gains error paths and must move to CASES.",
+    {
+      reason:
+        "The stub feed — a literal `{posts: []}` 200, deliberately un-gated (reads stay open, so there is nothing to reject). When it grows a real query it gains error paths and must move to CASES.",
+      handlerSource:
+        "async function handleListPosts() { return new Response(JSON.stringify({ posts: [] }), " +
+        '{ status: 200, headers: { "content-type": "application/json" } }); }',
+    },
   ],
 ]);
+
+/**
+ * The handler's source, normalized the same way `handlerSource` is.
+ *
+ * ⚠️ Relies on `Function.prototype.toString()` returning real source. That holds
+ * here: the pool serves modules through vite (transformed, but never minified).
+ * If a future build minifies the Worker under test, these pins will need to key
+ * off something else — but they will FAIL LOUDLY when that happens, which is the
+ * correct direction to break in.
+ */
+function handlerSourceOf(route: RouteDef): string {
+  return route.handler.toString().replace(/\s+/g, " ").trim();
+}
 
 /**
  * LAYER 1 — automatic. No per-route knowledge, so it cannot fall behind ROUTES.
@@ -254,7 +296,7 @@ describe("error-envelope coverage", () => {
   it("every ERROR_FREE entry still corresponds to a real route", () => {
     // A stale claim is a trap: it would silently excuse a FUTURE route that
     // happens to reuse the same method+pattern.
-    for (const [route, reason] of ERROR_FREE) {
+    for (const [route, { reason }] of ERROR_FREE) {
       expect(
         registered,
         `ERROR_FREE claims "${route}" has no error path, but the router no longer has that route. Remove the entry. (Its stated reason was: ${reason})`,
@@ -263,11 +305,31 @@ describe("error-envelope coverage", () => {
   });
 
   it("every ERROR_FREE entry states a reason", () => {
-    for (const [route, reason] of ERROR_FREE) {
+    for (const [route, { reason }] of ERROR_FREE) {
       expect(
         reason.length,
         `ERROR_FREE["${route}"] must say WHY the route has no error path — that justification is the whole value of the allowlist.`,
       ).toBeGreaterThan(20);
+    }
+  });
+
+  /**
+   * ⚠️ THE CLAIM EXPIRES WITH ITS PREMISE. The two guards above check that the
+   * claim is well-FORMED (real route, stated reason). Neither checks that it is
+   * still TRUE. This one does the only thing that can be checked mechanically:
+   * it detects when the code the reason was read from has changed underneath it.
+   */
+  it("every ERROR_FREE entry's handler is unchanged since the claim was made", () => {
+    for (const [routeLabel, { reason, handlerSource }] of ERROR_FREE) {
+      const route = ROUTES.find((r) => label(r) === routeLabel);
+      // The staleness guard above owns the "route is gone" message; skip rather
+      // than throw here so this test reports only what it is about.
+      if (route === undefined) continue;
+
+      expect(
+        handlerSourceOf(route),
+        `ERROR_FREE claims "${routeLabel}" has no error path because: ${reason}\n\nIts handler has CHANGED since that claim was made — re-read it. If it now has a failure mode (a query, a lookup, a validation, a binding that can be absent), move the route to CASES and probe that failure. If it is still genuinely error-free, update this pin deliberately.`,
+      ).toBe(handlerSource);
     }
   });
 
