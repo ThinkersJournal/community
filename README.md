@@ -4,7 +4,7 @@ The flagship of [Thinker's Journal](https://thinkersjournal.com): a public **soc
 
 > **▶ New session / new agent?** Start with **[`HANDOFF.md`](HANDOFF.md)** — the self-contained entry point (this repo's Claude memory is separate from the marketing-site project).
 
-> **Status:** pre-development. The full architecture is designed; implementation begins at milestone **M0**. This repository is **private** and stays quiet until the launch scope (M0–M4) is complete.
+> **Status:** **M0 (foundations) is built** and not yet deployed; **M1** is next. This repository is **private** and stays quiet until the launch scope (M0–M4) is complete.
 
 ## Two pillars
 
@@ -154,8 +154,10 @@ invalidates on write, so a cached auth/dup-email/verify read is a real security 
 | Watch paths | `apps/web/**`, `packages/shared/**` |
 
 The `API` Service Binding resolves by Worker **name** (`thinkersjournal-api`), so the api
-must be deployed first. First deploy targets `*.workers.dev`; smoke-hit the api's
-`/health` and a rendered `web` page before pointing DNS at it.
+must be deployed first. First deploy targets `*.workers.dev` — including the api's own
+`thinkersjournal-api.<subdomain>.workers.dev`, which is public by default (see the deploy
+gate). Smoke-hit the api's `/health` there and a rendered `web` page before pointing DNS
+at it.
 
 ### Deploy gate
 
@@ -168,7 +170,7 @@ Check every box before the first production deploy.
 - [ ] Postmark `From` is a **confirmed** sender signature / verified domain (silent failure otherwise).
 - [ ] Real Turnstile keys set as api secrets; dummy keys never deployed.
 - [ ] **`TEST_ROUTES` is unset in prod** and the `__test` route is unreachable — assert this with a deploy check (token exposure = account takeover).
-- [ ] Pin `wrangler` + `@cloudflare/vitest-pool-workers` versions; re-verify the `ratelimit`/hyperdrive/DO config shapes against the installed version.
+- [ ] Pin `wrangler` + `@cloudflare/vitest-pool-workers` versions; re-verify the `ratelimits`/hyperdrive/DO config shapes against the installed version.
 - [ ] Run at least one pre-launch pass on **real** infra (`wrangler dev --remote` / deployed staging) — local dev has no real Hyperdrive caching or true rate-limit thresholds.
 
 **Learned during M0 — each of these cost real debugging time:**
@@ -194,6 +196,16 @@ Check every box before the first production deploy.
       3/3; GETs unaffected). It looks dev-only — Astro's `createOriginCheckMiddleware`
       returns its 403 without consuming the request body — but verify on a deployed Worker
       before trusting any 4xx-heavy flow.
-- [ ] **The E2E's api-on-:8788 topology is DEV-ONLY.** Production must keep the api
-      binding-only, with no public route. Do not carry the two-process split into a
-      deployed environment.
+- [ ] **The api HAS a public URL — know what actually guards it.** `apps/api/wrangler.jsonc`
+      sets neither `workers_dev: false` nor `routes`, so Cloudflare defaults `workers_dev`
+      to true and the first `wrangler deploy` publishes
+      `thinkersjournal-api.<subdomain>.workers.dev`, publicly addressable. That is expected
+      at first deploy (it is what the smoke test above hits), so **do not assume the api is
+      unreachable from the internet** — the real guards are `TEST_ROUTES` unset, the Origin
+      allowlist, CSRF, and the session/epoch checks. **Concrete check: `GET
+      /__test/last-verify-token` on the api's public URL must 404.** Once a custom domain
+      exists, hardening step: set `workers_dev: false` + custom `routes` so the only entry
+      is the Service Binding from `web`.
+- [ ] **The E2E's api-on-:8788 topology is DEV-ONLY.** It exists so the test can read the
+      verification token off the api directly; a deployed environment has no reason to run
+      the two-process split. Do not carry it forward.
