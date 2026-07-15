@@ -40,9 +40,72 @@ export const MAX_PIXELS = 50_000_000;
  * Narrows `.info()`'s union to the dimensioned branch. See `ImageFacts` — this
  * is a TYPE-SOUNDNESS tool, not a format check. It is NOT the SVG defense
  * (src/media/sniff.ts is), and callers must not use it as one.
+ *
+ * ⚠️ `typeof x === "number"`, NOT `"width" in info`. The `in` operator answers
+ * "is there a KEY", not "is there a NUMBER": it is `true` for
+ * `{ width: undefined }`, which would narrow to `ImageFacts`, make
+ * `width * height` `NaN`, and — because `NaN > MAX_PIXELS` is FALSE — walk a
+ * pixel bomb straight through the guard below. That is the same NaN-blindness
+ * that makes an `as ImageFacts` cast unsafe, one level down. Unreachable from
+ * the union as documented today; written this way because the whole premise of
+ * this module is not trusting the binding's runtime shape, and `in` trusts it.
  */
 export function hasDimensions(info: ImageInfoResponse): info is ImageFacts {
-  return "width" in info && "height" in info;
+  const candidate = info as { width?: unknown; height?: unknown };
+  return typeof candidate.width === "number" && typeof candidate.height === "number";
+}
+
+/**
+ * THE PIXEL-BOMB BOUND — `true` means REJECT (a 413).
+ *
+ * A few KB of PNG can declare 8000×8000 in its header and decode to gigabytes;
+ * the byte cap does not bound this at all, which is why the bound is checked
+ * against `.info()`'s DECLARED dimensions before anything decodes the pixels.
+ *
+ * ⚠️ FAILS CLOSED, AND THAT IS THE ENTIRE POINT OF IT BEING A FUNCTION. Every
+ * "we could not get two real numbers out of `.info()`" case — the dimensionless
+ * `{ format: "image/svg+xml" }` branch, a `NaN`, an `Infinity` — returns `true`
+ * (reject) rather than falling through to a comparison that silently answers
+ * `false`. A naive `if (info.width * info.height > MAX_PIXELS)` over a cast gets
+ * every one of those cases WRONG in the dangerous direction, because every
+ * comparison against `NaN` is `false`. Kept as a pure predicate over the WIDE
+ * union (not over the narrowed `ImageFacts`) so those cases are reachable from a
+ * unit test — see test/images.test.ts.
+ */
+export function exceedsPixelBound(info: ImageInfoResponse): boolean {
+  if (!hasDimensions(info)) return true;
+  const pixels = info.width * info.height;
+  // ⚠️ NOT `pixels > MAX_PIXELS` alone: `NaN > n` and `NaN <= n` are BOTH false,
+  // so a NaN must be caught by an explicit finiteness test or it reads as "under
+  // the bound". Infinity is caught here too, though it would pass `>` anyway.
+  if (!Number.isFinite(pixels)) return true;
+  return pixels > MAX_PIXELS;
+}
+
+/**
+ * The dimensions `transform({ width: maxEdge, height: maxEdge, fit:
+ * "scale-down" })` produces from `facts` — the aspect ratio preserved, the
+ * longest edge bounded by `maxEdge`, and NEVER upscaled (`scale` is capped at
+ * 1, so a 100×100 avatar stays 100×100 rather than being blown up to 2048).
+ *
+ * Only a FALLBACK: src/routes/media.ts prefers a second `.info()` on the STORED
+ * bytes, which is authoritative and free. This exists so that when that call
+ * cannot answer, the row records what we actually kept rather than the
+ * DISCARDED pre-scale-down original — a 4000×3000 upload stored as 2048×1536
+ * must not be recorded as 4000×3000 (wrong `<img>` box ⇒ layout shift).
+ */
+export function scaleDownTo(
+  facts: ImageFacts,
+  maxEdge: number,
+): { width: number; height: number } {
+  const scale = Math.min(1, maxEdge / facts.width, maxEdge / facts.height);
+  if (scale === 1) return { width: facts.width, height: facts.height };
+  // `max(1, ...)`: an extreme aspect ratio (10000×1 ⇒ height 0.2) must not round
+  // to a 0-pixel edge — `media.height` is a NOT NULL integer and 0 is a lie.
+  return {
+    width: Math.max(1, Math.round(facts.width * scale)),
+    height: Math.max(1, Math.round(facts.height * scale)),
+  };
 }
 
 /**

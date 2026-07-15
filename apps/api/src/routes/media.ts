@@ -33,7 +33,13 @@ import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
 import { readCappedBody, sha256HexOf } from "../media/body";
-import { hasDimensions, inspectImage, MAX_PIXELS, toWebp } from "../media/images";
+import {
+  exceedsPixelBound,
+  hasDimensions,
+  inspectImage,
+  scaleDownTo,
+  toWebp,
+} from "../media/images";
 import { SNIFF_HEADER_BYTES, sniffImageFormat } from "../media/sniff";
 
 /**
@@ -139,9 +145,12 @@ export async function handleUploadMedia(
   if (facts === null || facts.format !== sniffed || !hasDimensions(facts)) {
     return unsupportedMediaType();
   }
-  if (facts.width * facts.height > MAX_PIXELS) {
-    // A PIXEL BOMB: a few KB of PNG that decodes to gigabytes. The byte cap does
-    // not bound this at all.
+  // A PIXEL BOMB: a few KB of PNG that declares 8000×8000 and decodes to
+  // gigabytes. The byte cap does not bound this at all. The bound FAILS CLOSED
+  // on anything that is not two real numbers — see `exceedsPixelBound`, which is
+  // a predicate (and unit-tested in test/images.test.ts) precisely so that
+  // property is pinned at the guard rather than only through this route.
+  if (exceedsPixelBound(facts)) {
     return errorResponse("PAYLOAD_TOO_LARGE", 413, {
       message: "That image is too many pixels.",
     });
@@ -191,10 +200,16 @@ export async function handleUploadMedia(
   });
 
   // ---- 10. Row -------------------------------------------------------------
-  // Dimensions come from `.info()` on the STORED bytes: `scale-down` may have
-  // resized them, so `facts` describes the discarded original, not what we kept.
+  // Dimensions come from `.info()` on the STORED bytes — authoritative, and
+  // free. ⚠️ `facts` describes the DISCARDED original: `scale-down` may have
+  // resized it, so `facts` is NOT a valid fallback here. When the second
+  // `.info()` cannot answer, re-derive from MAX_EDGE and the original's aspect
+  // ratio, which is exactly what the transform did and costs nothing.
   const storedInfo = await inspectImage(env, webp);
-  const stored = storedInfo !== null && hasDimensions(storedInfo) ? storedInfo : facts;
+  const stored =
+    storedInfo !== null && hasDimensions(storedInfo)
+      ? { width: storedInfo.width, height: storedInfo.height }
+      : scaleDownTo(facts, MAX_EDGE);
   const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<{ id: string }>(
       "INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",

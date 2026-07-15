@@ -10,7 +10,13 @@ import { csrfTokenFor } from "../src/auth/csrf";
 import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
 import { MAX_UPLOAD_BYTES, MEDIA_QUOTA_BYTES } from "../src/routes/media";
-import { oversizeBytes, PNG_1X1, SVG_BYTES, TEXT_BYTES } from "./fixtures/images";
+import {
+  oversizeBytes,
+  pixelBombPng,
+  PNG_1X1,
+  SVG_BYTES,
+  TEXT_BYTES,
+} from "./fixtures/images";
 
 import type { SessionData } from "@thinkersjournal/shared";
 
@@ -283,6 +289,35 @@ describe("the size cap is enforced while streaming", () => {
       body: oversizeBytes(MAX_UPLOAD_BYTES),
     });
     expect((await fetchWorker(request)).status).toBe(413);
+  });
+});
+
+/**
+ * ⚠️ THIS BLOCK PINS THE ROUTE'S *WIRING* OF THE BOUND, which the unit tests in
+ * test/images.test.ts deliberately cannot: `exceedsPixelBound` can be perfect and
+ * still never be CALLED. Deleting the guard from src/routes/media.ts leaves every
+ * unit test green and reddens exactly these.
+ */
+describe("pixel bombs are rejected on DECLARED dimensions", () => {
+  it("rejects a 65-byte PNG that declares 8000x8000 with 413", async () => {
+    const bomb = pixelBombPng(8000, 8000); // 64MP, over the 50MP bound
+    // ⚠️ The byte cap is NOT what stops this: the bomb is ~230,000x SMALLER than
+    // MAX_UPLOAD_BYTES. Only the declared-dimension bound stands between a few
+    // dozen bytes and a multi-gigabyte decode.
+    expect(bomb.byteLength).toBeLessThan(200);
+
+    const response = await fetchWorker(upload(bomb, actor));
+    expect(response.status).toBe(413);
+    expect(((await response.json()) as { code: string }).code).toBe(
+      "PAYLOAD_TOO_LARGE",
+    );
+  });
+
+  it("ACCEPTS an image of the same shape that is UNDER the bound", async () => {
+    // The other side of the boundary, so the case above proves the BOUND fired
+    // and not merely "this crafted fixture is rejected somehow". 4MP.
+    const ok = pixelBombPng(2000, 2000);
+    expect((await fetchWorker(upload(ok, actor))).status).not.toBe(413);
   });
 });
 
