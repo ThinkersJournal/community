@@ -1,7 +1,13 @@
+import rehypeShikiFromHighlighter from "@shikijs/rehype/core";
+import rehypeStringify from "rehype-stringify";
+import remarkParse from "remark-parse";
+import remarkRehype from "remark-rehype";
+import { unified } from "unified";
 import { describe, expect, it } from "vitest";
 
 import { renderMarkdown } from "../src";
-import { HIGHLIGHT_LANGS } from "../src/highlight";
+import { getHighlighter, HIGHLIGHT_LANGS, HIGHLIGHT_THEME } from "../src/highlight";
+import { rehypeLanguageAllowlist } from "../src/lang-allowlist";
 import { elements, eventHandlerNames, tagNames } from "./dom";
 
 describe("syntax highlighting", () => {
@@ -79,5 +85,54 @@ describe("the language allowlist (a DoS guard, not tidiness)", () => {
       elements(html).some((e) => typeof e.properties?.style === "string"),
       "no highlighted spans — the unknown-language class reached Shiki unrewritten",
     ).toBe(true);
+  });
+});
+
+/**
+ * ⚠️ THE THROW IS ONE CONFIG FLAG AWAY — AND THIS IS WHERE THE ALLOWLIST STOPS
+ * BEING "DEFENSE IN DEPTH" AND BECOMES THE ONLY THING HOLDING.
+ *
+ * @shikijs/rehype@4.3.1 does not currently reach Shiki's unloaded-language
+ * throw, but ONLY because we set neither `lazy` nor `fallbackLanguage` (see
+ * src/lang-allowlist.ts's header). `lazy: true` is a plausible future ask —
+ * "stop maintaining a fixed 15, just auto-load whatever the author wrote" — and
+ * it makes the wrapper call `highlighter.loadLanguage(<attacker string>)` and
+ * rethrow the rejection. That is a 500 on every render of the post, forever.
+ *
+ * These build the pipeline with `lazy: true` DELIBERATELY, to pin the guard in
+ * the dimension that actually matters, and to leave a tripwire for whoever adds
+ * that flag for real: if you set lazy:true in render.ts and delete the
+ * allowlist, THIS is the test that stops you.
+ */
+describe("the allowlist under `lazy: true` (where the DoS is real, not theoretical)", () => {
+  const HOSTILE = "```definitely-not-a-language\nx\n```";
+
+  const lazyPipeline = (opts: { withAllowlist: boolean }) => {
+    const base = unified().use(remarkParse).use(remarkRehype);
+    return async (markdown: string) => {
+      const highlighter = await getHighlighter();
+      const pipeline = opts.withAllowlist
+        ? base().use(rehypeLanguageAllowlist, { languages: highlighter.getLoadedLanguages() })
+        : base();
+      return String(
+        await pipeline
+          .use(rehypeShikiFromHighlighter, highlighter, { theme: HIGHLIGHT_THEME, lazy: true })
+          .use(rehypeStringify)
+          .process(markdown),
+      );
+    };
+  };
+
+  it("WITHOUT the allowlist, a hostile fence + lazy:true THROWS (this is the 500)", async () => {
+    // Guards the test below against going vacuous: if a future Shiki release
+    // stops throwing here, this reddens and tells us the threat model moved,
+    // rather than silently making the next test prove nothing.
+    await expect(lazyPipeline({ withAllowlist: false })(HOSTILE)).rejects.toThrow();
+  });
+
+  it("WITH the allowlist, the same fence + lazy:true renders fine", async () => {
+    const html = await lazyPipeline({ withAllowlist: true })(HOSTILE);
+    expect(tagNames(html)).toContain("pre");
+    expect(eventHandlerNames(html)).toEqual([]);
   });
 });

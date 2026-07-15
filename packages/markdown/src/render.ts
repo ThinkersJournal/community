@@ -188,7 +188,12 @@ function buildRenderer(highlighter: HighlighterCore) {
         protocols: ["http", "https"],
       })
       // ⚠️ ORDER: allowlist THEN Shiki. The allowlist reads the class the
-      // sanitizer decided to keep, and must run before Shiki can throw on it.
+      // sanitizer decided to keep, and must run before Shiki acts on it.
+      // ⚠️ DO NOT set `lazy: true` or `fallbackLanguage` on the Shiki plugin
+      // below without reading src/lang-allowlist.ts's header first: those flags
+      // are exactly what turns an attacker-controlled fence info string back
+      // into a throw — i.e. a 500 on every render of that post. The allowlist
+      // is what keeps that closed; it is verified load-bearing under lazy:true.
       .use(rehypeLanguageAllowlist, { languages: highlighter.getLoadedLanguages() })
       // ⚠️ AFTER rehypeSanitize, non-negotiably: defaultSchema allows no `style`,
       // so a sanitizer running after this would strip every token colour. Safe

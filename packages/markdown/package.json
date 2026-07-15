@@ -10,7 +10,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check:workerd": "esbuild src/index.ts --bundle --format=esm --platform=browser --outfile=node_modules/.cache/workerd-check.mjs"
+    "check:workerd": "node scripts/check-workerd.mjs"
   },
   "dependencies": {
     "@shikijs/langs": "^4.3.1",
