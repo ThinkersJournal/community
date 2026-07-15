@@ -103,6 +103,9 @@ export default defineConfig({
                 HYPERDRIVE_CACHED: TEST_DATABASE_URL,
                 HYPERDRIVE_FRESH: TEST_DATABASE_URL,
               },
+              // Miniflare simulates R2 locally with an in-memory bucket. The
+              // name need only match wrangler.jsonc's binding.
+              r2Buckets: ["MEDIA"],
               // Values for vars/secrets that live in the gitignored
               // `apps/api/.dev.vars`, so CI checkouts never have them. Supplied
               // directly here to keep the suite CI-safe without depending on

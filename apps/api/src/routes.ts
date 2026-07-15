@@ -20,6 +20,7 @@ import { handleTestRoute } from "./routes/__test";
 import { handleCsrf } from "./routes/csrf";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
+import { handleUploadMedia } from "./routes/media";
 import { handleCreatePost, handleListPosts } from "./routes/posts";
 import { handleSignup } from "./routes/signup";
 import { handleVerifyEmail } from "./routes/verify-email";
@@ -58,6 +59,11 @@ export const ROUTES: readonly RouteDef[] = [
   // NOT gated: reads stay open.
   { method: "GET", pattern: "/posts", handler: handleListPosts },
   { method: "POST", pattern: "/posts", handler: handleCreatePost },
+
+  // The image upload pipeline: sniff -> cross-check -> quota -> transform to
+  // WebP -> content-addressed R2 -> row. Takes RAW image bytes as the body, not
+  // multipart — see src/routes/media.ts's header.
+  { method: "POST", pattern: "/media", handler: handleUploadMedia },
 
   // TEST-ONLY. `handleTestRoute` returns null when `TEST_ROUTES` is unset (i.e.
   // in production), and we fall through to the SAME notFoundResponse() every

@@ -35,6 +35,18 @@
       "id": "PLACEHOLDER_SESSIONS_KV_ID_SET_AT_DEPLOY"
     }
   ],
+  // Cloudflare Images. NO zone, NO Images subscription, NO base fee — it is a
+  // per-Worker binding (GA since Feb 2025). 5,000 free unique transforms/mo,
+  // then $0.50/1k, billed once per unique (source+params) per calendar month.
+  // `.info()` is FREE.
+  // ⚠️ SVG IS A SUPPORTED INPUT — this binding will NOT reject it. The magic-byte
+  // allowlist in src/media/sniff.ts is the SVG defense, not this.
+  "images": { "binding": "IMAGES" },
+  // Transformed WebP bytes, content-addressed on the OUTPUT hash. Served to the
+  // public from the `cdn.thinkersjournal.com` R2 CUSTOM DOMAIN — deliberately
+  // NOT through a Worker, which would add an invocation per image to buy authz
+  // we do not need on a public CDN. Egress $0.
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "tj-media" }],
   // Per-user monotonic "security epoch" counter (logout-all / password-change
   // revocation, Tasks 16-17). New DO namespaces must use `new_sqlite_classes`
   // (KV-backed `new_classes` is blocked for new namespaces as of July 2026);
@@ -64,6 +76,15 @@
       "name": "LOGIN_LIMITER",
       "namespace_id": "1002",
       "simple": { "limit": 10, "period": 60 }
+    },
+    // Bounds an authenticated, verified account's upload rate. Keyed on the
+    // SESSION's user (see src/routes/media.ts) — not an IP, which an attacker
+    // can rotate. This is quota-adjacent, so it is consumed only by a request
+    // already entitled to proceed.
+    {
+      "name": "MEDIA_LIMITER",
+      "namespace_id": "1003",
+      "simple": { "limit": 20, "period": 60 }
     }
   ],
   "observability": {
