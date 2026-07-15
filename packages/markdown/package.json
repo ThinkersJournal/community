@@ -1,0 +1,33 @@
+{
+  "name": "@thinkersjournal/markdown",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check:workerd": "esbuild src/index.ts --bundle --format=esm --platform=browser --outfile=node_modules/.cache/workerd-check.mjs"
+  },
+  "dependencies": {
+    "mdast-util-to-string": "^4.0.0",
+    "rehype-external-links": "^3.0.0",
+    "rehype-sanitize": "6.0.0",
+    "rehype-stringify": "^10.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "11.1.2",
+    "unified": "11.0.5"
+  },
+  "devDependencies": {
+    "@types/hast": "^3.0.4",
+    "@types/mdast": "^4.0.4",
+    "esbuild": "^0.28.0",
+    "rehype-parse": "^9.0.1",
+    "unist-util-visit": "^5.0.0",
+    "vitest": "^4.1.10"
+  }
+}
