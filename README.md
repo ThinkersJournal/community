@@ -33,19 +33,42 @@ The flagship of [Thinker's Journal](https://thinkersjournal.com): a public **soc
 ### Prerequisites
 
 ```bash
-docker compose up -d                 # Postgres 18: `thinkersjournal` (dev) + `thinkersjournal_test`
+docker compose up -d                 # Postgres 18, three databases (below)
 pnpm install
 ```
+
+One Postgres 18 server hosts three databases:
+
+| Database | Purpose |
+| --- | --- |
+| `thinkersjournal` | **Dev.** What `wrangler dev` and the E2E write to. |
+| `thinkersjournal_test` | **Shared test fixture.** Every test that needs a schema to query: the `pool` Worker tests (via Hyperdrive) and the non-destructive `node` schema tests. Migrated by vitest's `globalSetup` before every run. |
+| `thinkersjournal_migrations_test` | **Owned solely by `test/migrations.db.test.ts`.** |
+
+Why the third database? `migrations.db.test.ts` proves the migration SQL by
+*running* it — its `down` drops **every** table in the stack. Vitest runs test
+projects **in parallel** (absent `sequence.groupOrder`), so on the shared DB that
+drop races the `pool` tests querying `users` through Hyperdrive, giving
+intermittent `relation "users" does not exist`. It needs *a* database, not the
+*shared* one, so it has its own and the race is structurally impossible. It
+manages its own schema (`globalSetup` migrates only the shared DB). Both test DB
+URLs default to localhost and are overridable via `TEST_DATABASE_URL` /
+`MIGRATIONS_TEST_DATABASE_URL`.
 
 > Upgrading from an M0 checkout? `docker compose down -v` first — **the `-v` is
 > required**. PG18 cannot read PG16's data directory and there is no in-place
 > major upgrade (the same property that makes the Neon major choice permanent).
-> The `-v` wipes BOTH databases — the test one recreates its schema
-> automatically (vitest's `globalSetup` migrates `thinkersjournal_test` before
-> every run), but the **dev** DB does not: run
+> The `-v` wipes ALL THREE databases — both test DBs recreate themselves
+> automatically (`globalSetup` migrates `thinkersjournal_test`, and
+> `migrations.db.test.ts` migrates its own), but the **dev** DB does not: run
 > `pnpm --filter @thinkersjournal/api migrate` once afterward, or `wrangler
 > dev`/`pnpm test:e2e` will hit a real Postgres with no `users`/`profiles`
 > tables.
+>
+> **Not** wiping the volume? `db/init/*.sql` runs **only** on the first boot of
+> an empty data directory, so a volume older than
+> `thinkersjournal_migrations_test` will not have it. You still do not need to
+> wipe — `globalSetup` creates that database if it is missing.
 
 ### `apps/api/.dev.vars` (gitignored — create it yourself)
 

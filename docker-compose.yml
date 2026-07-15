@@ -1,11 +1,16 @@
 # Local development + test database for the Thinker's Journal `api` Worker.
 #
-# Brings up a single Postgres 18 server exposing two databases:
+# Brings up a single Postgres 18 server exposing three databases:
 #   - `thinkersjournal`      (dev DB, created by POSTGRES_DB)
-#   - `thinkersjournal_test` (test DB, created by db/init/01-create-test-db.sql)
+#   - `thinkersjournal_test` (SHARED test fixture, created by
+#                             db/init/01-create-test-db.sql)
+#   - `thinkersjournal_migrations_test` (owned solely by the destructive
+#                             migration round-trip, which drops the whole
+#                             stack and so must not share the fixture DB —
+#                             see db/init/01-create-test-db.sql for why)
 #
 # Usage:
-#   docker compose up -d          # start, creating both databases
+#   docker compose up -d          # start, creating all three databases
 #   docker compose exec -T db pg_isready -U postgres   # readiness probe
 #   docker compose down           # stop (keeps the named volume)
 #   docker compose down -v        # stop and wipe data
