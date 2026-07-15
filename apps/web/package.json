@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
+    "test": "vitest run",
     "typecheck": "astro check"
   },
   "dependencies": {
@@ -13,6 +14,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "0.9.9",
+    "vitest": "4.1.10",
     "wrangler": "4.110.0"
   }
 }

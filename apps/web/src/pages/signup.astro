@@ -27,9 +27,14 @@ if (Astro.request.method === "POST") {
         password: form.get("password"),
         turnstileToken: form.get("turnstileToken"),
       },
-      // Required: a Service-Binding request carries no Origin of its own, and
-      // the api's `checkOrigin` fails closed without one.
-      origin: new URL(Astro.request.url).origin,
+      // ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own.
+      // Like login, signup has no session yet and so no double-submit token:
+      // `checkOrigin` is its ENTIRE CSRF defense. Substituting our own
+      // (always-allowlisted) origin would launder a cross-site request and let
+      // evil.com drive signups in a victim's browser. A Service-Binding request
+      // carries no Origin of its own, so this must be passed explicitly; an
+      // empty string is fine (the api falls back to Referer, then fails closed).
+      origin: Astro.request.headers.get("Origin") ?? "",
       // No `request`/cookie: signup is how a session first comes to exist.
     },
   );

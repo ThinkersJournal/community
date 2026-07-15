@@ -7,37 +7,15 @@
  * that page's LOGIN_REQUIRED handling).
  */
 import { apiFetch, applyCookies } from "../lib/api";
+import { resolveNext } from "../lib/next-url";
 
 /**
- * Where to send the user after a successful login — an OPEN-REDIRECT guard.
- * `next` is attacker-controllable (it is just a query param, and this page's
- * link is emailed around by verify-email.astro), so a hostile value must never
- * reach `Location:`. Anything not provably on THIS origin degrades to "/".
- *
- * ⚠️ RESOLVE, don't pattern-match. The obvious guard — "starts with a single
- * `/`" — is broken: `/\evil.com` satisfies it, yet browsers normalize `\` to
- * `/` in special schemes (WHATWG URL), so it navigates to `//evil.com`, i.e.
- * host `evil.com`. Verified: `new URL("/\\evil.com", "http://good.test").host`
- * === "evil.com". Any regex here is a guess about the browser's parser; running
- * the SAME parser the browser will run and comparing the resulting origin is
- * not a guess. Re-serializing from the parsed URL also strips anything clever
- * in the original spelling.
+ * Where to send the user after a successful login. `next` is
+ * attacker-controllable (it is just a query param, and this page's link is
+ * emailed around by verify-email.astro), so it goes through the open-redirect
+ * guard, which returns an ABSOLUTE same-origin URL — see src/lib/next-url.ts
+ * for why absolute is load-bearing and why a regex cannot do this job.
  */
-function resolveNext(raw: string | null, base: URL): string {
-  if (raw === null) {
-    return "/";
-  }
-  try {
-    const target = new URL(raw, base);
-    if (target.origin !== base.origin) {
-      return "/";
-    }
-    return target.pathname + target.search;
-  } catch {
-    return "/";
-  }
-}
-
 const next = resolveNext(Astro.url.searchParams.get("next"), Astro.url);
 
 let error: string | null = null;
@@ -48,7 +26,12 @@ if (Astro.request.method === "POST") {
   const response = await apiFetch("/auth/login", {
     method: "POST",
     body: { email: form.get("email"), password: form.get("password") },
-    origin: new URL(Astro.request.url).origin,
+    // ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own.
+    // `checkOrigin` is the ENTIRE CSRF defense for login (no session yet, so no
+    // double-submit token exists to check). Substituting our always-allowlisted
+    // origin here would launder a cross-site `Origin: evil.com` into a trusted
+    // one and let evil.com log a victim into the ATTACKER's account.
+    origin: Astro.request.headers.get("Origin") ?? "",
   });
 
   if (response.status === 200) {

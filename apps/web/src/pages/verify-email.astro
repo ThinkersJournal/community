@@ -21,6 +21,10 @@
  */
 import { apiFetch } from "../lib/api";
 
+// ⚠️ This page's own URL carries the verification token, and the rendered
+// login link echoes it back (`?next=`) — keep it out of shared/browser caches.
+Astro.response.headers.set("cache-control", "no-store");
+
 const token = Astro.url.searchParams.get("token");
 
 type Outcome = "verified" | "login-required" | "invalid" | "missing";

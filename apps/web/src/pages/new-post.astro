@@ -30,7 +30,9 @@
  */
 import { apiFetch, applyCookies } from "../lib/api";
 
-const origin = new URL(Astro.request.url).origin;
+// ⚠️ Per-session secrets (the CSRF token below) are rendered into this page —
+// never let a shared/browser cache hold it.
+Astro.response.headers.set("cache-control", "no-store");
 
 type Outcome = "created" | "unauthenticated" | "unverified" | "error" | null;
 let outcome: Outcome = null;
@@ -45,7 +47,11 @@ if (Astro.request.method === "POST") {
     // Forwards the session cookie — the api resolves the session from it and
     // recomputes the expected token to compare against the header below.
     request: Astro.request,
-    origin,
+    // ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own, which
+    // would launder a cross-site request into an allowlisted one. Here the
+    // double-submit token below is the primary defense and `checkOrigin` is
+    // defense-in-depth, but laundering it would still throw that layer away.
+    origin: Astro.request.headers.get("Origin") ?? "",
     // The hidden input, promoted back into the header the api demands.
     csrfToken: String(form.get("csrfToken") ?? ""),
   });

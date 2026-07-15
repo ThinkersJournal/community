@@ -80,10 +80,27 @@ export interface ApiFetchOptions {
    */
   request?: Request;
   /**
-   * Value for the `Origin` header. REQUIRED by the api for any non-GET
-   * (apps/api/src/auth/csrf.ts `checkOrigin` fails closed without it, since a
-   * Service-Binding request carries no Origin of its own). Pass the web app's
-   * own origin — `new URL(Astro.request.url).origin`.
+   * Value for the `Origin` header, FORWARDED FROM THE BROWSER'S REQUEST:
+   *
+   *     origin: Astro.request.headers.get("Origin") ?? ""
+   *
+   * Required for any non-GET, because a Service-Binding request carries no
+   * Origin of its own and the api's `checkOrigin` fails closed without one
+   * (apps/api/src/auth/csrf.ts).
+   *
+   * ⚠️ NEVER synthesize this from `Astro.request.url` / `Astro.url.origin`.
+   * That is always THIS app's own origin, which is always on the api's
+   * allowlist, so it would make `checkOrigin` pass unconditionally for every
+   * browser-originating request — laundering the attacker's `Origin: evil.com`
+   * into a trusted one. An earlier version of these pages did exactly that and
+   * it was a LIVE login-CSRF hole: `POST /auth/login` and `/auth/signup` have
+   * no session yet, hence no double-submit token, so `checkOrigin` is their
+   * ENTIRE CSRF defense (see the header of apps/api/src/routes/login.ts).
+   * Forward what the browser sent and let the api decide; a cross-site POST
+   * then correctly 403s at the api.
+   *
+   * An empty string (browser sent no Origin) is fine and intended: `checkOrigin`
+   * falls back to `Referer`, then fails closed.
    */
   origin?: string;
   /** The api's per-session CSRF token, echoed as `X-CSRF-Token`. */
