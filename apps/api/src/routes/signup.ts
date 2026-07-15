@@ -52,6 +52,7 @@ import { enforceRateLimit } from "../auth/ratelimit";
 import { createSession } from "../auth/session";
 import { verifyTurnstile } from "../auth/turnstile";
 import { withClient } from "../db/client";
+import { errorResponse } from "../http/errors";
 
 import type { Client } from "pg";
 
@@ -118,19 +119,12 @@ function verificationLinkOrigin(request: Request): string {
     : CANONICAL_ORIGIN;
 }
 
-function json(body: unknown, status: number, headers: HeadersInit = {}): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", ...headers },
-  });
-}
-
 /**
  * The 403 returned for BOTH a failed Turnstile challenge and a rejected origin.
  * One shared response keeps the two defenses from being probed apart.
  */
 function forbidden(): Response {
-  return json({ error: "Forbidden" }, 403);
+  return errorResponse("FORBIDDEN", 403);
 }
 
 /** Whether `err` is a Postgres unique-constraint violation. */
@@ -244,20 +238,16 @@ export async function handleSignup(
     raw = await request.json();
   } catch {
     // A malformed body is the client's error, not a 500.
-    return json({ error: "Invalid JSON body" }, 400);
+    return errorResponse("INVALID_JSON", 400);
   }
 
   const parsed = SignupInput.safeParse(raw);
   if (!parsed.success) {
     // Only the offending FIELD NAMES are echoed — never the submitted values,
     // one of which is the password.
-    return json(
-      {
-        error: "Invalid signup input",
-        fields: parsed.error.issues.map((issue) => issue.path.map(String).join(".")),
-      },
-      400,
-    );
+    return errorResponse("INVALID_INPUT", 400, {
+      fields: parsed.error.issues.map((issue) => issue.path.map(String).join(".")),
+    });
   }
   const { email, password, turnstileToken } = parsed.data;
 
@@ -342,7 +332,7 @@ export async function handleSignup(
 
   // A VERIFIED address has a proven owner — signup stops here.
   if (existing !== null && existing.email_verified_at !== null) {
-    return json({ error: "Email already registered" }, 409);
+    return errorResponse("EMAIL_TAKEN", 409);
   }
 
   // Hashed OUTSIDE the transaction below: Argon2id is deliberately slow (~19MiB,
@@ -464,5 +454,8 @@ export async function handleSignup(
   });
 
   // ---- 11. 201 + Set-Cookie ------------------------------------------------
-  return json({ userId }, 201, { "Set-Cookie": cookie });
+  return new Response(JSON.stringify({ userId }), {
+    status: 201,
+    headers: { "content-type": "application/json", "Set-Cookie": cookie },
+  });
 }

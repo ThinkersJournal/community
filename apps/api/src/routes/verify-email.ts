@@ -40,6 +40,7 @@ import {
 } from "../auth/email-verify";
 import { readSession } from "../auth/session";
 import { withClient } from "../db/client";
+import { errorResponse } from "../http/errors";
 
 /**
  * The single failure response for EVERY unhappy TOKEN path: a missing token, an
@@ -48,7 +49,7 @@ import { withClient } from "../db/client";
  * existed" would confirm to an attacker that a guessed token was once real.
  */
 function invalidToken(): Response {
-  return new Response("Invalid or expired verification link", { status: 400 });
+  return errorResponse("INVALID_TOKEN", 400);
 }
 
 /**
@@ -77,10 +78,7 @@ function invalidToken(): Response {
  * reason this is safe.
  */
 function loginRequired(status: 401 | 403): Response {
-  return new Response(JSON.stringify({ code: "LOGIN_REQUIRED" }), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
+  return errorResponse("LOGIN_REQUIRED", status);
 }
 
 /**

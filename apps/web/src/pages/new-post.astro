@@ -28,7 +28,7 @@
  * double-submit; a cross-site attacker can make the browser POST here, but
  * cannot read the token out of the page to fill the field in.
  */
-import { apiFetch, applyCookies } from "../lib/api";
+import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 
 // ⚠️ Per-session secrets (the CSRF token below) are rendered into this page —
 // never let a shared/browser cache hold it.
@@ -69,7 +69,7 @@ if (Astro.request.method === "POST") {
     // Either no session or a stale one (the epoch check — e.g. "log out
     // everywhere" happened). The api has already cleared the cookie.
     outcome = "unauthenticated";
-  } else if (response.data?.code === "EMAIL_NOT_VERIFIED") {
+  } else if (apiErrorCode(response) === "EMAIL_NOT_VERIFIED") {
     // The soft gate: authenticated, but content mutation needs a verified
     // address. Distinct from a CSRF/origin 403, which shares the status.
     outcome = "unverified";

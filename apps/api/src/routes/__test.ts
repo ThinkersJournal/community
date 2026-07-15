@@ -22,6 +22,7 @@
  * 404.
  */
 import { TEST_LAST_TOKEN_KEY } from "../auth/email-verify";
+import { notFoundResponse } from "../http/errors";
 
 /**
  * Handle a `/__test/*` request, or return `null` to mean "no such route" —
@@ -49,9 +50,7 @@ export async function handleTestRoute(
   if (request.method === "GET" && pathname === "/__test/last-verify-token") {
     const token = await env.SESSIONS.get(TEST_LAST_TOKEN_KEY);
     if (token === null) {
-      return new Response("No verification token has been issued", {
-        status: 404,
-      });
+      return notFoundResponse();
     }
     return new Response(token, {
       status: 200,

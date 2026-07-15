@@ -15,6 +15,7 @@
 import { checkCsrf, checkOrigin } from "./csrf";
 import { enforceRateLimit } from "./ratelimit";
 import { destroySession, readSession } from "./session";
+import { errorResponse } from "../http/errors";
 import { withClient } from "../db/client";
 
 import type { SessionData } from "@thinkersjournal/shared";
@@ -25,10 +26,7 @@ import type { SessionData } from "@thinkersjournal/shared";
  * "verify your email" prompt, so it must not be renamed or reworded.
  */
 function emailNotVerifiedResponse(): Response {
-  return new Response(JSON.stringify({ code: "EMAIL_NOT_VERIFIED" }), {
-    status: 403,
-    headers: { "content-type": "application/json" },
-  });
+  return errorResponse("EMAIL_NOT_VERIFIED", 403);
 }
 
 /**
@@ -66,10 +64,7 @@ export async function requireVerifiedEmail(
 
 /** The generic 403 for a rejected origin or a failed CSRF token. */
 function forbidden(): Response {
-  return new Response(JSON.stringify({ error: "Forbidden" }), {
-    status: 403,
-    headers: { "content-type": "application/json" },
-  });
+  return errorResponse("FORBIDDEN", 403);
 }
 
 /**
@@ -92,10 +87,7 @@ function forbidden(): Response {
  * rather than merely unused.
  */
 function unauthorized(extraHeaders: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify({ error: "Unauthorized" }), {
-    status: 401,
-    headers: { "content-type": "application/json", ...extraHeaders },
-  });
+  return errorResponse("UNAUTHORIZED", 401, { headers: extraHeaders });
 }
 
 /** Per-route opt-ins for `runMutatingPipeline`. Everything here is OPTIONAL. */

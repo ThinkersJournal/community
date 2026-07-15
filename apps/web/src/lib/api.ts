@@ -31,6 +31,8 @@
  */
 import { env } from "cloudflare:workers";
 
+import { isApiErrorBody, type ApiErrorCode } from "@thinkersjournal/shared";
+
 /** What every call through this module returns. */
 export interface ApiResponse<T> {
   status: number;
@@ -38,7 +40,8 @@ export interface ApiResponse<T> {
    * The parsed JSON body, or `null` when the response had no body / a non-JSON
    * body. ⚠️ `null` is NOT an error signal — `POST /auth/logout` answers 200
    * with a genuinely EMPTY body, so a 2xx with `data: null` is a success. Check
-   * `status`, never truthiness of `data`.
+   * `status`, never truthiness of `data`. A non-2xx, however, is now ALWAYS the
+   * {code, message?} envelope; read it with apiErrorCode().
    */
   data: T | null;
   /**
@@ -195,6 +198,20 @@ function parseJson<T>(text: string): T | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The api's error `code` for a non-2xx response, or null for a 2xx / a body
+ * that is not the envelope.
+ *
+ * ⚠️ Branch on THIS, never on `message` and never on the status alone: 403 is
+ * both "cross-site origin" (FORBIDDEN) and "verify your email first"
+ * (EMAIL_NOT_VERIFIED), and the pages must tell them apart. See the envelope
+ * contract in packages/shared/src/errors.ts.
+ */
+export function apiErrorCode(response: ApiResponse<unknown>): ApiErrorCode | null {
+  if (response.status < 400) return null;
+  return isApiErrorBody(response.data) ? response.data.code : null;
 }
 
 /**

@@ -29,6 +29,7 @@
  */
 import { csrfTokenFor } from "../auth/csrf";
 import { destroySession, readSession } from "../auth/session";
+import { errorResponse } from "../http/errors";
 
 /**
  * The ONE 401 for every "no usable session" case here: no cookie, an unknown
@@ -48,10 +49,7 @@ import { destroySession, readSession } from "../auth/session";
  * instance silently yields `{}` — dropping the cleared cookie with no error.
  */
 function loginRequired(extraHeaders: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify({ code: "LOGIN_REQUIRED" }), {
-    status: 401,
-    headers: { "content-type": "application/json", ...extraHeaders },
-  });
+  return errorResponse("LOGIN_REQUIRED", 401, { headers: extraHeaders });
 }
 
 /**

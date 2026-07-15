@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { enforceRateLimit } from "../src/auth/ratelimit";
 
+import type { ApiErrorBody } from "@thinkersjournal/shared";
+
 /**
  * The local `@cloudflare/vitest-pool-workers` pool DOES simulate real `simple`
  * ratelimit counting (verified empirically: a bare `env.LOGIN_LIMITER.limit()`
@@ -38,7 +40,7 @@ describe("enforceRateLimit", () => {
     const blocked = await enforceRateLimit(alwaysBlocked, "k");
     expect(blocked).toBeInstanceOf(Response);
     expect(blocked?.status).toBe(429);
-    expect(await blocked?.text()).toBe("Too many requests");
+    expect(((await blocked?.json()) as ApiErrorBody).code).toBe("RATE_LIMITED");
 
     expect(await enforceRateLimit(alwaysAllowed, "k")).toBeNull();
   });
