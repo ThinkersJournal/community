@@ -1,6 +1,11 @@
+import rehypeParse from "rehype-parse";
+import rehypeSanitize from "rehype-sanitize";
+import rehypeStringify from "rehype-stringify";
+import { unified } from "unified";
 import { describe, expect, it } from "vitest";
 
 import { renderMarkdown } from "../src";
+import { SANITIZE_SCHEMA } from "../src/render";
 import { elements, eventHandlerNames, schemeOf, tagNames, unsafeUrls } from "./dom";
 
 /**
@@ -87,6 +92,24 @@ describe("URL-protocol injection (remark-rehype validates NOTHING here)", () => 
     await expectInert(markdown);
   });
 
+  /**
+   * ⚠️ The pipeline lowercases a scheme BEFORE the sanitizer (see render.ts) to
+   * stop `HTTPS://` losing its href. That transform is deliberately conservative
+   * — it rewrites ONLY when the scheme case-insensitively equals http/https/
+   * mailto — but it sits on the UNSAFE side of the sanitizer, so it must be
+   * proven not to widen anything. A dangerous scheme cannot lowercase INTO the
+   * allowlist, and these pin it.
+   */
+  it.each([
+    ["uppercase JAVASCRIPT:", "[x](JAVASCRIPT:alert(1))"],
+    ["uppercase VBSCRIPT:", "[x](VBSCRIPT:msgbox(1))"],
+    ["uppercase DATA: html", "![](DATA:text/html;base64,PHN2Zy9vbmxvYWQ9YWxlcnQoMSk+)"],
+    ["mixed-case DaTa: svg", "![](DaTa:image/svg+xml;base64,PHN2Zy9vbmxvYWQ9YWxlcnQoMSk+)"],
+    ["uppercase FILE:", "[x](FILE:///etc/passwd)"],
+  ])("%s is still blocked (the scheme normalizer must not widen the allowlist)", async (_name, markdown) => {
+    await expectInert(markdown);
+  });
+
   it("9b. is STRICTER than markdown-it's GOOD_DATA_RE — no data: URL survives at all", async () => {
     const html = await renderMarkdown("![](data:image/png;base64,iVBORw0KGgo=)");
     // markdown-it's validateLink ALLOWS data:image/(gif|png|jpeg|webp) — even in
@@ -152,6 +175,77 @@ describe("15. DOM clobbering", () => {
     // Guard against a vacuous pass: there must BE fragment links to check.
     expect(fragments.length).toBeGreaterThan(0);
     expect(fragments.every((f) => ids.includes(f))).toBe(true);
+  });
+});
+
+/**
+ * ⚠️ PINNING THE HALF OF THE BOUNDARY WE DO NOT OWN.
+ *
+ * `protocols`, `tagNames` and `clobber` are overridden in render.ts and pinned
+ * above. But `attributes` is INHERITED wholesale from `defaultSchema`, and
+ * rehype-sanitize@6.0.0 depends on `hast-util-sanitize: "^5.0.0"` — a CARET.
+ * If a future 5.x widened `attributes['*']` (adding, say, `style` or `target`),
+ * this schema would silently inherit it and nothing here would redden.
+ *
+ * The pipeline's own ordering means renderMarkdown() can never produce such an
+ * attribute to test with (raw HTML is dropped before the sanitizer ever runs),
+ * so these feed the attribute DIRECTLY into our exact schema — the only way to
+ * assert on what the sanitizer removes rather than on what markdown emits.
+ */
+describe("inherited defaultSchema.attributes (a caret dep away from silently widening)", () => {
+  /**
+   * ⚠️ THIS GUARD IS NOT OPTIONAL — VERIFIED, NOT HYPOTHETICAL.
+   *
+   * `rehypeSanitize(undefined)` SILENTLY FALLS BACK TO `defaultSchema`. While
+   * writing these tests SANITIZE_SCHEMA was not yet exported, the import bound
+   * to `undefined`, and all eight cases below PASSED — against defaultSchema,
+   * testing nothing. A renamed/removed export would make this whole block go
+   * hollow again while still reporting green. So assert we hold OUR schema
+   * before asserting anything WITH it.
+   */
+  it("holds OUR schema, not an undefined that degrades to defaultSchema", () => {
+    expect(SANITIZE_SCHEMA, "SANITIZE_SCHEMA is not exported from src/render.ts").toBeDefined();
+    // The overrides that make it ours (defaultSchema.href also allows irc/ircs/xmpp).
+    expect(SANITIZE_SCHEMA.protocols?.href).toEqual(["http", "https", "mailto"]);
+    expect(SANITIZE_SCHEMA.protocols?.src).toEqual(["http", "https"]);
+    expect(SANITIZE_SCHEMA.clobber).toEqual([]);
+    expect(SANITIZE_SCHEMA.tagNames).not.toContain("picture");
+    expect(SANITIZE_SCHEMA.tagNames).not.toContain("source");
+    // …and the thing that must NOT be dropped.
+    expect(SANITIZE_SCHEMA.tagNames).toContain("input");
+  });
+
+  const sanitizeFragment = (html: string): string =>
+    String(
+      unified()
+        .use(rehypeParse, { fragment: true })
+        .use(rehypeSanitize, SANITIZE_SCHEMA)
+        .use(rehypeStringify)
+        .processSync(html),
+    );
+
+  it.each([
+    ["style", '<a href="https://e.com" style="position:fixed;top:0;left:0;width:100vw;height:100vw">x</a>', "style"],
+    ["target", '<a href="https://e.com" target="_blank">x</a>', "target"],
+    ["rel", '<a href="https://e.com" rel="me">x</a>', "rel"],
+    ["onclick", '<a href="https://e.com" onclick="alert(1)">x</a>', "onclick"],
+    ["formaction", '<button formaction="https://evil.com">x</button>', "formaction"],
+    ["srcset", '<img src="https://e.com/i.png" srcset="https://e.com/i.png 1x">', "srcset"],
+  ])("strips %s", (_name, input, attribute) => {
+    const out = sanitizeFragment(input);
+    const el = elements(out)[0];
+    const present = Object.keys(el?.properties ?? {}).map((k) => k.toLowerCase());
+    expect(present, `${attribute} survived: ${out}`).not.toContain(attribute.toLowerCase());
+  });
+
+  it("keeps the href it is supposed to keep (the pin is not vacuous)", () => {
+    const el = elements(sanitizeFragment('<a href="https://e.com" style="color:red">x</a>'))[0];
+    expect(el?.properties?.href).toBe("https://e.com");
+  });
+
+  it("still drops a javascript: href fed straight to the schema", () => {
+    const el = elements(sanitizeFragment('<a href="javascript:alert(1)">x</a>'))[0];
+    expect(el?.properties?.href).toBeUndefined();
   });
 });
 

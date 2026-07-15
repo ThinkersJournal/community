@@ -56,6 +56,12 @@ function collectBlockText(node: unknown, out: string[]): void {
  * `remarkGfm` is applied so the mdast matches what renderMarkdown() parses —
  * without it a GFM table is parsed as paragraphs of pipe characters and the
  * excerpt would read "| a | b |" instead of "a b".
+ *
+ * `maxChars` counts CODE POINTS, not UTF-16 code units — see the truncation
+ * note below. Returns "" for maxChars <= 0 (nothing fits).
+ *
+ * ⚠️ Returns TEXT, not escaped markup: escaping is the embedding page's job
+ * (Astro escapes attributes; RSS/Atom must escape it as XML).
  */
 export function markdownExcerpt(markdown: string, maxChars = 160): string {
   const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown);
@@ -63,6 +69,26 @@ export function markdownExcerpt(markdown: string, maxChars = 160): string {
   collectBlockText(tree, blocks);
 
   const text = blocks.join(" ").replace(/\s+/g, " ").trim();
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars - 1).trimEnd()}…`;
+
+  // ⚠️ `maxChars` is public API taking a number, and a realistic caller computes
+  // it (`160 - title.length`), which reaches <= 0. Without this guard the
+  // `maxChars - 1` below becomes `slice(0, -1)`, which drops only the LAST
+  // character and returns nearly the WHOLE document into a <meta> tag.
+  if (maxChars <= 0) return "";
+
+  // ⚠️ ITERATE CODE POINTS, NEVER slice() CODE UNITS.
+  //
+  // `text.slice()` cuts UTF-16 code units, so cutting through an emoji leaves a
+  // LONE HIGH SURROGATE (and `.trimEnd()` does not remove it). This excerpt goes
+  // into RSS/Atom, and XML 1.0 forbids unpaired surrogates — they cannot be
+  // encoded as valid UTF-8, so the serializer throws or emits U+FFFD and a feed
+  // reader rejects the ENTIRE DOCUMENT, every item, not just this one. The
+  // trigger is ordinary content: any emoji straddling the boundary.
+  //
+  // Cutting on code points cannot split a surrogate pair. It can still split a
+  // multi-code-point GRAPHEME (a ZWJ emoji, a flag), which merely looks odd —
+  // every code point remains valid XML, so the feed stays well-formed.
+  const chars = [...text];
+  if (chars.length <= maxChars) return text;
+  return `${chars.slice(0, maxChars - 1).join("").trimEnd()}…`;
 }

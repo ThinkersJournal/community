@@ -28,6 +28,9 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
 import { unified } from "unified";
+import { visit } from "unist-util-visit";
+
+import type { Element, Root } from "hast";
 
 /**
  * ⚠️ BUMP THIS AND EVERY CACHED RENDER IS INVALIDATED ON DEPLOY.
@@ -42,8 +45,15 @@ export const PIPELINE_VERSION = "v1";
 
 /**
  * ⚠️ defaultSchema IS NOT OUR POLICY. Every override below is load-bearing.
+ *
+ * Exported for test/xss.test.ts, which feeds attributes DIRECTLY into it to pin
+ * the half of the boundary we do NOT own: `attributes` is inherited wholesale
+ * from `defaultSchema`, and rehype-sanitize@6.0.0 depends on
+ * `hast-util-sanitize: "^5.0.0"` — a CARET. A future 5.x that widened
+ * `attributes['*']` would be inherited silently. It is deliberately NOT
+ * re-exported from src/index.ts: it is a test seam, not public API.
  */
-const schema: typeof defaultSchema = {
+export const SANITIZE_SCHEMA: typeof defaultSchema = {
   ...defaultSchema,
 
   // ⚠️ MUST be [] — and it is correct ONLY because raw HTML is off. remark-rehype
@@ -74,6 +84,77 @@ const schema: typeof defaultSchema = {
 // Do NOT drop `input`: GFM tasklists need it, and defaultSchema.required pins it
 // to { disabled: true, type: 'checkbox' }, which is safe.
 
+/**
+ * The URL-bearing properties our schema protocol-checks. Kept in lockstep with
+ * `SANITIZE_SCHEMA.protocols` above — normalizing a property the sanitizer does
+ * not check would be pointless; missing one it does check reintroduces the data
+ * loss this plugin exists to fix.
+ */
+const NORMALIZED_URL_PROPERTIES = ["href", "src", "cite", "longDesc"] as const;
+
+/** Exactly the schemes SANITIZE_SCHEMA allows, lowercase. */
+const ALLOWED_SCHEMES = new Set(["http", "https", "mailto"]);
+
+/**
+ * Lowercase a URL's scheme — and ONLY when it already names an allowed scheme.
+ *
+ * ⚠️ THIS RUNS ON THE UNSAFE SIDE OF THE SANITIZER, so it is written to be
+ * provably incapable of widening the allowlist: it rewrites a URL only if the
+ * scheme case-insensitively equals http/https/mailto, and is the IDENTITY for
+ * everything else. `JaVaScRiPt:` is not touched at all — no dangerous scheme can
+ * lowercase INTO {http, https, mailto}, so this cannot turn a blocked URL into
+ * an allowed one. test/xss.test.ts pins the uppercase dangerous schemes.
+ *
+ * ⚠️ The scheme is parsed EXACTLY as hast-util-sanitize parses it
+ * (lib/index.js `safeProtocol`): the FIRST colon, and only if no `/`, `?` or `#`
+ * appears before it. Any divergence here would be a parser differential between
+ * this plugin and the sanitizer — the exact class of bug the unified/AST design
+ * exists to avoid. Note it does NOT trim whitespace, deliberately: the sanitizer
+ * does not either, so "  https://x" stays stripped rather than being resurrected
+ * by a rule the sanitizer does not share.
+ */
+function lowercaseScheme(url: string): string {
+  const colon = url.indexOf(":");
+  if (colon < 0) return url;
+
+  const slash = url.indexOf("/");
+  const questionMark = url.indexOf("?");
+  const numberSign = url.indexOf("#");
+  // A colon after `/`, `?` or `#` is not a scheme (e.g. "/a/b:c").
+  if (slash > -1 && colon > slash) return url;
+  if (questionMark > -1 && colon > questionMark) return url;
+  if (numberSign > -1 && colon > numberSign) return url;
+
+  const scheme = url.slice(0, colon);
+  const lower = scheme.toLowerCase();
+  if (scheme === lower || !ALLOWED_SCHEMES.has(lower)) return url;
+  return lower + url.slice(colon);
+}
+
+/**
+ * ⚠️ WHY THIS EXISTS: hast-util-sanitize compares protocols CASE-SENSITIVELY
+ * (`url.slice(0, protocol.length) === protocol`), but RFC 3986 makes schemes
+ * case-INSENSITIVE. So `[x](HTTPS://example.com)` — valid user input — had its
+ * href silently STRIPPED. It failed closed, so it was never a security bug, but
+ * it was silent DATA LOSS on a cached, mass-served surface.
+ *
+ * Fixed HERE rather than by adding "HTTPS" to the protocols array, because that
+ * would only fix the all-caps spelling (not `HttP`) and would WIDEN the
+ * allowlist — the wrong direction on this surface.
+ */
+function rehypeLowercaseUrlScheme() {
+  return (tree: Root): void => {
+    visit(tree, "element", (node: Element) => {
+      for (const property of NORMALIZED_URL_PROPERTIES) {
+        const value = node.properties[property];
+        if (typeof value === "string") {
+          node.properties[property] = lowercaseScheme(value);
+        }
+      }
+    });
+  };
+}
+
 function buildRenderer() {
   return (
     unified()
@@ -81,9 +162,15 @@ function buildRenderer() {
       .use(remarkGfm)
       // allowDangerousHtml is false by DEFAULT => raw HTML is dropped here.
       .use(remarkRehype)
+      // Normalizes ONLY the case of an already-allowed scheme (HTTPS: -> https:)
+      // so the sanitizer's case-SENSITIVE protocol check does not silently drop
+      // valid user links. Runs BEFORE the sanitizer by necessity — it exists to
+      // change what the sanitizer sees — and is provably unable to widen the
+      // allowlist. See lowercaseScheme() above.
+      .use(rehypeLowercaseUrlScheme)
       // ─────────────────────────────────────────────────────────────────────
       // ⚠️ THE LAST UNSAFE THING IS ABOVE THIS LINE.
-      .use(rehypeSanitize, schema)
+      .use(rehypeSanitize, SANITIZE_SCHEMA)
       // Everything below is trusted, app-generated, and MUST run AFTER sanitize.
       // ORDERING IS NOT COSMETIC: defaultSchema allows NO `rel`, NO `target` and
       // NO `style` on any element, so running these BEFORE the sanitizer would
