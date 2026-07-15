@@ -6,9 +6,12 @@
  * `runMutatingPipeline` is the entry point; `requireVerifiedEmail` remains
  * exported as its own step (Task 13's tests pin it directly).
  *
- * ⚠️ GET/HEAD DO NOT BELONG HERE. This pipeline requires a session and would
- * 401 every anonymous read. Reads stay open (`GET /posts`); routes that need
- * their own read-side auth do it inline (`GET /verify-email`).
+ * ⚠️ GET/HEAD DO NOT BELONG IN `runMutatingPipeline`. It requires a session and
+ * would 401 every anonymous read; anonymous reads stay open
+ * (src/routes/public.ts). A GET that needs a session uses `readCurrentSession`
+ * below — the session+epoch half, without the Origin/CSRF steps that pass
+ * GET/HEAD by design. `GET /verify-email` still does its own inline, because its
+ * steps interleave (see that file).
  *
  * ⚠️ NEITHER DO SIGNUP/LOGIN. See `runMutatingPipeline`'s own note.
  */
@@ -88,6 +91,58 @@ function forbidden(): Response {
  */
 function unauthorized(extraHeaders: Record<string, string> = {}): Response {
   return errorResponse("UNAUTHORIZED", 401, { headers: extraHeaders });
+}
+
+/**
+ * The GET-side counterpart to `runMutatingPipeline`: resolve an authenticated,
+ * UNREVOKED session, or the `Response` to return verbatim.
+ *
+ * No Origin and no CSRF check — `checkOrigin`/`checkCsrf` pass GET/HEAD by
+ * design (src/auth/csrf.ts), so running them here would be theatre. What a
+ * session-bearing GET DOES owe is the epoch check: `readSession` ALONE IS NOT
+ * ENOUGH, even on a route that mutates nothing. A session's KV record OUTLIVES
+ * revocation — bumping a user's epoch (re-signup, "log out everywhere")
+ * invalidates every outstanding session WITHOUT enumerating them, which is
+ * exactly what makes revocation O(1). So a revoked-but-still-in-KV session
+ * resolves through `readSession` perfectly well.
+ *
+ * Without the epoch check, such a session gets a 200 while a garbage cookie gets
+ * a 401 — reintroducing precisely the oracle `runMutatingPipeline` goes out of
+ * its way to suppress (it makes "no session" and "revoked session"
+ * indistinguishable), and leaving the dead cookie in the browser to be replayed.
+ *
+ * `onFailure` is the CALLER's response factory rather than a fixed body: the
+ * post routes answer LOGIN_REQUIRED and the pipeline answers UNAUTHORIZED, and
+ * both are wire contracts the web app branches on. Passing it in is what lets
+ * this be one implementation instead of a third hand-rolled copy of the same
+ * two steps.
+ *
+ * ⚠️ `GET /verify-email` deliberately does NOT use this: it must resolve the
+ * token's owner BETWEEN the session read and the epoch check (the token is what
+ * says who is being verified), so its steps are interleaved rather than
+ * sequential. See that file's header.
+ *
+ * ⚠️ `Record<string, string>` on `onFailure`, deliberately narrower than
+ * `HeadersInit` — see `unauthorized` above for why the distinction silently
+ * drops a `Set-Cookie`.
+ */
+export async function readCurrentSession(
+  env: Env,
+  request: Request,
+  onFailure: (extraHeaders?: Record<string, string>) => Response,
+): Promise<SessionData | Response> {
+  const session = await readSession(env, request);
+  if (session === null) return onFailure();
+
+  const currentEpoch = await env.USER_SECURITY.getByName(session.userId).getEpoch();
+  if (currentEpoch !== session.securityEpoch) {
+    // Destroy rather than merely reject: the KV record is dead server-side from
+    // here, and the cleared cookie (`Max-Age=0`) stops the browser replaying a
+    // token that can never succeed again.
+    const { cookie } = await destroySession(env, request);
+    return onFailure({ "Set-Cookie": cookie });
+  }
+  return session;
 }
 
 /** Per-route opt-ins for `runMutatingPipeline`. Everything here is OPTIONAL. */

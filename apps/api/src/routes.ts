@@ -21,7 +21,12 @@ import { handleCsrf } from "./routes/csrf";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleUploadMedia } from "./routes/media";
-import { handleCreatePost, handleListPosts } from "./routes/posts";
+import { handleCreatePost, handleGetPost, handleUpdatePost } from "./routes/posts";
+import {
+  handlePublicPost,
+  handlePublicProfile,
+  handlePublicRecent,
+} from "./routes/public";
 import { handleSignup } from "./routes/signup";
 import { handleVerifyEmail } from "./routes/verify-email";
 
@@ -54,11 +59,29 @@ export const ROUTES: readonly RouteDef[] = [
   // own reasons — see its header; do not weaken it.
   { method: "GET", pattern: "/verify-email", handler: handleVerifyEmail },
 
-  // Content routes. `POST /posts` runs the full mutating pipeline, applied
-  // inside the handler so the route owns its own opt-ins. GET is deliberately
-  // NOT gated: reads stay open.
-  { method: "GET", pattern: "/posts", handler: handleListPosts },
+  // AUTHOR-facing content routes (src/routes/posts.ts). Each runs the mutating
+  // pipeline inside its own handler, so the route owns its opt-ins — all three
+  // are content mutation and therefore take `requireVerifiedEmail`. `GET
+  // /posts/:id` is the author's own post (drafts included) and authenticates via
+  // `readCurrentSession`; the ANONYMOUS reads are the /public/* routes below.
+  //
+  // ⚠️ M0's `GET /posts` stub feed is GONE, not moved. It answered a literal
+  // `{posts: []}`; the real public listing is `GET /public/profile`. A route that
+  // lies is worse than one that does not exist.
   { method: "POST", pattern: "/posts", handler: handleCreatePost },
+  { method: "PATCH", pattern: "/posts/:id", handler: handleUpdatePost },
+  { method: "GET", pattern: "/posts/:id", handler: handleGetPost },
+
+  // ANONYMOUS reads — what the edge caches. See src/routes/public.ts's header:
+  // no session is read here, by construction.
+  //
+  // ⚠️ These are LITERAL paths under /public/, so they cannot be shadowed by
+  // `/posts/:id` above (different first segment). If a literal `/posts/<word>`
+  // route is ever added it MUST be registered BEFORE `/posts/:id` — `findRoute`
+  // is first-match-wins, and route-protection.test.ts fails loudly if it is not.
+  { method: "GET", pattern: "/public/posts", handler: handlePublicPost },
+  { method: "GET", pattern: "/public/profile", handler: handlePublicProfile },
+  { method: "GET", pattern: "/public/recent", handler: handlePublicRecent },
 
   // The image upload pipeline: sniff -> cross-check -> quota -> transform to
   // WebP -> content-addressed R2 -> row. Takes RAW image bytes as the body, not

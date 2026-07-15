@@ -168,6 +168,39 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /auth/csrf",
     build: () => new Request("https://api.test/auth/csrf"),
   },
+  // ⚠️ THE FOUR BELOW ARE WHERE `GET /posts`'s ERROR_FREE CLAIM WENT (Task 9).
+  // That claim said the stub feed had no error path — true of a literal
+  // `{posts: []}`, and the reason the entry existed. Task 9 deleted the stub
+  // outright (the real listing is `GET /public/profile`), so the claim did not
+  // become stale, it became MOOT: there is no such route to make a claim about.
+  // These are its successors, and each is ledgered by the property the old entry
+  // asserted it lacked — a real failure mode, probed.
+  {
+    name: "401 the author's own post with no session",
+    route: "GET /posts/:id",
+    build: () =>
+      new Request("https://api.test/posts/00000000-0000-7000-8000-000000000000"),
+  },
+  {
+    name: "404 public post with no username/slug",
+    route: "GET /public/posts",
+    build: () => new Request("https://api.test/public/posts"),
+  },
+  // The UNKNOWN-USERNAME 404, deliberately — not the malformed-cursor 400. The
+  // owner lookup runs FIRST, so a probe with both would 404 before the cursor was
+  // ever cast, and this case would be named for a path it never took. The cursor
+  // 400 needs a real profile to reach; test/public-reads.test.ts owns it, where
+  // there is an actor to make one.
+  {
+    name: "404 public profile with an unknown username",
+    route: "GET /public/profile",
+    build: () => new Request("https://api.test/public/profile?username=nobody"),
+  },
+  {
+    name: "400 public recent with a malformed limit",
+    route: "GET /public/recent",
+    build: () => new Request("https://api.test/public/recent?limit=abc"),
+  },
   // TEST_ROUTES is "1" in this suite (vitest.config.ts), so the gate is OPEN and
   // the route runs — with no token stashed in KV it takes its own not-found
   // path. That is the branch worth pinning here: it must be the SAME envelope as
@@ -190,12 +223,17 @@ const CASES: readonly ErrorCase[] = [
  * the entry is wrong and the route owes this file a `CASES` probe instead.
  *
  * ⚠️ WHY `handlerSource` EXISTS. "This route has no error path" is a claim about
- * code, and the claim was true WHEN IT WAS WRITTEN. `GET /posts` is a literal
- * `{posts: []}` stub today; the M1 task that gives it a real query makes this
- * entry FALSE — and staleness/reason guards would not notice, because the route
- * still exists and still states a reason. That is the "remembered, not checked"
- * failure surviving inside the fix for it. So the claim is keyed to its premise:
- * when the handler changes, the claim EXPIRES and someone must re-read it.
+ * code, and the claim is only true OF THE CODE IT WAS READ FROM. A route that
+ * grows a query, a lookup or a validation makes its entry FALSE — and the
+ * staleness/reason guards below would not notice, because the route still exists
+ * and still states a reason. That is the "remembered, not checked" failure
+ * surviving inside the fix for it. So the claim is keyed to its premise: when
+ * the handler changes, the claim EXPIRES and someone must re-read it.
+ *
+ * This is not hypothetical — it has now happened once, to `GET /posts`. See the
+ * note above `ERROR_FREE` for how that resolved, and for the shape of the WRONG
+ * resolution (re-pinning the snapshot to whatever the code says today, which
+ * converts the guard into a rubber stamp).
  */
 interface ErrorFreeClaim {
   readonly reason: string;
@@ -207,6 +245,25 @@ interface ErrorFreeClaim {
   readonly handlerSource: string;
 }
 
+/**
+ * ⚠️ `GET /posts` USED TO BE THE SECOND ENTRY HERE, AND ITS REMOVAL IS THE
+ * MECHANISM WORKING — recorded because the next author deserves the worked
+ * example this file's header describes in the abstract.
+ *
+ * Its claim: "the stub feed — a literal `{posts: []}` 200 ... when it grows a
+ * real query it gains error paths and must move to CASES." Task 9 did not grow
+ * it a query: it DELETED the route (M0's stub answered an empty array forever;
+ * the real listing is `GET /public/profile`). So the claim was not falsified, it
+ * was left with no subject — and `every ERROR_FREE entry still corresponds to a
+ * real route` is the guard that fired, saying so.
+ *
+ * The resolution is therefore NOT a re-pinned `handlerSource` — there is no
+ * handler left to pin, and re-pointing the entry at `GET /posts/:id` would have
+ * been the "blindly update the snapshot" defeat in its purest form: a brand new
+ * route with a session check, a DB read and two 404 paths, inheriting a claim
+ * that it cannot answer non-2xx. The four successor routes are in CASES above,
+ * each probed on a real failure.
+ */
 const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
   [
     "GET /health",
@@ -214,16 +271,6 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
       reason:
         "A liveness probe with no input, no I/O and no branches: it returns a literal 200 'ok' (src/routes.ts) or the Worker is not running at all.",
       handlerSource: 'async () => new Response("ok", { status: 200 })',
-    },
-  ],
-  [
-    "GET /posts",
-    {
-      reason:
-        "The stub feed — a literal `{posts: []}` 200, deliberately un-gated (reads stay open, so there is nothing to reject). When it grows a real query it gains error paths and must move to CASES.",
-      handlerSource:
-        "async function handleListPosts() { return new Response(JSON.stringify({ posts: [] }), " +
-        '{ status: 200, headers: { "content-type": "application/json" } }); }',
     },
   ],
 ]);

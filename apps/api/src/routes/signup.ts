@@ -52,12 +52,11 @@ import { enforceRateLimit } from "../auth/ratelimit";
 import { createSession } from "../auth/session";
 import { verifyTurnstile } from "../auth/turnstile";
 import { withClient } from "../db/client";
+import { isUniqueViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
+import { randomSuffix } from "../util/random";
 
 import type { Client } from "pg";
-
-/** Postgres SQLSTATE for `unique_violation`. */
-const UNIQUE_VIOLATION = "23505";
 
 /** Longest sanitized email local-part kept as a generated username's base. */
 const USERNAME_BASE_MAX = 20;
@@ -125,25 +124,6 @@ function verificationLinkOrigin(request: Request): string {
  */
 function forbidden(): Response {
   return errorResponse("FORBIDDEN", 403);
-}
-
-/** Whether `err` is a Postgres unique-constraint violation. */
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    (err as { code?: unknown }).code === UNIQUE_VIOLATION
-  );
-}
-
-/** A ~64-bit random value in base36 — the uniqueness half of a username. */
-function randomSuffix(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(8));
-  let value = 0n;
-  for (const byte of bytes) {
-    value = (value << 8n) | BigInt(byte);
-  }
-  return value.toString(36);
 }
 
 /**

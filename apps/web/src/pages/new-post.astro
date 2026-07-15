@@ -43,7 +43,17 @@ if (Astro.request.method === "POST") {
 
   const response = await apiFetch<{ code?: string }>("/posts", {
     method: "POST",
-    body: { title: form.get("title"), body: form.get("body") },
+    // ⚠️ `markdownSource`, NOT `body` — the api's `CreatePostInput`
+    // (packages/shared/src/posts.ts) names the field for what it holds: clean
+    // Markdown, stored as the single source of truth and rendered at READ time.
+    // M0's stub never parsed its body, so this page sent `{title, body}` and
+    // nothing noticed; Task 9's real schema 400s that outright. The FORM field
+    // stays `body` (it is the textarea's HTML name, not a wire contract) and is
+    // mapped here — the one place that knows both names.
+    //
+    // `status` is deliberately not sent: it defaults to "draft". Publishing must
+    // be an explicit act, never the fallback of a client that omitted a field.
+    body: { title: form.get("title"), markdownSource: form.get("body") },
     // Forwards the session cookie — the api resolves the session from it and
     // recomputes the expected token to compare against the header below.
     request: Astro.request,
@@ -141,7 +151,14 @@ const loginHref = `/login?next=${encodeURIComponent("/new-post")}`;
             Body
             <textarea name="body" required></textarea>
           </label>
-          <button type="submit">Publish</button>
+          {/*
+            "Save draft", not "Publish": this form sends no `status`, and the api
+            defaults to a DRAFT by design. The button said "Publish" while M0's
+            stub created nothing at all, which was harmless; against Task 9's real
+            handler it would promise something the request does not ask for. The
+            publish control belongs with the real editor, not this harness page.
+          */}
+          <button type="submit">Save draft</button>
         </form>
       )
     }

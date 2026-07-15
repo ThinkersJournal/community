@@ -6,10 +6,9 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import worker from "../src";
-import { csrfTokenFor } from "../src/auth/csrf";
-import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
 import { MAX_UPLOAD_BYTES, MEDIA_QUOTA_BYTES } from "../src/routes/media";
+import { createVerifiedActor, deleteCreatedUsers } from "./actor";
 import {
   oversizeBytes,
   pixelBombPng,
@@ -18,7 +17,7 @@ import {
   TEXT_BYTES,
 } from "./fixtures/images";
 
-import type { SessionData } from "@thinkersjournal/shared";
+import type { Actor } from "./actor";
 
 /**
  * Task 8 — `POST /media`, the transform-on-WRITE image pipeline.
@@ -29,76 +28,21 @@ import type { SessionData } from "@thinkersjournal/shared";
  * is held to them the moment it is registered, with no edit there.
  *
  * ⚠️ THE ACTOR IS BUILT WITH `createSession` DIRECTLY, NOT VIA `POST
- * /auth/signup` — the same shape test/soft-gate.test.ts uses, and deliberately
- * NOT the signup route:
- *   • signup issues a verification email through Postmark via global `fetch`.
- *     Only test/email-verify.test.ts stubs that; driving the real route here
- *     would put a live third-party HTTP call on this suite's setup path.
- *   • it would couple every case below to FOUR unrelated routes (signup,
- *     __test/last-verify-token, verify-email, auth/csrf) and to SIGNUP_LIMITER.
- * The pipeline is what is under test; the session is a fixture.
+ * /auth/signup`. That fixture — and the reasoning for it — now lives in
+ * test/actor.ts, EXTRACTED THERE BY TASK 9 and imported rather than copied: this
+ * suite, test/posts.test.ts and test/public-reads.test.ts all need the identical
+ * verified-user-with-a-real-session, and the epoch subtlety in it is exactly the
+ * kind of detail that rots in a duplicate. See that file's header.
  */
 
 /** An origin in `checkOrigin`'s allowlist (src/auth/csrf.ts). */
 const ALLOWED_ORIGIN = "http://localhost:8787";
-
-// `users.password_hash` is NOT NULL — a valid PHC-encoded argon2id string.
-const PASSWORD_HASH = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$ZGlnZXN0";
-
-/** A verified user + a session cookie + its CSRF token. */
-interface Actor {
-  userId: string;
-  cookie: string;
-  csrfToken: string;
-}
-
-const createdUserIds: string[] = [];
 
 async function fetchWorker(request: Request): Promise<Response> {
   const ctx = createExecutionContext();
   const response = await worker.fetch(request, env, ctx);
   await waitOnExecutionContext(ctx);
   return response;
-}
-
-/** INSERT a user with `email_verified_at` already set, and return its id. */
-async function insertVerifiedUser(): Promise<string> {
-  const ctx = createExecutionContext();
-  const email = `t8_${crypto.randomUUID()}@example.com`;
-  const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    const { rows } = await c.query<{ id: string }>(
-      "INSERT INTO users (email, password_hash, email_verified_at) VALUES ($1, $2, now()) RETURNING id",
-      [email, PASSWORD_HASH],
-    );
-    return rows[0]!.id;
-  });
-  await waitOnExecutionContext(ctx);
-  createdUserIds.push(id);
-  return id;
-}
-
-/**
- * A verified actor with a real session.
- *
- * `securityEpoch` is read from the user's Durable Object rather than hardcoded:
- * the pipeline compares this stamp against the DO on every mutation, so a
- * made-up epoch would be a REVOKED session and every case would 401.
- */
-async function createVerifiedActor(): Promise<Actor> {
-  const userId = await insertVerifiedUser();
-  const data: SessionData = {
-    userId,
-    roles: ["member"],
-    securityEpoch: await env.USER_SECURITY.getByName(userId).getEpoch(),
-    csrfSecret: "csrf-secret-value",
-    createdAt: Date.now(),
-  };
-  const { cookie } = await createSession(env, data);
-  return {
-    userId,
-    cookie: cookie.split(";")[0]!,
-    csrfToken: await csrfTokenFor(data),
-  };
 }
 
 function upload(body: BodyInit, actor: Actor): Request {
@@ -120,15 +64,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (createdUserIds.length > 0) {
-    const ctx = createExecutionContext();
-    // `media.owner_id` is ON DELETE CASCADE, so this clears the rows too.
-    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-      c.query("DELETE FROM users WHERE id = ANY($1::uuid[])", [createdUserIds]),
-    );
-    await waitOnExecutionContext(ctx);
-    createdUserIds.length = 0;
-  }
+  // `media.owner_id` is ON DELETE CASCADE, so deleting the users clears the rows.
+  await deleteCreatedUsers();
 });
 
 describe("the happy path", () => {

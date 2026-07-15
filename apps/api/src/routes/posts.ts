@@ -1,58 +1,268 @@
 /**
- * Content routes (M1). This file still holds only STUB handlers — no real post
- * is created or read yet (YAGNI; that lands in M1) — but the AUTH around them
- * is real:
+ * Post authoring routes. The M0 stub is gone; the auth around it is unchanged.
  *
- *   POST /posts  — runs the full mutating pipeline (src/auth/pipeline.ts):
- *                  origin -> session -> CSRF -> epoch -> verified-email ->
- *                  handler. Opts INTO `requireVerifiedEmail` because creating
- *                  a post is content mutation, which the soft gate (Task 13)
- *                  reserves for verified users. It does NOT opt into rate
- *                  limiting: M0 has no posts limiter binding, and inventing
- *                  one here is out of scope.
- *   GET  /posts  — a stub feed, deliberately NOT gated and NOT run through the
- *                  pipeline: reads stay open to unverified (and anonymous)
- *                  users, so there is no session to require. No DB read yet
- *                  either; a real feed would use HYPERDRIVE_CACHED.
+ *   POST  /posts      — create (draft or published)
+ *   PATCH /posts/:id  — edit
+ *   GET   /posts/:id  — the AUTHOR's own post, drafts included
+ *
+ * All three are AUTHOR-facing. Anonymous reads live in src/routes/public.ts.
+ *
+ * ⚠️ EVERY DB ACCESS HERE USES HYPERDRIVE_FRESH — including the reads. These are
+ * permission decisions and read-after-write against the author's own writes, and
+ * Hyperdrive never invalidates on write. A CACHED read here would let an author
+ * save an edit and be shown their own pre-edit text for up to 60s.
+ *
+ * ⚠️ OWNERSHIP IS ENFORCED IN THE `WHERE` CLAUSE, never by a preceding SELECT.
+ * The transaction-mode pooler means a check-then-act is a race by construction;
+ * `WHERE id = $1 AND author_id = $2` returning zero rows is the check, atomically.
+ * Zero rows is a 404 — NEVER a 403, which would confirm the id names a real post.
+ *
+ * ⚠️ NO CACHE PURGE HERE YET — Task 14 wires it in. There is no cache to purge
+ * until Task 12 creates one, so a purge call written here would be dead code
+ * against a cache that does not exist. These handlers are complete without it.
  */
-import { runMutatingPipeline } from "../auth/pipeline";
+import { CreatePostInput, UpdatePostInput } from "@thinkersjournal/shared";
+
+import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
+import { withClient } from "../db/client";
+import { isInvalidTextRepresentation, isUniqueViolation } from "../db/errors";
+import { errorResponse } from "../http/errors";
+import { randomSuffix } from "../util/random";
+
+import type { RouteParams } from "../routing";
+import type { AuthoredPost } from "@thinkersjournal/shared";
+import type { Client } from "pg";
+
+/** Attempts to place a unique slug before giving up. */
+const SLUG_ATTEMPTS = 3;
+const SLUG_BASE_MAX = 60;
 
 /**
- * Handle `POST /posts`. Every auth check lives in the pipeline — this handler
- * only ever runs for a request that is same-origin, authenticated, CSRF-valid,
- * unrevoked, and email-verified, and it receives that validated session rather
- * than re-reading one.
+ * A URL-safe slug from a title.
+ *
+ * NFKD + combining-mark strip folds accents rather than dropping them ("Café" ->
+ * "cafe", not "caf"). Everything outside [a-z0-9] collapses to a single hyphen.
+ * A title that is entirely non-Latin sanitizes to "" and falls back to "post",
+ * whose uniqueness then comes entirely from the suffix retry below.
+ *
+ * The trailing-hyphen strip is repeated AFTER the truncation deliberately: the
+ * slice can land mid-separator and leave "my-long-title-" behind.
  */
+export function slugify(title: string): string {
+  const base = title
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, SLUG_BASE_MAX)
+    .replace(/-+$/, "");
+  return base === "" ? "post" : base;
+}
+
+/**
+ * The 401 for a session-bearing GET with no usable session.
+ *
+ * `Record<string, string>` rather than `HeadersInit`: this is SPREAD by
+ * `errorResponse`, and spreading a `Headers` instance silently yields `{}` —
+ * dropping the revocation path's cleared cookie. See src/auth/pipeline.ts's
+ * `unauthorized` for the full reasoning.
+ */
+function loginRequired(extraHeaders: Record<string, string> = {}): Response {
+  return errorResponse("LOGIN_REQUIRED", 401, { headers: extraHeaders });
+}
+
+/** The one 404 for "no such post, or not yours" — deliberately not two answers. */
+function notFound(): Response {
+  return errorResponse("NOT_FOUND", 404);
+}
+
+interface InsertedPost {
+  id: string;
+  slug: string;
+}
+
+/**
+ * INSERT the post, retrying with a suffixed slug on a `posts_author_slug_key`
+ * violation.
+ *
+ * No SAVEPOINT (unlike signup's profile insert): this is a SINGLE statement with
+ * no enclosing transaction, so a failure poisons nothing and the retry is just a
+ * retry. Only a unique violation is retried; anything else propagates.
+ *
+ * ⚠️ INSERT-AND-HANDLE-23505, never SELECT-then-INSERT. Under a transaction-mode
+ * pooler a "is this slug free?" check is a race by construction: two concurrent
+ * creates both read "free" and one of them 500s. The unique index is the check.
+ */
+async function insertPost(
+  client: Client,
+  authorId: string,
+  title: string,
+  markdownSource: string,
+  status: string,
+): Promise<InsertedPost | null> {
+  const base = slugify(title);
+  for (let attempt = 1; attempt <= SLUG_ATTEMPTS; attempt++) {
+    const slug = attempt === 1 ? base : `${base}-${randomSuffix()}`;
+    try {
+      const { rows } = await client.query<InsertedPost>(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+         VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 = 'published' THEN now() ELSE NULL END)
+         RETURNING id, slug`,
+        [authorId, title, slug, markdownSource, status],
+      );
+      return rows[0]!;
+    } catch (err) {
+      if (!isUniqueViolation(err) || attempt === SLUG_ATTEMPTS) throw err;
+    }
+  }
+  return null;
+}
+
+/** Parse + validate a post body. Resolves the fields, or the 400 to return. */
+async function readPostInput(
+  request: Request,
+  schema: typeof CreatePostInput | typeof UpdatePostInput,
+): Promise<{ title: string; markdownSource: string; status: string } | Response> {
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    // A malformed body is the client's error, not a 500.
+    return errorResponse("INVALID_JSON", 400);
+  }
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) {
+    // FIELD NAMES only — never the submitted values.
+    return errorResponse("INVALID_INPUT", 400, {
+      fields: parsed.error.issues.map((i) => i.path.map(String).join(".")),
+    });
+  }
+  return parsed.data;
+}
+
 export async function handleCreatePost(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  const result = await runMutatingPipeline(request, env, ctx, {
-    requireVerifiedEmail: true,
-  });
-  if (result instanceof Response) {
-    return result;
-  }
+  const result = await runMutatingPipeline(request, env, ctx, { requireVerifiedEmail: true });
+  if (result instanceof Response) return result;
 
-  // The stub success. `authorId` comes from the PIPELINE's validated session —
-  // never from the request body, which a caller controls: this is the shape a
-  // real M1 insert would take (`INSERT ... (author_id) VALUES (session.userId)`).
-  return new Response(
-    JSON.stringify({ ok: true, authorId: result.session.userId }),
-    { status: 201, headers: { "content-type": "application/json" } },
-  );
+  const input = await readPostInput(request, CreatePostInput);
+  if (input instanceof Response) return input;
+  const { title, markdownSource, status } = input;
+
+  // ⚠️ author_id comes from the PIPELINE's validated session, NEVER the body —
+  // which a caller controls. `CreatePostInput` has no authorId field at all, so
+  // this is unrepresentable rather than merely unused.
+  const authorId = result.session.userId;
+
+  let inserted: InsertedPost | null;
+  try {
+    inserted = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      insertPost(c, authorId, title, markdownSource, status),
+    );
+  } catch (err) {
+    // Every retry collided: answer 409 rather than 500. Astronomically unlikely
+    // (each retry adds ~64 bits of entropy), but a 23505 must never be a crash.
+    if (isUniqueViolation(err)) return errorResponse("SLUG_TAKEN", 409);
+    throw err;
+  }
+  if (inserted === null) return errorResponse("SLUG_TAKEN", 409);
+
+  // Task 14 adds the cache purge here (publishing changes what a LISTING shows).
+  // Not now: no cache exists until Task 12.
+
+  return new Response(JSON.stringify({ id: inserted.id, slug: inserted.slug, status }), {
+    status: 201,
+    headers: { "content-type": "application/json" },
+  });
 }
 
-/**
- * Handle `GET /posts` — a stub feed. Deliberately open: reads stay available
- * to unverified and anonymous users per the soft gate's policy, so this route
- * intentionally has no session, CSRF, or epoch requirement. A real feed (M1)
- * would query via `HYPERDRIVE_CACHED`.
- */
-export async function handleListPosts(): Promise<Response> {
-  return new Response(JSON.stringify({ posts: [] }), {
+export async function handleUpdatePost(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  const result = await runMutatingPipeline(request, env, ctx, { requireVerifiedEmail: true });
+  if (result instanceof Response) return result;
+
+  const input = await readPostInput(request, UpdatePostInput);
+  if (input instanceof Response) return input;
+  const { title, markdownSource, status } = input;
+  const authorId = result.session.userId;
+
+  let updated: { id: string; slug: string } | null;
+  try {
+    updated = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query<{ id: string; slug: string }>(
+        `UPDATE posts
+            SET title = $1,
+                markdown_source = $2,
+                status = $3,
+                -- FIRST publication only: coalesce keeps the original date across
+                -- every later edit, so re-publishing does not rewrite history (or
+                -- re-order the author's own listing under them).
+                published_at = CASE WHEN $3 = 'published' THEN coalesce(published_at, now()) ELSE published_at END,
+                updated_at = now()
+          -- ⚠️ OWNERSHIP IS THIS LINE. Not a preceding SELECT: under a
+          -- transaction-mode pooler a check-then-act is a race by construction.
+          WHERE id = $4 AND author_id = $5
+      RETURNING id, slug`,
+        [title, markdownSource, status, params.id, authorId],
+      );
+      return rows[0] ?? null;
+    });
+  } catch (err) {
+    // A malformed id is a 404, not a 500: `WHERE id = 'not-a-uuid'` throws
+    // (22P02) before it can match nothing. `:id` reaches here as any non-empty
+    // single segment — src/routing.ts guarantees nothing about its SHAPE.
+    if (isInvalidTextRepresentation(err)) return notFound();
+    throw err;
+  }
+  // ⚠️ Zero rows means "no such post" OR "not yours" — answered identically.
+  if (updated === null) return notFound();
+
+  // Task 14 adds the cache purge here — this is THE call site the whole purge hop
+  // exists for. Not now: no cache exists until Task 12.
+
+  return new Response(JSON.stringify({ id: updated.id, slug: updated.slug, status }), {
     status: 200,
     headers: { "content-type": "application/json" },
+  });
+}
+
+export async function handleGetPost(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  const session = await readCurrentSession(env, request, loginRequired);
+  if (session instanceof Response) return session;
+
+  let post: AuthoredPost | null;
+  try {
+    post = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query(
+        `SELECT id, title, slug, markdown_source AS "markdownSource", status,
+                published_at AS "publishedAt", updated_at AS "updatedAt"
+           FROM posts WHERE id = $1 AND author_id = $2`,
+        [params.id, session.userId],
+      );
+      return (rows[0] ?? null) as AuthoredPost | null;
+    });
+  } catch (err) {
+    if (isInvalidTextRepresentation(err)) return notFound();
+    throw err;
+  }
+  if (post === null) return notFound();
+
+  return new Response(JSON.stringify(post), {
+    status: 200,
+    // Per-author and includes unpublished text: never let a shared cache hold it.
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 }
