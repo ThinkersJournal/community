@@ -1,19 +1,20 @@
 /**
- * The soft email-verification gate (M0, Task 13).
+ * The MUTATING-REQUEST PIPELINE (M0, Task 16) — the one composition every
+ * non-GET, session-bearing route runs before its handler sees a request, plus
+ * the soft email-verification gate it grew out of (Task 13).
  *
- * Policy: unverified users may READ/browse freely, but CONTENT MUTATION
- * (posting/commenting/following) requires a verified email. This file holds
- * ONLY that one gate for now — Task 16 EXTENDS it into the full mutating
- * pipeline (origin -> session -> CSRF -> epoch -> verified-email ->
- * rate-limit -> handler) shared across every content-mutation route.
- * `requireVerifiedEmail` is written as a `Response | null` step so that
- * pipeline can drop it straight in alongside `enforceRateLimit` (see
- * src/auth/ratelimit.ts) and `checkCsrf`/`checkOrigin` (see src/auth/csrf.ts).
+ * `runMutatingPipeline` is the entry point; `requireVerifiedEmail` remains
+ * exported as its own step (Task 13's tests pin it directly).
  *
- * Deliberately NOT applied to auth routes (signup/login/logout — an
- * unverified user must still be able to log in and log out) and NOT to GETs;
- * callers opt a route in explicitly (see src/routes/posts.ts).
+ * ⚠️ GET/HEAD DO NOT BELONG HERE. This pipeline requires a session and would
+ * 401 every anonymous read. Reads stay open (`GET /posts`); routes that need
+ * their own read-side auth do it inline (`GET /verify-email`).
+ *
+ * ⚠️ NEITHER DO SIGNUP/LOGIN. See `runMutatingPipeline`'s own note.
  */
+import { checkCsrf, checkOrigin } from "./csrf";
+import { enforceRateLimit } from "./ratelimit";
+import { destroySession, readSession } from "./session";
 import { withClient } from "../db/client";
 
 import type { SessionData } from "@thinkersjournal/shared";
@@ -61,4 +62,153 @@ export async function requireVerifiedEmail(
   });
 
   return verifiedAt === null ? emailNotVerifiedResponse() : null;
+}
+
+/** The generic 403 for a rejected origin or a failed CSRF token. */
+function forbidden(): Response {
+  return new Response(JSON.stringify({ error: "Forbidden" }), {
+    status: 403,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * The generic 401 for "no usable session". `extraHeaders` carries the cleared
+ * cookie on the revocation path.
+ *
+ * ⚠️ Byte-identical across "no session at all" and "revoked session" — the two
+ * are deliberately indistinguishable to the client. The web app's handling is
+ * the same either way (send the user to log in), so distinguishing them would
+ * only tell a caller holding a stolen-but-revoked cookie that it was once real.
+ */
+function unauthorized(extraHeaders: HeadersInit = {}): Response {
+  return new Response(JSON.stringify({ error: "Unauthorized" }), {
+    status: 401,
+    headers: { "content-type": "application/json", ...extraHeaders },
+  });
+}
+
+/** Per-route opt-ins for `runMutatingPipeline`. Everything here is OPTIONAL. */
+export interface MutatingPipelineOptions {
+  /**
+   * Opt a CONTENT-mutation route into the soft email-verification gate
+   * (step 5). Auth routes (logout) leave this off: an unverified user must
+   * still be able to end their session.
+   */
+  requireVerifiedEmail?: boolean;
+  /**
+   * Opt a SENSITIVE route into rate limiting (step 6). Modelled as one object
+   * rather than the brief's separate `limiter`/`limiterKey` parameters so the
+   * two cannot be supplied independently — a limiter with no key (or a key
+   * with no limiter) is not a state a caller can reach, rather than one that
+   * silently skips the limit at runtime.
+   */
+  rateLimit?: { limiter: RateLimit; key: string };
+}
+
+/**
+ * The security spine for every non-GET, session-bearing route. Resolves EITHER
+ * a short-circuit `Response` the caller must return verbatim, OR the validated
+ * `session` to hand the handler:
+ *
+ *   const result = await runMutatingPipeline(request, env, ctx, opts);
+ *   if (result instanceof Response) return result;
+ *   // result.session is authenticated, unrevoked, and CSRF-checked.
+ *
+ * ⚠️ THE ORDER BELOW IS LOAD-BEARING — do not reorder:
+ *
+ *   1. checkOrigin       -> 403. FIRST: the cheapest check, and it must run
+ *                           before any KV/DO/DB touch so a cross-site request
+ *                           cannot make us spend I/O (or probe timing) at all.
+ *   2. readSession       -> 401 if absent. Everything below needs a session.
+ *   3. checkCsrf         -> 403. Needs the session (the token is derived from
+ *                           its `csrfSecret`), so it cannot precede step 2 —
+ *                           but it comes before the epoch/DB reads below so a
+ *                           forged cross-site request stops at the cheapest
+ *                           point that can still reject it.
+ *   4. checkSecurityEpoch-> 401 + cleared cookie. Before ANY authorization
+ *                           decision: a revoked session must not be able to
+ *                           act, so nothing downstream may run for one.
+ *   5. requireVerifiedEmail (opt-in) -> its 403. Authorization, and the first
+ *                           step that touches Postgres — deliberately last
+ *                           among the checks, behind every cheaper rejection.
+ *   6. rate limit (opt-in) -> its 429. Last: quota is spent only by a request
+ *                           that is otherwise fully entitled to proceed, so
+ *                           unauthenticated noise cannot burn a real user's
+ *                           budget.
+ *   7. hand the validated session to the handler.
+ *
+ * ⚠️ `POST /auth/signup` and `POST /auth/login` MUST NOT ROUTE THROUGH THIS.
+ * They are how a session comes to EXIST, so they have none at request time:
+ * step 2 would 401 every signup and login outright, and steps 3-4 have no
+ * `csrfSecret` and no user to read an epoch for. Those two routes run their
+ * own `checkOrigin` (the only step that applies pre-session) inline, along
+ * with their own rate limiting and Turnstile. `POST /auth/logout` (Task 17)
+ * DOES belong here — it has a session — but WITHOUT `requireVerifiedEmail`.
+ */
+export async function runMutatingPipeline(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  opts: MutatingPipelineOptions = {},
+): Promise<Response | { session: SessionData }> {
+  // ---- 1. Origin — before any I/O -----------------------------------------
+  if (!checkOrigin(request)) {
+    return forbidden();
+  }
+
+  // ---- 2. Session -----------------------------------------------------------
+  const session = await readSession(env, request);
+  if (session === null) {
+    return unauthorized();
+  }
+
+  // ---- 3. CSRF double-submit token -----------------------------------------
+  if (!(await checkCsrf(request, session))) {
+    return forbidden();
+  }
+
+  // ---- 4. Security epoch (revocation) --------------------------------------
+  // The session's `securityEpoch` was stamped when it was issued. If the
+  // user's CURRENT epoch has moved (re-signup taking the account over, and
+  // later: password change / "log out everywhere"), this session predates that
+  // event and is revoked — regardless of its KV record still being live. This
+  // is what makes revocation O(1): one DO counter invalidates every
+  // outstanding session for a user without enumerating any of them.
+  //
+  // Read fresh from the DO on EVERY mutating request, never cached: a
+  // revocation that took effect a cache-TTL later would be exactly the window
+  // an attacker with a stolen cookie needs.
+  const currentEpoch = await env.USER_SECURITY.getByName(
+    session.userId,
+  ).getEpoch();
+  if (currentEpoch !== session.securityEpoch) {
+    // Destroy it rather than merely rejecting it: the KV record is dead
+    // server-side from here on, and the cleared cookie (`Max-Age=0`) stops the
+    // browser replaying a token that can never succeed again.
+    const { cookie } = await destroySession(env, request);
+    return unauthorized({ "Set-Cookie": cookie });
+  }
+
+  // ---- 5. Verified email (content routes only) ------------------------------
+  if (opts.requireVerifiedEmail === true) {
+    const gated = await requireVerifiedEmail(env, ctx, session);
+    if (gated !== null) {
+      return gated;
+    }
+  }
+
+  // ---- 6. Rate limit (sensitive routes only) --------------------------------
+  if (opts.rateLimit !== undefined) {
+    const limited = await enforceRateLimit(
+      opts.rateLimit.limiter,
+      opts.rateLimit.key,
+    );
+    if (limited !== null) {
+      return limited;
+    }
+  }
+
+  // ---- 7. Hand off to the handler -------------------------------------------
+  return { session };
 }

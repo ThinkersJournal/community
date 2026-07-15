@@ -6,6 +6,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import worker from "../src";
+import { csrfTokenFor } from "../src/auth/csrf";
 import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
 
@@ -17,9 +18,22 @@ import type { SessionData } from "@thinkersjournal/shared";
  * verified email. `GET /posts` proves reads stay open regardless.
  *
  * Runs in the POOL project (real workerd) — needs the `SESSIONS` KV binding
- * (for `createSession`/`readSession`) and `HYPERDRIVE_FRESH` (for the
- * `users` row), plus the Worker's `fetch` handler.
+ * (for `createSession`/`readSession`), `HYPERDRIVE_FRESH` (for the `users`
+ * row) and, since Task 16, the `USER_SECURITY` Durable Object, plus the
+ * Worker's `fetch` handler.
+ *
+ * ⚠️ TASK 16 UPDATE — these requests now carry an allowed `Origin`, a correct
+ * `X-CSRF-Token`, and a session stamped with the user's REAL security epoch.
+ * `POST /posts` runs the full mutating pipeline (src/auth/pipeline.ts), which
+ * rejects a request missing any of those BEFORE the email gate is ever
+ * consulted; without them these cases would still go red/green on the right
+ * status codes but for entirely the wrong reason, and would stop testing the
+ * gate at all. The gate's own properties below are UNCHANGED — every
+ * assertion is exactly the one Task 13 pinned.
  */
+
+/** An origin in `checkOrigin`'s allowlist (src/auth/csrf.ts). */
+const ALLOWED_ORIGIN = "http://localhost:8787";
 
 // `users.password_hash` is NOT NULL — a valid PHC-encoded argon2id string.
 const PASSWORD_HASH = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$ZGlnZXN0";
@@ -54,12 +68,29 @@ async function verifyUser(userId: string): Promise<void> {
   await waitOnExecutionContext(ctx);
 }
 
-/** Create a real session for `userId` and return the raw cookie token. */
-async function sessionTokenFor(userId: string): Promise<string> {
+interface Authed {
+  /** The raw `tj_session` cookie token. */
+  token: string;
+  /** The value the client must echo in `X-CSRF-Token` for this session. */
+  csrfToken: string;
+}
+
+/**
+ * Create a real session for `userId`, returning its cookie token and matching
+ * CSRF token.
+ *
+ * ⚠️ `securityEpoch` is read from the user's Durable Object rather than
+ * hardcoded (Task 13 stamped a literal `1`, which no fresh user has — a fresh
+ * DO starts at 0). Since Task 16 the pipeline compares this stamp against the
+ * DO on every mutation, so a made-up epoch is a REVOKED session: every case
+ * below would 401 before reaching the gate. This mirrors what `POST
+ * /auth/login` stamps (src/routes/login.ts, step 7).
+ */
+async function sessionTokenFor(userId: string): Promise<Authed> {
   const data: SessionData = {
     userId,
     roles: ["member"],
-    securityEpoch: 1,
+    securityEpoch: await env.USER_SECURITY.getByName(userId).getEpoch(),
     csrfSecret: "csrf-secret-value",
     createdAt: Date.now(),
   };
@@ -68,18 +99,26 @@ async function sessionTokenFor(userId: string): Promise<string> {
   if (match === null) {
     throw new Error(`cookie did not match expected shape: ${cookie}`);
   }
-  return match[1]!;
+  return { token: match[1]!, csrfToken: await csrfTokenFor(data) };
 }
 
+/**
+ * A request carrying `authed`'s session. Non-GET requests also carry the
+ * allowed `Origin` and the `X-CSRF-Token` the pipeline requires — a real
+ * browser client sends both, and without them the pipeline rejects the request
+ * before the email gate under test runs at all.
+ */
 function requestWithCookie(
   path: string,
   method: string,
-  token: string,
+  authed: Authed,
 ): Request {
-  return new Request(`https://api.test${path}`, {
-    method,
-    headers: { Cookie: `tj_session=${token}` },
-  });
+  const headers = new Headers({ Cookie: `tj_session=${authed.token}` });
+  if (method !== "GET" && method !== "HEAD") {
+    headers.set("Origin", ALLOWED_ORIGIN);
+    headers.set("X-CSRF-Token", authed.csrfToken);
+  }
+  return new Request(`https://api.test${path}`, { method, headers });
 }
 
 beforeEach(async () => {
@@ -103,11 +142,11 @@ afterEach(async () => {
 describe("soft email-verification gate", () => {
   it("POST /posts with an unverified session -> 403 EMAIL_NOT_VERIFIED", async () => {
     const userId = await insertUnverifiedUser();
-    const token = await sessionTokenFor(userId);
+    const authed = await sessionTokenFor(userId);
 
     const ctx = createExecutionContext();
     const response = await worker.fetch(
-      requestWithCookie("/posts", "POST", token),
+      requestWithCookie("/posts", "POST", authed),
       env,
       ctx,
     );
@@ -123,12 +162,12 @@ describe("soft email-verification gate", () => {
 
   it("POST /posts succeeds once the user's email is verified", async () => {
     const userId = await insertUnverifiedUser();
-    const token = await sessionTokenFor(userId);
+    const authed = await sessionTokenFor(userId);
     await verifyUser(userId);
 
     const ctx = createExecutionContext();
     const response = await worker.fetch(
-      requestWithCookie("/posts", "POST", token),
+      requestWithCookie("/posts", "POST", authed),
       env,
       ctx,
     );
@@ -139,11 +178,11 @@ describe("soft email-verification gate", () => {
 
   it("GET /posts with the SAME unverified session -> 200 (reads are open)", async () => {
     const userId = await insertUnverifiedUser();
-    const token = await sessionTokenFor(userId);
+    const authed = await sessionTokenFor(userId);
 
     const ctx = createExecutionContext();
     const response = await worker.fetch(
-      requestWithCookie("/posts", "GET", token),
+      requestWithCookie("/posts", "GET", authed),
       env,
       ctx,
     );
@@ -154,8 +193,14 @@ describe("soft email-verification gate", () => {
 
   it("POST /posts with no session -> 401 (not 403)", async () => {
     const ctx = createExecutionContext();
+    // Carries the allowed `Origin` so the pipeline's origin check passes and
+    // the MISSING SESSION is what this case actually exercises — the point
+    // being that it 401s rather than 403ing like the unverified case above.
     const response = await worker.fetch(
-      new Request("https://api.test/posts", { method: "POST" }),
+      new Request("https://api.test/posts", {
+        method: "POST",
+        headers: { Origin: ALLOWED_ORIGIN },
+      }),
       env,
       ctx,
     );

@@ -23,6 +23,10 @@ export default {
       return new Response("ok", { status: 200 });
     }
 
+    // ⚠️ Signup and login do NOT run the mutating pipeline
+    // (src/auth/pipeline.ts) — they are how a session comes to exist, so its
+    // "401 if no session" step would reject every one of them. Each performs
+    // its own `checkOrigin` + rate limiting inline. See the pipeline's header.
     if (request.method === "POST" && pathname === "/auth/signup") {
       return await handleSignup(request, env, ctx);
     }
@@ -31,13 +35,18 @@ export default {
       return await handleLogin(request, env, ctx);
     }
 
+    // Likewise NOT the pipeline: a GET carries no session/CSRF/epoch
+    // requirement. This route authenticates INLINE (session + token ownership
+    // + epoch) for its own reasons — see its header; do not weaken it.
+
     if (request.method === "GET" && pathname === "/verify-email") {
       return await handleVerifyEmail(request, env, ctx);
     }
 
-    // Content routes (M1 stub — Task 13 wires just enough to exercise the
-    // soft email-verification gate; Task 16 replaces this with the full
-    // mutating pipeline). GET is deliberately NOT gated: reads stay open.
+    // Content routes (M1 stubs). `POST /posts` runs the full mutating
+    // pipeline (origin -> session -> CSRF -> epoch -> verified-email), applied
+    // inside the handler so the route owns its own opt-ins. GET is
+    // deliberately NOT gated: reads stay open.
     if (request.method === "GET" && pathname === "/posts") {
       return await handleListPosts();
     }
