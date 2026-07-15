@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "//build": "Never 'astro build' directly. build-web.mjs is what cleans dist (astro.config.mjs disables astro's own broken emptyDir via vite.build.emptyOutDir=false) and reaps the workerd processes astro leaks, which would lock dist and break the NEXT build. See that script's header.",
+    "build": "node ../../scripts/build-web.mjs",
     "test": "vitest run",
     "typecheck": "astro check"
   },

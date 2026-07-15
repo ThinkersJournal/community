@@ -64,8 +64,55 @@ function parseSessionCookie(request: Request): string | null {
   return null;
 }
 
-/** Build the `Set-Cookie` string carrying `token` (or the clearing value). */
-function buildCookie(token: string, maxAge: number): string {
+/**
+ * Build the `Set-Cookie` string carrying `token` (or the clearing value).
+ *
+ * ⚠️ THE ATTRIBUTES ARE ENVIRONMENT-DEPENDENT, AND THAT IS DELIBERATE.
+ *
+ * Production emits `Domain=.thinkersjournal.com; Secure` — the Global
+ * Constraint, and non-negotiable there: `Secure` keeps the session token off
+ * plaintext http, and the `Domain` scopes it across our subdomains.
+ *
+ * But those same two attributes make the cookie IMPOSSIBLE to store in local
+ * dev. At `http://127.0.0.1:8787` a browser rejects `Secure` (not https) and
+ * rejects a `Domain` the origin does not belong to — so it silently drops the
+ * cookie, `readSession` returns null on the next request, and every
+ * authenticated flow 401s. No session can exist at all: a real-browser E2E is
+ * impossible, and a human clicking through localhost cannot stay logged in.
+ * So dev omits EXACTLY those two attributes and nothing else — `HttpOnly`,
+ * `SameSite=Lax`, `Path`, and `Max-Age` are identical in both modes.
+ *
+ * ⚠️ WHY THIS IS KEYED ON `TEST_ROUTES` AND MUST NOT GET ITS OWN FLAG.
+ * `TEST_ROUTES` is already the most deploy-gated var in the system: it gates
+ * `GET /__test/last-verify-token` (src/routes/__test.ts), which hands out a
+ * live account-takeover credential. It is therefore set ONLY in the gitignored
+ * `.dev.vars` and vitest's `miniflare.bindings`, is deliberately absent from
+ * wrangler.jsonc's `vars` so a deploy cannot carry it, and the deploy gate
+ * already asserts its absence. Reusing it means the relaxed cookie is
+ * unreachable in production for the SAME reason the test route is, checked by
+ * the SAME gate. A second flag would be a second thing to get wrong, and its
+ * failure mode — a production session cookie quietly losing `Secure` — is a
+ * plaintext-interception bug that no test would catch.
+ *
+ * An EXPLICIT `=== "1"` allowlist, NOT a truthiness check: wrangler vars are
+ * always strings, so `TEST_ROUTES="0"` and `"false"` are both TRUTHY, and a
+ * truthiness check would strip `Secure` in production for anyone who set "0"
+ * to mean "off". Fail closed on everything but the literal "1". Keep this
+ * condition identical to the gates in routes/__test.ts and auth/email-verify.ts.
+ *
+ * BOTH modes are pinned by test/session.test.ts — including the exact
+ * production string — because the suite itself runs with `TEST_ROUTES="1"`, so
+ * the production shape would otherwise go entirely unexercised.
+ */
+function buildCookie(env: Env, token: string, maxAge: number): string {
+  // DEV/CI ONLY — omits Domain + Secure. Unreachable in production: see above.
+  if (env.TEST_ROUTES === "1") {
+    return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+  }
+
+  // PRODUCTION. Both branches are spelled out in full rather than assembled
+  // from shared fragments, so each string is readable (and greppable) exactly
+  // as the browser will receive it.
   return `${SESSION_COOKIE_NAME}=${token}; Path=/; Domain=${COOKIE_DOMAIN}; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
@@ -87,7 +134,7 @@ export async function createSession(
     expirationTtl: SESSION_TTL_SECONDS,
   });
 
-  return { cookie: buildCookie(token, SESSION_TTL_SECONDS) };
+  return { cookie: buildCookie(env, token, SESSION_TTL_SECONDS) };
 }
 
 /**
@@ -127,5 +174,8 @@ export async function destroySession(
     await env.SESSIONS.delete(key);
   }
 
-  return { cookie: buildCookie("", 0) };
+  // ⚠️ Built with the SAME `env`, so the cleared cookie carries the same
+  // Domain/Path/Secure as the one that set it — a browser only drops a cookie
+  // when those match. A mismatch would leave a dead session cookie in place.
+  return { cookie: buildCookie(env, "", 0) };
 }

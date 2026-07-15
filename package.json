@@ -6,9 +6,12 @@
     "packages/*"
   ],
   "scripts": {
-    "typecheck": "pnpm -r run typecheck"
+    "typecheck": "pnpm -r run typecheck && tsc -p tsconfig.e2e.json",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "26.1.1",
     "typescript": "6.0.3"
   },
   "pnpm": {

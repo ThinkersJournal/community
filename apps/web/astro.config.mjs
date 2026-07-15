@@ -77,4 +77,46 @@ export default defineConfig({
   session: {
     driver: { entrypoint: "unstorage/drivers/memory" },
   },
+
+  vite: {
+    build: {
+      // ⚠️ NOT a preference — this DISABLES A BROKEN CODE PATH, and removing it
+      // makes `astro build` fail on the second and every later run on Windows
+      // with a message that names neither the cause nor the real file:
+      //
+      //     The property 'options.recursive' is no longer supported. Received true
+      //       at Object.rmdirSync (node:fs)
+      //       at emptyDir (astro/dist/core/fs/index.js:34)
+      //
+      // Two upstream defects compound to produce it:
+      //   1. `astro build` (via @astrojs/cloudflare -> @cloudflare/vite-plugin)
+      //      spawns workerd children and never reaps them. They outlive the
+      //      build, are orphaned, and keep open handles on `dist/`. Measured: a
+      //      clean build leaves 4 behind.
+      //   2. Astro's `emptyDir` therefore gets EPERM from `fs.rmSync` on the
+      //      locked dir, and its Windows EPERM fallback calls
+      //      `fs.rmdirSync(p, { recursive: true })` — which Node 26 REMOVED. So
+      //      the fallback throws a different error, masking the EPERM.
+      //
+      // Astro consults this exact flag before calling the broken function
+      // (`core/build/static-build.js`):
+      //
+      //     if (settings.config?.vite?.build?.emptyOutDir !== false) {
+      //       emptyDir(settings.config.outDir, new Set(".git"));
+      //     }
+      //
+      // so `false` means `emptyDir` is never reached. Neither defect is ours to
+      // fix: astro@7.0.9 is the latest release, and @cloudflare/vite-plugin is
+      // pinned to 1.44.0 by wrangler's peer range (task-18-report.md §1).
+      //
+      // ⚠️ THE OUTPUT IS STILL CLEANED — by `scripts/build-web.mjs`, which IS
+      // this package's `build` script (see package.json). It removes `dist`
+      // itself before building, and reaps the workerd processes astro leaks
+      // afterwards, so the build starts from a genuinely empty directory and
+      // leaves nothing holding it. Do not set this back to `true`, and do not
+      // bypass the `build` script by running `astro build` directly, or stale
+      // output silently survives between builds.
+      emptyOutDir: false,
+    },
+  },
 });

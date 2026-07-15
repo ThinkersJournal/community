@@ -1,0 +1,29 @@
+{
+  // Type-checks the E2E harness — `playwright.config.ts` and `e2e/**` — which
+  // live at the repo ROOT and therefore belong to no workspace package. Without
+  // this they would be checked by NOTHING: `pnpm typecheck` is `pnpm -r run
+  // typecheck`, which only visits packages, and Playwright transpiles specs
+  // without type-checking them. The root `typecheck` script runs this after the
+  // recursive pass.
+  //
+  // ⚠️ Deliberately NOT extending tsconfig.base.json. The base sets
+  // `"types": []` to keep stray `@types/*` out of the WORKERS runtime scope —
+  // correct there, actively wrong here: this code runs in NODE (it spawns dev
+  // servers and reads `process.env`) and drives a BROWSER, so it needs both
+  // `@types/node` and Playwright's types. The base's substantive settings
+  // (strict, bundler resolution, verbatimModuleSyntax) are restated below.
+  "compilerOptions": {
+    "strict": true,
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    "target": "ES2022",
+    // `DOM` is required: the spec's `page.evaluate`-adjacent types and
+    // `crypto.randomUUID()` resolve against it.
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["playwright.config.ts", "e2e/**/*.ts"]
+}
