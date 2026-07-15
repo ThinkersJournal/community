@@ -74,13 +74,25 @@ import { withClient } from "../db/client";
  * nonexistent-email request in a given isolate slower than a wrong-password
  * request until the memo warms, which is its own (smaller) timing tell.
  *
- * ⚠️ Must be regenerated if `CURRENT_ARGON2_PARAMS` ever changes, so the
- * dummy verify keeps costing the same as a real one on the current baseline.
- * It does NOT need to satisfy `needsRehash` (it is never stored, so nothing
- * ever rehashes it) — only to be a well-formed, realistically-costed PHC
- * string that `verifyPassword` fully computes against.
+ * ⚠️ Must be regenerated if `CURRENT_ARGON2_PARAMS` ever changes, so the dummy
+ * verify keeps costing the same as a real one on the current baseline.
+ *
+ * ⚠️ EXPORTED SOLELY SO A TEST CAN PIN IT — this is not part of the route's
+ * API and nothing else should import it. The invariant that matters is
+ * `needsRehash(DUMMY_HASH) === false`, which test/login.test.ts asserts,
+ * because this control degrades SILENTLY in both directions:
+ *   (a) if `CURRENT_ARGON2_PARAMS` is raised and this constant is not
+ *       regenerated, it becomes a WEAK-param hash — the no-row path then costs
+ *       far less than a real verify and the timing oracle quietly returns,
+ *       with every functional test still green;
+ *   (b) if it were malformed, `parsePhc` returns null and `verifyPassword`
+ *       returns false in ~0ms without throwing — the control is simply gone,
+ *       again with every test still green.
+ * `needsRehash` returns `true` for an unparseable hash AND for drifted params,
+ * so that one assertion covers both failure modes at zero flake risk (it is a
+ * pure string/param check — no timing measurement involved).
  */
-const DUMMY_HASH =
+export const DUMMY_HASH =
   "$argon2id$v=19$m=19456,t=2,p=1$QkJCQkJCQkJCQkJCQkJCQg$uREWjDiAO3pY5UG33fbKbLCW2BBdEoCNm7s5sr8Admo";
 
 /** A `users` row as read by the login lookup. */
@@ -150,6 +162,14 @@ export async function handleLogin(
   // Keyed on ip + email so one address cannot be credential-stuffed from many
   // IPs and one IP cannot brute-force many addresses. `CF-Connecting-IP` is
   // absent off Cloudflare (and in tests), hence the stable placeholder.
+  //
+  // ⚠️ `email` here is the PARSED value, which `LoginInput` has already
+  // lowercased — do NOT rebuild this key from the raw request body. The DB
+  // lookup below is citext (case-INsensitive), so a case-sensitive key would
+  // let `Victim@…` and `victim@…` hit the same user row via DIFFERENT limiter
+  // buckets: case-rotating the address then multiplies the 10/60s ceiling by
+  // the number of variants and nullifies this defense entirely. See the
+  // NormalizedEmail note in packages/shared/src/schemas.ts.
   const clientIp = request.headers.get("CF-Connecting-IP");
   const limited = await enforceRateLimit(
     env.LOGIN_LIMITER,
@@ -194,14 +214,27 @@ export async function handleLogin(
   // password we JUST verified (plaintext still in hand) with the CURRENT
   // params, so the row silently upgrades on the user's next successful login
   // instead of requiring a bulk migration.
+  //
+  // ⚠️ NEVER FAILS THE LOGIN. This is an OPPORTUNISTIC upgrade riding on an
+  // authentication that has ALREADY succeeded — the caller proved they know the
+  // password at step 5. Letting a transient Postgres blip here escape would
+  // turn a correct password into a 500 and lock a legitimate user out over
+  // something entirely incidental to their credentials. On failure we log and
+  // proceed: the user gets their session, the row keeps its old (still valid,
+  // merely weaker) hash, and the next successful login retries the upgrade.
   if (needsRehash(row.password_hash)) {
-    const freshHash = await hashPassword(password);
-    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-      c.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
-        freshHash,
-        row.id,
-      ]),
-    );
+    try {
+      const freshHash = await hashPassword(password);
+      await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+        c.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
+          freshHash,
+          row.id,
+        ]),
+      );
+    } catch (err) {
+      // The error only — NEVER the password, the old hash, or the new one.
+      console.error("password rehash-on-upgrade failed; login proceeds", err);
+    }
   }
 
   // ---- 7. Security epoch ------------------------------------------------------

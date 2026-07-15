@@ -16,9 +16,10 @@ import type { SessionData } from "@thinkersjournal/shared";
 import type { computeHash } from "argon2id/lib/setup.js";
 
 import worker from "../src";
-import { hashPassword } from "../src/auth/password";
+import { hashPassword, needsRehash } from "../src/auth/password";
 import { readSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
+import { DUMMY_HASH } from "../src/routes/login";
 
 /**
  * Task 15 — `POST /auth/login`. Runs in the POOL project (real workerd): needs
@@ -197,6 +198,13 @@ describe("POST /auth/login", () => {
       const passwordHash = await hashPassword(VALID_PASSWORD);
       const userId = await insertUser(email, passwordHash);
 
+      // ⚠️ BUMP FIRST — a fresh user's epoch is 0, so asserting the session's
+      // epoch against a never-bumped DO would pass just as happily for a
+      // hardcoded `securityEpoch: 0` that never consulted the DO at all.
+      // Bumping to a NON-DEFAULT value is what actually pins "the route reads
+      // this from the DO" (same precedent as test/signup.test.ts).
+      await env.USER_SECURITY.getByName(userId).bumpEpoch();
+
       const response = await login(validBody(email));
 
       expect(response.status).toBe(200);
@@ -207,6 +215,8 @@ describe("POST /auth/login", () => {
       expect(session?.userId).toBe(userId);
       expect(session?.roles).toEqual([]);
 
+      // Both the concrete post-bump value and agreement with the DO.
+      expect(session?.securityEpoch).toBe(1);
       const epoch = await env.USER_SECURITY.getByName(userId).getEpoch();
       expect(session?.securityEpoch).toBe(epoch);
     },
@@ -236,6 +246,12 @@ describe("POST /auth/login", () => {
         nonexistentEmail.text(),
       ]);
       expect(wrongText).toBe(nonexistentText);
+
+      // ...and from the HEADERS too, not just the body: a differing
+      // `content-type` (or any other header) would be an oracle on its own.
+      // Pinned explicitly so the property survives the shared `unauthorized()`
+      // helper ever being split into two call-site-specific responses.
+      expect([...wrongPassword.headers]).toEqual([...nonexistentEmail.headers]);
 
       // Neither failure issued a session.
       expect(wrongPassword.headers.get("Set-Cookie")).toBeNull();
@@ -329,4 +345,73 @@ describe("POST /auth/login", () => {
 
     expect(response.status).toBe(400);
   });
+
+  /**
+   * The timing-equalization control (src/routes/login.ts) is otherwise
+   * UNTESTABLE without measuring wall-clock time, which would flake. This
+   * deterministic assertion pins the invariant that actually matters instead.
+   *
+   * `needsRehash` returns `true` for an unparseable hash AND for one whose
+   * params have drifted from `CURRENT_ARGON2_PARAMS`, so `=== false` here
+   * simultaneously proves `DUMMY_HASH` is (a) well-formed — a malformed string
+   * would make `verifyPassword` bail in ~0ms via `parsePhc`, silently deleting
+   * the control — and (b) still costed at the CURRENT params, so the no-row
+   * path burns the same Argon2id work as a real wrong-password verify.
+   *
+   * ⚠️ If this reddens, DO NOT relax it: regenerate `DUMMY_HASH` at the new
+   * `CURRENT_ARGON2_PARAMS` (see its comment in src/routes/login.ts).
+   */
+  it("keeps DUMMY_HASH well-formed and at CURRENT_ARGON2_PARAMS (timing-control guard)", () => {
+    expect(needsRehash(DUMMY_HASH)).toBe(false);
+  });
+
+  /**
+   * ⚠️ BRUTE-FORCE BYPASS REGRESSION. `users.email` is citext, so the login
+   * lookup is case-INsensitive — but the limiter key is built from the parsed
+   * email. If that email were NOT normalized to lowercase (see NormalizedEmail
+   * in packages/shared/src/schemas.ts), `victim@…` and `Victim@…` would hit the
+   * same user row through DIFFERENT limiter buckets, handing an attacker 10
+   * fresh attempts per case variant (~2^16 for a typical address) from a single
+   * IP and nullifying LOGIN_LIMITER entirely.
+   *
+   * Removing `.toLowerCase()` from the schema must turn this test RED.
+   */
+  it(
+    "counts case-variant emails against the SAME rate-limit bucket (no case-rotation bypass)",
+    async () => {
+      const email = uniqueEmail();
+      // Same address, case-rotated: citext resolves both to one row.
+      const rotated = email.toUpperCase();
+      expect(rotated).not.toBe(email);
+
+      // Exhaust the 10/60s quota using the LOWERCASE spelling. These are
+      // nonexistent-user 401s, which is all the limiter needs to count.
+      for (let i = 0; i < 10; i++) {
+        expect((await login(validBody(email))).status).toBe(401);
+      }
+      expect((await login(validBody(email))).status).toBe(429);
+
+      // The UPPERCASE spelling must already be exhausted — it shares the bucket.
+      // Without normalization this would be a 401 (a fresh bucket) instead.
+      expect((await login(validBody(rotated))).status).toBe(429);
+    },
+    60_000,
+  );
+
+  /** Normalization must not break the citext lookup it exists to agree with. */
+  it(
+    "logs in successfully with a mixed-case spelling of a lowercase-stored email",
+    async () => {
+      const email = uniqueEmail();
+      const passwordHash = await hashPassword(VALID_PASSWORD);
+      const userId = await insertUser(email, passwordHash);
+
+      const response = await login(validBody(email.toUpperCase()));
+
+      expect(response.status).toBe(200);
+      const session = await sessionFromResponse(response);
+      expect(session?.userId).toBe(userId);
+    },
+    30_000,
+  );
 });

@@ -260,6 +260,13 @@ export async function handleSignup(
   // Cloudflare (and in tests), hence the stable placeholder for the KEY — but
   // `undefined`, not the placeholder, is what reaches Turnstile below, which
   // expects a real IP or none at all.
+  //
+  // ⚠️ `email` here is the PARSED value, which `SignupInput` has already
+  // lowercased — do NOT rebuild this key from the raw request body. The dup
+  // check below is citext (case-INsensitive), so a case-sensitive key would let
+  // `Victim@…` and `victim@…` contend for the same row via DIFFERENT limiter
+  // buckets, multiplying this limiter's ceiling by the number of case variants.
+  // See the NormalizedEmail note in packages/shared/src/schemas.ts.
   const clientIp = request.headers.get("CF-Connecting-IP");
   const limited = await enforceRateLimit(
     env.SIGNUP_LIMITER,
