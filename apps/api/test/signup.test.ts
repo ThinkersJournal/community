@@ -6,12 +6,13 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
+import { TEST_LAST_TOKEN_KEY } from "../src/auth/email-verify";
 import { withClient } from "../src/db/client";
 
 /**
  * Task 14 — `POST /auth/signup`, the route that composes every auth primitive
  * built so far (zod validation -> rate limit -> Turnstile -> origin -> dup
- * check -> tx -> verification email -> epoch -> session).
+ * check -> epoch bump -> tx -> verification email -> epoch -> session).
  *
  * Runs in the POOL project (real workerd): needs `SESSIONS` KV,
  * `HYPERDRIVE_FRESH`, `USER_SECURITY` (DO) and `SIGNUP_LIMITER`.
@@ -25,6 +26,13 @@ import { withClient } from "../src/db/client";
 
 /** An allowlisted origin (src/auth/csrf.ts) — signup 403s without one. */
 const ORIGIN = "https://thinkersjournal.com";
+
+/**
+ * The origin every emailed verification link must be built on (production only —
+ * see `verificationLinkOrigin` in src/routes/signup.ts). NOT derived from the
+ * request URL, and NOT every origin `checkOrigin` accepts.
+ */
+const CANONICAL_ORIGIN = "https://thinkersjournal.com";
 
 const VALID_PASSWORD = "correct-horse-battery-staple";
 
@@ -119,6 +127,49 @@ function validBody(email: string, password: string = VALID_PASSWORD) {
   return { email, password, turnstileToken: "dummy-turnstile-token" };
 }
 
+/** The `Cookie` header value carrying the session a signup response just set. */
+function cookieFrom(response: Response): string {
+  return response.headers.get("Set-Cookie")!.split(";")[0]!;
+}
+
+/** The parsed Postmark JSON body of the Nth captured send. */
+function postmarkBody(calls: RequestInit[], index = 0): Record<string, unknown> {
+  return JSON.parse(String(calls[index]!.body)) as Record<string, unknown>;
+}
+
+/**
+ * The RAW verification token signup just issued, read from the TEST-ONLY stash
+ * (`TEST_ROUTES === "1"`; src/auth/email-verify.ts). Holds only the MOST RECENT
+ * token, so read it immediately after the signup whose token you want.
+ */
+async function lastVerifyToken(): Promise<string> {
+  const token = await env.SESSIONS.get(TEST_LAST_TOKEN_KEY);
+  expect(token).not.toBeNull();
+  return token!;
+}
+
+/** `GET /verify-email?token=…` through the Worker's router, optionally signed in. */
+async function verifyEmail(token: string, cookie?: string): Promise<Response> {
+  const ctx = createExecutionContext();
+  const response = await worker.fetch(
+    new Request(
+      `https://api.test/verify-email?token=${encodeURIComponent(token)}`,
+      cookie === undefined ? undefined : { headers: { Cookie: cookie } },
+    ),
+    env,
+    ctx,
+  );
+  await waitOnExecutionContext(ctx);
+  return response;
+}
+
+/** The `users.id` for `email`. */
+async function userIdFor(email: string): Promise<string> {
+  const rows = await query("SELECT id FROM users WHERE email = $1", [email]);
+  expect(rows).toHaveLength(1);
+  return String(rows[0]!.id);
+}
+
 beforeEach(async () => {
   // Sessions AND verification tokens both live in SESSIONS; clear it so each
   // case observes only its own writes.
@@ -180,8 +231,74 @@ describe("POST /auth/signup", () => {
     const { keys } = await env.SESSIONS.list({ prefix: "verify-email:" });
     expect(keys).toHaveLength(1);
 
-    // And the verification email was sent.
+    // And the verification email was sent ...
     expect(postmarkCalls).toHaveLength(1);
+
+    // ... carrying a link on the CANONICAL production origin.
+    //
+    // ⚠️ Asserting the LINK, not just that a send happened: the origin here is
+    // the file's key security decision. `new URL(request.url).origin` would be
+    // the obvious "simplification", and it is Host-header controlled — an
+    // attacker could put a link to a host THEY control into mail sent from our
+    // own confirmed sender. A send-count assertion alone would not notice.
+    const body = postmarkBody(postmarkCalls);
+    expect(String(body.TextBody)).toContain(
+      `${CANONICAL_ORIGIN}/verify-email?token=`,
+    );
+    expect(String(body.HtmlBody)).toContain(
+      `${CANONICAL_ORIGIN}/verify-email?token=`,
+    );
+    // The Host of the request that triggered the send was `api.test` — it must
+    // appear nowhere in the mail.
+    expect(String(body.TextBody)).not.toContain("api.test");
+    expect(String(body.HtmlBody)).not.toContain("api.test");
+  });
+
+  /**
+   * With no `Origin`, `checkOrigin` falls back to `Referer` — but the emailed
+   * link does NOT: it pins `CANONICAL_ORIGIN`.
+   */
+  it("builds the emailed link on CANONICAL_ORIGIN when the request has only a Referer", async () => {
+    const postmarkCalls = stubFetch(true);
+    const email = uniqueEmail();
+
+    const response = await signup(validBody(email), {
+      Referer: `${ORIGIN}/signup`,
+    });
+
+    expect(response.status).toBe(201);
+    expect(String(postmarkBody(postmarkCalls).TextBody)).toContain(
+      `${CANONICAL_ORIGIN}/verify-email?token=`,
+    );
+  });
+
+  /**
+   * `ALLOWED_ORIGINS` (src/auth/csrf.ts) includes `http://localhost:8787` for
+   * dev, and that is fine for CSRF — a remote attacker's browser cannot forge
+   * that Origin against a developer's machine. But a NON-BROWSER client (curl, a
+   * script) can set any Origin it likes against production, so honoring it for
+   * the emailed link would deliver an unusable localhost link into a real
+   * victim's inbox: verification-denial griefing. The link origin is therefore
+   * restricted to PRODUCTION origins only.
+   */
+  it("never builds the emailed link on a non-production origin, even an allowlisted one", async () => {
+    const postmarkCalls = stubFetch(true);
+    const email = uniqueEmail();
+
+    const response = await signup(validBody(email), {
+      Origin: "http://localhost:8787",
+    });
+
+    // The origin is allowlisted, so the signup itself still succeeds ...
+    expect(response.status).toBe(201);
+
+    // ... but the emailed link points at production, NOT localhost.
+    const body = postmarkBody(postmarkCalls);
+    expect(String(body.TextBody)).toContain(
+      `${CANONICAL_ORIGIN}/verify-email?token=`,
+    );
+    expect(String(body.TextBody)).not.toContain("localhost");
+    expect(String(body.HtmlBody)).not.toContain("localhost");
   });
 
   it("409s on a duplicate VERIFIED email", async () => {
@@ -233,6 +350,134 @@ describe("POST /auth/signup", () => {
       [after[0]!.id],
     );
     expect(profiles).toHaveLength(1);
+  });
+
+  /**
+   * Re-signup changes the account's password, so every session issued against
+   * the OLD one must die. See the ordering note at step 6 of
+   * src/routes/signup.ts.
+   */
+  it("bumps the security epoch on a re-signup, revoking the previous claimant's sessions", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+
+    expect((await signup(validBody(email))).status).toBe(201);
+    const userId = await userIdFor(email);
+    const epochBefore = await env.USER_SECURITY.getByName(userId).getEpoch();
+
+    expect(
+      (await signup(validBody(email, "a-completely-different-password"))).status,
+    ).toBe(201);
+
+    expect(await env.USER_SECURITY.getByName(userId).getEpoch()).toBe(
+      epochBefore + 1,
+    );
+  });
+
+  /**
+   * The NEW session must carry the POST-bump epoch — reading the epoch before
+   * the bump would stamp the session with a value the bump immediately
+   * invalidates, logging the new owner straight back out.
+   */
+  it("gives the re-signup's own session a live (post-bump) epoch", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+
+    expect((await signup(validBody(email))).status).toBe(201);
+    const response = await signup(
+      validBody(email, "a-completely-different-password"),
+    );
+    expect(response.status).toBe(201);
+
+    // The clearest proof the new session is live: it can verify the account.
+    const verify = await verifyEmail(
+      await lastVerifyToken(),
+      cookieFrom(response),
+    );
+    expect(verify.status).toBe(200);
+  });
+
+  it("issues a session and token that verify the account end to end", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+
+    const response = await signup(validBody(email));
+    expect(response.status).toBe(201);
+    const token = await lastVerifyToken();
+    const cookie = cookieFrom(response);
+
+    const verify = await verifyEmail(token, cookie);
+
+    expect(verify.status).toBe(200);
+    const rows = await query(
+      "SELECT email_verified_at FROM users WHERE email = $1",
+      [email],
+    );
+    expect(rows[0]!.email_verified_at).not.toBeNull();
+
+    // Still ONE-TIME on success: the same link cannot be replayed.
+    expect((await verifyEmail(token, cookie)).status).toBe(400);
+  });
+
+  /**
+   * ⚠️ THE ACCOUNT-TAKEOVER REGRESSION — the reason `GET /verify-email` requires
+   * authentication at all. Read the header of src/routes/verify-email.ts first.
+   *
+   * The chain this pins:
+   *   1. The victim signs up  -> session S1, token T1 emailed to the victim.
+   *   2. An attacker re-signs-up the SAME (still unverified) address: the
+   *      account's password becomes the ATTACKER'S, and T2 is emailed to the
+   *      victim too.
+   *   3. The victim clicks T1 — the mail they were expecting.
+   *
+   * Historically step 3 stamped `email_verified_at` unconditionally, so the
+   * VICTIM'S OWN CLICK promoted an account holding the ATTACKER'S password to
+   * verified: the attacker ended up owning a verified account and the victim's
+   * password no longer worked. Note the attacker never touches the link — the
+   * victim's legitimate click is the exploit.
+   *
+   * Both halves of the fix are asserted, because either alone is insufficient:
+   *   (a) the re-signup BUMPED the epoch, making S1 stale, and
+   *   (b) T1 + S1 no longer verifies.
+   *
+   * Removing the `bumpEpoch()` in signup, or the epoch check in verify-email,
+   * must turn this test RED. Both mutations were run; both redden it here.
+   */
+  it("does not let a victim's own verification link verify an account an attacker took over", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+
+    // 1. The victim signs up: session S1, verification token T1.
+    const victim = await signup(validBody(email, "victim-password-here"));
+    expect(victim.status).toBe(201);
+    const s1 = cookieFrom(victim);
+    // Read T1 NOW — the stash holds only the most recent token, and the attacker
+    // is about to issue T2 over it.
+    const t1 = await lastVerifyToken();
+    const userId = await userIdFor(email);
+    const epochBefore = await env.USER_SECURITY.getByName(userId).getEpoch();
+
+    // 2. The attacker re-signs-up the same still-unverified address.
+    const attacker = await signup(validBody(email, "attacker-password-here"));
+    expect(attacker.status).toBe(201);
+
+    // (a) The epoch bumped, so S1 — issued against the victim's password — is
+    //     now stale. This is what the verify-email epoch check keys off.
+    expect(await env.USER_SECURITY.getByName(userId).getEpoch()).toBe(
+      epochBefore + 1,
+    );
+
+    // (b) The victim clicks T1 while still holding S1: NO verification.
+    const clicked = await verifyEmail(t1, s1);
+    expect(clicked.status).toBe(401);
+    expect(await clicked.json()).toEqual({ code: "LOGIN_REQUIRED" });
+
+    // The account is STILL UNVERIFIED — the takeover did not complete.
+    const rows = await query(
+      "SELECT email_verified_at FROM users WHERE id = $1",
+      [userId],
+    );
+    expect(rows[0]!.email_verified_at).toBeNull();
   });
 
   it("400s a password shorter than 12 characters (zod)", async () => {

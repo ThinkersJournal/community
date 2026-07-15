@@ -5,10 +5,20 @@
  * address being proven. It follows the same hash-before-store property as
  * sessions (src/auth/session.ts): KV holds only the SHA-256 hash of the token,
  * so a leaked/dumped KV namespace never reveals a usable verification link.
- * Consuming a token DELETES its key, so a replayed link cannot re-verify.
+ * Redeeming a token DELETES its key, so a replayed link cannot re-verify.
  *
  * Tokens live in the `SESSIONS` KV namespace under a `verify-email:` prefix,
  * with a 24h TTL.
+ *
+ * ⚠️ LOOKUP AND DELETE ARE DELIBERATELY SEPARATE (`peekVerificationToken` /
+ * `deleteVerificationToken`) rather than one `consume` call. `GET /verify-email`
+ * must resolve a token to its user id BEFORE it can run its authentication
+ * checks (the token is what says WHO is being verified), but a request that
+ * fails those checks must NOT burn the token: a legitimate user who clicks the
+ * link before signing in has to be able to click that same link again after
+ * logging in. The route therefore peeks, authenticates, and only then deletes —
+ * keeping the token one-time ON SUCCESS while leaving it usable after a
+ * rejected attempt. Do not recombine these into a single consume-on-lookup.
  */
 
 const VERIFY_TTL_SECONDS = 86_400; // 24h
@@ -81,35 +91,46 @@ export async function createVerificationToken(
 }
 
 /**
- * Redeem a verification token, returning the user id it was minted for, or
- * `null` if it is unknown/expired/already used.
+ * Look up a verification token WITHOUT consuming it, returning the user id it
+ * was minted for, or `null` if it is unknown/expired/already redeemed.
  *
- * ONE-TIME: a successful lookup deletes the key before returning, so a replayed
- * link (a forwarded email, a link in browser history, a leaked referrer) cannot
- * verify the account a second time.
- *
- * ⚠️ NOT ATOMIC: this is a get-then-delete, so two requests racing the same
- * token can both observe it before either delete lands, and both will succeed.
- * That is harmless HERE because the only effect is an idempotent
- * `UPDATE users SET email_verified_at = now()` — a double-verify just restamps
- * the column. Do NOT reuse this primitive for password reset, invites,
- * single-use payment/credit operations, or anything where a double-consume
- * grants something: those need a real atomic compare-and-delete (e.g. a DO or a
- * conditional SQL UPDATE), which KV cannot provide.
+ * Does NOT delete: the caller decides whether the token was actually redeemed.
+ * `GET /verify-email` (src/routes/verify-email.ts) needs the user id to run its
+ * auth checks, and must leave the token intact when those checks fail — see the
+ * file header. Callers that DO redeem the token MUST follow up with
+ * `deleteVerificationToken` to keep it one-time.
  */
-export async function consumeVerificationToken(
+export async function peekVerificationToken(
   env: Env,
   token: string,
 ): Promise<string | null> {
-  const key = await verifyKey(token);
+  return await env.SESSIONS.get(await verifyKey(token));
+}
 
-  const userId = await env.SESSIONS.get(key);
-  if (userId === null) {
-    return null;
-  }
-
-  await env.SESSIONS.delete(key);
-  return userId;
+/**
+ * Delete a verification token's key, making it unusable. Idempotent — deleting
+ * an unknown/already-deleted token is a no-op.
+ *
+ * ONE-TIME: the redeeming caller invokes this on its success path, so a replayed
+ * link (a forwarded email, a link in browser history, a leaked referrer) cannot
+ * verify the account a second time.
+ *
+ * ⚠️ NOT ATOMIC with `peekVerificationToken`: that peek-then-delete pair means
+ * two requests racing the same token can both observe it before either delete
+ * lands, and both will succeed. That is harmless HERE because the only effect is
+ * an idempotent `UPDATE users SET email_verified_at = now()` — a double-verify
+ * just restamps the column — and because both racers must independently pass the
+ * route's authentication checks, so a race grants an attacker nothing. Do NOT
+ * reuse this pair for password reset, invites, single-use payment/credit
+ * operations, or anything where a double-redeem grants something: those need a
+ * real atomic compare-and-delete (e.g. a DO or a conditional SQL UPDATE), which
+ * KV cannot provide.
+ */
+export async function deleteVerificationToken(
+  env: Env,
+  token: string,
+): Promise<void> {
+  await env.SESSIONS.delete(await verifyKey(token));
 }
 
 /** The subset of Postmark's send response this module inspects. */

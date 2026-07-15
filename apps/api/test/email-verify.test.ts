@@ -7,25 +7,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
 import {
-  consumeVerificationToken,
   createVerificationToken,
+  deleteVerificationToken,
+  peekVerificationToken,
   sendVerificationEmail,
   TEST_LAST_TOKEN_KEY,
 } from "../src/auth/email-verify";
+import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
 
 /**
  * Task 12 — email verification: one-time tokens, the Postmark send, the
  * `GET /verify-email` route, and the TEST-ONLY token-exposure route.
  *
- * Runs in the POOL project (real workerd) because it needs the `SESSIONS` KV
- * and `HYPERDRIVE_FRESH` bindings, plus the Worker's `fetch` handler.
+ * Runs in the POOL project (real workerd) because it needs the `SESSIONS` KV,
+ * `HYPERDRIVE_FRESH` and `USER_SECURITY` (DO) bindings, plus the Worker's
+ * `fetch` handler.
  *
  * `cloudflare:test` does NOT export undici's `fetchMock` in the installed
  * `@cloudflare/vitest-pool-workers@0.18.4` (see test/turnstile.test.ts for the
  * verification), so the Postmark test stubs the global `fetch` with
  * `vi.stubGlobal` and restores it in `afterEach` — otherwise the stub leaks
  * into sibling pool test files sharing this workerd isolate.
+ *
+ * ⚠️ `GET /verify-email` REQUIRES AUTHENTICATION (see the header of
+ * src/routes/verify-email.ts): holding the emailed link is not enough, the
+ * caller must also hold a live, non-stale session for the token's OWN user.
+ * That is what stops a victim's click on their own link from verifying an
+ * account an attacker has taken over. The end-to-end takeover regression lives
+ * in test/signup.test.ts (it needs a real re-signup); the cases here pin each
+ * individual check.
  */
 
 // `users.password_hash` is NOT NULL — a valid PHC-encoded argon2id string.
@@ -48,6 +59,45 @@ async function insertUser(): Promise<string> {
   await waitOnExecutionContext(ctx);
   createdUserIds.push(id);
   return id;
+}
+
+/**
+ * Mint a session for `userId` and return the `Cookie` header value carrying it.
+ * `createSession` hands back a full `Set-Cookie` string; the request needs only
+ * its leading `tj_session=<token>` pair.
+ *
+ * Defaults `securityEpoch` to the user's CURRENT epoch, i.e. a fresh, non-stale
+ * session — pass an explicit value (or bump the DO afterwards) to make it stale.
+ */
+async function sessionCookieFor(
+  userId: string,
+  securityEpoch?: number,
+): Promise<string> {
+  const epoch =
+    securityEpoch ?? (await env.USER_SECURITY.getByName(userId).getEpoch());
+  const { cookie } = await createSession(env, {
+    userId,
+    roles: [],
+    securityEpoch: epoch,
+    csrfSecret: "test-csrf-secret",
+    createdAt: Date.now(),
+  });
+  return cookie.split(";")[0]!;
+}
+
+/** `GET /verify-email?token=…` through the Worker's router, optionally signed in. */
+async function verifyEmail(token: string, cookie?: string): Promise<Response> {
+  const ctx = createExecutionContext();
+  const response = await worker.fetch(
+    new Request(
+      `https://api.test/verify-email?token=${encodeURIComponent(token)}`,
+      cookie === undefined ? undefined : { headers: { Cookie: cookie } },
+    ),
+    env,
+    ctx,
+  );
+  await waitOnExecutionContext(ctx);
+  return response;
 }
 
 /** Read a user's `email_verified_at` through the FRESH (cache-disabled) binding. */
@@ -93,17 +143,38 @@ afterEach(async () => {
 });
 
 describe("verification tokens", () => {
-  it("consumes a token exactly once (a replay returns null)", async () => {
+  /**
+   * The peek is NON-consuming BY DESIGN, and that is a security property, not an
+   * implementation detail: `GET /verify-email` must resolve a token to its user
+   * before it can authenticate the caller, and a caller who FAILS those checks
+   * must not have burned the token — a legitimate user who clicks the link
+   * before signing in has to be able to click it again afterwards.
+   */
+  it("peeks a token without consuming it (repeatable)", async () => {
     const userId = crypto.randomUUID();
     const token = await createVerificationToken(env, userId);
 
-    expect(await consumeVerificationToken(env, token)).toBe(userId);
-    // ONE-TIME: the first consume deleted the key, so a replay finds nothing.
-    expect(await consumeVerificationToken(env, token)).toBeNull();
+    expect(await peekVerificationToken(env, token)).toBe(userId);
+    expect(await peekVerificationToken(env, token)).toBe(userId);
+  });
+
+  it("makes a token unusable once deleted (one-time on redemption)", async () => {
+    const userId = crypto.randomUUID();
+    const token = await createVerificationToken(env, userId);
+
+    await deleteVerificationToken(env, token);
+
+    expect(await peekVerificationToken(env, token)).toBeNull();
   });
 
   it("returns null for an unknown token", async () => {
-    expect(await consumeVerificationToken(env, "not-a-real-token")).toBeNull();
+    expect(await peekVerificationToken(env, "not-a-real-token")).toBeNull();
+  });
+
+  it("deletes an unknown token without throwing (idempotent)", async () => {
+    await expect(
+      deleteVerificationToken(env, "not-a-real-token"),
+    ).resolves.toBeUndefined();
   });
 
   it("stores the token HASHED — KV never holds the raw token", async () => {
@@ -138,15 +209,7 @@ describe("GET /verify-email", () => {
     expect(await readVerifiedAt(userId)).toBeNull();
 
     const token = await createVerificationToken(env, userId);
-    const ctx = createExecutionContext();
-    const response = await worker.fetch(
-      new Request(
-        `https://api.test/verify-email?token=${encodeURIComponent(token)}`,
-      ),
-      env,
-      ctx,
-    );
-    await waitOnExecutionContext(ctx);
+    const response = await verifyEmail(token, await sessionCookieFor(userId));
 
     expect(response.status).toBe(200);
     // Read back through FRESH (cache-disabled) — a CACHED read-after-write here
@@ -155,15 +218,9 @@ describe("GET /verify-email", () => {
   });
 
   it("rejects an unknown token with a 400 (not a 500)", async () => {
-    const ctx = createExecutionContext();
-    const response = await worker.fetch(
-      new Request("https://api.test/verify-email?token=bogus"),
-      env,
-      ctx,
-    );
-    await waitOnExecutionContext(ctx);
+    const cookie = await sessionCookieFor(await insertUser());
 
-    expect(response.status).toBe(400);
+    expect((await verifyEmail("bogus", cookie)).status).toBe(400);
   });
 
   it("rejects a missing token with a 400 (not a 500)", async () => {
@@ -181,15 +238,84 @@ describe("GET /verify-email", () => {
   it("does not re-verify on a replayed token", async () => {
     const userId = await insertUser();
     const token = await createVerificationToken(env, userId);
-    const url = `https://api.test/verify-email?token=${encodeURIComponent(token)}`;
+    const cookie = await sessionCookieFor(userId);
 
-    const ctx = createExecutionContext();
-    const first = await worker.fetch(new Request(url), env, ctx);
-    const second = await worker.fetch(new Request(url), env, ctx);
-    await waitOnExecutionContext(ctx);
+    const first = await verifyEmail(token, cookie);
+    const second = await verifyEmail(token, cookie);
 
     expect(first.status).toBe(200);
+    // ONE-TIME ON SUCCESS: the first verify burned the token.
     expect(second.status).toBe(400);
+  });
+
+  /**
+   * Verification REQUIRES a session — holding the emailed link is not enough.
+   * See the header of src/routes/verify-email.ts for the takeover chain this
+   * closes.
+   *
+   * The token must SURVIVE this rejection: the user hasn't done anything wrong,
+   * they just clicked the link before signing in. Burning it here would strand
+   * them with no way to verify (there is no resend endpoint until M1), which is
+   * why the route peeks rather than consumes.
+   */
+  it("401s LOGIN_REQUIRED with no session, leaving the user unverified and the token UNBURNED", async () => {
+    const userId = await insertUser();
+    const token = await createVerificationToken(env, userId);
+
+    const response = await verifyEmail(token);
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ code: "LOGIN_REQUIRED" });
+    expect(await readVerifiedAt(userId)).toBeNull();
+
+    // THE TOKEN IS STILL GOOD: sign in and click the SAME link again.
+    const retry = await verifyEmail(token, await sessionCookieFor(userId));
+    expect(retry.status).toBe(200);
+    expect(await readVerifiedAt(userId)).not.toBeNull();
+  });
+
+  /**
+   * A session for SOMEONE ELSE must not verify this token's user — otherwise any
+   * account could verify any address whose link it got hold of.
+   */
+  it("rejects a session belonging to a DIFFERENT user than the token's", async () => {
+    const tokenUserId = await insertUser();
+    const otherUserId = await insertUser();
+    const token = await createVerificationToken(env, tokenUserId);
+
+    const response = await verifyEmail(
+      token,
+      await sessionCookieFor(otherUserId),
+    );
+
+    expect(response.status).toBe(403);
+    // The SAME generic body as every other auth failure: a distinct "not your
+    // token" would let an attacker probe whose token they hold.
+    expect(await response.json()).toEqual({ code: "LOGIN_REQUIRED" });
+    expect(await readVerifiedAt(tokenUserId)).toBeNull();
+  });
+
+  /**
+   * ⚠️ THE LOAD-BEARING CHECK. A session issued BEFORE the user's last
+   * `bumpEpoch()` proves knowledge of a password that is no longer current, so
+   * it must not verify. Without this the whole auth gate is theatre: the
+   * victim's pre-takeover session is a live session for the right user, so it
+   * would satisfy every other check and the takeover in
+   * src/routes/verify-email.ts's header would stand.
+   */
+  it("401s LOGIN_REQUIRED for a STALE session (epoch bumped after it was issued)", async () => {
+    const userId = await insertUser();
+    const token = await createVerificationToken(env, userId);
+    const cookie = await sessionCookieFor(userId);
+
+    // Everything the account holds is revoked — e.g. a re-signup took it over.
+    await env.USER_SECURITY.getByName(userId).bumpEpoch();
+
+    const response = await verifyEmail(token, cookie);
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ code: "LOGIN_REQUIRED" });
+    expect(await readVerifiedAt(userId)).toBeNull();
   });
 });
 

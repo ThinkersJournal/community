@@ -9,11 +9,13 @@
  *   3. Turnstile           — bot defense.
  *   4. origin check        — CSRF, BEFORE any DB touch.
  *   5. dup check (FRESH)   — verified dup -> 409; unverified dup -> re-signup.
- *   6. single transaction  — create (or take over) the user + profile.
- *   7. verification email  — never fails the signup (see step note below).
- *   8. security epoch      — stamped into the session.
- *   9. session             — opaque KV token.
- *  10. 201 + Set-Cookie.
+ *   6. epoch bump          — re-signup ONLY: revoke every session on the account
+ *                            being taken over, BEFORE its password changes.
+ *   7. single transaction  — create (or take over) the user + profile.
+ *   8. verification email  — never fails the signup (see step note below).
+ *   9. security epoch      — read AFTER step 6, stamped into the session.
+ *  10. session             — opaque KV token.
+ *  11. 201 + Set-Cookie.
  *
  * Only `checkOrigin` applies here, not the double-submit `checkCsrf`: there is
  * no session yet at signup time, so there is no `csrfSecret` to echo back.
@@ -47,8 +49,8 @@ const USERNAME_BASE_MAX = 20;
 const USERNAME_ATTEMPTS = 3;
 
 /**
- * The canonical origin verification links point at when the request carries no
- * `Origin` header.
+ * The origin verification links point at unless the request proves it came from
+ * another PRODUCTION origin (see `verificationLinkOrigin`).
  *
  * ⚠️ NOT `new URL(request.url).origin`: that is derived from the client-supplied
  * `Host` header, which would let an attacker point the verification link in mail
@@ -56,6 +58,49 @@ const USERNAME_ATTEMPTS = 3;
  * vector (see the escaping note in src/auth/email-verify.ts).
  */
 const CANONICAL_ORIGIN = "https://thinkersjournal.com";
+
+/**
+ * The ONLY origins an emailed verification link may point at.
+ *
+ * ⚠️ Deliberately NARROWER than `ALLOWED_ORIGINS` in src/auth/csrf.ts, and
+ * deliberately a SEPARATE list rather than an import — the two answer different
+ * questions and must be free to diverge. `checkOrigin` asks "may this browser
+ * submit this form?", for which allowing `http://localhost:8787` is fine: a
+ * remote attacker's browser cannot forge that Origin against a developer's
+ * machine. This list asks "where may we send a real user's verification link?",
+ * and localhost is NOT fine there, because a NON-BROWSER client (curl, a script)
+ * can set any Origin it likes against production, pass `checkOrigin`, and get a
+ * `http://localhost:8787/verify-email?token=…` link delivered into the victim's
+ * inbox — a link that can never work, i.e. verification-denial griefing.
+ *
+ * Consequence for LOCAL DEV: a signup at localhost gets a link pointing at
+ * production. That is intentional. Local flows use the gated
+ * `GET /__test/last-verify-token` route (src/routes/__test.ts) to fetch the raw
+ * token instead — do NOT re-add localhost here to make dev email links clickable.
+ */
+const VERIFICATION_LINK_ORIGINS: Set<string> = new Set([
+  "https://thinkersjournal.com",
+  "https://www.thinkersjournal.com",
+]);
+
+/**
+ * The origin to build this signup's verification link on: the request's `Origin`
+ * when it is a production origin (so a signup on `www.` keeps the user on `www.`),
+ * and `CANONICAL_ORIGIN` for EVERYTHING else — a missing Origin, a `Referer`-only
+ * request, and any non-production origin `checkOrigin` tolerates.
+ *
+ * Fails SAFE by construction: the only values that can ever be returned are the
+ * members of `VERIFICATION_LINK_ORIGINS` and `CANONICAL_ORIGIN`, none of which
+ * are attacker-influenced. `Referer` is deliberately NOT consulted — it is a
+ * weaker signal than `Origin` and every value it could contribute is already
+ * covered by the canonical fallback.
+ */
+function verificationLinkOrigin(request: Request): string {
+  const origin = request.headers.get("Origin");
+  return origin !== null && VERIFICATION_LINK_ORIGINS.has(origin)
+    ? origin
+    : CANONICAL_ORIGIN;
+}
 
 /** Base64url-encode (URL-safe, no padding) raw bytes — RFC 4648 §5. */
 function base64urlEncode(bytes: Uint8Array): string {
@@ -146,8 +191,26 @@ async function insertProfile(client: Client, userId: string, email: string): Pro
       await client.query("RELEASE SAVEPOINT profile_insert");
       return;
     } catch (err) {
-      await client.query("ROLLBACK TO SAVEPOINT profile_insert");
-      if (!isUniqueViolation(err) || attempt === USERNAME_ATTEMPTS) {
+      // The recovery gets its OWN try/catch so it cannot REPLACE the root error:
+      // on a dead connection this ROLLBACK throws too, and an escaping rollback
+      // failure would bury `err` — the actual cause — leaving a "connection
+      // terminated" in the logs with no trace of what really went wrong.
+      let recovered = true;
+      try {
+        await client.query("ROLLBACK TO SAVEPOINT profile_insert");
+      } catch (rollbackErr) {
+        recovered = false;
+        console.error(
+          "ROLLBACK TO SAVEPOINT after a failed profile insert failed",
+          rollbackErr,
+        );
+      }
+
+      // Retry ONLY a username collision we actually rolled back: without the
+      // savepoint rollback the transaction stays poisoned ("current transaction
+      // is aborted"), so a retry — and the COMMIT — would fail anyway. Either
+      // way `err`, not the rollback failure, is what propagates.
+      if (!recovered || !isUniqueViolation(err) || attempt === USERNAME_ATTEMPTS) {
         throw err;
       }
     }
@@ -245,7 +308,35 @@ export async function handleSignup(
   // pooled connection for the duration of every signup.
   const passwordHash = await hashPassword(password);
 
-  // ---- 6. Single transaction -----------------------------------------------
+  // ---- 6. Epoch bump — re-signup ONLY --------------------------------------
+  // ⚠️ LOAD-BEARING SECURITY STEP. Taking over an unverified account changes its
+  // password, so every session issued against the OLD password must die. Bumping
+  // the epoch does that in O(1): each of those sessions carries a now-stale
+  // `securityEpoch` and fails the revocation check (src/routes/verify-email.ts).
+  //
+  // This is what forces the DISPLACED party to re-authenticate with the password
+  // the account holds NOW, and it is half of the account-takeover fix documented
+  // at the top of src/routes/verify-email.ts — WITHOUT it, the previous
+  // claimant's surviving session silently satisfies that route's auth checks and
+  // their click on the old emailed link verifies an account holding SOMEONE
+  // ELSE'S password. Do not remove; test/signup.test.ts pins this.
+  //
+  // ORDER — BEFORE the password changes, not after. Revoke-then-mutate is the
+  // fail-safe direction: if this call throws we 500 with the OLD password still
+  // in place and nothing granted, whereas mutating first and crashing before the
+  // bump would leave the NEW password live alongside UNREVOKED old sessions —
+  // exactly the takeover state. The cost of this ordering is that a bump
+  // followed by a failed transaction logs the previous claimant out of an
+  // account nobody took over; harmless, and unverified accounts cannot mutate
+  // content anyway (src/auth/pipeline.ts).
+  //
+  // Step 9 reads the epoch back AFTER this, so the session minted below carries
+  // the POST-bump value and does not invalidate itself.
+  if (existing !== null) {
+    await env.USER_SECURITY.getByName(existing.id).bumpEpoch();
+  }
+
+  // ---- 7. Single transaction -----------------------------------------------
   const userId = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     await c.query("BEGIN");
     try {
@@ -282,26 +373,41 @@ export async function handleSignup(
       await c.query("COMMIT");
       return id;
     } catch (err) {
-      await c.query("ROLLBACK");
+      // The ROLLBACK gets its OWN try/catch so it cannot REPLACE the root error:
+      // if the connection is dead, ROLLBACK throws too and `throw err` below
+      // would never run — the caller would see "connection terminated" instead of
+      // the unique violation (or whatever) that actually failed the signup.
+      try {
+        await c.query("ROLLBACK");
+      } catch (rollbackErr) {
+        console.error(
+          "ROLLBACK after a failed signup transaction failed",
+          rollbackErr,
+        );
+      }
       throw err;
     }
   });
 
-  // ---- 7. Verification email -----------------------------------------------
+  // ---- 8. Verification email -----------------------------------------------
   const token = await createVerificationToken(env, userId);
-  // `checkOrigin` passed above, so a present `Origin` is one of the allowlisted
-  // values in src/auth/csrf.ts — trusted, and correct for local dev too.
-  const origin = request.headers.get("Origin") ?? CANONICAL_ORIGIN;
-  const verifyUrl = `${origin}/verify-email?token=${encodeURIComponent(token)}`;
+  // Restricted to PRODUCTION origins — NOT every origin `checkOrigin` accepts.
+  // See `verificationLinkOrigin`: a non-browser client can set any Origin it
+  // likes, and the one place that must never honor a localhost Origin is a link
+  // we mail to a real user.
+  const verifyUrl = `${verificationLinkOrigin(request)}/verify-email?token=${encodeURIComponent(token)}`;
   // NEVER throws (src/auth/email-verify.ts): the account already exists by now,
   // so a Postmark outage must not turn a successful signup into a 500. The user
   // can request another email.
   await sendVerificationEmail(env, email, verifyUrl);
 
-  // ---- 8. Security epoch ---------------------------------------------------
+  // ---- 9. Security epoch ---------------------------------------------------
+  // Read AFTER step 6's bump, so a re-signup's new session carries the POST-bump
+  // epoch. Reading it before the bump would stamp the session with a value the
+  // bump immediately invalidates — logging the new owner straight back out.
   const securityEpoch = await env.USER_SECURITY.getByName(userId).getEpoch();
 
-  // ---- 9. Session ----------------------------------------------------------
+  // ---- 10. Session ---------------------------------------------------------
   const { cookie } = await createSession(env, {
     userId,
     // No roles at signup: a fresh account is a plain member. Roles are granted
@@ -315,6 +421,6 @@ export async function handleSignup(
     createdAt: Date.now(),
   });
 
-  // ---- 10. 201 + Set-Cookie ------------------------------------------------
+  // ---- 11. 201 + Set-Cookie ------------------------------------------------
   return json({ userId }, 201, { "Set-Cookie": cookie });
 }
