@@ -9,14 +9,14 @@
  *                            and the Argon2id hash, which is deliberately
  *                            expensive and therefore a DoS lever if unbounded).
  *   4. Turnstile           — bot defense.
- *   5. dup check (FRESH)   — verified dup -> 409; unverified dup -> re-signup.
- *   6. epoch bump          — re-signup ONLY: revoke every session on the account
- *                            being taken over, BEFORE its password changes.
- *   7. single transaction  — create (or take over) the user + profile.
- *   8. verification email  — never fails the signup (see step note below).
- *   9. security epoch      — read AFTER step 6, stamped into the session.
- *  10. session             — opaque KV token.
- *  11. 201 + Set-Cookie.
+ *   5. atomic upsert (FRESH) — ONE transaction, ONE guarded statement:
+ *                            verified dup -> 409; unverified dup -> re-signup;
+ *                            new -> create. Contains the epoch bump, which is
+ *                            issued BEFORE the COMMIT (see the step's note).
+ *   6. verification email  — never fails the signup (see step note below).
+ *   7. security epoch      — read AFTER the bump, stamped into the session.
+ *   8. session             — opaque KV token.
+ *   9. 201 + Set-Cookie.
  *
  * ⚠️ ORIGIN BEFORE THE LIMITER — this is a DELIBERATE deviation from the task
  * brief's literal step order, and it matches the rule src/auth/pipeline.ts
@@ -107,13 +107,24 @@ function generateUsername(email: string): string {
  * so without rolling back to a savepoint the retry — and the COMMIT — would fail
  * too. Only a unique violation is retried; anything else propagates and rolls
  * the whole signup back.
+ *
+ * ⚠️ TWO DIFFERENT UNIQUE INDEXES, ONLY ONE OF THEM SWALLOWED. `ON CONFLICT
+ * (user_id) DO NOTHING` names the PK alone, so a re-signup over a user that
+ * ALREADY has a profile is a silent no-op (that is the point — the caller runs
+ * this on every path and no longer has to assume the row is there). A
+ * `profiles.username` collision is a different index, is NOT covered by that
+ * conflict target, and still surfaces as 23505 — which is exactly what the retry
+ * loop below needs, since the mint-a-new-suffix recovery only makes sense for
+ * the username. Do not widen the target to `DO NOTHING` on every conflict: that
+ * would swallow username collisions into a signup that silently has no profile.
  */
 async function insertProfile(client: Client, userId: string, email: string): Promise<void> {
   for (let attempt = 1; attempt <= USERNAME_ATTEMPTS; attempt++) {
     await client.query("SAVEPOINT profile_insert");
     try {
       await client.query(
-        "INSERT INTO profiles (user_id, username) VALUES ($1, $2)",
+        `INSERT INTO profiles (user_id, username) VALUES ($1, $2)
+         ON CONFLICT (user_id) DO NOTHING`,
         [userId, generateUsername(email)],
       );
       await client.query("RELEASE SAVEPOINT profile_insert");
@@ -143,12 +154,6 @@ async function insertProfile(client: Client, userId: string, email: string): Pro
       }
     }
   }
-}
-
-/** An existing `users` row matching the signup's email, if any. */
-interface ExistingUser {
-  id: string;
-  email_verified_at: Date | null;
 }
 
 /**
@@ -247,95 +252,119 @@ export async function handleSignup(
     return forbidden();
   }
 
-  // ---- 5. Duplicate check (FRESH) ------------------------------------------
-  // `users.email` is citext, so this match is case-insensitive.
-  const existing = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    const { rows } = await c.query(
-      "SELECT id, email_verified_at FROM users WHERE email = $1",
-      [email],
-    );
-    return (rows[0] ?? null) as ExistingUser | null;
-  });
-
-  // A VERIFIED address has a proven owner — signup stops here.
-  if (existing !== null && existing.email_verified_at !== null) {
-    return errorResponse("EMAIL_TAKEN", 409);
-  }
-
   // Hashed OUTSIDE the transaction below: Argon2id is deliberately slow (~19MiB,
   // 2 passes), and holding a Hyperdrive connection open across it would burn a
   // pooled connection for the duration of every signup.
   const passwordHash = await hashPassword(password);
 
-  // ---- 6. Epoch bump — re-signup ONLY --------------------------------------
-  // ⚠️ LOAD-BEARING SECURITY STEP. Taking over an unverified account changes its
-  // password, so every session issued against the OLD password must die. Bumping
-  // the epoch does that in O(1): each of those sessions carries a now-stale
-  // `securityEpoch` and fails the revocation check (src/routes/verify-email.ts).
+  // ---- 5. Atomic guarded upsert (FRESH) ------------------------------------
   //
-  // This is what forces the DISPLACED party to re-authenticate with the password
-  // the account holds NOW, and it is half of the account-takeover fix documented
-  // at the top of src/routes/verify-email.ts — WITHOUT it, the previous
-  // claimant's surviving session silently satisfies that route's auth checks and
-  // their click on the old emailed link verifies an account holding SOMEONE
-  // ELSE'S password. Do not remove; test/signup.test.ts pins this.
+  // ⚠️ ONE STATEMENT, NOT check-then-act. M0 ran `SELECT … WHERE email = $1` and
+  // then, separately, INSERTed — with the Argon2id hash above sitting BETWEEN
+  // them, which made it the widest check-then-act window in the codebase. Under
+  // a TRANSACTION-MODE pooler that is a race by construction: two concurrent
+  // signups for one address both read "no row", both INSERT, and the second dies
+  // on `users_email_key` as a 500. This is the Global Constraint the rest of the
+  // Worker already follows — "all uniqueness/races via DB constraints +
+  // INSERT … ON CONFLICT" — and signup was the one place disobeying it.
   //
-  // ORDER — BEFORE the password changes, not after. Revoke-then-mutate is the
-  // fail-safe direction: if this call throws we 500 with the OLD password still
-  // in place and nothing granted, whereas mutating first and crashing before the
-  // bump would leave the NEW password live alongside UNREVOKED old sessions —
-  // exactly the takeover state. The cost of this ordering is that a bump
-  // followed by a failed transaction logs the previous claimant out of an
-  // account nobody took over; harmless, and unverified accounts cannot mutate
-  // content anyway (src/auth/pipeline.ts).
+  // HOW THE GUARD ENCODES THE POLICY:
+  //   • no row          -> the INSERT wins    -> `inserted = true`, a new account
+  //   • row, UNVERIFIED -> the DO UPDATE fires -> `inserted = false`, a re-signup
+  //   • row, VERIFIED   -> the WHERE blocks it -> ZERO ROWS
   //
-  // Step 9 reads the epoch back AFTER this, so the session minted below carries
-  // the POST-bump value and does not invalidate itself.
-  if (existing !== null) {
-    await env.USER_SECURITY.getByName(existing.id).bumpEpoch();
-  }
-
-  // ---- 7. Single transaction -----------------------------------------------
-  const userId = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+  // ⚠️ ZERO ROWS IS THE 409, AND ONLY THE DATABASE CAN DECIDE IT. `WHERE
+  // users.email_verified_at IS NULL` on the DO UPDATE means a conflict with a
+  // verified row updates NOTHING and returns NOTHING — so `rows.length === 0` is
+  // unambiguously "a verified account owns this address", decided atomically
+  // rather than by a read anything could have invalidated between check and act.
+  //
+  // ⚠️ THE `WHERE` IS THE WHOLE SECURITY PROPERTY. M0 rejected an UNGUARDED
+  // `ON CONFLICT DO UPDATE` precisely because it would let any stranger's signup
+  // overwrite a VERIFIED account's password — a one-request account takeover of
+  // a proven owner. This guarded form is the answer M0 was missing, not a
+  // relaxation of its finding. test/signup.test.ts pins it.
+  //
+  // ⚠️ DOES NOT 409 THE UNVERIFIED PATH, DELIBERATELY: that would confirm to an
+  // enumerator that the address is registered. An unverified row has no PROVEN
+  // owner — anyone can type any address into the form — so a later signup takes
+  // it over, preserving the user id (no delete + re-insert).
+  //
+  // `xmax = 0` is the standard way to ask "did this row come from the INSERT or
+  // the UPDATE"; the bump below must fire ONLY on the takeover path.
+  const upserted = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     await c.query("BEGIN");
     try {
-      let id: string;
+      const { rows } = await c.query<{ id: string; inserted: boolean }>(
+        `INSERT INTO users (email, password_hash)
+              VALUES ($1, $2)
+         ON CONFLICT (email) DO UPDATE
+                 SET password_hash = EXCLUDED.password_hash
+               WHERE users.email_verified_at IS NULL
+           RETURNING id, (xmax = 0) AS inserted`,
+        [email, passwordHash],
+      );
 
-      if (existing === null) {
-        const { rows } = await c.query(
-          "INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id",
-          [email, passwordHash],
-        );
-        id = rows[0].id as string;
-        await insertProfile(c, id, email);
-      } else {
-        // RE-SIGNUP over an UNVERIFIED account (`email_verified_at IS NULL`).
-        //
-        // An unverified account has no PROVEN owner: anyone can type any address
-        // into the form, so the row only records that someone claimed it. Letting
-        // a later signup take it over is therefore safe, and it is what keeps
-        // this path enumeration-resistant — 409ing here would confirm the address
-        // is registered, and falling through to the INSERT would hit the
-        // `users.email` unique index and 500.
-        //
-        // The user id is DELIBERATELY preserved (no delete + re-insert), and the
-        // existing `profiles` row is left alone: its PK is `user_id`, so a second
-        // insert would violate it. Only the password changes; a fresh
-        // verification token + session follow below exactly as for a new signup.
-        await c.query("UPDATE users SET password_hash = $1 WHERE id = $2", [
-          passwordHash,
-          existing.id,
-        ]);
-        id = existing.id;
+      const row = rows[0] ?? null;
+      if (row === null) {
+        // A VERIFIED account owns this address. Nothing was written.
+        await c.query("ROLLBACK");
+        return null;
       }
 
+      // ---- Epoch bump — RE-SIGNUP ONLY, and BEFORE THE COMMIT ---------------
+      // ⚠️ LOAD-BEARING SECURITY STEP, and half of the account-takeover fix
+      // documented at the top of src/routes/verify-email.ts. Taking over an
+      // unverified account changes its password, so every session issued against
+      // the OLD password must die. Bumping the epoch does that in O(1): each of
+      // those sessions carries a now-stale `securityEpoch` and fails the
+      // revocation check. WITHOUT it, the previous claimant's surviving session
+      // satisfies that route's auth checks by itself and their click on the old
+      // emailed link verifies an account holding SOMEONE ELSE'S password. Do not
+      // remove; test/signup.test.ts pins this.
+      //
+      // ⚠️ ORDER: INSIDE the transaction, BEFORE the COMMIT — NOT after it.
+      // Revoke-then-mutate is the fail-safe direction and it survives the move to
+      // an upsert intact, because what matters is not which line runs first but
+      // what is OBSERVABLE. The bump is a Durable Object call and is NOT part of
+      // this transaction, so the two can fail independently:
+      //   • bump throws  -> the catch below ROLLS BACK -> the new password never
+      //                     existed. The OLD password stays live and nothing was
+      //                     granted. Harmless.
+      //   • COMMIT throws after a successful bump -> the password never changes
+      //                     and the previous claimant is merely logged out of an
+      //                     account nobody took over. Harmless — and unverified
+      //                     accounts cannot mutate content anyway (auth/pipeline).
+      // Committing FIRST and bumping after would invert this into the takeover
+      // state: the attacker's password live, the victim's session UNREVOKED and
+      // its epoch still MATCHING, so the victim's own click on their emailed link
+      // verifies an account holding the attacker's password. `bumpEpoch` is
+      // load-bearing precisely WHEN it fails, so "it is only a crash window" is
+      // not a defense. The COMMIT is the gate: no observer can ever see the new
+      // password unless the bump already succeeded.
+      //
+      // The cost is that the re-signup path holds this connection and the row's
+      // lock across one DO round-trip. That is bounded, far cheaper than the
+      // Argon2id hash already done above (outside the tx), and only on re-signup.
+      if (!row.inserted) {
+        await env.USER_SECURITY.getByName(row.id).bumpEpoch();
+      }
+
+      // Runs on EVERY path, not just the insert: `ON CONFLICT (user_id) DO
+      // NOTHING` makes it a no-op when the profile is already there, so a
+      // re-signup no longer has to ASSUME the unverified row has one — a user
+      // without a profile heals here instead. Note the two ON CONFLICTs target
+      // DIFFERENT indexes: `profiles.user_id` (swallowed) and `profiles.username`
+      // (still raised as 23505, still retried under the savepoint).
+      await insertProfile(c, row.id, email);
+
       await c.query("COMMIT");
-      return id;
+      return row;
     } catch (err) {
       // The ROLLBACK gets its OWN try/catch so it cannot REPLACE the root error:
       // if the connection is dead, ROLLBACK throws too and `throw err` below
       // would never run — the caller would see "connection terminated" instead of
-      // the unique violation (or whatever) that actually failed the signup.
+      // whatever actually failed the signup.
       try {
         await c.query("ROLLBACK");
       } catch (rollbackErr) {
@@ -348,7 +377,13 @@ export async function handleSignup(
     }
   });
 
-  // ---- 8. Verification email -----------------------------------------------
+  // Zero rows came back: a VERIFIED account owns this address (see the guard).
+  if (upserted === null) {
+    return errorResponse("EMAIL_TAKEN", 409);
+  }
+  const userId = upserted.id;
+
+  // ---- 6. Verification email -----------------------------------------------
   const token = await createVerificationToken(env, userId);
   // Restricted to PRODUCTION origins — NOT every origin `checkOrigin` accepts.
   // See `verificationLinkOrigin`: a non-browser client can set any Origin it
@@ -360,13 +395,13 @@ export async function handleSignup(
   // can request another email.
   await sendVerificationEmail(env, email, verifyUrl);
 
-  // ---- 9. Security epoch ---------------------------------------------------
-  // Read AFTER step 6's bump, so a re-signup's new session carries the POST-bump
+  // ---- 7. Security epoch ---------------------------------------------------
+  // Read AFTER step 5's bump, so a re-signup's new session carries the POST-bump
   // epoch. Reading it before the bump would stamp the session with a value the
   // bump immediately invalidates — logging the new owner straight back out.
   const securityEpoch = await env.USER_SECURITY.getByName(userId).getEpoch();
 
-  // ---- 10. Session ---------------------------------------------------------
+  // ---- 8. Session ----------------------------------------------------------
   const { cookie } = await createSession(env, {
     userId,
     // No roles at signup: a fresh account is a plain member. Roles are granted
@@ -380,7 +415,7 @@ export async function handleSignup(
     createdAt: Date.now(),
   });
 
-  // ---- 11. 201 + Set-Cookie ------------------------------------------------
+  // ---- 9. 201 + Set-Cookie -------------------------------------------------
   return new Response(JSON.stringify({ userId }), {
     status: 201,
     headers: { "content-type": "application/json", "Set-Cookie": cookie },

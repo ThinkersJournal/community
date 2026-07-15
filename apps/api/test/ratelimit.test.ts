@@ -34,7 +34,19 @@ describe("enforceRateLimit", () => {
     const blocked = await enforceRateLimit(env.LOGIN_LIMITER, key);
     expect(blocked).toBeInstanceOf(Response);
     expect(blocked?.status).toBe(429);
-  });
+  },
+  // ⚠️ REQUIRED, and this was the ONE `awaitLimiterBurstWindow` caller missing it
+  // (login's three, resend's and signup's all have it). The helper may hold the
+  // burst for up to ~12s waiting for a clean window, which does not fit vitest's
+  // 5s default: whenever this test's body happened to start in the last ~10s of a
+  // wall-clock minute it timed out — ~17% of runs, at random, with a failure
+  // message ("Test timed out in 5000ms") that pointed nowhere near the cause.
+  // Reproduced on an unmodified tree; nothing about the code under test changed.
+  //
+  // NOT a flake-hiding timeout bump: the wait is bounded and deliberate, the
+  // burst still has to earn its 429 from the REAL limiter binding, and the
+  // assertions above are untouched. See ./helpers/limiter-window.ts.
+  60_000);
 
   it("returns a 429 Response iff the limiter reports success: false (deterministic branch logic via a stub)", async () => {
     const alwaysBlocked: RateLimit = {
