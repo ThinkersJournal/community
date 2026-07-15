@@ -1,4 +1,5 @@
 import { handleTestRoute } from "./routes/__test";
+import { handleLogin } from "./routes/login";
 import { handleCreatePost, handleListPosts } from "./routes/posts";
 import { handleSignup } from "./routes/signup";
 import { handleVerifyEmail } from "./routes/verify-email";
@@ -24,6 +25,10 @@ export default {
 
     if (request.method === "POST" && pathname === "/auth/signup") {
       return await handleSignup(request, env, ctx);
+    }
+
+    if (request.method === "POST" && pathname === "/auth/login") {
+      return await handleLogin(request, env, ctx);
     }
 
     if (request.method === "GET" && pathname === "/verify-email") {
