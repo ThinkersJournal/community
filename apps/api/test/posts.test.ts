@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
+import { slugify } from "../src/routes/posts";
 import { createUnverifiedActor, createVerifiedActor, deleteCreatedUsers } from "./actor";
 
 import type { Actor } from "./actor";
@@ -309,5 +310,31 @@ describe("GET /posts/:id (the author's own draft)", () => {
   it("401s with no session", async () => {
     const { id } = await create(actor, { title: "Draft", markdownSource: "secret" });
     expect((await fetchWorker(new Request(`https://api.test/posts/${id}`))).status).toBe(401);
+  });
+});
+
+/**
+ * Pure-unit guard for `slugify`'s accent-folding (src/routes/posts.ts). NFKD
+ * splits an accented letter into base + a U+0300–U+036F combining mark; the strip
+ * drops ONLY the mark, so the base letter survives ("café" -> "cafe", never
+ * "caf"). Pinned because the character range is a silent-break magnet — an editor
+ * re-normalizing the source, or the `̀-ͯ` escapes being "tidied" back
+ * into raw invisible marks, would degrade folding with nothing here to catch it.
+ */
+describe("slugify — accent folding", () => {
+  it('folds "Café" to "cafe" (mark dropped, base letter kept)', () => {
+    expect(slugify("Café")).toBe("cafe");
+  });
+
+  it("folds multiple accented words and hyphenates the spaces", () => {
+    expect(slugify("Crème Brûlée")).toBe("creme-brulee");
+  });
+
+  it("folds mixed diacritics without dropping any base letter", () => {
+    expect(slugify("Naïve résumé over Zürich")).toBe("naive-resume-over-zurich");
+  });
+
+  it('falls back to "post" for an all-non-Latin title', () => {
+    expect(slugify("日本語")).toBe("post");
   });
 });

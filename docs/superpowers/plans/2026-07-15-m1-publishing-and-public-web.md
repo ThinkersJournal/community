@@ -5204,6 +5204,8 @@ thinkersjournal-community/
   curl -s http://127.0.0.1:8787/@<username> | rg -c '<li>'          # EXPECT: 20
   curl -is http://127.0.0.1:8787/@<username> | rg 'cache-tag|cloudflare-cdn-cache-control'
   #   EXPECT: cache-tag: author:…, listing, pipeline:v1  (NO post: tag)
+  #   (plus Astro core's own astro-path:/@<username> — unconditional on every
+  #   cacheable response, and something our purge flow never targets, so harmless.)
   #   ⚠️ LOCAL-DEV-ONLY — no real edge to strip it here; not observable against a
   #   real deploy (Cf-Cache-Status is the deploy-gate proof, see Task 20).
   #   EXPECT: cloudflare-cdn-cache-control: public, max-age=3600, stale-while-revalidate=86400
@@ -5789,10 +5791,15 @@ thinkersjournal-community/
   #   EXPECT: cloudflare-cdn-cache-control: public, max-age=60, stale-while-revalidate=600
   #   ⚠️ NOT `cache-control` — the Astro Cloudflare provider writes the
   #   CDN-specific header name (verified against the installed adapter, Task 12).
-  #   EXPECT: NO cache-tag header at all  <- the untagged property, load-bearing.
-  #   ⚠️ This absence is only meaningful LOCALLY, where nothing strips headers —
-  #   on a real deploy Cloudflare strips cache-tag from every response, tagged or
-  #   not, so its absence there proves nothing either way.
+  #   EXPECT: cache-tag: astro-path:/sitemap.xml  — and ONLY that. Astro CORE
+  #   unconditionally stamps `astro-path:<path>` on every cacheable response, so
+  #   the header is NOT absent. "Untagged" means our PURGE FLOW never targets this
+  #   entry: apps/api/src/cache/purge.ts only ever purges `post:`/`author:`/
+  #   `listing` — never `astro-path:` — which is the property the HYPERDRIVE_CACHED
+  #   read depends on. So the load-bearing check is that NONE of post:/author:/
+  #   listing appears, not that the header is empty.
+  #   ⚠️ Only meaningful LOCALLY, where nothing strips headers — on a real deploy
+  #   Cloudflare strips cache-tag from every response, tagged or not.
   curl -s http://127.0.0.1:8787/rss.xml | rg -c '<item>'          # EXPECT: your post count, <= 20
   ```
 
@@ -5935,10 +5942,16 @@ thinkersjournal-community/
     const response = await page.request.get("/sitemap.xml");
     // ⚠️ `cloudflare-cdn-cache-control`, not `cache-control` — see above.
     expect(response.headers()["cloudflare-cdn-cache-control"]).toBe("public, max-age=60, stale-while-revalidate=600");
-    // ⚠️ Untagged is what licenses /public/recent's HYPERDRIVE_CACHED read.
-    // LOCAL-DEV-ONLY absence check — see the note above; a real deploy strips
-    // cache-tag from every response, tagged or not.
-    expect(response.headers()["cache-tag"]).toBeUndefined();
+    // ⚠️ NOT `toBeUndefined()`. Astro CORE unconditionally appends
+    // `astro-path:<path>` to every cacheable response, so the header is PRESENT.
+    // "Untagged" means OUR PURGE FLOW never targets this entry — the header carries
+    // ONLY that Astro-internal tag and NONE of the tags apps/api/src/cache/purge.ts
+    // ever purges by. That is what licenses /public/recent's HYPERDRIVE_CACHED read.
+    // (LOCAL-DEV-ONLY: a real deploy strips cache-tag from every response.)
+    const cacheTag = response.headers()["cache-tag"];
+    expect(cacheTag).toContain("astro-path:");
+    expect(cacheTag).not.toContain("listing");
+    expect(cacheTag).not.toContain("author:");
   });
   ```
 

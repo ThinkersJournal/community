@@ -46,6 +46,20 @@ import { defineConfig, devices } from "@playwright/test";
  * Playwright sets webServers up in array order, each waiting for its `url`
  * before the next starts. The api must be listening before web starts, or web's
  * `API` binding comes up `[not connected]` and every page 500s.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ⚠️ WORKERS CACHE IS NOT SIMULATED LOCALLY — A CACHE HIT/PURGE IS UNOBSERVABLE.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * miniflare (what `wrangler dev` runs under) does NOT simulate Workers Cache, so
+ * two GETs of the same public URL here are two independent Worker invocations with
+ * no cache in between. A real cache HIT-then-purge — what the publish->edit spec
+ * conceptually exercises — is therefore UNOBSERVABLE locally BY CONSTRUCTION:
+ * there is no local cache to hit or to invalidate. What the E2E CAN pin locally is
+ * the cache-HEADER contract our code emits (`cloudflare-cdn-cache-control` + the
+ * `cache-tag` set); the HIT/purge proof itself (`Cf-Cache-Status`: MISS -> HIT ->
+ * edit -> MISS) is DEPLOY-GATE-ONLY (Task 20). This fact lived only in
+ * e2e/publish.spec.ts's header; it is recorded here too so a reader of the config
+ * does not re-derive it.
  */
 
 /** The `web` Worker — the ONLY origin the browser is allowed to know about. */

@@ -70,7 +70,7 @@ if (Astro.request.method === "GET") {
 
     if (response.status === 200) {
       outcome = "verified";
-    } else if (response.data?.code === "LOGIN_REQUIRED") {
+    } else if (apiErrorCode(response) === "LOGIN_REQUIRED") {
       // 401 (no session / stale session) and 403 (token belongs to someone else)
       // share this code and an identical body — deliberately, so the api never
       // reveals whose token it is. Both mean the same thing to the user: sign in

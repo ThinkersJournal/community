@@ -27,7 +27,7 @@ built and review-clean (M0's 19 tasks preceded them on `m0-foundations`). **Gree
 
 | Suite | Command | Expected |
 | --- | --- | --- |
-| api | `pnpm --filter @thinkersjournal/api test` | **392 tests / 31 files** |
+| api | `pnpm --filter @thinkersjournal/api test` | **396 tests / 31 files** |
 | web | `pnpm --filter @thinkersjournal/web test` | **276** (+2 skipped) |
 | shared | `pnpm --filter @thinkersjournal/shared test` | **17** |
 | markdown | `pnpm --filter @thinkersjournal/markdown test` | **93** |

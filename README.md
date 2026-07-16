@@ -177,7 +177,7 @@ the authoritative table):
 
 | Suite | Command | Expected |
 | --- | --- | --- |
-| api | `pnpm --filter @thinkersjournal/api test` | **392** / 31 files |
+| api | `pnpm --filter @thinkersjournal/api test` | **396** / 31 files |
 | web | `pnpm --filter @thinkersjournal/web test` | **276** (+2 skipped) |
 | shared | `pnpm --filter @thinkersjournal/shared test` | **17** |
 | markdown | `pnpm --filter @thinkersjournal/markdown test` | **93** |

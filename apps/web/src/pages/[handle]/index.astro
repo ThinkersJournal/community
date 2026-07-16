@@ -105,8 +105,21 @@ setPublicPageCsp(Astro);
 const canonical = profileUrl(profile.username);
 const displayName = profile.displayName ?? profile.username;
 const description = profile.bio ?? `Posts by ${displayName} on Thinker's Journal.`;
+// ⚠️ encodeURIComponent on the username in the HREF (a URL needs percent-encoding;
+// Astro's `{}` only HTML-escapes). Usernames are `[a-z0-9_]` today so this is a
+// no-op — but M2 relaxes the charset. Defense-in-depth + future-proofing.
 const nextHref =
-  profile.nextCursor === null ? null : `/@${profile.username}?cursor=${encodeURIComponent(profile.nextCursor)}`;
+  profile.nextCursor === null
+    ? null
+    : `/@${encodeURIComponent(profile.username)}?cursor=${encodeURIComponent(profile.nextCursor)}`;
+
+// ⚠️ DEFENSIVE date formatting — same rationale as [slug].astro. A malformed
+// timestamp would make `.toISOString()` THROW and 500 this cached listing; format
+// only when the Date is valid, else fall back to the raw string verbatim.
+const displayDate = (value: string): string => {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toISOString().slice(0, 10);
+};
 ---
 
 <html lang="en">
@@ -142,11 +155,17 @@ const nextHref =
         <ul>
           {profile.posts.map((post) => (
             <li>
-              <a href={`/@${profile.username}/${post.slug}`}>{post.title}</a>
+              {/* ⚠️ encodeURIComponent on BOTH username and slug in the HREF (URL
+                  needs percent-encoding; Astro `{}` only HTML-escapes). Both are
+                  constrained today, so this is a no-op — future-proofs the M2
+                  charset relaxation. The link TEXT is not encoded — Astro handles it. */}
+              <a href={`/@${encodeURIComponent(profile.username)}/${encodeURIComponent(post.slug)}`}>
+                {post.title}
+              </a>
               {/* markdownExcerpt returns TEXT; Astro escapes it into the element.
                   Never set:html here — this is untrusted source, unsanitized. */}
               <p>{markdownExcerpt(post.excerptSource)}</p>
-              <time datetime={post.publishedAt}>{new Date(post.publishedAt).toISOString().slice(0, 10)}</time>
+              <time datetime={post.publishedAt}>{displayDate(post.publishedAt)}</time>
             </li>
           ))}
         </ul>

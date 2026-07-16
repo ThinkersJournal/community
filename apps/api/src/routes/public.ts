@@ -137,16 +137,25 @@ export async function handlePublicProfile(
           -- v7 ids are time-ordered, so this IS newest-first. No created_at
           -- index exists, and none is needed. Served by posts_author_published_key.
           ORDER BY id DESC
-          LIMIT ${PAGE_SIZE}`,
+          -- ⚠️ PAGE_SIZE + 1, not PAGE_SIZE. The one extra row is a SENTINEL whose
+          -- mere existence answers "is there a next page?". With a flat LIMIT
+          -- PAGE_SIZE, a page of exactly PAGE_SIZE rows returns a non-null cursor
+          -- onto an EMPTY next page (one wasted round trip) — which the DTO's
+          -- "null when there are no more" (packages/shared/src/posts.ts) forbids.
+          LIMIT ${PAGE_SIZE + 1}`,
         [owner[0].userId, cursor],
       );
 
-      const page = posts as PublicPostSummary[];
+      const rows = posts as PublicPostSummary[];
+      // The sentinel (if it came back) is proof of a next page: drop it from the
+      // page returned, and hand its predecessor's id back as the cursor.
+      const hasMore = rows.length > PAGE_SIZE;
+      const page = rows.slice(0, PAGE_SIZE);
       return {
         ...owner[0],
         posts: page,
-        // null when this page was short — i.e. there is no next page to ask for.
-        nextCursor: page.length === PAGE_SIZE ? page[page.length - 1]!.id : null,
+        // Non-null ONLY when a real next row exists — never a cursor onto emptiness.
+        nextCursor: hasMore ? page[page.length - 1]!.id : null,
       } satisfies PublicProfile;
     });
     return profile === null ? notFound() : json(profile);

@@ -21,6 +21,15 @@
  * exactly the ones apps/web/src/lib/cache.ts sets on the public renders; a write
  * that skips the purge leaves that content stale for a full maxAge+swr window
  * (25 HOURS). test/purge-wiring.test.ts pins every call site.
+ *
+ * ⚠️ NO RATE LIMITER ON `POST /posts` — DELIBERATE, not forgotten. The mutating
+ * pipeline gates creation on origin -> session -> CSRF -> epoch -> verified-email,
+ * but it opts OUT of the (opt-in) rate limiter: there is no posts-limiter binding,
+ * and per-author content-creation throttling is deferred to the per-author
+ * rate-budget DO (M3 in the plan's Deferred record —
+ * docs/superpowers/plans/2026-07-15-m1-publishing-and-public-web.md). Until then
+ * M1 leans on the deploy gate's Cloudflare WAF rule. Recorded here so the
+ * omission reads as a decision, like every other omission in this file.
  */
 import { CreatePostInput, UpdatePostInput } from "@thinkersjournal/shared";
 
@@ -54,7 +63,12 @@ export function slugify(title: string): string {
   const base = title
     .toLowerCase()
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
+    // U+0300\u2013U+036F is the Combining Diacritical Marks block: NFKD splits an
+    // accented letter into base + mark, and this drops the mark ("caf\u00e9" -> "cafe").
+    // \u26a0\ufe0f ESCAPES, NOT the literal marks \u2014 a raw range here is invisible in review
+    // and one editor re-normalization from silently degrading accent-folding.
+    // test/posts.test.ts pins "Caf\u00e9" -> "cafe".
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, SLUG_BASE_MAX)
@@ -128,7 +142,7 @@ async function insertPost(
   title: string,
   markdownSource: string,
   status: string,
-): Promise<InsertedPost | null> {
+): Promise<InsertedPost> {
   const base = slugify(title);
   for (let attempt = 1; attempt <= SLUG_ATTEMPTS; attempt++) {
     const slug = attempt === 1 ? base : `${base}-${randomSuffix()}`;
@@ -145,7 +159,13 @@ async function insertPost(
       if (!isUniqueViolation(err) || attempt === SLUG_ATTEMPTS) throw err;
     }
   }
-  return null;
+  // Unreachable: the FINAL iteration (attempt === SLUG_ATTEMPTS) rethrows on a
+  // 23505 and every non-23505 rethrows immediately, so the loop always exits via
+  // `return` or `throw`. This satisfies the compiler's control-flow analysis,
+  // which cannot prove a runtime-bounded loop terminates — it is NOT a real
+  // "gave up" path (each retry adds ~64 bits of entropy). The 409 for a genuine
+  // exhaustion comes from handleCreatePost's catch on the rethrown 23505, not here.
+  throw new Error("unreachable: insertPost exhausted its slug-retry loop");
 }
 
 /** Parse + validate a post body. Resolves the fields, or the 400 to return. */
@@ -187,7 +207,7 @@ export async function handleCreatePost(
   // this is unrepresentable rather than merely unused.
   const authorId = result.session.userId;
 
-  let inserted: InsertedPost | null;
+  let inserted: InsertedPost;
   try {
     inserted = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
       insertPost(c, authorId, title, markdownSource, status),
@@ -195,10 +215,11 @@ export async function handleCreatePost(
   } catch (err) {
     // Every retry collided: answer 409 rather than 500. Astronomically unlikely
     // (each retry adds ~64 bits of entropy), but a 23505 must never be a crash.
+    // ⚠️ THIS catch is the ONLY path to the 409 — insertPost returns an
+    // InsertedPost or throws, never null, so there is no null branch to check.
     if (isUniqueViolation(err)) return errorResponse("SLUG_TAKEN", 409);
     throw err;
   }
-  if (inserted === null) return errorResponse("SLUG_TAKEN", 409);
 
   // Publishing changes what a LISTING shows. There is no `post:` tag to purge —
   // nothing has ever been cached for a post that did not exist until now. A draft

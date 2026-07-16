@@ -69,6 +69,16 @@ const html = await renderMarkdown(post.markdownSource);
 const description = markdownExcerpt(post.markdownSource);
 const canonical = postUrl(post.username, post.slug);
 
+// ⚠️ DEFENSIVE date formatting. `post.publishedAt` is a non-null PG timestamp, so
+// it always parses today — but a malformed value would make `.toISOString()`
+// THROW and 500 this otherwise-cached page. Format only when the Date is valid;
+// otherwise fall back to the raw string (the `datetime` attribute below already
+// carries the raw value verbatim, so nothing is lost).
+const publishedDate = new Date(post.publishedAt);
+const publishedDisplay = Number.isNaN(publishedDate.getTime())
+  ? post.publishedAt
+  : publishedDate.toISOString().slice(0, 10);
+
 markPublicCacheable(Astro, [
   // ⚠️ THESE THREE LITERALS MUST MATCH apps/api/src/cache/purge.ts's CALL SITES
   // EXACTLY — a typo here is INVISIBLE (miniflare does not simulate Workers
@@ -141,8 +151,12 @@ const jsonLd = {
     <article>
       <h1>{post.title}</h1>
       <p>
-        <a href={`/@${post.username}`}>{post.displayName ?? post.username}</a>
-        <time datetime={post.publishedAt}>{new Date(post.publishedAt).toISOString().slice(0, 10)}</time>
+        {/* ⚠️ encodeURIComponent on the username in the HREF (Astro escapes it as
+            TEXT, but a URL needs percent-encoding): usernames are `[a-z0-9_]` today
+            so this is a no-op, but M2 relaxes the charset. Defense-in-depth. The
+            display text below is intentionally NOT encoded — Astro `{}` handles it. */}
+        <a href={`/@${encodeURIComponent(post.username)}`}>{post.displayName ?? post.username}</a>
+        <time datetime={post.publishedAt}>{publishedDisplay}</time>
       </p>
       {/* ⚠️ THE ONE PLACE THIS APP EMITS UNESCAPED HTML. It is safe for exactly
           one reason: `html` came out of packages/markdown, whose LAST UNSAFE
