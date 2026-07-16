@@ -41,7 +41,17 @@ const PASSWORD_HASH = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$ZGlnZXN0";
 /** Rows created by a test, deleted in `afterEach`. */
 const createdUserIds: string[] = [];
 
-/** INSERT an UNVERIFIED user (`email_verified_at IS NULL`) with a per-run-unique email; returns its id. */
+/**
+ * INSERT an UNVERIFIED user (`email_verified_at IS NULL`) with a per-run-unique
+ * email; returns its id.
+ *
+ * ⚠️ ALSO INSERTS A `profiles` ROW — every real user has one (signup creates
+ * both together; see src/routes/signup.ts), and T17's `POST /posts` response
+ * now resolves the author's `username` via `profiles.user_id`
+ * (src/routes/posts.ts's `usernameFor`). Without this, the one case here that
+ * reaches a SUCCESSFUL `POST /posts` (post-verification) would 500 on a
+ * data-integrity state the real system never produces.
+ */
 async function insertUnverifiedUser(): Promise<string> {
   const ctx = createExecutionContext();
   const email = `t13_${crypto.randomUUID()}@example.com`;
@@ -50,7 +60,12 @@ async function insertUnverifiedUser(): Promise<string> {
       "INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id",
       [email, PASSWORD_HASH],
     );
-    return rows[0].id as string;
+    const userId = rows[0].id as string;
+    await c.query("INSERT INTO profiles (user_id, username) VALUES ($1, $2)", [
+      userId,
+      `t13_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`,
+    ]);
+    return userId;
   });
   await waitOnExecutionContext(ctx);
   createdUserIds.push(id);

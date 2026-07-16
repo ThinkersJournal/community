@@ -1,137 +1,246 @@
 ---
 /**
- * `POST /posts` through the Service Binding — the page that ties the CSRF story
- * together.
+ * The Markdown editor — create (`/new-post`) and edit (`/new-post?post=<id>`).
  *
- * HOW THE TOKEN GETS HERE. The api requires `X-CSRF-Token` =
- * `sha256Hex(session.csrfSecret)` on every mutating request. `csrfSecret` lives
- * only in the api's KV session record, so THIS Worker cannot compute the token
- * — it fetches it from `GET /auth/csrf` (apps/api/src/routes/csrf.ts) over the
- * Service Binding, forwarding the browser's session cookie, and embeds the
- * result in the HTML below as a hidden input.
+ * ONE page for both: two pages would be two copies of the same form and the
+ * same submit logic, drifting from the day the second was written.
  *
- * ⚠️ WHY A HIDDEN INPUT AND NOT A COOKIE. The Global Constraint is that the
- * token is delivered "only via authenticated HTML/same-origin JSON, never a
- * readable cookie". A non-HttpOnly cookie would be readable by any injected
- * script AND would ride along on cross-site requests automatically — which is
- * precisely the property the double-submit exists to deny. Rendered into the
- * page body, the token is reachable only by someone who could already read an
- * authenticated response from this origin.
+ * ⚠️ PREVIEW IS SERVER-SIDE, through the SAME `renderMarkdown` the public post
+ * page (`[handle]/[slug].astro`) uses. That is not a shortcut — it is the
+ * point: the preview is not an approximation of the post, it IS the post, with
+ * zero extra JS shipped and no second renderer to drift out of sync with the
+ * sanitizer. It also costs nothing extra in bundle size: this Worker already
+ * bundles `@thinkersjournal/markdown` (Shiki included) to render the public
+ * post page, so importing it here does not add a byte to what `web` ships —
+ * see the task report for the tradeoff this decision avoided (bundling the
+ * pipeline into the BROWSER would have cost ~2MB of Shiki on an authed,
+ * uncached page).
+ *
+ * ⚠️ HOW THE CSRF TOKEN GETS HERE (unchanged from M0 — do not simplify). The
+ * api requires `X-CSRF-Token` = `sha256Hex(session.csrfSecret)` on every
+ * mutating request. `csrfSecret` lives only in the api's KV session record, so
+ * THIS Worker cannot compute it — it fetches it from `GET /auth/csrf`
+ * (apps/api/src/routes/csrf.ts) over the Service Binding, forwarding the
+ * browser's session cookie, and embeds it below as a hidden input.
+ *
+ * ⚠️ WHY A HIDDEN INPUT AND NOT A COOKIE. A non-HttpOnly cookie would be
+ * readable by any injected script AND would ride along on cross-site requests
+ * automatically — precisely the property the double-submit exists to deny.
+ * Rendered into the page body, the token is reachable only by someone who
+ * could already read an authenticated response from this origin.
  *
  * ⚠️ WHY THE FORM POSTS TO THIS PAGE RATHER THAN TO THE API. An HTML form
  * cannot set a request HEADER — there is no markup for it — so a form could
- * never satisfy `X-CSRF-Token` by itself, and the api accepts the token in NO
- * other place (by design: a header is exactly what a cross-site form cannot
- * forge). So the form posts back here same-origin, and this component promotes
- * the hidden field to a real header on the Service-Binding call. The token
- * still round-trips through the page, which is what makes it a genuine
- * double-submit; a cross-site attacker can make the browser POST here, but
- * cannot read the token out of the page to fill the field in.
+ * never satisfy `X-CSRF-Token`, and the api accepts the token in NO other
+ * place (by design: a header is exactly what a cross-site form cannot forge).
+ * So the form posts back here same-origin, and this component promotes the
+ * hidden field to a real header on the Service-Binding call.
  */
+import { renderMarkdown } from "@thinkersjournal/markdown";
+import type { AuthoredPost } from "@thinkersjournal/shared";
+
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 
-// ⚠️ Per-viewer: this page forwards the session cookie to the api and renders a
-// PER-SESSION CSRF token into the HTML below. Cookie is NOT in the Workers Cache
-// key and does NOT trigger a bypass, so a cacheable render here would hand one
-// viewer's CSRF token to every subsequent visitor. See src/lib/cache.ts.
+// ⚠️ Per-session secrets (the CSRF token below) and unpublished text are
+// rendered here — never let a shared cache hold this. Cookie is NOT in the
+// Workers Cache key and does NOT trigger a bypass, so a cacheable render here
+// would hand one viewer's CSRF token — and another's draft — to everyone else.
 markPrivate(Astro);
 
-type Outcome = "created" | "unauthenticated" | "unverified" | "error" | null;
+type Outcome = "saved" | "published" | "unauthenticated" | "unverified" | "error" | null;
 let outcome: Outcome = null;
 let message = "";
+let previewHtml: string | null = null;
+
+// ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own, which
+// would launder a cross-site request into an allowlisted one. See
+// src/lib/api.ts's `origin` doc comment for the login-CSRF incident this
+// guards against (Task 18); the same laundering here would reopen it for
+// post authoring.
+const origin = Astro.request.headers.get("Origin") ?? "";
+
+/**
+ * Fetch the CSRF token for the caller's session on EVERY render — GET and the
+ * re-render after a POST alike — so the freshly-rendered form always carries a
+ * token matching the CURRENT session (after logout-all + re-login, a stale one
+ * would 403). 401 here simply means "not logged in": a normal state, not a
+ * failure.
+ */
+const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
+const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
+
+let postId = Astro.url.searchParams.get("post");
+let title = "";
+let markdownSource = "";
 
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
+  const intent = String(form.get("intent") ?? "draft");
+  title = String(form.get("title") ?? "");
+  markdownSource = String(form.get("markdownSource") ?? "");
+  postId = String(form.get("postId") ?? "") || null;
+  const submittedToken = String(form.get("csrfToken") ?? "");
 
-  const response = await apiFetch<{ code?: string }>("/posts", {
-    method: "POST",
-    // ⚠️ `markdownSource`, NOT `body` — the api's `CreatePostInput`
-    // (packages/shared/src/posts.ts) names the field for what it holds: clean
-    // Markdown, stored as the single source of truth and rendered at READ time.
-    // M0's stub never parsed its body, so this page sent `{title, body}` and
-    // nothing noticed; Task 9's real schema 400s that outright. The FORM field
-    // stays `body` (it is the textarea's HTML name, not a wire contract) and is
-    // mapped here — the one place that knows both names.
-    //
-    // `status` is deliberately not sent: it defaults to "draft". Publishing must
-    // be an explicit act, never the fallback of a client that omitted a field.
-    body: { title: form.get("title"), markdownSource: form.get("body") },
-    // Forwards the session cookie — the api resolves the session from it and
-    // recomputes the expected token to compare against the header below.
-    request: Astro.request,
-    // ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own, which
-    // would launder a cross-site request into an allowlisted one. Here the
-    // double-submit token below is the primary defense and `checkOrigin` is
-    // defense-in-depth, but laundering it would still throw that layer away.
-    origin: Astro.request.headers.get("Origin") ?? "",
-    // The hidden input, promoted back into the header the api demands.
-    csrfToken: String(form.get("csrfToken") ?? ""),
-  });
-
-  // ⚠️ Load-bearing on the 401 path. The api's pipeline answers a REVOKED/stale
-  // session with 401 **plus a cleared cookie** (step 4, checkSecurityEpoch in
-  // apps/api/src/auth/pipeline.ts) — dropping that header leaves the dead
-  // cookie in the browser, so the user is stuck re-sending a session that can
-  // only ever 401 again instead of being cleanly logged out.
-  applyCookies(Astro.response.headers, response.setCookies);
-
-  if (response.status === 201) {
-    outcome = "created";
-  } else if (response.status === 401) {
-    // Either no session or a stale one (the epoch check — e.g. "log out
-    // everywhere" happened). The api has already cleared the cookie.
-    outcome = "unauthenticated";
-  } else if (apiErrorCode(response) === "EMAIL_NOT_VERIFIED") {
-    // The soft gate: authenticated, but content mutation needs a verified
-    // address. Distinct from a CSRF/origin 403, which shares the status.
-    outcome = "unverified";
+  if (intent === "preview") {
+    // ⚠️ REQUIRES A SESSION, DELIBERATELY NARROWER THAN "pure render, no auth
+    // needed" might suggest. It IS a pure render — no api call, no mutation,
+    // and NOT gated on email verification (an unverified author must still be
+    // able to preview a draft before they can verify). But with no gate at
+    // all, this branch is a free, unauthenticated "run Shiki over arbitrary
+    // text" oracle: `renderMarkdown` runs the full sanitize+highlight pipeline
+    // on whatever a POST body contains, and nothing before this line checks
+    // WHO is asking. The public post page pays the same cost only for content
+    // that already cleared signup + email verification to exist; this closes
+    // the same gap for the editor's preview.
+    if (csrfToken === null) {
+      outcome = "unauthenticated";
+    } else {
+      previewHtml = await renderMarkdown(markdownSource);
+    }
   } else {
-    outcome = "error";
-    message = `Could not create the post (status ${response.status}).`;
+    const status = intent === "publish" ? "published" : "draft";
+    interface SavedPost {
+      id: string;
+      slug: string;
+      status: string;
+      // Only present so a successful PUBLISH can redirect to `/@user/slug`
+      // without a second round trip — see apps/api/src/routes/posts.ts's
+      // `usernameFor`.
+      username: string;
+    }
+    const response =
+      postId === null
+        ? await apiFetch<SavedPost>("/posts", {
+            method: "POST",
+            // ⚠️ `markdownSource`, matching the api's `CreatePostInput`
+            // (packages/shared/src/posts.ts) — clean Markdown, the single
+            // source of truth, rendered at READ time.
+            body: { title, markdownSource, status },
+            // Forwards the session cookie — the api resolves the session from
+            // it and recomputes the expected token to compare against the
+            // header below.
+            request: Astro.request,
+            origin,
+            // The hidden input, promoted back into the header the api demands.
+            csrfToken: submittedToken,
+          })
+        : await apiFetch<SavedPost>(`/posts/${encodeURIComponent(postId)}`, {
+            method: "PATCH",
+            body: { title, markdownSource, status },
+            request: Astro.request,
+            origin,
+            csrfToken: submittedToken,
+          });
+
+    const succeeded = response.status === 201 || response.status === 200;
+
+    if (succeeded && status === "published" && response.data !== null) {
+      // ⚠️ DO NOT REPLACE THIS WITH `Astro.redirect(...)`. That helper builds a
+      // response it owns ITSELF, which does not carry `Astro.response.headers`
+      // — the api's `Set-Cookie` (if any rides on this response) would be
+      // silently dropped on the very response that navigates the browser away.
+      // login.astro hit exactly this bug first (see its identical warning);
+      // building the redirect by hand and applying cookies to IT is the fix.
+      const redirect = new Response(null, {
+        status: 302,
+        // A RELATIVE path, deliberately — NOT src/lib/canonical.ts's
+        // `postUrl()`. That helper is correct for an OG/canonical tag (a
+        // constant production origin, because host is not in the Workers
+        // Cache key) but wrong here: a redirect must land the browser back on
+        // THIS origin (localhost in dev, the real domain in prod), and a
+        // relative `Location` does exactly that without hardcoding either.
+        headers: { Location: `/@${response.data.username}/${response.data.slug}` },
+      });
+      applyCookies(redirect.headers, response.setCookies);
+      return redirect;
+    }
+
+    if (succeeded && status === "draft" && response.data !== null) {
+      // ⚠️ POST/REDIRECT/GET, same reasoning as the publish branch above — and
+      // discovered by hand-testing Step 5's own checklist ("the URL keeps
+      // ?post=<id> on reload"): a PLAIN FORM POST re-renders the SAME url
+      // (`/new-post`, no query string), so without this the address bar never
+      // gains `?post=`, a reload re-submits the form instead of re-fetching
+      // (the browser's "confirm resubmission" prompt), and there is no
+      // shareable/bookmarkable url back to this exact draft. `saved=1` is a
+      // one-shot flag the GET branch below reads to show "Draft saved." on
+      // the very next render, then never again on a plain reload.
+      const redirect = new Response(null, {
+        status: 302,
+        headers: { Location: `/new-post?post=${encodeURIComponent(response.data.id)}&saved=1` },
+      });
+      applyCookies(redirect.headers, response.setCookies);
+      return redirect;
+    }
+
+    // Every other outcome re-renders THIS page, so `Astro.response` IS the
+    // outgoing response — an error/401/unverified, or the defensive case
+    // where the api answered SUCCESS with no parseable body (neither redirect
+    // above could fire without `response.data`).
+    //
+    // ⚠️ LOAD-BEARING ON THE 401 PATH. The api's pipeline answers a
+    // REVOKED/stale session with 401 **plus a cleared cookie** (checkSecurityEpoch
+    // in apps/api/src/auth/pipeline.ts) — dropping this leaves the dead cookie
+    // in the browser, so the user is stuck re-sending a session that can only
+    // ever 401 again instead of being cleanly logged out.
+    applyCookies(Astro.response.headers, response.setCookies);
+
+    if (succeeded) {
+      postId = response.data?.id ?? postId;
+      outcome = status === "published" ? "published" : "saved";
+    } else if (response.status === 401) {
+      outcome = "unauthenticated";
+    } else if (apiErrorCode(response) === "EMAIL_NOT_VERIFIED") {
+      // The soft gate: authenticated, but content mutation needs a verified
+      // address. Distinct from a CSRF/origin 403, which shares the status.
+      outcome = "unverified";
+    } else {
+      outcome = "error";
+      message = `Could not save (status ${response.status}).`;
+    }
   }
 }
 
-/**
- * Fetch the CSRF token for the caller's session. Done on every render — GET and
- * the re-render after a POST alike — so the freshly-rendered form always
- * carries a token matching the CURRENT session (after a logout-all + re-login,
- * a stale one would 403).
- *
- * 401 here simply means "not logged in": there is no session, so there is no
- * token to issue. That is a normal state for this page, not a failure.
- */
-const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", {
-  request: Astro.request,
-});
-const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
+// Load an existing post for editing. AFTER the POST branch so a just-created
+// post's id is honoured, and only for a GET — a POST already has the text
+// (from the form, for every intent including preview).
+if (postId !== null && Astro.request.method === "GET") {
+  const existing = await apiFetch<AuthoredPost>(`/posts/${encodeURIComponent(postId)}`, {
+    request: Astro.request,
+  });
+  if (existing.status === 200 && existing.data !== null) {
+    title = existing.data.title;
+    markdownSource = existing.data.markdownSource;
+    // The one-shot flag the draft-save redirect above appends. Read here
+    // rather than persisted anywhere: reloading this exact URL keeps showing
+    // it (harmless — it is still true that the draft was saved), but
+    // navigating anywhere else drops it naturally, with no state to clean up.
+    if (Astro.url.searchParams.get("saved") === "1") {
+      outcome = "saved";
+    }
+  } else {
+    // 404 covers "not yours" too — the api never distinguishes them.
+    return new Response(null, { status: 404 });
+  }
+}
 
-/** Come back here once logged in. */
-const loginHref = `/login?next=${encodeURIComponent("/new-post")}`;
+const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
 ---
 
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>New post</title>
+    <title>{postId === null ? "New post" : "Edit post"}</title>
   </head>
   <body>
-    <h1>New post</h1>
+    <h1>{postId === null ? "New post" : "Edit post"}</h1>
 
-    {outcome === "created" && <p id="created">Post created.</p>}
-    {
-      outcome === "unverified" && (
-        <p id="unverified">
-          Please verify your email address before posting.
-        </p>
-      )
-    }
+    {outcome === "saved" && <p id="saved">Draft saved.</p>}
+    {outcome === "published" && <p id="published">Published.</p>}
+    {outcome === "unverified" && <p id="unverified">Please verify your email address before posting.</p>}
+    {outcome === "unauthenticated" && <p id="session-expired">Your session has expired. Please log in again.</p>}
     {outcome === "error" && <p id="error">{message}</p>}
-    {
-      outcome === "unauthenticated" && (
-        <p id="session-expired">Your session has expired. Please log in again.</p>
-      )
-    }
 
     {
       csrfToken === null ? (
@@ -139,31 +248,117 @@ const loginHref = `/login?next=${encodeURIComponent("/new-post")}`;
           <a href={loginHref}>Log in to write a post</a>
         </p>
       ) : (
-        <form method="POST">
-          {/*
-            The api's per-session CSRF token. Promoted to the `X-CSRF-Token`
-            header server-side on submit (see the frontmatter) — a form cannot
-            set a header itself.
-          */}
+        <form method="POST" id="editor-form">
+          {/* The api's per-session CSRF token, promoted to the X-CSRF-Token
+              header server-side on submit (see the frontmatter) — a form
+              cannot set a header itself. */}
           <input type="hidden" name="csrfToken" value={csrfToken} />
+          <input type="hidden" name="postId" value={postId ?? ""} />
           <label>
             Title
-            <input type="text" name="title" required />
+            <input type="text" id="title" name="title" value={title} required />
           </label>
           <label>
-            Body
-            <textarea name="body" required></textarea>
+            Body (Markdown)
+            <textarea id="markdownSource" name="markdownSource" rows="24" required>{markdownSource}</textarea>
           </label>
-          {/*
-            "Save draft", not "Publish": this form sends no `status`, and the api
-            defaults to a DRAFT by design. The button said "Publish" while M0's
-            stub created nothing at all, which was harmless; against Task 9's real
-            handler it would promise something the request does not ask for. The
-            publish control belongs with the real editor, not this harness page.
-          */}
-          <button type="submit">Save draft</button>
+
+          <fieldset>
+            <legend>Insert an image</legend>
+            {/* NOT inside a nested form — HTML forbids that. The island below
+                uploads it with fetch() and writes the Markdown into the
+                textarea. */}
+            <input type="file" id="media-file" accept="image/jpeg,image/png,image/gif,image/webp" />
+            <p id="media-status" role="status" />
+          </fieldset>
+
+          <button type="submit" name="intent" value="preview">Preview</button>
+          <button type="submit" name="intent" value="draft">Save draft</button>
+          <button type="submit" name="intent" value="publish">Publish</button>
         </form>
       )
     }
+
+    {
+      previewHtml !== null && (
+        <section id="preview">
+          <h2>Preview</h2>
+          {/* Safe for the SAME one reason as the public page: this string came
+              out of packages/markdown, whose LAST UNSAFE THING is
+              rehype-sanitize. And it is the same function, so what you see IS
+              what publishes. */}
+          <div id="preview-body" set:html={previewHtml} />
+        </section>
+      )
+    }
+
+    <script>
+      /**
+       * THE ONE ISLAND. Everything else on this page is a plain form POST; a
+       * file is the one thing that cannot reach the server without JS.
+       *
+       * ⚠️ CORRECTED CLAIM, VERIFIED AGAINST THE BUILT OUTPUT — an earlier draft
+       * of this comment asserted Astro emits this as an external
+       * `<script type="module" src=…>`. It does not: with no `import` inside it
+       * to bundle, Astro leaves a plain `<script type="module">` INLINE in the
+       * rendered HTML (confirmed by fetching a built `/new-post` and inspecting
+       * the response — see the task report). That is harmless TODAY only
+       * because this page sets NO Content-Security-Policy at all — same as
+       * every other authed page (login.astro, signup.astro, verify-email.astro)
+       * — so there is no `script-src` for an inline script to violate. It is
+       * NOT harmless in general: if an authed-page CSP is ever added with
+       * `script-src 'self'` (no `'unsafe-inline'`), this script would need a
+       * nonce or to gain an `import` so Astro externalizes it — either fix
+       * belongs to whoever adds that CSP, informed by this note.
+       *
+       * ⚠️ Uploads to /media-upload (same-origin), NOT to the api directly: the
+       * api has no public route, and same-origin-by-construction is what makes
+       * its Origin allowlist meaningful.
+       */
+      const input = document.querySelector<HTMLInputElement>("#media-file");
+      const status = document.querySelector<HTMLParagraphElement>("#media-status");
+      const textarea = document.querySelector<HTMLTextAreaElement>("#markdownSource");
+      const tokenField = document.querySelector<HTMLInputElement>("input[name='csrfToken']");
+
+      input?.addEventListener("change", async () => {
+        const file = input.files?.[0];
+        if (file === undefined || status === null || textarea === null || tokenField === null) return;
+
+        status.textContent = "Uploading…";
+        input.disabled = true;
+        try {
+          const response = await fetch("/media-upload", {
+            method: "POST",
+            // The api demands this header and a form cannot set one — which is
+            // exactly why the token round-trips through the page.
+            headers: { "X-CSRF-Token": tokenField.value },
+            // The raw File, sent as-is. NOT FormData/multipart: POST /media
+            // takes raw bytes (apps/api/src/routes/media.ts's header explains
+            // why), and a browser `fetch` body of a `File` is already exactly
+            // that — no wrapping needed.
+            body: file,
+          });
+          const data = (await response.json()) as { url?: string; code?: string };
+          if (!response.ok || data.url === undefined) {
+            // The api's error envelope: {code, message?}. Show the code — the
+            // messages are deliberately generic (they must not echo a
+            // filename), and the code is enough to tell 413/415/403 apart.
+            status.textContent = `Upload failed (${data.code ?? response.status}).`;
+            return;
+          }
+          // Insert at the cursor rather than appending: an image belongs
+          // where the author was typing.
+          const at = textarea.selectionStart ?? textarea.value.length;
+          const markdown = `\n![](${data.url})\n`;
+          textarea.value = textarea.value.slice(0, at) + markdown + textarea.value.slice(at);
+          status.textContent = "Inserted.";
+        } catch {
+          status.textContent = "Upload failed.";
+        } finally {
+          input.disabled = false;
+          input.value = "";
+        }
+      });
+    </script>
   </body>
 </html>

@@ -108,7 +108,7 @@ test.describe("resend verification, across both Workers", () => {
     // above still passes — which is exactly how the bug hid.
     expect(
       (await victim.cookies()).find((c) => c.name === "tj_session"),
-      "the browser is still holding a DEAD session cookie — verify-email.astro must applyCookies() the resend response (see new-post.astro:74 for the same guard)",
+      "the browser is still holding a DEAD session cookie — verify-email.astro must applyCookies() the resend response (see new-post.astro's \"LOAD-BEARING ON THE 401 PATH\" comment for the same guard)",
     ).toBeUndefined();
 
     await victim.close();

@@ -52,6 +52,14 @@ const createdUserIds: string[] = [];
  * INSERT a user with a per-run-unique email; returns its id. `verified`
  * controls `email_verified_at`, i.e. which side of the soft gate (Task 13)
  * the user lands on.
+ *
+ * ⚠️ ALSO INSERTS A `profiles` ROW — every real user has one (signup creates
+ * both in the same transaction; see src/routes/signup.ts), and T17's
+ * `POST /posts` response now resolves the author's `username` via
+ * `profiles.user_id` (src/routes/posts.ts's `usernameFor`). Without this a
+ * user built by this fixture is not a real user at all, and every case here
+ * that reaches `POST /posts` would 500 on a data-integrity state the real
+ * system never produces — a fixture gap, not a bug in the handler.
  */
 async function insertUser(verified: boolean): Promise<string> {
   const ctx = createExecutionContext();
@@ -62,7 +70,12 @@ async function insertUser(verified: boolean): Promise<string> {
        VALUES ($1, $2, ${verified ? "now()" : "NULL"}) RETURNING id`,
       [email, PASSWORD_HASH],
     );
-    return rows[0].id as string;
+    const userId = rows[0].id as string;
+    await c.query("INSERT INTO profiles (user_id, username) VALUES ($1, $2)", [
+      userId,
+      `t16_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`,
+    ]);
+    return userId;
   });
   await waitOnExecutionContext(ctx);
   createdUserIds.push(id);

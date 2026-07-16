@@ -134,13 +134,19 @@ test.describe("signup -> verify -> post, across both Workers", () => {
     // ---- 4. THE PAYOFF: posting now succeeds --------------------------------
     // Identical to the negative case below in every respect except that this
     // user verified. The soft gate is the only difference between them.
+    // ⚠️ "Save draft" (name="intent" value="draft"), not "Publish": publishing
+    // redirects away to /@user/slug (Task 17), which would make this case
+    // about the redirect target rather than about the soft gate the test
+    // exists to prove. The draft/publish CHOICE itself is proven server-side
+    // by apps/api/test/posts.test.ts; this spine test only needs ONE of them
+    // to reach the payoff assertion below.
     await page.goto("/new-post");
     await page.fill('input[name="title"]', "My first post");
-    await page.fill('textarea[name="body"]', "Written by a verified account.");
-    await page.click('button[type="submit"]');
+    await page.fill('textarea[name="markdownSource"]', "Written by a verified account.");
+    await page.click('button[name="intent"][value="draft"]');
 
     await expect(
-      page.locator("#created"),
+      page.locator("#saved"),
       "a VERIFIED user could not create a post",
     ).toBeVisible();
     // And specifically NOT blocked by the soft gate.
@@ -172,15 +178,16 @@ test.describe("signup -> verify -> post, across both Workers", () => {
     // no /verify-email visit.
     await page.goto("/new-post");
     await page.fill('input[name="title"]', "Too early");
-    await page.fill('textarea[name="body"]', "This account never verified.");
-    await page.click('button[type="submit"]');
+    await page.fill('textarea[name="markdownSource"]', "This account never verified.");
+    await page.click('button[name="intent"][value="draft"]');
 
     await expect(
       page.locator("#unverified"),
       "an UNVERIFIED user was not stopped by the soft gate",
     ).toBeVisible();
     // The post must NOT have been created.
-    await expect(page.locator("#created")).toHaveCount(0);
+    await expect(page.locator("#saved")).toHaveCount(0);
+    await expect(page.locator("#published")).toHaveCount(0);
 
     // ⚠️ Distinguishes the SOFT GATE (403 EMAIL_NOT_VERIFIED) from the other
     // ways this page can fail. #unverified is only rendered after the request

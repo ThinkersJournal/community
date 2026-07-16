@@ -82,6 +82,32 @@ function notFound(): Response {
 interface InsertedPost {
   id: string;
   slug: string;
+  username: string;
+}
+
+/**
+ * The author's `profiles.username`, for the create/edit response.
+ *
+ * ⚠️ WHY THIS EXISTS AT ALL — T17's editor redirects a successful PUBLISH to
+ * `/@<username>/<slug>`, and that Worker has no session of its own (it forwards
+ * the browser's cookie to US, not the other way around) — it cannot compute a
+ * username it was never told. Rather than have the editor page make a SECOND
+ * round trip (or, worse, thread a username through `GET /auth/csrf`, which
+ * would conflate an unrelated concern), the create/update handlers that already
+ * know `authorId` hand it back alongside `id`/`slug`.
+ *
+ * A separate SELECT, not a JOIN on the INSERT/UPDATE: `profiles.user_id` is a
+ * FOREIGN KEY into `users`, and `authorId` is the SESSION's user (never the
+ * body — see handleCreatePost), so the row is guaranteed to exist. A JOIN would
+ * work too, but two simple statements over one held connection cost the same
+ * round trips either way and read far more plainly.
+ */
+async function usernameFor(client: Client, authorId: string): Promise<string> {
+  const { rows } = await client.query<{ username: string }>(
+    "SELECT username FROM profiles WHERE user_id = $1",
+    [authorId],
+  );
+  return rows[0]!.username;
 }
 
 /**
@@ -107,13 +133,14 @@ async function insertPost(
   for (let attempt = 1; attempt <= SLUG_ATTEMPTS; attempt++) {
     const slug = attempt === 1 ? base : `${base}-${randomSuffix()}`;
     try {
-      const { rows } = await client.query<InsertedPost>(
+      const { rows } = await client.query<{ id: string; slug: string }>(
         `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
          VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 = 'published' THEN now() ELSE NULL END)
          RETURNING id, slug`,
         [authorId, title, slug, markdownSource, status],
       );
-      return rows[0]!;
+      const { id, slug: insertedSlug } = rows[0]!;
+      return { id, slug: insertedSlug, username: await usernameFor(client, authorId) };
     } catch (err) {
       if (!isUniqueViolation(err) || attempt === SLUG_ATTEMPTS) throw err;
     }
@@ -180,10 +207,10 @@ export async function handleCreatePost(
     await purgeTags(env, [`author:${authorId}`, "listing"]);
   }
 
-  return new Response(JSON.stringify({ id: inserted.id, slug: inserted.slug, status }), {
-    status: 201,
-    headers: { "content-type": "application/json" },
-  });
+  return new Response(
+    JSON.stringify({ id: inserted.id, slug: inserted.slug, status, username: inserted.username }),
+    { status: 201, headers: { "content-type": "application/json" } },
+  );
 }
 
 export async function handleUpdatePost(
@@ -200,7 +227,7 @@ export async function handleUpdatePost(
   const { title, markdownSource, status } = input;
   const authorId = result.session.userId;
 
-  let updated: { id: string; slug: string } | null;
+  let updated: { id: string; slug: string; username: string } | null;
   try {
     updated = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const { rows } = await c.query<{ id: string; slug: string }>(
@@ -219,7 +246,13 @@ export async function handleUpdatePost(
       RETURNING id, slug`,
         [title, markdownSource, status, params.id, authorId],
       );
-      return rows[0] ?? null;
+      const row = rows[0];
+      // ⚠️ Only fetched on a HIT. A miss (wrong id, or not this author's) must
+      // stay a single query — see the purge-quota reasoning below: the same
+      // "don't spend anything extra on a request that turns out to be a 404"
+      // discipline applies to this SELECT as much as to the purge call.
+      if (row === undefined) return null;
+      return { id: row.id, slug: row.slug, username: await usernameFor(c, authorId) };
     });
   } catch (err) {
     // A malformed id is a 404, not a 500: `WHERE id = 'not-a-uuid'` throws
@@ -247,10 +280,10 @@ export async function handleUpdatePost(
   // committed, so a failed invalidation must not lose the user's work.
   await purgeTags(env, [`post:${updated.id}`, `author:${authorId}`, "listing"]);
 
-  return new Response(JSON.stringify({ id: updated.id, slug: updated.slug, status }), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
+  return new Response(
+    JSON.stringify({ id: updated.id, slug: updated.slug, status, username: updated.username }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
 }
 
 export async function handleGetPost(

@@ -123,11 +123,23 @@ describe("POST /posts", () => {
   it("creates a draft owned by the SESSION's user", async () => {
     const response = await createPost(actor, { title: "Hello world", markdownSource: "# hi" });
     expect(response.status).toBe(201);
-    const body = (await response.json()) as { id: string; slug: string; status: string };
+    const body = (await response.json()) as { id: string; slug: string; status: string; username: string };
     expect(body.slug).toBe("hello-world");
     expect(body.status).toBe("draft");
     expect(body.id[14]).toBe("7"); // uuidv7 PK
     expect(await authorOf(body.id)).toBe(actor.userId);
+  });
+
+  /**
+   * ⚠️ T17's editor redirects a successful PUBLISH to `/@<username>/<slug>` —
+   * the `web` Worker has no session of its own, so it cannot compute this
+   * itself. It must come from the SAME handler that already resolved
+   * `authorId` from the session (never trust a caller-supplied username).
+   */
+  it("returns the AUTHOR's username alongside id/slug — the editor's redirect needs it", async () => {
+    const response = await createPost(actor, { title: "Byline", markdownSource: "x" });
+    const body = (await response.json()) as { username: string };
+    expect(body.username).toBe(actor.username);
   });
 
   /**
@@ -209,6 +221,8 @@ describe("PATCH /posts/:id", () => {
     expect(after.title).toBe("After");
     expect(after.published_at).not.toBeNull();
     expect(after.updated_at > before.updated_at).toBe(true);
+    // Same reasoning as POST /posts: the editor's publish redirect needs it.
+    expect(((await response.json()) as { username: string }).username).toBe(actor.username);
   });
 
   /**
