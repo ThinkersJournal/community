@@ -86,6 +86,21 @@ describe("markPublicCacheable", () => {
     expect(ctx.cache.set).not.toHaveBeenCalledWith(expect.objectContaining({ maxAge: expect.anything() }));
   });
 
+  it("⚠️ REFUSES a render that is MINTING a session (response carries Set-Cookie)", () => {
+    // ⚠️ THE REQUEST LOOKS ANONYMOUS AND IS NOT. A successful login/signup render
+    // arrives with NO cookie (there is no session yet) and leaves with one, so
+    // `hasViewerState` — which reads the REQUEST — sees nothing to refuse.
+    //
+    // Cloudflare does bypass its cache on `Set-Cookie`, but this file's own
+    // header says relying on that makes correctness depend on a side effect a
+    // page has no reason to produce. Depending on it in exactly the case it
+    // warns about would be incoherent. So refuse on our own terms.
+    const ctx = context();
+    ctx.response.headers.set("set-cookie", `${SESSION_COOKIE_NAME}=fresh; HttpOnly`);
+    expect(markPublicCacheable(ctx, ["post:1"])).toBe(false);
+    expect(ctx.cache.set).toHaveBeenCalledWith(false);
+  });
+
   it("passes ONLY maxAge/swr/tags into cache.set() — never an s-maxage-shaped key", () => {
     // ⚠️ THIS TEST CANNOT READ THE REAL RESPONSE HEADER. `ctx.cache.set` here is
     // a bare `vi.fn()` spy with no implementation, so `ctx.response.headers` is
@@ -115,6 +130,13 @@ describe("markFeedCacheable (untagged, TTL-only)", () => {
 
   it("still refuses an authed render", () => {
     const ctx = context(`${SESSION_COOKIE_NAME}=abc`);
+    expect(markFeedCacheable(ctx)).toBe(false);
+    expect(ctx.cache.set).toHaveBeenCalledWith(false);
+  });
+
+  it("also refuses a render minting a session", () => {
+    const ctx = context();
+    ctx.response.headers.set("set-cookie", "x=1");
     expect(markFeedCacheable(ctx)).toBe(false);
     expect(ctx.cache.set).toHaveBeenCalledWith(false);
   });
@@ -212,6 +234,35 @@ describe("⚠️ against the REAL Astro cache runtime + the REAL Cloudflare prov
     // And the render says so in its own right, for any cache that never sees
     // the adapter's stamp (a browser, an intermediary).
     expect(headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  it("⚠️ a render MINTING a session emits no cacheable directive", () => {
+    const c = realContext();
+    c.response.headers.set("set-cookie", `${SESSION_COOKIE_NAME}=fresh; HttpOnly`);
+    markPublicCacheable(c.ctx, ["post:1"]);
+    const headers = emit(c);
+    expect(headers.get("cloudflare-cdn-cache-control")).toBeNull();
+    expect(headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  it("⚠️ documents the ORDERING LIMIT of the Set-Cookie check — it is call-time, not response-time", () => {
+    // ⚠️ READ THIS BEFORE TRUSTING THE CHECK ABOVE. `markPublicCacheable` can
+    // only inspect the response AS IT IS WHEN CALLED. Pages call their helper at
+    // the TOP of frontmatter, and `applyCookies(Astro.response.headers, …)` runs
+    // LATER — so a cookie minted after the declaration is INVISIBLE to it, and
+    // the render is marked cacheable regardless.
+    //
+    // This is pinned rather than hidden because it bounds what §4's fix actually
+    // buys: it closes the gap when the cookie is already applied, and it does
+    // NOT make "a public page may mint a session" safe. The real defense remains
+    // structural and unchanged — a page that mints a session is markPrivate, and
+    // public pages render fully anonymous and never mint cookies at all. A
+    // response-time guarantee would need middleware, not a call-time helper.
+    const c = realContext();
+    markPublicCacheable(c.ctx, ["post:1"]); // declared FIRST — response is clean here
+    c.response.headers.set("set-cookie", `${SESSION_COOKIE_NAME}=late; HttpOnly`); // minted AFTER
+    const headers = emit(c);
+    expect(headers.get("cloudflare-cdn-cache-control")).toBe("public, max-age=3600, stale-while-revalidate=86400");
   });
 
   it("markPrivate emits no cacheable directive either", () => {

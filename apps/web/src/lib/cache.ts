@@ -21,6 +21,15 @@
  * public page view. Logged-in traffic is a small fraction of SEO traffic, and
  * the alternative is a session leak.
  *
+ * ⚠️ THE ONLY THING THAT PREVENTS AN EDGE LEAK IS NEVER EMITTING A `public`
+ * CDN-TARGETED DIRECTIVE. Once `Cloudflare-CDN-Cache-Control: public, …` is on a
+ * response, nothing else on that response can rescue it: CF's header precedence
+ * puts that header HIGHEST and `Cache-Control` LOWEST, so a `private, no-store`
+ * beside it is simply ignored at the edge. Hence the inventory forbids
+ * `cache.set(` ANYWHERE under src/ but here — including in COMPONENTS, which can
+ * reach `Astro.cache` too and whose opt-in would silently overwrite a page's
+ * refusal (`set(false)` is not sticky — see below).
+ *
  * ⚠️ CACHEABILITY IS A DECLARED PROPERTY, NOT AN ACCIDENT OF OMISSION. Every
  * page calls EXACTLY ONE of the three helpers below, enforced by
  * test/page-cache-inventory.test.ts. Silence is not permitted — but silence is
@@ -100,12 +109,58 @@ export function hasViewerState(context: CacheContext): boolean {
 }
 
 /**
+ * Whether this render is MINTING a session — the request looked anonymous, but
+ * the response is handing out a cookie (a successful login/signup).
+ *
+ * ⚠️ `hasViewerState` CANNOT SEE THIS. It reads the REQUEST, and on a login there
+ * is no session yet, so the request is genuinely cookie-free. Cloudflare does
+ * bypass its cache when a response carries `Set-Cookie` — but this module's
+ * header says relying on that makes correctness depend on a side effect a page
+ * has no reason to produce, and depending on it in precisely the case it warns
+ * about would be incoherent. So we refuse on our own terms.
+ *
+ * ⚠️ CALL-TIME, NOT RESPONSE-TIME — know what this does not buy. It sees the
+ * response only as it is when the helper runs. Pages declare at the top of
+ * frontmatter and apply cookies later, so a cookie minted AFTER the declaration
+ * is invisible here and the render is still marked cacheable (pinned in
+ * test/cache.test.ts). This closes the gap when the cookie is already applied;
+ * it does NOT make "a public page may mint a session" safe. The defense that
+ * actually holds is structural: a page that mints a session is markPrivate, and
+ * public pages render fully anonymous and never mint cookies at all. A
+ * response-time guarantee would need middleware, not a call-time helper.
+ */
+function mintsSession(context: CacheContext): boolean {
+  return context.response.headers.has("set-cookie");
+}
+
+/** Whether this render is viewer-specific in any way we can detect. */
+function isViewerSpecific(context: CacheContext): boolean {
+  return hasViewerState(context) || mintsSession(context);
+}
+
+/**
  * Refuse to cache, and say so on the response itself.
  *
- * Two mechanisms, deliberately: `cache.set(false)` stops the Astro provider
- * emitting `Cloudflare-CDN-Cache-Control` (so the adapter's default-deny stamp
- * writes `no-store` instead), while the explicit `cache-control` header covers
- * every cache that never sees that stamp — the browser, any intermediary.
+ * Two mechanisms, with VERY different reach — do not confuse them:
+ *
+ *   • `cache.set(false)` is the one that protects the EDGE. It stops the Astro
+ *     provider emitting `Cloudflare-CDN-Cache-Control`, so the adapter's
+ *     default-deny stamp writes `no-store` instead. This is the real defense.
+ *
+ *   • ⚠️ The explicit `cache-control` header protects BROWSERS AND INTERMEDIARIES
+ *     ONLY — it gives ZERO edge protection, and an earlier version of this
+ *     comment overstated it ("covers every cache that never sees that stamp").
+ *     Per Cloudflare's documented header precedence,
+ *     `Cloudflare-CDN-Cache-Control` is HIGHEST (consumed and stripped by CF)
+ *     and `Cache-Control` is LOWEST. So if anything ever emits a `public`
+ *     CDN-targeted directive on this response, the edge honours THAT and ignores
+ *     the `private, no-store` sitting right beside it.
+ *
+ * ⚠️ NOTHING ON THE RESPONSE CAN RESCUE AN EDGE LEAK ONCE THE CDN HEADER SAYS
+ * `public`. There is no second line of defense at that point. That is why
+ * test/page-cache-inventory.test.ts forbids `cache.set(` everywhere under src/
+ * except here: preventing the `public` directive from ever being emitted is the
+ * only thing that works.
  */
 function refuse(context: CacheContext): void {
   context.cache.set(false);
@@ -138,7 +193,7 @@ function refuse(context: CacheContext): void {
  * mechanism cannot do, since it only acts when you ship.
  */
 export function markPublicCacheable(context: CacheContext, tags: string[]): boolean {
-  if (hasViewerState(context)) {
+  if (isViewerSpecific(context)) {
     refuse(context);
     return false;
   }
@@ -148,7 +203,7 @@ export function markPublicCacheable(context: CacheContext, tags: string[]): bool
 
 /** Mark an UNTAGGED, short-TTL public render cacheable (sitemap.xml, rss.xml). */
 export function markFeedCacheable(context: CacheContext): boolean {
-  if (hasViewerState(context)) {
+  if (isViewerSpecific(context)) {
     refuse(context);
     return false;
   }
