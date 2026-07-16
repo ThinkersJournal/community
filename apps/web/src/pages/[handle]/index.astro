@@ -1,0 +1,160 @@
+---
+/**
+ * `/@user` — the public profile: a keyset-paginated listing of published posts.
+ *
+ * ⚠️ ANONYMOUS BY CONSTRUCTION, exactly as [slug].astro. The api call below omits
+ * `request`, so src/lib/api.ts never forwards the browser's Cookie — the api
+ * cannot resolve a session, and there is therefore no viewer-specific value in
+ * this render to leak. That is the DEFENSE, not `markPublicCacheable`'s cookie
+ * check (belt-and-braces). Viewer state (an Edit/Follow button) hydrates
+ * CLIENT-SIDE. Do NOT add `request: Astro.request` here to "personalize" this
+ * page — see src/lib/cache.ts's header for exactly why that turns into a mass
+ * session leak the moment this render is also marked cacheable.
+ *
+ * ⚠️ THE ANONYMITY IS STRUCTURAL, NOT A POLICY. This page reads exactly one
+ * source — `GET /public/profile`, whose handler (apps/api/src/routes/public.ts
+ * `handlePublicProfile`) reads NO session at all and whose response type is
+ * `PublicProfile`, the anonymous-reader DTO. There is no viewer-specific value
+ * in scope here to leak even by accident.
+ *
+ * ⚠️ KEYSET, NOT OFFSET. `?cursor=<last-seen-id>` with `ORDER BY id DESC`: v7 ids
+ * are time-ordered, so that IS newest-first, and it needs no created_at index
+ * (the whole payoff of the v7 decision — see apps/api/src/routes/public.ts's
+ * `handlePublicProfile`). Offset pagination would also SKIP or DUPLICATE rows
+ * whenever a post is published mid-scroll, and would get linearly slower with
+ * depth. The cursor is forwarded OPAQUELY, as a plain query-string value via
+ * `URLSearchParams` (which encodes it) — never parsed, never interpolated into
+ * anything by hand. It is a bound Postgres parameter at the api
+ * (`WHERE ... AND id < $2`); a malformed cursor 400s there
+ * (apps/api/test/public-reads.test.ts's "400s a malformed cursor rather than
+ * 500ing" pins that contract) rather than 500ing or being SQL-injectable, and
+ * this page treats that 400 exactly like an unknown user or a network hiccup —
+ * one `status !== 200` branch, one 404. A hand-edited URL is a 404 to a reader,
+ * not an error page.
+ *
+ * ⚠️ EACH CURSOR PAGE IS ITS OWN CACHE ENTRY — the query string IS in the cache
+ * key. They all carry `author:<id>` + `listing`, so one purge (on this author's
+ * publish OR edit — apps/api/src/routes/posts.ts) drops every page of this
+ * author's listing at once.
+ *
+ * ⚠️ ROUTING: `[handle]/index.astro`, a sibling of `[handle]/[slug].astro`, not a
+ * literal `@[username]` directory — `@` in a folder name is unverified territory
+ * in Astro 7. An explicit startsWith("@") check is unambiguous and gives a real
+ * 404 for `/foo`. Static routes (/login, /new-post, /internal/purge) still win.
+ * ⚠️ Nothing here may be renamed to a `_`-prefixed path: Astro's router skips any
+ * file OR directory starting with `_`, silently.
+ *
+ * ⚠️ NO MARKDOWN RENDER HERE — only `markdownExcerpt` (plain text). This page
+ * never imports `renderMarkdown`, so shiki is not pulled into this route's reach
+ * (it is already reachable via [slug].astro, but this page adds nothing to that).
+ */
+import { markdownExcerpt } from "@thinkersjournal/markdown";
+
+import { apiFetch } from "../../lib/api";
+import { markPublicCacheable } from "../../lib/cache";
+import { profileUrl } from "../../lib/canonical";
+import { setPublicPageCsp } from "../../lib/csp";
+
+import type { PublicProfile } from "@thinkersjournal/shared";
+
+const { handle } = Astro.params;
+if (handle === undefined || !handle.startsWith("@")) {
+  return new Response(null, { status: 404 });
+}
+const username = handle.slice(1);
+if (username === "") return new Response(null, { status: 404 });
+
+const cursor = Astro.url.searchParams.get("cursor");
+const query = new URLSearchParams({ username });
+if (cursor !== null) query.set("cursor", cursor);
+
+// ⚠️ ANONYMOUS — no `request`. See the header.
+const response = await apiFetch<PublicProfile>(`/public/profile?${query.toString()}`);
+if (response.status !== 200 || response.data === null) {
+  // Covers an unknown username, a request for a user with zero published posts'
+  // OWN malformed input, AND the api's 400 on a malformed cursor — a hand-edited
+  // URL is a 404 to a reader, not an error page. This branch declares no
+  // cacheability, so the adapter stamps `no-store` and the 404 is uncached,
+  // deliberately fail-closed, same tradeoff as [slug].astro's 404.
+  return new Response(null, { status: 404 });
+}
+const profile = response.data;
+
+markPublicCacheable(Astro, [
+  // ⚠️ THESE TWO LITERALS MUST MATCH apps/api/src/cache/purge.ts's CALL SITES
+  // EXACTLY — a typo here is INVISIBLE (miniflare does not simulate Workers
+  // Cache) and its only symptom is a listing that never reflects a new/edited
+  // post for up to 25h. Cross-checked against apps/api/src/routes/posts.ts:
+  //   • publish -> purgeTags(env, [`author:${authorId}`, "listing"])
+  //   • edit    -> purgeTags(env, [`post:${updated.id}`, `author:${authorId}`, "listing"])
+  // Both call sites purge `author:` + `listing`, so this page is invalidated by
+  // either. (`post:<id>` is irrelevant here — this page never shows one post's
+  // full body, only a listing.) The api's `GET /public/profile` selects
+  // `user_id AS "userId"` — the SAME id those call sites interpolate as
+  // `authorId` (it is the post's `author_id`, which IS the profile's `user_id`).
+  //
+  // `author:<id>` — every page listing this author. Purged on any of their edits.
+  // `listing`     — sitemap/RSS/site-wide listings.
+  // (`pipeline:v1` is appended by markPublicCacheable itself — not here.)
+  `author:${profile.userId}`,
+  "listing",
+]);
+setPublicPageCsp(Astro);
+
+const canonical = profileUrl(profile.username);
+const displayName = profile.displayName ?? profile.username;
+const description = profile.bio ?? `Posts by ${displayName} on Thinker's Journal.`;
+const nextHref =
+  profile.nextCursor === null ? null : `/@${profile.username}?cursor=${encodeURIComponent(profile.nextCursor)}`;
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{displayName}</title>
+    <meta name="description" content={description} />
+    {/* ⚠️ ALWAYS the first page's URL, and ALWAYS a CONSTANT origin, never
+        Astro.url: (1) a cursor page is the same collection as page 1, and
+        pointing each page at itself would split the profile's ranking across
+        pages; (2) HOST IS NOT IN THE WORKERS CACHE KEY (src/lib/canonical.ts),
+        so a host-derived canonical would be cached under whichever host filled
+        the entry and served under all of them. */}
+    <link rel="canonical" href={canonical} />
+    {/* Cursor pages are pagination, not distinct content — keep them out of the
+        index while still letting a crawler follow through to the posts. */}
+    {cursor !== null && <meta name="robots" content="noindex, follow" />}
+    <meta property="og:type" content="profile" />
+    <meta property="og:title" content={displayName} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+  </head>
+  <body>
+    <h1>{displayName}</h1>
+    {profile.bio !== null && <p>{profile.bio}</p>}
+
+    {
+      profile.posts.length === 0 ? (
+        <p id="no-posts">No posts yet.</p>
+      ) : (
+        <ul>
+          {profile.posts.map((post) => (
+            <li>
+              <a href={`/@${profile.username}/${post.slug}`}>{post.title}</a>
+              {/* markdownExcerpt returns TEXT; Astro escapes it into the element.
+                  Never set:html here — this is untrusted source, unsanitized. */}
+              <p>{markdownExcerpt(post.excerptSource)}</p>
+              <time datetime={post.publishedAt}>{new Date(post.publishedAt).toISOString().slice(0, 10)}</time>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+
+    {nextHref !== null && (
+      <a id="next-page" rel="next" href={nextHref}>
+        Older posts
+      </a>
+    )}
+  </body>
+</html>
