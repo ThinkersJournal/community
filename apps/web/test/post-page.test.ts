@@ -22,7 +22,8 @@ import { describe, expect, it } from "vitest";
  *     `_`-prefixed segments Astro skips without warning);
  *   • ANONYMOUS BY CONSTRUCTION — the public fetch forwards no browser request;
  *   • a not-found NEVER declares cacheability (it returns before the helper);
- *   • the three purge-matched cache tags; the CSP; the ld+json escape.
+ *   • the two purge-matched cache tags (and NEVER the platform-wide `listing`);
+ *     the CSP; the ld+json escape.
  *
  * ⚠️ ANTI-VACUITY: every negative below is preceded by a POSITIVE that proves we
  * are looking at the real construct (the call exists, the fetch exists) — a bare
@@ -107,16 +108,22 @@ describe("cacheability + purge tags", () => {
     expect(code).toContain("markPublicCacheable(Astro,");
   });
 
-  it("⚠️ passes exactly the three tags apps/api/src/cache/purge.ts purges by", () => {
-    // Cross-checked against apps/api/src/routes/posts.ts call sites:
-    //   publish -> [`author:${authorId}`, "listing"]
-    //   edit    -> [`post:${updated.id}`, `author:${authorId}`, "listing"]
-    // A typo here is invisible locally (miniflare does not simulate Workers
-    // Cache); its only symptom is edits that never invalidate. `pipeline:v1` is
-    // appended by the helper itself, not here.
+  it("⚠️ passes exactly the two tags it depends on — and NEVER the platform-wide `listing`", () => {
+    // This page subscribes to `post:${post.id}` + `author:${post.authorId}`.
+    // Cross-checked against apps/api/src/routes/posts.ts: both call sites purge
+    // `author:`, and edit also purges `post:`, so every change that actually
+    // affects THIS post's page invalidates it. A typo here is invisible locally
+    // (miniflare does not simulate Workers Cache); its only symptom is edits that
+    // never invalidate. `pipeline:v1` is appended by the helper itself, not here.
+    //
+    // ⚠️ The api ADDITIONALLY purges `"listing"` on every publish/edit by ANY
+    // author, but this page must NOT subscribe to it: doing so re-introduces the
+    // final-review defect — every author's write would evict every post page (a
+    // viral post's ~24 renders/day balloons to a render on every platform-wide
+    // write). This inverted assertion is the permanent tripwire against re-adding it.
     expect(code).toContain("`post:${post.id}`");
     expect(code).toContain("`author:${post.authorId}`");
-    expect(code).toMatch(/["']listing["']/);
+    expect(code).not.toMatch(/["']listing["']/);
   });
 
   it("⚠️ a NOT-FOUND returns BEFORE it ever declares cacheability", () => {

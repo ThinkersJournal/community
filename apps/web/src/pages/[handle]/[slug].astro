@@ -80,22 +80,27 @@ const publishedDisplay = Number.isNaN(publishedDate.getTime())
   : publishedDate.toISOString().slice(0, 10);
 
 markPublicCacheable(Astro, [
-  // ⚠️ THESE THREE LITERALS MUST MATCH apps/api/src/cache/purge.ts's CALL SITES
-  // EXACTLY — a typo here is INVISIBLE (miniflare does not simulate Workers
-  // Cache) and its only symptom is edits that never appear for up to 25h.
-  // Cross-checked against apps/api/src/routes/posts.ts:
-  //   • publish -> purgeTags(env, [`author:${authorId}`, "listing"])
-  //   • edit    -> purgeTags(env, [`post:${updated.id}`, `author:${authorId}`, "listing"])
-  // and the api's `GET /public/posts` selects `p.id AS id` + `p.author_id AS
+  // ⚠️ THESE LITERALS MUST MATCH apps/api/src/cache/purge.ts's CALL SITES EXACTLY
+  // for the tags this page DOES subscribe to — a typo here is INVISIBLE (miniflare
+  // does not simulate Workers Cache) and its only symptom is edits that never
+  // appear for up to 25h. Cross-checked against apps/api/src/routes/posts.ts, and
+  // the api's `GET /public/posts` selects `p.id AS id` + `p.author_id AS
   // "authorId"`, i.e. the SAME two ids those call sites interpolate.
   //
   // `post:<id>`   — this page. Purged on every edit of this post.
-  // `author:<id>` — every page listing this author. Purged on any of their edits.
-  // `listing`     — sitemap/RSS/site-wide listings.
+  // `author:<id>` — purged on any of this author's publishes/edits (so e.g. a
+  //                 future display-name change reflows the byline here).
+  //
+  // ⚠️ THE api ALSO purges `"listing"` on every publish/edit — and this page
+  // DELIBERATELY does NOT subscribe to it. A single post's content never changes
+  // when a DIFFERENT author publishes, so subscribing would evict this (possibly
+  // viral) page on every platform-wide write for nothing — the exact defect the
+  // final whole-branch review caught. `"listing"` is reserved for M2's site-wide
+  // feed page, which will be the correct subscriber. Do NOT re-add `"listing"`
+  // here (test/post-page.test.ts is the permanent tripwire).
   // (`pipeline:v1` is appended by markPublicCacheable itself — not here.)
   `post:${post.id}`,
   `author:${post.authorId}`,
-  "listing",
 ]);
 setPublicPageCsp(Astro);
 

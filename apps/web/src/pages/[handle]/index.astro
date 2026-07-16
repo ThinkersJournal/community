@@ -33,9 +33,9 @@
  * not an error page.
  *
  * ⚠️ EACH CURSOR PAGE IS ITS OWN CACHE ENTRY — the query string IS in the cache
- * key. They all carry `author:<id>` + `listing`, so one purge (on this author's
- * publish OR edit — apps/api/src/routes/posts.ts) drops every page of this
- * author's listing at once.
+ * key. They all carry `author:<id>`, so one purge (on this author's publish OR
+ * edit — apps/api/src/routes/posts.ts) drops every page of this author's listing
+ * at once.
  *
  * ⚠️ ROUTING: `[handle]/index.astro`, a sibling of `[handle]/[slug].astro`, not a
  * literal `@[username]` directory — `@` in a folder name is unverified territory
@@ -82,23 +82,28 @@ if (response.status !== 200 || response.data === null) {
 const profile = response.data;
 
 markPublicCacheable(Astro, [
-  // ⚠️ THESE TWO LITERALS MUST MATCH apps/api/src/cache/purge.ts's CALL SITES
-  // EXACTLY — a typo here is INVISIBLE (miniflare does not simulate Workers
-  // Cache) and its only symptom is a listing that never reflects a new/edited
-  // post for up to 25h. Cross-checked against apps/api/src/routes/posts.ts:
-  //   • publish -> purgeTags(env, [`author:${authorId}`, "listing"])
-  //   • edit    -> purgeTags(env, [`post:${updated.id}`, `author:${authorId}`, "listing"])
-  // Both call sites purge `author:` + `listing`, so this page is invalidated by
-  // either. (`post:<id>` is irrelevant here — this page never shows one post's
-  // full body, only a listing.) The api's `GET /public/profile` selects
-  // `user_id AS "userId"` — the SAME id those call sites interpolate as
-  // `authorId` (it is the post's `author_id`, which IS the profile's `user_id`).
+  // ⚠️ THIS LITERAL MUST MATCH apps/api/src/cache/purge.ts's CALL SITES EXACTLY
+  // for the tag this page DOES subscribe to — a typo here is INVISIBLE (miniflare
+  // does not simulate Workers Cache) and its only symptom is a listing that never
+  // reflects a new/edited post for up to 25h. Cross-checked against
+  // apps/api/src/routes/posts.ts: both the publish and edit call sites purge
+  // `author:${authorId}`, so this page is invalidated by either. (`post:<id>` is
+  // irrelevant here — this page never shows one post's full body, only a listing.)
+  // The api's `GET /public/profile` selects `user_id AS "userId"` — the SAME id
+  // those call sites interpolate as `authorId` (it is the post's `author_id`,
+  // which IS the profile's `user_id`).
   //
-  // `author:<id>` — every page listing this author. Purged on any of their edits.
-  // `listing`     — sitemap/RSS/site-wide listings.
+  // `author:<id>` — this author's listing. Purged on any of their publishes/edits.
+  //
+  // ⚠️ THE api ALSO purges `"listing"` on every publish/edit — and this page
+  // DELIBERATELY does NOT subscribe to it. This author's listing never changes
+  // when a DIFFERENT author publishes, so subscribing would evict every page of
+  // this listing on every platform-wide write for nothing — the exact defect the
+  // final whole-branch review caught. `"listing"` is reserved for M2's site-wide
+  // feed page, which will be the correct subscriber. Do NOT re-add `"listing"`
+  // here (test/profile-page.test.ts is the permanent tripwire).
   // (`pipeline:v1` is appended by markPublicCacheable itself — not here.)
   `author:${profile.userId}`,
-  "listing",
 ]);
 setPublicPageCsp(Astro);
 

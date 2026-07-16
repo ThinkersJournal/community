@@ -77,7 +77,10 @@ export interface CacheContext {
  * PURGE-INVALIDATED pages (post, profile). Long is CORRECT here precisely
  * because purge exists: a viral post at 1M views/day costs ~24 renders/day
  * (99.998%) instead of ~1440 at a 60s window, and an edit is reflected by a
- * near-instant global purge rather than by waiting out the TTL.
+ * near-instant global purge rather than by waiting out the TTL. That ~24 figure
+ * holds ONLY because those pages subscribe to their OWN `post:`/`author:` tags
+ * and NOT the platform-wide `listing` tag — subscribing to `listing` would evict
+ * them on every platform-wide write, collapsing the ratio back toward per-write.
  */
 export const PUBLIC_MAX_AGE = 3600;
 export const PUBLIC_SWR = 86400;

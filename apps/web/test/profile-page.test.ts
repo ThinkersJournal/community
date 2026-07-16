@@ -25,7 +25,8 @@ import { describe, expect, it } from "vitest";
  *     api's 400 on a malformed cursor) collapses to a single 404 rather than a
  *     crash;
  *   • a not-found never declares cacheability;
- *   • the two purge-matched cache tags; the CSP; excerpts never set:html'd.
+ *   • the one purge-matched cache tag (and NEVER the platform-wide `listing`);
+ *     the CSP; excerpts never set:html'd.
  *
  * ⚠️ ANTI-VACUITY: every negative below is preceded by a POSITIVE that proves we
  * are looking at the real construct — a bare `not.toContain` over source text
@@ -125,18 +126,22 @@ describe("cacheability + purge tags", () => {
     expect(code).toContain("markPublicCacheable(Astro,");
   });
 
-  it("⚠️ passes exactly the two tags apps/api/src/cache/purge.ts's PUBLISH call site purges by", () => {
-    // Cross-checked against apps/api/src/routes/posts.ts:180 —
-    //   publish -> purgeTags(env, [`author:${authorId}`, "listing"])
-    // (edit additionally purges `post:${id}`, which is irrelevant to a LISTING
-    // page: this page never shows one post's full body, so it has no post-scoped
-    // tag to carry — but `edit` still purges `author:` + `listing` too, so this
-    // page invalidates on edits as well as on publish.)
-    // A typo here is invisible locally (miniflare does not simulate Workers
-    // Cache); its only symptom is a listing that never reflects a new/edited
-    // post for up to 25h. `pipeline:v1` is appended by the helper itself, not here.
+  it("⚠️ passes exactly the one tag it depends on — and NEVER the platform-wide `listing`", () => {
+    // This page subscribes only to `author:${profile.userId}`. Cross-checked
+    // against apps/api/src/routes/posts.ts: both the publish and edit call sites
+    // purge `author:`, so every change to this author's listing invalidates it.
+    // (`post:<id>` is irrelevant to a LISTING page — it never shows one post's
+    // full body.) A typo here is invisible locally (miniflare does not simulate
+    // Workers Cache); its only symptom is a listing that never reflects a
+    // new/edited post for up to 25h. `pipeline:v1` is appended by the helper, not here.
+    //
+    // ⚠️ The api ADDITIONALLY purges `"listing"` on every publish/edit by ANY
+    // author, but this page must NOT subscribe to it: this author's listing never
+    // changes when a DIFFERENT author publishes, and subscribing re-introduces the
+    // final-review defect (every author's write would evict every profile page).
+    // This inverted assertion is the permanent tripwire against re-adding it.
     expect(code).toContain("`author:${profile.userId}`");
-    expect(code).toMatch(/["']listing["']/);
+    expect(code).not.toMatch(/["']listing["']/);
   });
 
   it("⚠️ a NOT-FOUND returns BEFORE it ever declares cacheability", () => {

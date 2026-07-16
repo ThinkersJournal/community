@@ -22,7 +22,7 @@ let message = "";
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
 
-  const response = await apiFetch<{ code?: string; error?: string }>(
+  const response = await apiFetch<{ code?: string }>(
     "/auth/signup",
     {
       method: "POST",
