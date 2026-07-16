@@ -1,0 +1,152 @@
+---
+/**
+ * `/@user/slug` — the public post page. The SEO/unfurl-critical render, and the
+ * one M1 page whose output is edge-cached for hours.
+ *
+ * ⚠️ THIS RENDER IS FULLY ANONYMOUS, BY CONSTRUCTION. The api call below omits
+ * `request`, so src/lib/api.ts does NOT forward the browser's Cookie — the api
+ * cannot resolve a session, and there is therefore no viewer-specific value in
+ * this render to leak. That is the DEFENSE. Cookie is not in the Workers Cache
+ * key and does not trigger bypass, so a cacheable render carrying viewer state is
+ * served to EVERYONE. markPublicCacheable's cookie check is belt-and-braces.
+ * ⚠️ DO NOT add `request: Astro.request` to that call to "personalize" anything.
+ * Viewer state (an Edit link, reactions) hydrates CLIENT-SIDE.
+ *
+ * ⚠️ THE ANONYMITY IS STRUCTURAL, NOT A POLICY. This page reads exactly one
+ * source — `GET /public/posts`, whose handler reads NO session at all
+ * (apps/api/src/routes/public.ts) and whose response type is `PublicPost`, the
+ * anonymous-reader DTO. There is no viewer-specific value in scope here to leak
+ * even by accident: the only inputs are two URL params and that anonymous body.
+ *
+ * ⚠️ ROUTING: `[handle]`, not a literal `@[username]` directory. `@` in a folder
+ * name is unverified territory in Astro 7; an explicit startsWith("@") check is
+ * unambiguous and gives a real 404 for `/foo/bar`. Static routes (/login,
+ * /new-post, /internal/purge) still win — Astro prioritizes static segments.
+ * ⚠️ And NOTHING here may be renamed to a `_`-prefixed path: Astro's router skips
+ * any file OR DIRECTORY starting with `_`, silently (see src/pages/internal/purge.ts).
+ */
+import { markdownExcerpt, renderMarkdown } from "@thinkersjournal/markdown";
+
+import { apiFetch } from "../../lib/api";
+import { markPublicCacheable } from "../../lib/cache";
+import { postUrl, profileUrl } from "../../lib/canonical";
+import { setPublicPageCsp } from "../../lib/csp";
+import { jsonLdScript } from "../../lib/json-ld";
+
+import type { PublicPost } from "@thinkersjournal/shared";
+
+const { handle, slug } = Astro.params;
+if (handle === undefined || slug === undefined || !handle.startsWith("@")) {
+  return new Response(null, { status: 404 });
+}
+const username = handle.slice(1);
+if (username === "") return new Response(null, { status: 404 });
+
+// ⚠️ ANONYMOUS — no `request`, so no Cookie is forwarded. See the header.
+const response = await apiFetch<PublicPost>(
+  `/public/posts?username=${encodeURIComponent(username)}&slug=${encodeURIComponent(slug)}`,
+);
+if (response.status !== 200 || response.data === null) {
+  // A draft and a nonexistent post are the same answer here because the api
+  // makes them the same answer (apps/api/src/routes/public.ts).
+  // ⚠️ This branch declares no cacheability, so the adapter stamps `no-store` and
+  // the 404 is uncached — deliberate and fail-closed. It costs an api hit per
+  // bogus URL; caching negatives correctly is a purge problem (a post that is
+  // later published must invalidate its own 404) and is not worth it in M1.
+  return new Response(null, { status: 404 });
+}
+const post = response.data;
+
+// READ-TIME RENDER. markdown_source is the single source of truth; no HTML is
+// ever stored. This is what makes a sanitizer fix a DEPLOY (plus a
+// PIPELINE_VERSION bump) rather than a backfill of every row.
+const html = await renderMarkdown(post.markdownSource);
+// ⚠️ PLAIN TEXT, DELIBERATELY UNESCAPED (packages/markdown/src/excerpt.ts says so).
+// Escaping is THIS page's job. Every use below is either an Astro `{}` attribute
+// expression (Astro HTML-escapes those) or goes through jsonLdScript. Never
+// hand-roll an attribute around this value and never `set:html` it.
+const description = markdownExcerpt(post.markdownSource);
+const canonical = postUrl(post.username, post.slug);
+
+markPublicCacheable(Astro, [
+  // ⚠️ THESE THREE LITERALS MUST MATCH apps/api/src/cache/purge.ts's CALL SITES
+  // EXACTLY — a typo here is INVISIBLE (miniflare does not simulate Workers
+  // Cache) and its only symptom is edits that never appear for up to 25h.
+  // Cross-checked against apps/api/src/routes/posts.ts:
+  //   • publish -> purgeTags(env, [`author:${authorId}`, "listing"])
+  //   • edit    -> purgeTags(env, [`post:${updated.id}`, `author:${authorId}`, "listing"])
+  // and the api's `GET /public/posts` selects `p.id AS id` + `p.author_id AS
+  // "authorId"`, i.e. the SAME two ids those call sites interpolate.
+  //
+  // `post:<id>`   — this page. Purged on every edit of this post.
+  // `author:<id>` — every page listing this author. Purged on any of their edits.
+  // `listing`     — sitemap/RSS/site-wide listings.
+  // (`pipeline:v1` is appended by markPublicCacheable itself — not here.)
+  `post:${post.id}`,
+  `author:${post.authorId}`,
+  "listing",
+]);
+setPublicPageCsp(Astro);
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  headline: post.title,
+  description,
+  datePublished: post.publishedAt,
+  dateModified: post.updatedAt,
+  author: { "@type": "Person", name: post.displayName ?? post.username, url: profileUrl(post.username) },
+  mainEntityOfPage: { "@type": "WebPage", "@id": canonical },
+};
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{post.title}</title>
+    <meta name="description" content={description} />
+    {/* ⚠️ Built from a CONSTANT origin, never Astro.url — HOST IS NOT IN THE
+        CACHE KEY, so a host-derived canonical would be cached under whichever
+        host filled the entry and served under all of them. */}
+    <link rel="canonical" href={canonical} />
+
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content={post.title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="article:published_time" content={post.publishedAt} />
+    <meta property="article:modified_time" content={post.updatedAt} />
+    <meta property="article:author" content={post.displayName ?? post.username} />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    {/* ⚠️ jsonLdScript, NEVER a bare JSON.stringify: it does not escape `<`, so a
+        title containing `</script>` would close this block and inject markup —
+        a path that bypasses the Markdown sanitizer entirely. A ld+json block is
+        NOT subject to script-src (it is inert data, never executed), so the CSP
+        neither blocks it nor protects it. See src/lib/json-ld.ts.
+
+        ⚠️ `is:inline` IS REQUIRED, not decoration. Without it Astro treats a
+        <script> as a module to BUNDLE — which would move this block into an
+        external .js file and destroy the structured data. Astro already infers
+        it here (because of the `type` attribute) and emits a hint saying so;
+        stating it explicitly is what stops that inference being silently
+        withdrawn by a future refactor. It does NOT weaken the CSP: script-src
+        governs EXECUTED script, and a non-JS `type` is inert data. */}
+    <script is:inline type="application/ld+json" set:html={jsonLdScript(jsonLd)} />
+  </head>
+  <body>
+    <article>
+      <h1>{post.title}</h1>
+      <p>
+        <a href={`/@${post.username}`}>{post.displayName ?? post.username}</a>
+        <time datetime={post.publishedAt}>{new Date(post.publishedAt).toISOString().slice(0, 10)}</time>
+      </p>
+      {/* ⚠️ THE ONE PLACE THIS APP EMITS UNESCAPED HTML. It is safe for exactly
+          one reason: `html` came out of packages/markdown, whose LAST UNSAFE
+          THING is rehype-sanitize. Never `set:html` anything else here, and never
+          interpolate a user value into this element. */}
+      <div id="post-body" set:html={html} />
+    </article>
+  </body>
+</html>

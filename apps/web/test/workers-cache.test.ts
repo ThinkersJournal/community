@@ -242,5 +242,26 @@ describe("wrangler.jsonc — the Workers Cache lever", () => {
     };
     expect(astroConfig.cache?.provider?.name).toBe("cloudflare");
     expect(config.cache?.enabled).toBe(true);
-  });
+    // ⚠️ 60s, NOT the 5s default — and the reason is genuine work, not a flaky
+    // machine. `import("../astro.config.mjs")` cold-loads the @astrojs/cloudflare
+    // adapter graph (astro.config.mjs's own imports), which is heavy enough to sit
+    // right AT the 5s default: measured 6.6s for this whole file clean, and ~17s
+    // cold on a slower machine. T15 tipped it over the edge — this app now also
+    // pulls Shiki's grammars in via `@thinkersjournal/markdown` elsewhere in the
+    // suite, so the run is heavier by the time this dynamic import fires. Either
+    // way it is real I/O, not a hang, so the honest fix is real-I/O time for THIS
+    // test (the call the ratelimit/limiter tests already make with 60_000) — NOT a
+    // higher GLOBAL testTimeout, which would mask a genuine hang in some future
+    // fast test.
+    //
+    // ⚠️ ALSO measured: this import can genuinely HANG (>60s) if a `wrangler dev`
+    // / workerd process is alive — the same "don't touch the adapter while a dev
+    // server runs" trap documented in astro.config.mjs and playwright.config.ts.
+    // That is an environment error, not this test's business; run the suite with
+    // no dev server up.
+    //
+    // The assertions above are untouched: rename the provider or flip
+    // `cache.enabled` and this still reddens (fast — the import succeeds, the
+    // expect fails), which is how MUTATION-style tampering is caught here.
+  }, 60_000);
 });
