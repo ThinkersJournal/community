@@ -91,6 +91,36 @@ supplies the same values via `miniflare.bindings`, and `playwright.config.ts` pa
 them as `--var` flags, so both are CI-safe on a fresh checkout. `.dev.vars` is only for
 running `wrangler dev` by hand.
 
+### `apps/web/.dev.vars` (gitignored — create it yourself)
+
+The `web` Worker needs **one** local secret, and the value **must be byte-identical to
+`apps/api/.dev.vars`'s `PURGE_SECRET`**:
+
+```ini
+# The shared secret guarding POST /internal/purge (apps/web/src/lib/purge.ts).
+# ⚠️ MUST match apps/api/.dev.vars' PURGE_SECRET exactly.
+PURGE_SECRET=dev-purge-secret-not-for-production
+```
+
+**Why it matters, and why its absence is invisible.** On every publish/edit the `api`
+Worker asks `web` to invalidate its cached HTML, over the `WEB` Service Binding (the
+purge hop — `api` cannot reach into `web`'s cache). `web` compares this secret in
+constant time and **fails closed**. Without the file, `web` has no `PURGE_SECRET`, every
+purge **403s**, and the only symptom is an api log line — `cache purge rejected` — while
+content stays stale for its full 25h `maxAge+swr` window. A **mismatch between the two
+files behaves identically.** Nothing crashes; nothing turns red.
+
+> ⚠️ **This file is read at BUILD time, not at `wrangler dev` time.** The Cloudflare Vite
+> plugin (`@cloudflare/vite-plugin`, `src/dev-vars.ts`) copies it to
+> **`apps/web/dist/server/.dev.vars`** during the build — a quoted/normalized copy —
+> because `wrangler dev -c dist/server/wrangler.json` (the command below) resolves
+> `.dev.vars` next to the config it is given, which is the *generated* one. Two
+> consequences: create this file **before** building, and **rebuild after changing it**
+> or `wrangler dev` keeps serving the old value.
+
+The E2E does not depend on this file — `playwright.config.ts` passes `PURGE_SECRET` to
+**both** Workers as `--var`, so a fresh checkout is CI-safe.
+
 ### Running both Workers
 
 The `web` Worker is server-rendered Astro; the `api` Worker is reached **only** over the
@@ -300,3 +330,51 @@ Check every box before the first production deploy.
 - [ ] **The E2E's api-on-:8788 topology is DEV-ONLY.** It exists so the test can read the
       verification token off the api directly; a deployed environment has no reason to run
       the two-process split. Do not carry it forward.
+
+**Learned during M1 — the cross-Worker purge hop (`api` → `web`):**
+
+> Why any of this exists: Workers Cache purge is scoped to the Worker+entrypoint that
+> **owns** the cache — *a Worker cannot reach into another Worker's cache.* Edits land in
+> `api`; the rendered HTML lives in `web`'s cache. So `api` asks `web` over the `WEB`
+> Service Binding (`POST /internal/purge`), and `web` calls `context.cache.invalidate()`
+> inside its own entrypoint. **Every failure mode below is silent by design**, because a
+> purge failure must never turn a saved edit into a 500 — the post is already committed.
+> The blast radius of each is the same: content stale for its full `maxAge+swr` window
+> (**25 hours**), with nothing red anywhere.
+
+- [ ] **`PURGE_SECRET` is set on BOTH Workers, byte-identical, with real entropy.**
+      `wrangler secret put PURGE_SECRET` on `thinkersjournal-api` **and** on
+      `thinkersjournal-web`. `web` compares it in constant time and **fails closed** — on a
+      mismatch, on an unset value, and on an empty one (an empty secret must never
+      authorize the internet: `timingSafeEqual("", "") === true`, which is why
+      `apps/web/src/lib/purge.ts` guards `=== ""` explicitly). Set on one Worker but not
+      the other = **every purge 403s forever**, and the only signal is an api log line.
+      Do not reuse the dev placeholder.
+- [ ] **First deploy is ORDER-DEPENDENT — the Service Bindings are CIRCULAR.** `web → api`
+      for everything, `api → web` for purge. `wrangler deploy` resolves the target service
+      **by name**, and on a clean account neither exists yet. Order: **deploy `api` with the
+      `services` block commented out → deploy `web` → restore the block → redeploy `api`.**
+      Every later deploy is order-independent. (The block is
+      `"services": [{ "binding": "WEB", "service": "thinkersjournal-web" }]` in
+      `apps/api/wrangler.jsonc`; it is pinned by `apps/api/test/purge-binding.node.test.ts`,
+      because with it deleted **every api test still passes** while production gets
+      `env.WEB === undefined` and purges die silently.)
+- [ ] **Alert on the purge log lines.** `purgeTags` **never throws** by contract (the write
+      is already committed), so a broken hop is invisible to users and to every test. The
+      only signal is `cache purge rejected` / `cache purge threw` in the api's logs. Wire
+      those alerts before launch — same reasoning, and the same failure shape, as the
+      Postmark alerting item above.
+- [ ] **Verify a real purge on real infra — nothing local can.** Workers Cache is **not**
+      simulated by miniflare: locally `cache.purge` is not even a function
+      (`TypeError: cache.purge is not a function`), so `POST /internal/purge` 500s under
+      `wrangler dev` **by design** and the api absorbs it. That means the *entire* purge
+      mechanism is unproven until it runs deployed. Publish a post, edit it, confirm the
+      change is live before `maxAge` would have expired.
+- [ ] **Hardening (free): block `/internal/*` from the public internet at the edge.**
+      `web` is the public Worker, so `https://thinkersjournal.com/internal/purge` is a real,
+      routable URL and the shared secret is its **only** guard — there is no way to prove a
+      request arrived over a Service Binding. A WAF custom rule blocking `/internal/*` costs
+      nothing and **will not break the hop**: Service-Binding dispatch is isolate-to-isolate
+      and never traverses the edge. The secret remains the guard; this removes the public
+      attack surface entirely. Worst case if the secret leaks is a forced-re-render cost/DoS
+      lever, not a data leak (the route reads nothing and writes nothing) — rotate it.

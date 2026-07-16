@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
@@ -35,27 +35,65 @@ const SECRET = "dev-purge-secret-not-for-production";
  * the route never entered the build manifest — no warning, no error, just a 404 at
  * runtime for the one request that keeps the site from serving 25h-stale HTML.
  *
- * This pins the FILE LOCATION, not the handler, because the file location is what
- * was wrong. `apps/api/src/cache/purge.ts`'s PURGE_PATH must name the same route;
- * that side is pinned by apps/api/test/purge.test.ts.
+ * ⚠️ AN EARLIER VERSION OF THIS BLOCK WAS ITSELF VACUOUS — it asserted
+ * `["internal", "purge.ts"].startsWith("_") === false` over a HARDCODED literal, so
+ * it never touched the filesystem and could never fail. That is the same
+ * always-passes anti-pattern this task exists to stamp out, decorating the very
+ * finding it was written for. It now walks the real `src/pages` tree.
  */
 const PAGES_DIR = join(import.meta.dirname, "../src/pages");
 const ROUTE_FILE = join(PAGES_DIR, "internal/purge.ts");
+/** The built server bundle — present only after `pnpm --filter ...web build`. */
+const SERVER_ENTRY = join(import.meta.dirname, "../dist/server/entry.mjs");
+
+/** Every file under `dir`, recursively. Mirrors page-cache-inventory.test.ts. */
+function allFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((entry) => {
+    const full = join(dir, entry);
+    return statSync(full).isDirectory() ? allFiles(full) : [full];
+  });
+}
 
 describe("⚠️ the purge route is ROUTABLE (not just correct)", () => {
   it("lives where api dispatches: src/pages/internal/purge.ts -> POST /internal/purge", () => {
     expect(existsSync(ROUTE_FILE), `${ROUTE_FILE} does not exist`).toBe(true);
   });
 
-  it("has NO underscore-prefixed path segment, which Astro would silently drop", () => {
-    const segments = ["internal", "purge.ts"];
-    for (const segment of segments) {
-      expect(
-        segment.startsWith("_"),
-        `"${segment}" starts with "_", so Astro's router skips it and the route 404s with no warning anywhere. See this file's header.`,
-      ).toBe(false);
-    }
+  it("NO page anywhere under src/pages has an underscore-prefixed segment", () => {
+    // ⚠️ A REPO-WIDE TRIPWIRE, not a check of this one route: it also catches
+    // someone adding a `_dir/` or `_file.ts` elsewhere under src/pages and quietly
+    // losing that route. Every file under src/pages here is a real route — the
+    // cacheability inventory already requires each one to declare itself — so
+    // Astro's "underscore means private helper" convention has no legitimate use
+    // in this tree. If you want a private module, put it in src/lib or
+    // src/components, NOT under src/pages.
+    const offenders = allFiles(PAGES_DIR)
+      .map((f) => f.replace(/\\/g, "/").split("src/pages/")[1] ?? f)
+      .filter((rel) => rel.split("/").some((segment) => segment.startsWith("_")));
+
+    expect(
+      offenders,
+      `these files under src/pages have an "_"-prefixed segment, so Astro's router SKIPS them and they 404 with no warning anywhere (dist/core/routing/create-manifest.js: 'if (name[0] === "_") { continue; }'): ${offenders.join(", ")}`,
+    ).toEqual([]);
   });
+
+  // ⚠️ BUILD-GATED, and it is the only test here that proves ROUTABILITY rather
+  // than a PROXY for it. The two above pin the file's LOCATION, which is a proxy
+  // with slack: if Astro's rules shift, or `prerender = false` is dropped from the
+  // route, they stay green while the route dies exactly as it did before. This
+  // greps the real built manifest. Skipped without a build (a fresh clone has no
+  // dist/), which is why it backs the location tests up rather than replacing them;
+  // `pnpm exec playwright test` always builds first, so CI does exercise it.
+  it.skipIf(!existsSync(SERVER_ENTRY))(
+    "is present in the BUILT server manifest (the only real proof)",
+    () => {
+      const entry = readFileSync(SERVER_ENTRY, "utf8");
+      expect(
+        entry.includes('"route":"/internal/purge"'),
+        'dist/server/entry.mjs has no "route":"/internal/purge". The route did not survive the build — Astro dropped it (an "_"-prefixed segment?) or it was moved. api will POST into a 404 and every purge will silently fail.',
+      ).toBe(true);
+    },
+  );
 });
 
 function context(
