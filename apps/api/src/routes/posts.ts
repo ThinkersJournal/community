@@ -17,13 +17,15 @@
  * `WHERE id = $1 AND author_id = $2` returning zero rows is the check, atomically.
  * Zero rows is a 404 — NEVER a 403, which would confirm the id names a real post.
  *
- * ⚠️ NO CACHE PURGE HERE YET — Task 14 wires it in. There is no cache to purge
- * until Task 12 creates one, so a purge call written here would be dead code
- * against a cache that does not exist. These handlers are complete without it.
+ * ⚠️ PURGE-ON-EDIT IS PART OF THE WRITE, not an afterthought. The tags here are
+ * exactly the ones apps/web/src/lib/cache.ts sets on the public renders; a write
+ * that skips the purge leaves that content stale for a full maxAge+swr window
+ * (25 HOURS). test/purge-wiring.test.ts pins every call site.
  */
 import { CreatePostInput, UpdatePostInput } from "@thinkersjournal/shared";
 
 import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
+import { purgeTags } from "../cache/purge";
 import { withClient } from "../db/client";
 import { isInvalidTextRepresentation, isUniqueViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
@@ -171,8 +173,12 @@ export async function handleCreatePost(
   }
   if (inserted === null) return errorResponse("SLUG_TAKEN", 409);
 
-  // Task 14 adds the cache purge here (publishing changes what a LISTING shows).
-  // Not now: no cache exists until Task 12.
+  // Publishing changes what a LISTING shows. There is no `post:` tag to purge —
+  // nothing has ever been cached for a post that did not exist until now. A draft
+  // purges NOTHING: it is in no cached listing, and purge quota is scarce.
+  if (status === "published") {
+    await purgeTags(env, [`author:${authorId}`, "listing"]);
+  }
 
   return new Response(JSON.stringify({ id: inserted.id, slug: inserted.slug, status }), {
     status: 201,
@@ -225,8 +231,21 @@ export async function handleUpdatePost(
   // ⚠️ Zero rows means "no such post" OR "not yours" — answered identically.
   if (updated === null) return notFound();
 
-  // Task 14 adds the cache purge here — this is THE call site the whole purge hop
-  // exists for. Not now: no cache exists until Task 12.
+  // ⚠️ BELOW THE 404 ABOVE, AND THAT ORDER IS A SECURITY PROPERTY, not tidiness.
+  // Purge quota is 5 requests/MINUTE for the whole zone. Purging before the
+  // ownership check would let anyone burn it by PATCHing ids they do not own —
+  // a cheap, unauthenticated-in-effect denial of invalidation, whose symptom is
+  // everyone ELSE's edits going stale for 25h. test/purge-wiring.test.ts pins
+  // this with "a 404 edit purges NOTHING"; moving this line above the check
+  // reddens it.
+  // ⚠️ ONE call, ALL tags. A call per tag would spend an author's whole budget in
+  // under two edits.
+  // ⚠️ AWAITED, not fired into ctx.waitUntil(): the editor redirects to the post
+  // page straight after this, and purging behind the response races that
+  // redirect — showing the author their own stale post. Purge is ~10-50ms and
+  // edits are rare. It NEVER throws (see src/cache/purge.ts): the post is already
+  // committed, so a failed invalidation must not lose the user's work.
+  await purgeTags(env, [`post:${updated.id}`, `author:${authorId}`, "listing"]);
 
   return new Response(JSON.stringify({ id: updated.id, slug: updated.slug, status }), {
     status: 200,

@@ -1,5 +1,6 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 
+import worker from "../src";
 import { csrfTokenFor } from "../src/auth/csrf";
 import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
@@ -110,6 +111,79 @@ export async function createVerifiedActor(): Promise<Actor> {
 export async function createUnverifiedActor(): Promise<Actor> {
   const { userId, username } = await insertUser(false);
   return { userId, username, ...(await sessionFor(userId)) };
+}
+
+/**
+ * An origin in `checkOrigin`'s allowlist (src/auth/csrf.ts). The suite runs with
+ * `TEST_ROUTES: "1"` (vitest.config.ts), which is what puts the dev origins on
+ * that allowlist at all.
+ */
+const ALLOWED_ORIGIN = "http://localhost:8787";
+
+/** The headers a mutating, authenticated request from `actor` must carry. */
+function mutatingHeaders(actor: Actor): Record<string, string> {
+  return {
+    Origin: ALLOWED_ORIGIN,
+    Cookie: actor.cookie,
+    "X-CSRF-Token": actor.csrfToken,
+    "content-type": "application/json",
+  };
+}
+
+/**
+ * A `POST /posts` REQUEST — deliberately NOT the response.
+ *
+ * ⚠️ THESE RETURN A `Request`, WHICH IS WHY THEY ARE NOT test/posts.test.ts's
+ * BUILDERS. That file's `createPost`/`patchPost` drive the Worker themselves and
+ * hand back a `Response`, which is right for what it tests. The purge suites must
+ * drive the Worker with a MODIFIED `env` (a stubbed `WEB` binding they can
+ * observe), so they need the request as a value and the dispatch as their own.
+ *
+ * The title is per-call unique: `posts_author_slug_key` is a unique index, and a
+ * fixed title would make a second create for the same actor depend on the
+ * handler's random-suffix retry rather than on the thing under test.
+ */
+export function createPostRequest(actor: Actor, status: string): Request {
+  return new Request("https://api.test/posts", {
+    method: "POST",
+    headers: mutatingHeaders(actor),
+    body: JSON.stringify({
+      title: `Purge fixture ${crypto.randomUUID()}`,
+      markdownSource: "# body",
+      status,
+    }),
+  });
+}
+
+/** A `PATCH /posts/:id` REQUEST for `actor` — see `createPostRequest`. */
+export function patchPostRequest(actor: Actor, id: string, status: string): Request {
+  return new Request(`https://api.test/posts/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: mutatingHeaders(actor),
+    body: JSON.stringify({
+      title: `Purge fixture edited ${crypto.randomUUID()}`,
+      markdownSource: "# edited",
+      status,
+    }),
+  });
+}
+
+/**
+ * Create a PUBLISHED post for `actor` and return its id, failing loudly if the
+ * create did not work — a fixture that silently returned `undefined` would make
+ * the suite's real assertions fail for a reason that is not theirs.
+ *
+ * Driven with the REAL `env`, whose `WEB` binding is vitest.config.ts's 200 stub:
+ * this create genuinely dispatches a purge, and nothing here looks at it.
+ */
+export async function createPublished(actor: Actor): Promise<string> {
+  const ctx = createExecutionContext();
+  const response = await worker.fetch(createPostRequest(actor, "published"), env, ctx);
+  await waitOnExecutionContext(ctx);
+  if (response.status !== 201) {
+    throw new Error(`fixture create failed: ${response.status} ${await response.text()}`);
+  }
+  return ((await response.json()) as { id: string }).id;
 }
 
 /**

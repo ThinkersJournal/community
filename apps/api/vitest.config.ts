@@ -106,6 +106,36 @@ export default defineConfig({
               // Miniflare simulates R2 locally with an in-memory bucket. The
               // name need only match wrangler.jsonc's binding.
               r2Buckets: ["MEDIA"],
+              // ⚠️ REQUIRED, NOT OPTIONAL — the pool will not START without it.
+              // wrangler.jsonc declares `services: [{ binding: "WEB", service:
+              // "thinkersjournal-web" }]` (the purge hop), and miniflare
+              // resolves service bindings by NAME against workers it actually
+              // has. `web` is a different package that is not in this pool, so
+              // without this override every test file dies before it runs with:
+              //
+              //   Worker "core:user:vitest-pool-workers-runner-pool"'s binding
+              //   "WEB" refers to a service "core:user:thinkersjournal-web",
+              //   but no such service is defined.
+              //
+              // A 200 is the RIGHT default rather than a throw: test/posts.test.ts
+              // drives the real handlers with the real `env`, so publishing a post
+              // there genuinely dispatches a purge through this binding. Answering
+              // "web accepted it" keeps that suite's output pristine (purgeTags
+              // logs on a non-2xx) without asserting anything about purging.
+              //
+              // ⚠️ THIS STUB PROVES NOTHING ABOUT THE HOP. It is a stand-in for a
+              // Worker that is not here. The tests that care (test/purge.test.ts,
+              // test/purge-wiring.test.ts) pass their OWN `WEB` stub in the `env`
+              // they hand to `worker.fetch`, and observe that. The REAL
+              // cross-Worker dispatch is only exercised by the E2E's two
+              // `wrangler dev` processes.
+              serviceBindings: {
+                WEB: () =>
+                  new Response(JSON.stringify({ purged: 0 }), {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                  }),
+              },
               // Values for vars/secrets that live in the gitignored
               // `apps/api/.dev.vars`, so CI checkouts never have them. Supplied
               // directly here to keep the suite CI-safe without depending on
@@ -124,6 +154,10 @@ export default defineConfig({
                 // which makes that route 404 like any nonexistent path.
                 // test/email-verify.test.ts covers BOTH states.
                 TEST_ROUTES: "1",
+                // A SECRET (src/cache/purge.ts). Supplied here so the suite is
+                // CI-safe without .dev.vars. Must match apps/web/.dev.vars for
+                // the E2E's cross-process purge hop to authenticate.
+                PURGE_SECRET: "dev-purge-secret-not-for-production",
               },
             },
           }),

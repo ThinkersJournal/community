@@ -15,6 +15,8 @@
  * elsewhere, or logging), it cannot be used to derive the secret or forge
  * anything beyond a matching CSRF header.
  */
+import { timingSafeEqual } from "@thinkersjournal/shared";
+
 import { sha256Hex } from "./encoding";
 
 import type { SessionData } from "@thinkersjournal/shared";
@@ -77,26 +79,6 @@ function allowedOrigins(env: Env): ReadonlySet<string> {
   return env.TEST_ROUTES === "1"
     ? PRODUCTION_AND_DEV_ORIGINS
     : PRODUCTION_ONLY_ORIGINS;
-}
-
-/**
- * Constant-time string comparison: accumulates XOR differences over the
- * FULL length of both strings (no early return on the first mismatch), so
- * the time taken does not leak how many leading characters matched. Callers
- * are expected to pass fixed-length strings (64-char hex digests); a length
- * mismatch itself is reported immediately (its own length check does not
- * leak useful timing information about digest content) but no character
- * comparison short-circuits.
- */
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
 }
 
 /**

@@ -55,6 +55,19 @@
     "bindings": [{ "name": "USER_SECURITY", "class_name": "UserSecurityDO" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserSecurityDO"] }],
+  // ⚠️ THE PURGE HOP — api CANNOT purge web's cache.
+  // Workers Cache purge is scoped to the Worker+entrypoint that OWNS the cache:
+  // "a Worker cannot reach into another Worker's cache." Edits land HERE; the
+  // rendered HTML lives in `web`'s cache. So this Worker asks `web` to purge, and
+  // `web` calls context.cache.invalidate() inside its own entrypoint — the only
+  // scope in which that call means anything. See src/cache/purge.ts.
+  //
+  // ⚠️ THIS MAKES THE SERVICE BINDINGS CIRCULAR (web -> api for everything, api
+  // -> web for purge). Fine at runtime; a FIRST-DEPLOY chicken-and-egg, because
+  // `wrangler deploy` resolves the target service by name and neither exists yet.
+  // Order: deploy api WITHOUT this block -> deploy web -> add this block ->
+  // redeploy api. Every later deploy is order-independent. See README.md's gate.
+  "services": [{ "binding": "WEB", "service": "thinkersjournal-web" }],
   // Brute-force defense for signup/login (see src/auth/ratelimit.ts). This is a
   // TOP-LEVEL wrangler key (not `unsafe.bindings` — that shape is stale/legacy).
   // NOTE: the key is the PLURAL "ratelimits" — verified against the installed
