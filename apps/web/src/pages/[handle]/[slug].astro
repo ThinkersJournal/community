@@ -32,6 +32,7 @@ import { markPublicCacheable } from "../../lib/cache";
 import { postUrl, profileUrl } from "../../lib/canonical";
 import { setPublicPageCsp } from "../../lib/csp";
 import { jsonLdScript } from "../../lib/json-ld";
+import { FEED_TITLE } from "../../lib/xml";
 
 import type { PublicPost } from "@thinkersjournal/shared";
 
@@ -110,6 +111,7 @@ const jsonLd = {
         CACHE KEY, so a host-derived canonical would be cached under whichever
         host filled the entry and served under all of them. */}
     <link rel="canonical" href={canonical} />
+    <link rel="alternate" type="application/rss+xml" title={FEED_TITLE} href="/rss.xml" />
 
     <meta property="og:type" content="article" />
     <meta property="og:title" content={post.title} />

@@ -54,6 +54,7 @@ import { apiFetch } from "../../lib/api";
 import { markPublicCacheable } from "../../lib/cache";
 import { profileUrl } from "../../lib/canonical";
 import { setPublicPageCsp } from "../../lib/csp";
+import { FEED_TITLE } from "../../lib/xml";
 
 import type { PublicProfile } from "@thinkersjournal/shared";
 
@@ -121,6 +122,7 @@ const nextHref =
         so a host-derived canonical would be cached under whichever host filled
         the entry and served under all of them. */}
     <link rel="canonical" href={canonical} />
+    <link rel="alternate" type="application/rss+xml" title={FEED_TITLE} href="/rss.xml" />
     {/* Cursor pages are pagination, not distinct content — keep them out of the
         index while still letting a crawler follow through to the posts. */}
     {cursor !== null && <meta name="robots" content="noindex, follow" />}

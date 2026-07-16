@@ -8,8 +8,12 @@
  * route in this file reads a session, and test/public-reads.test.ts pins that a
  * draft 404s even for its OWN author.
  *
- * ⚠️ EVERY ROUTE HERE USES HYPERDRIVE_FRESH. `HYPERDRIVE_CACHED` is reserved for
- * the sitemap.xml/rss.xml renderers (Task 18) and is used nowhere in this file.
+ * ⚠️ EXACTLY ONE ROUTE HERE USES `HYPERDRIVE_CACHED` — `handlePublicRecent` —
+ * and it is the ONLY route in this entire api that may
+ * (apps/api/test/hyperdrive-binding-inventory.node.test.ts enforces this
+ * mechanically, not just by convention: it fails if a second call site appears
+ * anywhere under src/, or if this one moves). Every OTHER route in this file
+ * uses `HYPERDRIVE_FRESH`.
  *
  * The reasoning, because it is a CORRECTNESS rule and not a performance
  * preference:
@@ -17,19 +21,28 @@
  *     render after a purge IS a read-after-write, and Hyperdrive never
  *     invalidates on write — so a CACHED read there can serve a PRE-EDIT row
  *     which the edge then re-caches for up to 25h. A 60s query cache turning
- *     into a 25h stale page is the whole hazard.
- *   • Behind a 3600s edge TTL a 60s Hyperdrive cache hits ~never anyway: by the
- *     time the edge asks again, the 60s window is long gone. It buys nothing to
- *     offset that hazard.
- *   • /public/recent is TTL-only and untagged, so CACHED would be defensible for
- *     it in isolation — Task 9's brief specifies exactly that. It is FRESH here
- *     regardless, on instruction, and the tradeoff is worth stating plainly: the
- *     cost is one uncached query per 60s window per PoP, and the benefit is that
- *     this file has ONE rule ("FRESH here, always") rather than a per-route
- *     judgement call that the next author must re-derive correctly. Task 18 owns
- *     the sitemap/RSS renderers and can revisit the binding THERE, where the
- *     staleness budget actually lives, with the cache it is reasoning about in
- *     front of it.
+ *     into a 25h stale page is the whole hazard. FRESH here, unconditionally.
+ *   • Behind a 3600s edge TTL a 60s Hyperdrive cache would hit ~never anyway: by
+ *     the time the edge asks again, the 60s window is long gone. It would buy
+ *     nothing to offset that hazard even if it were otherwise safe.
+ *   • /public/recent is DIFFERENT IN KIND, not just "defensible in isolation":
+ *     it is UNTAGGED — nothing purges it, ever — and its only two callers are
+ *     `sitemap.xml`/`rss.xml` (Task 18), whose edge entries carry a 60s
+ *     `maxAge`/600s `swr` (apps/web/src/lib/cache.ts's `markFeedCacheable`).
+ *     Untagged means the first render after an edit is NOT a read-after-write —
+ *     there is no purge to race — so Hyperdrive's 60s cache window is a strict
+ *     SUBSET of the 60s edge staleness that TTL already accepts. Task 9 kept
+ *     this route on FRESH regardless, because at that point the compensating
+ *     edge TTL had not been built yet (T12/T13 built it): a CACHED read with no
+ *     cache in front of it would just have been a stale read bought for
+ *     nothing. That gap is closed now, so the deferred call is made HERE:
+ *     `handlePublicRecent` reads through `HYPERDRIVE_CACHED`.
+ *   • ⚠️ THIS DOES NOT GENERALIZE TO A FUTURE CALLER. If `/public/recent` ever
+ *     grows a caller whose edge entry IS purge-tagged (a cacheable homepage
+ *     feed, say), it must either read through a SEPARATE route that stays
+ *     FRESH, or this route goes back to FRESH — the exact hazard the first
+ *     bullet describes, reopened. Nothing enforces that automatically; it is a
+ *     fact about today's only two callers, not a property of this route's name.
  */
 import { MAX_CURSOR } from "@thinkersjournal/shared";
 
@@ -178,7 +191,13 @@ export async function handlePublicRecent(
   const limit = recentLimit(new URL(request.url));
   if (limit instanceof Response) return limit;
 
-  const posts = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+  // ⚠️ HYPERDRIVE_CACHED — see the file header. The ONLY read in this api that
+  // may use it: this route is UNTAGGED (nothing purges it, ever) and its only
+  // callers (sitemap.xml, rss.xml) sit behind a 60s edge TTL that already
+  // accepts this staleness, so Hyperdrive's 60s cache window adds nothing new.
+  // test/hyperdrive-binding-inventory.node.test.ts enforces that this stays the
+  // sole call site.
+  const posts = await withClient(env.HYPERDRIVE_CACHED, ctx, async (c) => {
     const { rows } = await c.query(
       `SELECT p.id, p.title, p.slug, pr.username,
               left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
