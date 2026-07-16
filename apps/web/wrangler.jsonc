@@ -57,6 +57,31 @@
   // this flag WITHOUT that line is the one combination that silently caches
   // authed HTML. The pair is pinned together by test/workers-cache.test.ts.
   //
+  // ⚠️ THE LINE BELOW IS DECORATIVE, AND IT IS NOT THE OFF SWITCH. Both facts
+  // are counter-intuitive and both were verified by calling the adapter's
+  // config customizer directly (`cloudflareConfigCustomizer` in
+  // @astrojs/cloudflare/dist/wrangler.js:32):
+  //
+  //     cache: needsWorkerCache && !config.cache?.enabled ? { enabled: true } : void 0
+  //
+  //   provider + `"cache": { "enabled": true }`  -> undefined       (ours passes through)
+  //   provider + cache ABSENT                    -> {"enabled":true} (INJECTED anyway)
+  //   provider + `"cache": { "enabled": false }` -> {"enabled":true} (your "off" is OVERRIDDEN)
+  //
+  // So: deleting the line below changes NOTHING (the adapter injects it), and
+  // setting it to `false` does NOT disable the cache — it is inverted to `true`.
+  // It is kept only because this file is where this Worker's surface is
+  // declared, and a reader must not have to know the adapter injects it.
+  // ⚠️ THE ONLY OFF SWITCH IS REMOVING `cache: { provider: cacheCloudflare() }`
+  // FROM astro.config.mjs. Nothing in THIS file can turn the cache off.
+  //
+  // ⚠️ COROLLARY — Cloudflare's documented "keep staging uncached" pattern
+  // (top-level `cache.enabled: false` + `env.production.cache.enabled: true`)
+  // SILENTLY DOES NOT WORK under this adapter: the top-level `false` is
+  // rewritten to `true`, so staging caches too. If per-env caching is ever
+  // needed, it must be solved in astro.config.mjs (conditional provider), not
+  // here — and re-verify the customizer first.
+  //
   // ⚠️ THE WORKER VERSION IS IN THE CACHE KEY by default, and that default is
   // LOAD-BEARING — see `cross_version_cache` below. Every deploy starts cold and
   // a template change self-invalidates (no purge-on-deploy needed).

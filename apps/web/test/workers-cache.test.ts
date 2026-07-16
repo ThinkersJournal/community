@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 
 import cacheProviderFactory from "@astrojs/cloudflare/cache/provider";
 import { parse } from "jsonc-parser";
@@ -105,27 +106,114 @@ describe("the INSTALLED @astrojs/cloudflare cache provider", () => {
   });
 });
 
+describe("⚠️ the adapter's DEFAULT-DENY stamp — the basis of 'no authed HTML is cacheable'", () => {
+  /**
+   * ⚠️ THE SINGLE MOST LOAD-BEARING SHAPE IN THIS FEATURE, AND THE ONE NOTHING
+   * ELSE HERE CAN SEE.
+   *
+   * Every other assertion in this file describes what happens when a page OPTS
+   * IN. This one describes what happens when it does not — which is the case for
+   * every page that exists today, including the two that render session state.
+   *
+   * The mechanism lives in the ADAPTER, not in our code:
+   *
+   *     if (cacheProviderEnabled && !response.headers.has("Cloudflare-CDN-Cache-Control")) {
+   *       response.headers.set("Cloudflare-CDN-Cache-Control", "no-store");
+   *     }
+   *
+   * Without it, a response carrying no cache directives is NOT uncached: Workers
+   * Cache applies RFC 9111 heuristic freshness and stores every 200 for TWO
+   * HOURS. Cookie is not in the cache key and does not bypass. So if a version
+   * bump drops or reworks this block, authed HTML becomes cacheable and served
+   * to everyone — and every other test in this repo STAYS GREEN, because none of
+   * them exercise a non-opted-in response through the adapter. It would be found
+   * in production, as a mass session leak.
+   *
+   * ⚠️ WHY SOURCE-READING AND NOT AN IMPORT. `handler.js` cannot be loaded under
+   * vitest: it resolves `virtual:astro-cloudflare:config` (a build-time virtual
+   * module) and `cloudflare:workers` (a workerd built-in), neither of which
+   * exists in Node. Reading the shipped source is the only way to assert on it
+   * from here — the same idiom as T3's dispatcher pin.
+   *
+   * ⚠️ IF THIS FAILS AFTER AN UPGRADE: do NOT delete it and do NOT loosen the
+   * match until it passes. Re-read the adapter and answer one question — does a
+   * response that never calls `Astro.cache.set(...)` still come back
+   * uncacheable? Verify it on the wire (`curl -D -` against `wrangler dev`; every
+   * page and the 404 must show `no-store`), then update this assertion to
+   * whatever the new mechanism is. If the answer is no, the cache must be turned
+   * off (remove `cache: { provider }` from astro.config.mjs — see that file:
+   * it is the ONLY off switch) until T13's guard covers every page explicitly.
+   */
+  const require_ = createRequire(import.meta.url);
+  // Resolve via package.json: it is the one path the adapter's `exports` map
+  // exposes, so this survives layout changes and pnpm's symlinked store, while
+  // `dist/utils/handler.js` is deliberately not exported and cannot be resolved.
+  const adapterRoot = dirname(require_.resolve("@astrojs/cloudflare/package.json"));
+  const handlerSource = readFileSync(join(adapterRoot, "dist/utils/handler.js"), "utf8");
+  const normalized = handlerSource.replace(/\s+/g, " ");
+
+  it("still stamps `no-store` on any response that did not opt in", () => {
+    expect(normalized).toContain(
+      'if (cacheProviderEnabled && !response.headers.has("Cloudflare-CDN-Cache-Control")) ' +
+        '{ response.headers.set("Cloudflare-CDN-Cache-Control", "no-store"); }',
+    );
+  });
+
+  it("still gates that stamp on the configured provider, not on wrangler's flag", () => {
+    // `cacheProviderEnabled` traces to `needsWorkerCache =
+    // config.cache?.provider?.name === "cloudflare"` (@astrojs/cloudflare
+    // dist/index.js). It is the ASTRO config that arms the stamp — which is why
+    // astro.config.mjs's provider line is a safety mechanism and not a
+    // convenience, and why the two configs are pinned together below.
+    expect(normalized).toContain("cacheProviderEnabled");
+  });
+});
+
 describe("wrangler.jsonc — the Workers Cache lever", () => {
+  type CacheBlock = { enabled?: boolean; cross_version_cache?: boolean };
   const config = parse(readFileSync(join(import.meta.dirname, "../wrangler.jsonc"), "utf8")) as {
-    cache?: { enabled?: boolean; cross_version_cache?: boolean };
+    cache?: CacheBlock;
     compatibility_date?: string;
+    env?: Record<string, { cache?: CacheBlock }>;
   };
+
+  /**
+   * Every `cache` block in the file, top-level AND per-environment.
+   *
+   * ⚠️ NOT just the top level. Wrangler's schema hangs `CacheOptions` off BOTH
+   * `RawConfig.cache` and `RawEnvironment.cache`, and Cloudflare documents the
+   * per-environment override as the TYPICAL pattern — so `env.production.cache.
+   * cross_version_cache: true` is the single most likely way this ever gets set,
+   * and a top-level-only guard cannot see it.
+   */
+  const cacheBlocks: Array<[string, CacheBlock]> = [
+    ...(config.cache ? [["cache", config.cache] as [string, CacheBlock]] : []),
+    ...Object.entries(config.env ?? {}).flatMap(([name, env]) =>
+      env?.cache ? [[`env.${name}.cache`, env.cache] as [string, CacheBlock]] : [],
+    ),
+  ];
 
   it("has the cache ENABLED", () => {
     expect(config.cache?.enabled).toBe(true);
   });
 
-  it("⚠️ does NOT set `cross_version_cache` — the Worker version must stay in the cache key", () => {
+  it("⚠️ sets `cross_version_cache` NOWHERE — top level or any env — so the Worker version stays in the cache key", () => {
     // ⚠️ DO NOT "FIX" THIS BY ENABLING IT. Worker-version-in-key is what makes a
     // markdown-pipeline change (a rehype-sanitize CVE patch, a schema
     // tightening, a PIPELINE_VERSION bump) atomically invalidate EVERY cached
-    // render on deploy — because the pipeline is bundled INTO this Worker, so
-    // changing it changes the version, and every entry goes cold. Turning
-    // cross_version_cache on would share entries across versions and leave the
-    // old renders being served by the new, patched code. That is the difference
-    // between "a sanitizer fix ships instantly" and "a sanitizer fix ships in
-    // an hour, maybe". The cost is a cold cache per deploy. Pay it.
-    expect(config.cache).not.toHaveProperty("cross_version_cache");
+    // render on deploy — because from T13/T15 the pipeline is bundled INTO this
+    // Worker, so changing it changes the version, and every entry goes cold.
+    // Turning cross_version_cache on would share entries across versions and
+    // leave the old, vulnerable renders being served by the new, patched code.
+    // That is the difference between "a sanitizer fix ships instantly" and "a
+    // sanitizer fix ships in an hour, maybe". The cost is a cold cache per
+    // deploy. Pay it.
+    //
+    // Asserted over EVERY cache block, not just the top one — see `cacheBlocks`.
+    expect(cacheBlocks.length).toBeGreaterThan(0);
+    for (const [where, block] of cacheBlocks) {
+      expect(block, `${where} must not set cross_version_cache`).not.toHaveProperty("cross_version_cache");
+    }
   });
 
   it("has a compatibility_date at or after Workers Cache's 2026-07-06 ship date", () => {

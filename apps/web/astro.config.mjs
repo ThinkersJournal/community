@@ -77,9 +77,22 @@ export default defineConfig({
   // `cloudflare:workers` (T14's purge hop). See the version notes above for the
   // verified shapes.
   //
-  // ⚠️ THIS LINE IS A SAFETY MECHANISM, NOT JUST AN ENABLER — DO NOT REMOVE IT
-  // WHILE LEAVING `"cache": { "enabled": true }` IN wrangler.jsonc.
-  // The two are COUPLED, and the asymmetry is the whole point:
+  // ⚠️ THIS LINE IS THE ON/OFF SWITCH FOR THE WHOLE FEATURE, AND IT IS ALSO A
+  // SAFETY MECHANISM. Both halves are counter-intuitive, so read both.
+  //
+  // ⚠️ IT IS THE *ONLY* OFF SWITCH. Not wrangler.jsonc. The adapter's config
+  // customizer (dist/wrangler.js:32) does:
+  //     cache: needsWorkerCache && !config.cache?.enabled ? { enabled: true } : void 0
+  // so with this line present, wrangler.jsonc's `"cache"` block is DECORATIVE:
+  // absent -> the adapter injects `{ enabled: true }`; set to `{ enabled: false }`
+  // -> ALSO inverted to `{ enabled: true }`. Verified by calling the customizer
+  // directly. To turn the cache off you delete THIS line — and if you do, also
+  // remove the now-live `"cache"` block from wrangler.jsonc, because without
+  // this line that block stops being decorative and becomes the unsafe combo
+  // described below.
+  //
+  // ⚠️ DO NOT REMOVE IT WHILE LEAVING `"cache": { "enabled": true }` IN
+  // wrangler.jsonc. The two are COUPLED, and the asymmetry is the whole point:
   //
   //   • Presence of a provider named "cloudflare" here is what sets the
   //     adapter's `needsWorkerCache` (dist/index.js:119), which makes its
