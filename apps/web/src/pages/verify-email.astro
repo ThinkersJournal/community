@@ -38,11 +38,14 @@
  * cannot read the token out of the page to fill the field in.
  */
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
+import { markPrivate } from "../lib/cache";
 
-// ⚠️ This page's own URL carries the verification token, and the rendered
-// login link + hidden CSRF input both carry per-request secrets — keep it out
-// of shared/browser caches.
-Astro.response.headers.set("cache-control", "no-store");
+// ⚠️ Per-viewer: this page's own URL carries the verification token, and the
+// rendered login link + hidden CSRF input both carry per-request secrets.
+// Cookie is NOT in the Workers Cache key and does NOT trigger a bypass, so a
+// cacheable render here would serve one user's verification outcome — and CSRF
+// token — to everyone. See src/lib/cache.ts.
+markPrivate(Astro);
 
 const token = Astro.url.searchParams.get("token");
 

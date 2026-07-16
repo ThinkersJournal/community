@@ -29,10 +29,13 @@
  * cannot read the token out of the page to fill the field in.
  */
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
+import { markPrivate } from "../lib/cache";
 
-// ⚠️ Per-session secrets (the CSRF token below) are rendered into this page —
-// never let a shared/browser cache hold it.
-Astro.response.headers.set("cache-control", "no-store");
+// ⚠️ Per-viewer: this page forwards the session cookie to the api and renders a
+// PER-SESSION CSRF token into the HTML below. Cookie is NOT in the Workers Cache
+// key and does NOT trigger a bypass, so a cacheable render here would hand one
+// viewer's CSRF token to every subsequent visitor. See src/lib/cache.ts.
+markPrivate(Astro);
 
 type Outcome = "created" | "unauthenticated" | "unverified" | "error" | null;
 let outcome: Outcome = null;

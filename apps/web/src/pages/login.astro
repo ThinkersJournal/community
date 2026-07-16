@@ -7,7 +7,14 @@
  * that page's LOGIN_REQUIRED handling).
  */
 import { apiFetch, applyCookies } from "../lib/api";
+import { markPrivate } from "../lib/cache";
 import { resolveNext } from "../lib/next-url";
+
+// ⚠️ Per-viewer: this page mints a session (the api's `Set-Cookie` rides out on
+// this very response) and renders an attacker-supplied `?next=`. Cookie is NOT
+// in the Workers Cache key and does NOT trigger a bypass, so a cacheable render
+// here could serve one login's outcome to the next visitor. See src/lib/cache.ts.
+markPrivate(Astro);
 
 /**
  * Where to send the user after a successful login. `next` is

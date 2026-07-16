@@ -11,6 +11,21 @@
  * works.
  */
 import { apiFetch } from "../lib/api";
+import { markPrivate } from "../lib/cache";
+
+// ⚠️ `markPrivate` FOR NOW — deliberately conservative, and NOT because this
+// page is per-viewer today (it calls only the public `GET /health` and forwards
+// no cookie, so today's render is already anonymous).
+//
+// The logged-out home is the obvious candidate to make cacheable, but doing it
+// safely is the ANONYMOUS-RENDER treatment, not a one-line swap to
+// markPublicCacheable: the moment this page grows a real feed it will want the
+// viewer's name, an "Edit" link, reaction state — and every one of those must
+// hydrate CLIENT-SIDE, because Cookie is NOT in the Workers Cache key and does
+// NOT trigger a bypass. Marking it public first and adding the feed second is
+// exactly the ordering that leaks. That work belongs with M2's feed.
+// See src/lib/cache.ts.
+markPrivate(Astro);
 
 let status: number | null = null;
 let payload = "";
