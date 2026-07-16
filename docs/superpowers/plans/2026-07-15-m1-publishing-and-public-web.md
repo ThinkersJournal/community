@@ -49,8 +49,14 @@
 - **UUIDv7 for `posts` and `media` ONLY; `users`/`profiles` stay v4.** The invariant is **per-table**, not per-database — FKs are plain `uuid` comparisons with no version semantics. Use v7 only where we keyset-paginate. ⚠️ **A v7 id LEAKS ITS ROW'S CREATION TIME** to anyone holding it; fine for posts/media (already public), never for anything where creation time is sensitive.
 - **Error envelope:** every **non-2xx** api response body is `{"code": ApiErrorCode, "message"?: string, "fields"?: string[]}` with `content-type: application/json`. Success bodies stay per-route. `code` values are a **wire contract** — the `web` Worker branches on them.
 - **Nonces are useless on a cached page.** Every viewer of a cached render receives the *same* nonce, so a nonce-based CSP is security theatre here. Public-page CSP is therefore allowlist-based: **`script-src 'self'` with no `unsafe-inline`** (the directive the CSP exists for), and `style-src 'self' 'unsafe-inline'` because Shiki emits an inline `style` attribute per token span and CSP has no hash/nonce mechanism for style *attributes*. That widening is safe **only** because `defaultSchema` has no `style` in `attributes`, so user content can never carry one — every inline style on the page is app-generated, post-sanitize.
-- **Tooling-shape pins, M1 edition — VERIFY BEFORE RELYING.** Workers Cache shipped **2026-07-06** and Astro's CDN cache-provider API is flagged **experimental**. Verify `"cache": { "enabled": true }`, `cacheCloudflare()`, `Astro.cache.set(...)` and `context.cache.invalidate({ tags })` against the **installed** astro 7.0.9 / `@astrojs/cloudflare` 14.1.3 / wrangler 4.110.0 — not against a blog post. Each task that touches them carries an explicit verification step; the **constraints** above (never `s-maxage`, never per-viewer state, batch tags) are what is load-bearing, not the spelling of the call.
+- **Tooling-shape pins, M1 edition — VERIFY BEFORE RELYING.** Workers Cache shipped **2026-07-06** and Astro's CDN cache-provider API is flagged **experimental**. Verify `"cache": { "enabled": true }`, `cacheCloudflare()`, `Astro.cache.set(...)` and `context.cache.invalidate({ tags })` against the **installed** astro 7.0.9 / `@astrojs/cloudflare` 14.1.3 / wrangler 4.110.0 — not against a blog post. Each task that touches them carries an explicit verification step; the **constraints** above (never `s-maxage`, never per-viewer state, batch tags) are what is load-bearing, not the spelling of the call. **⚠️ CORRECTED BY TASK 12'S ACTUAL RUN of that verification against the installed packages:** the Astro cache provider writes the response header as **`Cloudflare-CDN-Cache-Control`, NOT `Cache-Control`** — every check in this plan that reads cache behaviour off `Cache-Control` is reading a header the provider never sets. The task-level fixes below carry this correction; do not reintroduce the old name.
+- **Any top-level Astro config key — `cache`, and any future `routeRules` — stays TOP-LEVEL, never nested under `experimental`.** Astro validates `experimental` with a `z.strictObject`: an unrecognized key inside it is a hard config-parse error, not a silently-ignored extra. Task 12's `cache: { provider: cacheCloudflare() }` is already top-level for exactly this reason — keep it that way on any refactor.
 - **Purge is scoped to the Worker that OWNS the cache.** `api` **cannot** purge `web`'s cache. The hop is a Service Binding `api → web` + an internal route on `web` guarded by a shared secret. **Batch every tag for an edit into ONE call** — the Free-zone purge limit is **5 requests/minute** (burst 25, 100 ops/request).
+- **`Cache-Tag` is a purge handle — Cloudflare CONSUMES and STRIPS it before the response reaches the client.** It is never observable against a real deployed page (curl, browser devtools, Playwright against a deployed Worker). Locally, under `wrangler dev`, there is no real edge in front of the Worker to strip it, so the header passes straight through — useful for pinning what OUR code emits, but it proves nothing about what a real client sees. The only client-visible, deploy-verifiable proof that caching is active is **`Cf-Cache-Status`** (`MISS` then `HIT` on a second request) — see the M1 deploy gate.
+- **Workers Cache is NOT simulated by miniflare / `wrangler dev`.** Two GETs against a local dev server are two independent Worker invocations — there is no local `Cf-Cache-Status`, and a local cache HIT is unobservable **by construction**, not by toolchain gap. Any step below claiming to verify a cache hit locally means "the headers our code emits", never a real cached response; the real proof is deploy-gate-only.
+- **`Astro.cache.set(...)` ALWAYS needs an explicit `maxAge`/`swr` — never call it with only `{ tags }`.** An untimed `cache.set({ tags })` emits a bare `public` `Cloudflare-CDN-Cache-Control`, which (a) falls back to Cloudflare's ~2h heuristic-freshness caching instead of the TTLs this plan chose deliberately, and (b) is the one directive that overrides the "never cache a request carrying `Authorization`" default (RFC 9111 §3) — i.e. an untimed call can defeat the exact per-viewer cache-poisoning defense Task 13 exists for. `src/lib/cache.ts`'s helpers are the only place a TTL is chosen, for this reason too.
+- **`"cache": { "enabled": true }` in `wrangler.jsonc` is NOT a runtime off-switch once the Astro provider is wired.** Verified against the installed adapter by calling its wrangler-config customizer: `enabled: false` **plus** `cache: { provider: cacheCloudflare() }` present in `astro.config.mjs` still emits `{"enabled": true}` — the adapter re-asserts it. **The only real off-switch is not wiring the provider in `astro.config.mjs` at all.** Cloudflare's documented pattern of keeping a staging/preview environment uncached via `env.production` does **not** work here — do not rely on it.
+- **`PIPELINE_VERSION` is a `Cache-Tag`, not a cache-key input — the deploy-time invalidation guarantee is TRANSITIVE, not direct.** Cloudflare's cache key is not user-composable for ordinary eyeball traffic (`cf.cacheKey` overrides apply only to same-account/Service-Binding requests), and a `Cache-Tag` is a purge handle, not a key component — `PIPELINE_VERSION` cannot be "put in the cache key." What actually invalidates every cached render atomically on a `PIPELINE_VERSION` bump is that `packages/markdown` is bundled INTO `web`: bumping it changes the bundle, which changes the Worker's VERSION, which **is** in the cache key by default (see Task 12's `wrangler.jsonc` note) — so every entry across every route goes cold on that deploy, with no purge call needed. ⚠️ **`cross_version_cache: true` would silently void this guarantee** (old-version entries would keep serving under the new version's key); it is therefore kept at its default (unset/off) and is a deploy-gate item.
 
 ---
 
@@ -150,7 +156,7 @@ thinkersjournal-community/
 - **`@thinkersjournal/markdown`:** plain Vitest (node). ⚠️ **Assertions parse the output with `rehype-parse` and walk the hast tree** (`test/dom.ts`) — never substring matching. The 16-payload XSS corpus is a table-driven regression suite; it is the highest-value test in M1. Workerd compatibility is proven separately by an `esbuild --platform=browser` bundle check (which **errors on any `node:` import`) and end-to-end by Task 19.
 - **`web`:** plain Vitest (node) for pure helpers + two **source-inventory** suites in the idiom of M0's `route-protection.test.ts` — they read the pages' source and assert a structural invariant, so a NEW page is covered the moment it exists rather than when someone remembers.
 - **E2E (thin):** Playwright, two `wrangler dev` processes (web primary :8787, api its own primary :8788 — **DEV-ONLY**, it is how the test reads the verification token that stands in for an inbox). Dummy Turnstile keys + `GET /__test/last-verify-token`.
-- **What local tests CANNOT prove:** real Hyperdrive caching, true rate-limit thresholds, real edge cache hits/purge propagation, and real Images transforms at scale. Those are deploy-gate items, not test assertions. What the E2E **can** prove locally is the **response contract** — that a public render carries `cache-control: public, max-age=3600, stale-while-revalidate=86400` + the right `cache-tag`s, and that an **authed** render carries neither.
+- **What local tests CANNOT prove:** real Hyperdrive caching, true rate-limit thresholds, real edge cache hits/purge propagation, and real Images transforms at scale. Those are deploy-gate items, not test assertions. What the E2E **can** prove locally is the **response contract** — that a public render carries `cloudflare-cdn-cache-control: public, max-age=3600, stale-while-revalidate=86400` (⚠️ **not** `cache-control` — that is the standard header name, but it is not what the Astro Cloudflare cache provider writes; see the amended Global Constraint) + the right `cache-tag`s, and that an **authed** render carries neither. ⚠️ `cache-tag` is a LOCAL-ONLY observation: Cloudflare's real edge consumes and strips it before a deployed client ever sees it, so this contract's client-visible, production proof is `Cf-Cache-Status` (`MISS` then `HIT`) at the deploy gate, not this header.
 
 ---
 
@@ -1165,7 +1171,7 @@ thinkersjournal-community/
 >
 > **`rehype-sanitize`, and nothing else.** DOMPurify+linkedom is **disqualifying**: its source reads `if (!DOMPurify.isSupported) { return dirty; }` — an imperfect DOM shim makes `sanitize()` return **attacker HTML unmodified**, with no throw and no warning (`cloudflare/workerd#5752`, open since 2025-12). A sanitizer whose failure mode is "silently become a pass-through" cannot sit on a stored+cached+mass-served surface. HTMLRewriter is **not a sanitizer** (per Cloudflare's own maintainer) and the Sanitizer API will not ship. `sanitize-html` needs `process` + `htmlparser2` and is string→parse→string, i.e. the exact surface unified avoids.
 >
-> **Render at READ time.** The edge cache amortizes it (~1–5ms/render, once per PoP per TTL, against a 30s CPU limit), so write-time buys ~nothing while costing the thing that matters most: **a sanitizer fix would require a backfill of every row.** Read-time makes tightening the schema or patching a rehype-sanitize CVE a **deploy** that fixes every post at once. `PIPELINE_VERSION` in the cache key is the write-time backfill, replaced by a one-character change.
+> **Render at READ time.** The edge cache amortizes it (~1–5ms/render, once per PoP per TTL, against a 30s CPU limit), so write-time buys ~nothing while costing the thing that matters most: **a sanitizer fix would require a backfill of every row.** Read-time makes tightening the schema or patching a rehype-sanitize CVE a **deploy** that fixes every post at once. `PIPELINE_VERSION`'s bump is the write-time backfill, replaced by a one-character change — ⚠️ **not** because it sits "in the cache key" (a `Cache-Tag` is a purge handle, not a key component, and Cloudflare's cache key is not user-composable for eyeball traffic), but **transitively**: `packages/markdown` is bundled into `web`, so the bump changes the bundle, which changes the Worker's VERSION, which **is** in the cache key by default — every entry goes cold on that deploy. See the amended Global Constraint.
 
 **Files:** Create `packages/markdown/package.json`, `packages/markdown/tsconfig.json`, `packages/markdown/src/{index,render,excerpt}.ts`, `packages/markdown/test/{dom.ts,xss.test.ts,render.test.ts,excerpt.test.ts}`.
 
@@ -1436,9 +1442,16 @@ thinkersjournal-community/
    *
    * This is why rendering happens at READ time. The alternative — storing HTML —
    * would make a schema tightening or a rehype-sanitize CVE patch a BACKFILL OF
-   * EVERY ROW. Here it is a deploy, plus this one character. It is part of the
-   * edge cache key (apps/web/src/lib/cache.ts); bump it whenever the pipeline's
-   * OUTPUT changes for the same input.
+   * EVERY ROW. Here it is a deploy, plus this one character.
+   *
+   * ⚠️ NOT "part of the cache key" — it is folded into a `pipeline:` Cache-TAG
+   * (apps/web/src/lib/cache.ts), and a Cache-Tag is a purge handle, not a key
+   * component (Cloudflare's cache key is not user-composable for eyeball
+   * traffic). The real deploy-time guarantee is TRANSITIVE: this package is
+   * bundled into `web`, so bumping this string changes the bundle, which changes
+   * the Worker's VERSION, which IS in the cache key by default — every cached
+   * render goes cold on that deploy. Bump it whenever the pipeline's OUTPUT
+   * changes for the same input.
    */
   export const PIPELINE_VERSION = "v1";
 
@@ -1605,7 +1618,7 @@ thinkersjournal-community/
   });
 
   describe("PIPELINE_VERSION", () => {
-    it("is a non-empty string (it is part of the edge cache key)", async () => {
+    it("is a non-empty string (folded into a Cache-Tag; invalidation is transitive via the Worker version — see render.ts)", async () => {
       const { PIPELINE_VERSION } = await import("../src");
       expect(PIPELINE_VERSION).toMatch(/^v\d+$/);
     });
@@ -3898,7 +3911,8 @@ thinkersjournal-community/
   rg -n "\"cache\"|cacheEnabled" apps/web/node_modules/wrangler/wrangler-dist/cli.js | head -10
   ```
 
-  ⚠️ **The CONSTRAINTS are what is load-bearing, not the spelling.** If a name differs, adapt the call and keep: `max-age` never `s-maxage`; tags batched into one purge; no per-viewer state in a cacheable render. If the provider API is absent entirely, the fallback is to set `Cache-Control` + `Cache-Tag` on `Astro.response.headers` by hand (Workers Cache reads both off the response) and to purge via `ctx.cache.purge()` inside `web`'s entrypoint — **the same two headers and the same scope**, just spelled manually. Record which path was taken.
+  ⚠️ **The CONSTRAINTS are what is load-bearing, not the spelling.** If a name differs, adapt the call and keep: `max-age` never `s-maxage`; tags batched into one purge; no per-viewer state in a cacheable render. If the provider API is absent entirely, the fallback is to set the response headers by hand — ⚠️ **`Cloudflare-CDN-Cache-Control`, NOT the standard `Cache-Control`** (verified against the installed adapter: that is the name the real provider path writes, and it is what Workers Cache actually reads; the standard header is a browser-facing fallback, not the CDN's own signal) — plus `Cache-Tag`, and to purge via `ctx.cache.purge()` inside `web`'s entrypoint — **the same scope**, just spelled manually. Record which path was taken.
+  ⚠️ **This step's own run is what surfaced the header-name correction above** — this plan's earlier drafts asserted `Cache-Control` throughout; every check below has been corrected to `Cloudflare-CDN-Cache-Control` for anything the PROVIDER emits. Headers this codebase sets BY HAND (e.g. `markPrivate`'s `private, no-store`) are unaffected — those are real, standard `Cache-Control`, deliberately.
 
 - [ ] **Step 2: Enable the cache on the Worker.** In `apps/web/wrangler.jsonc`, after `compatibility_flags`:
 
@@ -3914,6 +3928,14 @@ thinkersjournal-community/
     //
     // ⚠️ THE WORKER VERSION IS IN THE CACHE KEY by default: every deploy starts
     // cold, and a template change self-invalidates (no purge-on-deploy needed).
+    // This is also WHY A `PIPELINE_VERSION` BUMP INVALIDATES EVERY CACHED RENDER:
+    // packages/markdown is bundled INTO this Worker, so bumping it changes the
+    // bundle, which changes THIS version, which is in every entry's key. It is
+    // NOT because PIPELINE_VERSION is itself a cache-key input (it is a
+    // Cache-Tag, a purge handle — Cloudflare's cache key is not user-composable
+    // for eyeball traffic). ⚠️ Leave `cross_version_cache` at its default (unset,
+    // i.e. off): setting it true would let a stale entry from a PRIOR version
+    // keep serving under the new version's key, silently voiding this guarantee.
     // ⚠️ HOST IS NOT IN THE CACHE KEY: apex and www share entries (hence the
     // www->apex redirect), and `*.workers.dev` shares entries with the custom
     // domain at the same version (hence `workers_dev: false` at launch). Both are
@@ -3924,6 +3946,16 @@ thinkersjournal-community/
     // COST: this makes normally-free static-asset requests billable (~11 billed
     // requests per page view vs 1) ~= $0.30 per million page views. Accepted: it
     // buys the elimination of 10-30ms of SSR CPU per view.
+    //
+    // ⚠️ `enabled: true` HERE IS NOT THE OFF-SWITCH IN REVERSE. Verified against
+    // the installed adapter: once astro.config.mjs wires `cache: { provider:
+    // cacheCloudflare() }` (Step 3), the adapter re-asserts `{"enabled": true}`
+    // in the generated config REGARDLESS of what this flag says — calling the
+    // customizer with `enabled: false` and the provider both present still
+    // produces `{"enabled": true}`. The ONLY real off-switch is not wiring the
+    // provider into astro.config.mjs at all. Cloudflare's documented pattern of
+    // using `env.production` to keep a staging environment uncached does NOT
+    // work here — do not reach for it.
     "cache": { "enabled": true },
   ```
 
@@ -3938,18 +3970,31 @@ thinkersjournal-community/
     // itself shipped 2026-07-06. Re-run that verification on any bump of either.
     //
     // This is what lets a page call `Astro.cache.set({ maxAge, swr, tags })` and
-    // have it become the `Cache-Control` + `Cache-Tag` response headers the
-    // Workers Cache in front of this Worker reads (see wrangler.jsonc).
+    // have it become the `Cloudflare-CDN-Cache-Control` + `Cache-Tag` response
+    // headers the Workers Cache in front of this Worker reads (see
+    // wrangler.jsonc). ⚠️ NOT the standard `Cache-Control` — verified against the
+    // installed adapter, and the correction that every cache check in this plan
+    // now carries.
     //
     // ⚠️ NEVER `s-maxage`. `s-maxage`, `must-revalidate` and `proxy-revalidate`
     // SILENTLY DISABLE stale-while-revalidate (RFC 9111 §4.2.4): revalidation goes
     // FOREGROUND and the whole cost lever dies with no error anywhere. The helper
     // in src/lib/cache.ts is the only place TTLs are chosen, for exactly this
     // reason — do not set cache headers by hand in a page.
+    // ⚠️ ALWAYS PASS an explicit maxAge/swr to cache.set(). A bare
+    // `cache.set({ tags })` with no TTL emits a bare `public` directive, which
+    // both falls back to Cloudflare's ~2h heuristic freshness and — because
+    // `public` is the one directive that overrides "never cache a request
+    // carrying Authorization" — can defeat Task 13's per-viewer cache-poisoning
+    // guard. src/lib/cache.ts's helpers exist so no call site can omit this.
+    //
+    // ⚠️ THIS KEY STAYS TOP-LEVEL. `cache` (and any future `routeRules`) must
+    // never move under `experimental` — Astro validates that object with a
+    // z.strictObject, so an unrecognized key inside it is a hard config error.
     cache: { provider: cacheCloudflare() },
   ```
 
-- [ ] **Step 4: Verify the build still emits a runnable config.** `pnpm --filter @thinkersjournal/web build` → succeeds; then `rg -n '"cache"' apps/web/dist/server/wrangler.json` → the generated config carries `"cache": { "enabled": true }`. (⚠️ Never run this while a `wrangler dev` is alive — see the Global Constraints.) `pnpm --filter @thinkersjournal/web typecheck` (`astro check`) → exit 0.
+- [ ] **Step 4: Verify the build still emits a runnable config.** `pnpm --filter @thinkersjournal/web build` → succeeds; then `rg -n '"cache"' apps/web/dist/server/wrangler.json` → the generated config carries `"cache": { "enabled": true }`. ⚠️ Also `rg -n 'cross_version_cache' apps/web/dist/server/wrangler.json apps/web/wrangler.jsonc` → **no match** — its absence is what keeps the `PIPELINE_VERSION`/worker-version invalidation guarantee true; a match here means someone set it and silently broke that guarantee. (⚠️ Never run this while a `wrangler dev` is alive — see the Global Constraints.) `pnpm --filter @thinkersjournal/web typecheck` (`astro check`) → exit 0.
 - [ ] **Step 5: Record the outcome.** Add a line to `apps/web/astro.config.mjs`'s version-notes block stating which path Step 1 selected (provider API, or manual headers) and the exact verified call shape. **This block is the record for the next reader; the plan's prose is not.**
 - [ ] **Step 6: Commit.** `git add -A && git commit -m "feat(m1): enable Workers Cache on web + wire the Astro cache provider"` — and put Step 1's verified output in the commit body.
 
@@ -4036,12 +4081,26 @@ thinkersjournal-community/
       expect(ctx.cache.set).not.toHaveBeenCalledWith(expect.objectContaining({ maxAge: expect.anything() }));
     });
 
-    it("never emits s-maxage (which would silently kill SWR)", () => {
+    it("passes ONLY maxAge/swr/tags into cache.set() — never an s-maxage-shaped key", () => {
+      // ⚠️ THIS TEST CANNOT READ THE REAL RESPONSE HEADER. `ctx.cache.set` here is
+      // a bare `vi.fn()` spy with no implementation, so `ctx.response.headers` is
+      // NEVER mutated by it — reading `ctx.response.headers.get(...)` after this
+      // call is always empty, regardless of header name, because the Astro
+      // Cloudflare adapter's real header translation (which writes
+      // `Cloudflare-CDN-Cache-Control`, NOT `Cache-Control` — verified against the
+      // installed astro@7.0.9 / @astrojs/cloudflare@14.1.3, Task 12) happens
+      // inside the adapter's render pipeline, outside this mock's reach. All this
+      // unit test can pin is the CALL SHAPE we control. The real response header
+      // — including that it never carries `s-maxage` — is asserted end-to-end by
+      // Task 19's E2E and re-verified at the Task 20 deploy gate; that is the
+      // only place this promise is actually provable.
       const ctx = context();
       markPublicCacheable(ctx, ["x"]);
-      const header = ctx.response.headers.get("cache-control") ?? "";
-      expect(header).not.toContain("s-maxage");
-      expect(header).not.toContain("must-revalidate");
+      expect(ctx.cache.set).toHaveBeenCalledWith({
+        maxAge: expect.any(Number),
+        swr: expect.any(Number),
+        tags: expect.any(Array),
+      });
     });
   });
 
@@ -4144,8 +4203,11 @@ thinkersjournal-community/
         expect(source, `${name} calls cache.set() directly — use a helper from src/lib/cache.ts.`).not.toMatch(
           /\bcache\.set\(/,
         );
-        expect(source, `${name} sets Cache-Control by hand — use a helper from src/lib/cache.ts.`).not.toMatch(
-          /headers\.set\(\s*["']cache-control["']/i,
+        // ⚠️ Catches BOTH the standard header AND the real one the Astro provider
+        // reads (`Cloudflare-CDN-Cache-Control`, verified in Task 12) — a page
+        // hand-setting either is bypassing src/lib/cache.ts.
+        expect(source, `${name} sets a cache-control header by hand — use a helper from src/lib/cache.ts.`).not.toMatch(
+          /headers\.set\(\s*["'](cache-control|cloudflare-cdn-cache-control)["']/i,
         );
       },
     );
@@ -5019,10 +5081,10 @@ thinkersjournal-community/
   ```
 
   **Assert by eye, then encode in Task 19:**
-  - `cache-control: public, max-age=3600, stale-while-revalidate=86400` — ⚠️ **and NO `s-maxage`, no `must-revalidate`** (either silently kills SWR).
-  - `cache-tag:` contains `post:…`, `author:…`, `listing`, `pipeline:v1`.
+  - `cloudflare-cdn-cache-control: public, max-age=3600, stale-while-revalidate=86400` — ⚠️ **NOT `cache-control`** (that is the standard header; the Astro Cloudflare provider writes the CDN-specific one — verified against the installed adapter in Task 12) — **and NO `s-maxage`, no `must-revalidate`** (either silently kills SWR).
+  - `cache-tag:` contains `post:…`, `author:…`, `listing`, `pipeline:v1`. ⚠️ **LOCAL-DEV-ONLY.** There is no real Cloudflare edge in front of `wrangler dev`, so the header passes straight through unstripped here — this is a legitimate way to pin what OUR code emits, but it is NOT reproducible against a real deployed page: Cloudflare's edge consumes `Cache-Tag` for its purge index and strips it before the response reaches any client. The deploy-gate's client-visible proof that caching is real is `Cf-Cache-Status` (`MISS` then `HIT`), not this header — see Task 20.
   - `content-security-policy:` present, `script-src 'self'` with no `unsafe-inline`.
-  - Re-run **with** `-H "Cookie: tj_session=anything"` → `cache-control: private, no-store` and **no `cache-tag`**. ⚠️ If the authed render is still cacheable, **stop** — that is the mass-session-leak condition, and nothing else in M1 matters until it is fixed.
+  - Re-run **with** `-H "Cookie: tj_session=anything"` → `cache-control: private, no-store` (this one IS the standard header — `markPrivate` sets it by hand, deliberately, unaffected by the provider naming above) and **no `cache-tag`**. ⚠️ If the authed render is still cacheable, **stop** — that is the mass-session-leak condition, and nothing else in M1 matters until it is fixed.
 
 - [ ] **Step 6: Commit.** `git add -A && git commit -m "feat(m1): SSR public post page with OG, JSON-LD, cache tags and a CSP"`
 
@@ -5140,9 +5202,14 @@ thinkersjournal-community/
 
   ```bash
   curl -s http://127.0.0.1:8787/@<username> | rg -c '<li>'          # EXPECT: 20
-  curl -is http://127.0.0.1:8787/@<username> | rg 'cache-tag|cache-control'
+  curl -is http://127.0.0.1:8787/@<username> | rg 'cache-tag|cloudflare-cdn-cache-control'
   #   EXPECT: cache-tag: author:…, listing, pipeline:v1  (NO post: tag)
-  #   EXPECT: cache-control: public, max-age=3600, stale-while-revalidate=86400
+  #   ⚠️ LOCAL-DEV-ONLY — no real edge to strip it here; not observable against a
+  #   real deploy (Cf-Cache-Status is the deploy-gate proof, see Task 20).
+  #   EXPECT: cloudflare-cdn-cache-control: public, max-age=3600, stale-while-revalidate=86400
+  #   ⚠️ NOT `cache-control` — that is the standard header name, not what the
+  #   Astro Cloudflare provider writes (verified against the installed adapter,
+  #   Task 12).
   curl -s "http://127.0.0.1:8787/@<username>?cursor=<nextCursor>" | rg -c '<li>'   # EXPECT: 5
   curl -s http://127.0.0.1:8787/@nobody -o /dev/null -w '%{http_code}'             # EXPECT: 404
   curl -s http://127.0.0.1:8787/notahandle -o /dev/null -w '%{http_code}'          # EXPECT: 404
@@ -5719,8 +5786,13 @@ thinkersjournal-community/
   ```bash
   curl -is http://127.0.0.1:8787/sitemap.xml | head -12
   #   EXPECT: content-type: application/xml; charset=utf-8
-  #   EXPECT: cache-control: public, max-age=60, stale-while-revalidate=600
-  #   EXPECT: NO cache-tag header at all  <- the untagged property, load-bearing
+  #   EXPECT: cloudflare-cdn-cache-control: public, max-age=60, stale-while-revalidate=600
+  #   ⚠️ NOT `cache-control` — the Astro Cloudflare provider writes the
+  #   CDN-specific header name (verified against the installed adapter, Task 12).
+  #   EXPECT: NO cache-tag header at all  <- the untagged property, load-bearing.
+  #   ⚠️ This absence is only meaningful LOCALLY, where nothing strips headers —
+  #   on a real deploy Cloudflare strips cache-tag from every response, tagged or
+  #   not, so its absence there proves nothing either way.
   curl -s http://127.0.0.1:8787/rss.xml | rg -c '<item>'          # EXPECT: your post count, <= 20
   ```
 
@@ -5830,15 +5902,30 @@ thinkersjournal-community/
 
     // Logged IN (the browser context still holds tj_session).
     const authed = await page.request.get(url);
+    // ⚠️ `cache-control` here is CORRECT AS-IS: markPrivate sets this standard
+    // header BY HAND (src/lib/cache.ts's `refuse()`), independent of the Astro
+    // cache provider's own header. It is the one `cache-control` assertion in
+    // this file that is not a naming bug.
     expect(authed.headers()["cache-control"]).toBe("private, no-store");
     expect(authed.headers()["cache-tag"]).toBeUndefined();
 
     // Logged OUT — a fresh context with no cookie jar.
     await page.context().clearCookies();
     const anon = await page.request.get(url);
-    expect(anon.headers()["cache-control"]).toBe("public, max-age=3600, stale-while-revalidate=86400");
+    // ⚠️ `cloudflare-cdn-cache-control`, NOT `cache-control` — the Astro
+    // Cloudflare provider writes the CDN-specific header (verified against the
+    // installed adapter, Task 12); `cache-control` is always absent/undefined on
+    // this path and would silently make a `.toBe(...)` assertion here a false
+    // failure, not a vacuous pass.
+    expect(anon.headers()["cloudflare-cdn-cache-control"]).toBe("public, max-age=3600, stale-while-revalidate=86400");
     // ⚠️ NEVER s-maxage / must-revalidate — either SILENTLY disables SWR.
-    expect(anon.headers()["cache-control"]).not.toContain("s-maxage");
+    expect(anon.headers()["cloudflare-cdn-cache-control"]).not.toContain("s-maxage");
+    // ⚠️ LOCAL-DEV-ONLY PROOF. This E2E runs both Workers under `wrangler dev`,
+    // where there is no real Cloudflare edge to consume/strip `Cache-Tag` — so
+    // this assertion legitimately observes what OUR code emits, but it does NOT
+    // hold against a real deployed page (Cloudflare strips the header before any
+    // client sees it there). The deploy-gate's client-visible proof that caching
+    // is real is `Cf-Cache-Status` (`MISS` then `HIT`) — see Task 20.
     expect(anon.headers()["cache-tag"]).toContain("listing");
     expect(anon.headers()["content-security-policy"]).toContain("script-src 'self'");
     expect(anon.headers()["content-security-policy"]).not.toContain("script-src 'self' 'unsafe-inline'");
@@ -5846,8 +5933,11 @@ thinkersjournal-community/
 
   test("sitemap.xml is untagged and short-TTL", async ({ page }) => {
     const response = await page.request.get("/sitemap.xml");
-    expect(response.headers()["cache-control"]).toBe("public, max-age=60, stale-while-revalidate=600");
+    // ⚠️ `cloudflare-cdn-cache-control`, not `cache-control` — see above.
+    expect(response.headers()["cloudflare-cdn-cache-control"]).toBe("public, max-age=60, stale-while-revalidate=600");
     // ⚠️ Untagged is what licenses /public/recent's HYPERDRIVE_CACHED read.
+    // LOCAL-DEV-ONLY absence check — see the note above; a real deploy strips
+    // cache-tag from every response, tagged or not.
     expect(response.headers()["cache-tag"]).toBeUndefined();
   });
   ```
@@ -5855,7 +5945,7 @@ thinkersjournal-community/
   Add the small helper `postIdFrom` to `e2e/helpers.ts`: fetch `/@user` and read the edit id — or, simpler and with fewer moving parts, capture it from the editor's `input[name='postId']` **before** publishing. Use whichever the first run proves reliable; **prefer reading the hidden field**, since it needs no extra request.
 
 - [ ] **Step 3: Run → FAIL, then GREEN.** `pnpm test:e2e`. ⚠️ **Build first, with no `wrangler dev` alive** (`pnpm --filter @thinkersjournal/web build`) — a build racing a dev server leaves the Service Binding reporting `[connected]` while every dispatch fails with `Network connection lost`, which looks like an app bug and is not.
-  ⚠️ **If the purge assertion fails locally**, first check whether Workers Cache is simulated under `wrangler dev` at all: if there is **no** local cache, the second `page.goto(url)` re-renders unconditionally and the test passes **vacuously**. Prove which world you are in by asserting the *headers* (which are set either way, and are what the cache reads) — the header assertions above are the real contract; the content assertion is the belt-and-braces. **Record the finding in `playwright.config.ts`'s header**, and if the cache is not simulated, add "verify a real purge on the deployed Worker" to the deploy gate rather than pretending the local run covered it.
+  ⚠️ **Workers Cache is NOT simulated under `wrangler dev` — this is confirmed, not a "check whether."** Two GETs against local `wrangler dev` are two independent Worker invocations (no local `Cf-Cache-Status`), so the second `page.goto(url)` in the publish→edit→reflected test re-renders **unconditionally**, and its content assertion (`toContainText("Edited body.")`) would pass **vacuously** even if the purge hop were entirely broken — it never observed a cache at all. The **header** assertions above (`cloudflare-cdn-cache-control`, `cache-tag`) are the real local contract: they pin what OUR code emits regardless of whether a cache sits in front. **A real cache HIT-then-purge is unobservable locally by construction**, full stop — it is a **deploy-gate-only** proof (`Cf-Cache-Status`: `MISS` → `HIT` → edit → `MISS`/`UPDATING`, added to Task 20). Record this in `playwright.config.ts`'s header so the next reader does not re-derive it.
 - [ ] **Step 4: Commit.** `git add -A && git commit -m "test(m1): E2E publish -> render -> edit -> purge, and the authed-render cache guard"`
 
 ### Task 20: Deploy gate + docs
@@ -5913,6 +6003,15 @@ thinkersjournal-community/
         ISN'T SCANNED.** Verify with `curl -I https://cdn.thinkersjournal.com/media/post/<hash>.webp`
         → `cf-cache-status: HIT` on the second request. A MISS here is a legal exposure,
         not a slow image.
+  - [ ] **A Transform Rule adds `X-Content-Type-Options: nosniff` on the
+        `cdn.thinkersjournal.com` R2 custom domain itself.** Media is served
+        DIRECTLY from R2 through that custom domain, deliberately NOT through a
+        Worker (Task 8) — so neither `setPublicPageCsp`'s `nosniff` (which only
+        runs on `web`'s own SSR page responses) nor anything set on `api`'s `POST
+        /media` 201 JSON response ever touches these bytes. Without a Transform
+        Rule on the zone, a served image has no nosniff protection at all. Verify:
+        `curl -I https://cdn.thinkersjournal.com/media/post/<hash>.webp | rg -i
+        'x-content-type-options'` → `nosniff`.
   - [ ] **CSAM Scanning Tool activated** on the CDN zone (Caching → Configuration → CSAM
         Scanning Tool). **Free, all plans. NCMEC credentials are NO LONGER REQUIRED** —
         activate, verify the notification email, accept the Service-Specific Terms. ⚠️ The
@@ -5941,10 +6040,35 @@ thinkersjournal-community/
         can still exhaust it. Pro raises it to 5/sec.
   - [ ] **`api`'s `WEB` Service Binding resolves** — see the first-deploy order above. A
         missing binding is another silent-purge-failure path.
-  - [ ] **Verify a REAL purge on the deployed Workers.** Local `wrangler dev` may not
-        simulate Workers Cache at all, in which case the E2E's purge assertion passed
-        vacuously (see `playwright.config.ts`). Publish → note `cf-cache-status: HIT` →
-        edit → confirm the next request is a `MISS`/`UPDATING` carrying the new content.
+  - [ ] **Assert a real cache `MISS` then `HIT` via `Cf-Cache-Status`, on a public
+        page, BEFORE trusting anything else about caching.** This is the ONLY
+        client-visible proof Workers Cache is active at all — the header the Astro
+        provider actually writes (`Cloudflare-CDN-Cache-Control`) and the
+        `Cache-Tag` purge handle are both invisible client-side on a real deploy
+        (Cloudflare strips `Cache-Tag` before the client ever sees it, and plain
+        `Cache-Control` — the name every local/unit check in this plan used to
+        read — is never set at all). `curl -is
+        https://thinkersjournal.com/@<user>/<slug>` twice in a row → first request
+        `cf-cache-status: MISS`, second `cf-cache-status: HIT`. If this never flips
+        to `HIT`, nothing downstream (purge, TTLs, tags) can be trusted either, no
+        matter how green the local suites are.
+  - [ ] **Verify a REAL purge on the deployed Workers.** Local `wrangler dev` does
+        NOT simulate Workers Cache at all — confirmed, not a maybe: two local GETs
+        are two independent Worker invocations, so the E2E's purge assertion
+        passes on content alone, without ever having observed a cache (see
+        `playwright.config.ts`). Publish → confirm `cf-cache-status: HIT` (the item
+        above) → edit → confirm the next request is a `MISS`/`UPDATING` carrying
+        the new content.
+  - [ ] **A gradual deployment leaves the OLD Worker version serving ITS OWN
+        cached HTML to its traffic share until rollout completes.** The Worker
+        version is part of the Workers Cache key (Task 12) by design, so during a
+        gradual rollout the previous version's cache entries are not invalidated
+        by the new version's deploy — each version's traffic share sees only that
+        version's cache, and a purge issued against the new version does not reach
+        the old version's entries. Expect a window where some readers still see
+        pre-edit content even after a successful purge, until the old version's
+        traffic share reaches zero. This is expected, not a purge-hop failure —
+        do not "fix" it mid-rollout.
   - [ ] **Workers Cache + the Astro cache provider still have the shape M1 verified.**
         Workers Cache shipped **2026-07-06** and Astro's CDN cache-provider API is flagged
         **experimental**. Re-run Task 12 Step 1's four checks on any bump of astro,
@@ -5958,6 +6082,28 @@ thinkersjournal-community/
         there could serve a pre-edit row that the edge then re-caches for **25 hours**.
         Behind a 3600s edge TTL a 60s query cache hits ~never anyway. See the amended
         Global Constraint in the M1 plan.
+  - [ ] **Upload a REAL SVG against the REAL Images binding on a deployed
+        Worker.** Miniflare backs the `IMAGES` binding with `sharp`, which
+        RASTERIZES SVG input — so a local `IMAGES` call against an SVG either
+        fails cleanly or comes back as a raster format, either of which can read
+        as "the binding neutralizes SVG safely." Production Cloudflare Images does
+        the opposite: it PASSES SVG THROUGH (sanitized via svg-hush), still shaped
+        as SVG, not rasterized. Local green here proves nothing about production
+        behaviour. Task 7's magic-byte sniff is the ACTUAL SVG defense (it rejects
+        SVG with a 415 before the Images binding ever sees it) — this check exists
+        to catch a regression in that sniff, which local tests alone cannot.
+  - [ ] **"What local green does NOT prove" — a standing warning, not a one-time
+        check.** ⚠️ **LOCAL HYPERDRIVE IS NOT A POOLER**: local dev connects
+        STRAIGHT to Postgres, with none of a real pooler's connection reuse or
+        transaction-mode semantics in front of it. Anything whose correctness
+        depends on real pooling behaviour is UNPROVEN by a local green run — this
+        nearly shipped a no-op safety setting in Task 11, where the
+        transaction-mode-pooler reasoning behind the atomic guarded upsert had
+        nothing real to run against locally. Pair this with the `sharp`/SVG item
+        above: local infra simulation (miniflare's Images/R2/Hyperdrive) is close
+        enough for LOGIC, never close enough for a SECURITY or POOLING guarantee.
+        Anything in that category earns its own real-infra deploy-gate line, not a
+        "tests are green" sign-off.
   - [ ] **The Images bill is a TRANSFORM bill, not a traffic bill.** 5,000 free unique
         transforms/month, then $0.50/1k, billed once per unique (source+params) per
         calendar month. We transform on **write** and serve from R2 (egress $0), so this
@@ -6001,7 +6147,7 @@ thinkersjournal-community/
 
 **Inherited from M0 (all still binding):** `HYPERDRIVE_FRESH` is cache-disabled and every auth/dup/verify/epoch read uses it · Neon's string is the **direct** (non-pooled) host with `sslmode=require` · Postmark `From` is a **confirmed** sender · real Turnstile keys, dummy keys never deployed · **`TEST_ROUTES` unset in prod** (gates **two** things: the `__test` token route *and* the session cookie's `Domain`/`Secure`) — asserted by `pnpm smoke:deploy` steps 1 + 4 · wrangler + `@cloudflare/vitest-pool-workers` pinned, config shapes re-verified · one real-infra pass (`pnpm smoke:deploy` step 3) · Postmark alerting · argon2id `.wasm` bundles on a real deploy · the Astro-403→503 dev quirk does not reproduce deployed · the api's public workers.dev URL — **now closed by M1's `workers_dev = false`**.
 
-**New in M1:** Neon on **PG18** · R2 `tj-media` + `cdn.thinkersjournal.com` · **the CDN Cache Rule (cached == the set CSAM scanning covers — NOT optional)** · **CSAM tool activated** (free; no NCMEC creds) · **`workers_dev = false` on both** (workers.dev shares cache entries) · **www → apex** (host is not in the cache key) · **`PURGE_SECRET` matches on both Workers** · purge alerting + the 5/min Free-zone limit · the circular Service Binding's first-deploy order · a **real** purge verified on deployed Workers · Workers Cache/Astro-provider shapes re-verified on any bump · **`HYPERDRIVE_CACHED` used by exactly one route** · the R2 dedupe/deletion hazard understood before any delete ships.
+**New in M1:** Neon on **PG18** · R2 `tj-media` + `cdn.thinkersjournal.com` · **the CDN Cache Rule (cached == the set CSAM scanning covers — NOT optional)** · **a Transform Rule adds `nosniff` on the CDN custom domain itself** (the media route's own `nosniff` never reaches R2-served bytes) · **CSAM tool activated** (free; no NCMEC creds) · **`workers_dev = false` on both** (workers.dev shares cache entries) · **www → apex** (host is not in the cache key) · **`PURGE_SECRET` matches on both Workers** · purge alerting + the 5/min Free-zone limit · the circular Service Binding's first-deploy order · **a real cache `MISS`→`HIT` via `Cf-Cache-Status` on a public page** (the only client-visible proof caching works at all) · a **real** purge verified on deployed Workers · a gradual deployment's old Worker version keeps serving its own cached HTML until rollout completes · Workers Cache/Astro-provider shapes re-verified on any bump · **`HYPERDRIVE_CACHED` used by exactly one route** · **a real SVG uploaded against the real Images binding** (miniflare's `sharp` rasterizes SVG; production passes it through via svg-hush) · **local Hyperdrive is not a pooler** — anything pooling-dependent is unproven locally · the R2 dedupe/deletion hazard understood before any delete ships.
 
 ## Deferred / out-of-scope
 
