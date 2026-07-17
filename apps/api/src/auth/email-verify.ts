@@ -26,6 +26,70 @@ import { base64urlEncode, sha256Hex } from "./encoding";
 const VERIFY_TTL_SECONDS = 86_400; // 24h
 
 /**
+ * The origin verification links point at unless the request proves it came from
+ * another PRODUCTION origin (see `verificationLinkOrigin`).
+ *
+ * ⚠️ NOT `new URL(request.url).origin`: that is derived from the client-supplied
+ * `Host` header, which would let an attacker point the verification link in mail
+ * sent from OUR confirmed sender at a host they control — a phishing/token-theft
+ * vector (see the escaping note on `escapeHtml` below).
+ */
+const CANONICAL_ORIGIN = "https://thinkersjournal.com";
+
+/**
+ * The ONLY origins an emailed verification link may point at.
+ *
+ * ⚠️ Deliberately NARROWER than `checkOrigin`'s allowlist (src/auth/csrf.ts), and
+ * deliberately a SEPARATE list rather than an import — the two answer different
+ * questions and must be free to diverge. `checkOrigin` asks "may this browser
+ * submit this form?", for which allowing `http://localhost:8787` is fine: a
+ * remote attacker's browser cannot forge that Origin against a developer's
+ * machine. This list asks "where may we send a real user's verification link?",
+ * and localhost is NOT fine there, because a NON-BROWSER client (curl, a script)
+ * can set any Origin it likes against production, pass `checkOrigin`, and get a
+ * `http://localhost:8787/verify-email?token=…` link delivered into the victim's
+ * inbox — a link that can never work, i.e. verification-denial griefing.
+ *
+ * Consequence for LOCAL DEV: a signup at localhost gets a link pointing at
+ * production. That is intentional. Local flows use the gated
+ * `GET /__test/last-verify-token` route (src/routes/__test.ts) to fetch the raw
+ * token instead — do NOT re-add localhost here to make dev email links clickable.
+ */
+const VERIFICATION_LINK_ORIGINS: Set<string> = new Set([
+  "https://thinkersjournal.com",
+  "https://www.thinkersjournal.com",
+]);
+
+/**
+ * The origin to build a verification link on: the request's `Origin` when it is
+ * a production origin (so a signup on `www.` keeps the user on `www.`), and
+ * `CANONICAL_ORIGIN` for EVERYTHING else — a missing Origin, a `Referer`-only
+ * request, and any non-production origin `checkOrigin` tolerates.
+ *
+ * Fails SAFE by construction: the only values that can ever be returned are the
+ * members of `VERIFICATION_LINK_ORIGINS` and `CANONICAL_ORIGIN`, none of which
+ * are attacker-influenced. `Referer` is deliberately NOT consulted — it is a
+ * weaker signal than `Origin` and every value it could contribute is already
+ * covered by the canonical fallback.
+ *
+ * ⚠️ LIVES HERE, NOT IN src/routes/signup.ts, SO THAT "WHICH ORIGIN MAY WE MAIL
+ * A LINK TO" IS ONE RULE WITH ONE IMPLEMENTATION. It was signup's private
+ * helper until Task 10 added a SECOND route that mails the same link
+ * (src/routes/resend-verification.ts). That route first shipped with a bare
+ * `CANONICAL_ORIGIN` constant and a docstring claiming it was "identical to
+ * signup's" — true of the SECURITY property (neither is Host-derived) but NOT of
+ * the behaviour: signup keeps a `www.` user on `www.`, while the copy always
+ * mailed an apex link. That is precisely the drift two copies of a rule produce,
+ * so there is now one function and both callers use it.
+ */
+export function verificationLinkOrigin(request: Request): string {
+  const origin = request.headers.get("Origin");
+  return origin !== null && VERIFICATION_LINK_ORIGINS.has(origin)
+    ? origin
+    : CANONICAL_ORIGIN;
+}
+
+/**
  * The fixed KV key under which the most recently issued RAW token is stashed
  * for `GET /__test/last-verify-token` (src/routes/__test.ts) to hand back to
  * the E2E suite. Written ONLY when `env.TEST_ROUTES` is exactly `"1"`.

@@ -31,6 +31,101 @@
   "name": "thinkersjournal-web",
   "compatibility_date": "2026-07-13",
   "compatibility_flags": ["nodejs_compat"],
+
+  // ⚠️ WORKERS CACHE — an HTTP cache IN FRONT of this Worker (shipped
+  // 2026-07-06; needs Wrangler 4.69.0+, we pin 4.110.0). A HIT DOES NOT RUN
+  // THIS WORKER at all: no CPU, no Service-Binding hop to `api`, no Hyperdrive,
+  // no Postgres. Tiered by default, with REQUEST COLLAPSING — a thundering herd
+  // on a cold viral post costs ONE render.
+  //
+  // Available on any plan, and on workers.dev AS WELL AS a custom domain
+  // (Workers are zoneless), so this is verifiable BEFORE DNS cutover.
+  //
+  // ⚠️ NOTHING IS CACHED TODAY, AND THAT IS NOT AN ACCIDENT — it is why turning
+  // this on BEFORE T13's per-viewer guard is safe. To Workers Cache, omitting
+  // `Cache-Control` is NOT opting out: a 200 with no cache directives falls to
+  // RFC 9111 HEURISTIC freshness and is stored for TWO HOURS. What forecloses
+  // that here is the ADAPTER, not us — with the cache provider configured in
+  // astro.config.mjs it stamps `Cloudflare-CDN-Cache-Control: no-store` on every
+  // response that did not opt in via `Astro.cache.set(...)`. VERIFIED live
+  // against both Workers under `wrangler dev`: /, /login, /signup, /new-post,
+  // /verify-email and a 404 all came back `no-store`; a probe page calling
+  // `Astro.cache.set({maxAge,swr,tags})` came back
+  // `public, max-age=3600, stale-while-revalidate=86400`.
+  // ⚠️ That default-deny is CONDITIONAL ON THE PROVIDER BEING WIRED. See the
+  // block above `cache: { provider: cacheCloudflare() }` in astro.config.mjs:
+  // this flag WITHOUT that line is the one combination that silently caches
+  // authed HTML. The pair is pinned together by test/workers-cache.test.ts.
+  //
+  // ⚠️ THE LINE BELOW IS DECORATIVE, AND IT IS NOT THE OFF SWITCH. Both facts
+  // are counter-intuitive and both were verified by calling the adapter's
+  // config customizer directly (`cloudflareConfigCustomizer` in
+  // @astrojs/cloudflare/dist/wrangler.js:32):
+  //
+  //     cache: needsWorkerCache && !config.cache?.enabled ? { enabled: true } : void 0
+  //
+  //   provider + `"cache": { "enabled": true }`  -> undefined       (ours passes through)
+  //   provider + cache ABSENT                    -> {"enabled":true} (INJECTED anyway)
+  //   provider + `"cache": { "enabled": false }` -> {"enabled":true} (your "off" is OVERRIDDEN)
+  //
+  // So: deleting the line below changes NOTHING (the adapter injects it), and
+  // setting it to `false` does NOT disable the cache — it is inverted to `true`.
+  // It is kept only because this file is where this Worker's surface is
+  // declared, and a reader must not have to know the adapter injects it.
+  // ⚠️ THE ONLY OFF SWITCH IS REMOVING `cache: { provider: cacheCloudflare() }`
+  // FROM astro.config.mjs. Nothing in THIS file can turn the cache off.
+  //
+  // ⚠️ COROLLARY — Cloudflare's documented "keep staging uncached" pattern
+  // (top-level `cache.enabled: false` + `env.production.cache.enabled: true`)
+  // SILENTLY DOES NOT WORK under this adapter: the top-level `false` is
+  // rewritten to `true`, so staging caches too. If per-env caching is ever
+  // needed, it must be solved in astro.config.mjs (conditional provider), not
+  // here — and re-verify the customizer first.
+  //
+  // ⚠️ THE WORKER VERSION IS IN THE CACHE KEY by default, and that default is
+  // LOAD-BEARING — see `cross_version_cache` below. Every deploy starts cold and
+  // a template change self-invalidates (no purge-on-deploy needed).
+  // ⚠️ HOST IS NOT IN THE CACHE KEY: apex and www share entries (hence the
+  // www->apex redirect), and `*.workers.dev` shares entries with the custom
+  // domain at the same version (hence `workers_dev: false` at launch). Both are
+  // deploy-gate items in README.md.
+  // ⚠️ COOKIE IS NOT IN THE CACHE KEY AND DOES NOT BYPASS. See src/lib/cache.ts
+  // (T13) — that is what makes that file load-bearing rather than tidy.
+  //
+  // COST: this makes normally-free static-asset requests billable (~11 billed
+  // requests per page view vs 1) ~= $0.30 per million page views. Accepted: it
+  // buys the elimination of 10-30ms of SSR CPU per view.
+  //
+  // ⚠️ DO NOT ADD `"cross_version_cache": true`. Wrangler 4.110.0 accepts it
+  // (CacheOptions = { enabled, cross_version_cache? }, additionalProperties
+  // false) and it would raise the post-deploy hit rate — at the cost of the one
+  // guarantee this platform renders Markdown at READ time to buy.
+  //
+  // ⚠️ HOW `PIPELINE_VERSION` ACTUALLY REACHES THE CACHE KEY — read this before
+  // touching either. The plan says "PIPELINE_VERSION is part of the edge cache
+  // key". Taken literally that is NOT how Workers Cache works: the key is
+  // {entrypoint, path+query, Worker version, ctx.props} plus anti-poisoning
+  // headers, and a Worker serving eyeball traffic CANNOT compose its own key
+  // (`cf.cacheKey` exists only on a gateway Worker's fetch() INTO a cached
+  // entrypoint). A `Cache-Tag` is a PURGE HANDLE, not a key component — tagging
+  // `pipeline:v1` does not make bumping to `v2` invalidate anything by itself.
+  //
+  // What makes the guarantee real is WORKER-VERSION-IN-KEY, this default:
+  // from T13/T15 the markdown pipeline is bundled INTO this Worker (T13 adds
+  // `@thinkersjournal/markdown` to package.json; T15's post page renders with
+  // it), so a sanitizer fix / schema tightening / PIPELINE_VERSION bump changes
+  // this Worker's BUNDLE, hence its VERSION, hence every cache key — and every
+  // cached render goes cold ATOMICALLY on deploy, with no purge. That is what
+  // makes "a rehype-sanitize CVE patch fixes every post at once" true rather
+  // than aspirational, and it is TRANSITIVE: it holds only while the pipeline
+  // is actually bundled here and this default is left alone.
+  //
+  // `cross_version_cache: true` would break exactly that: entries shared across
+  // versions means the NEW, patched code serves the OLD, vulnerable HTML until
+  // each entry's TTL lapses. The price of the default is a cold cache per
+  // deploy. Pay it. Pinned by test/workers-cache.test.ts.
+  "cache": { "enabled": true },
+
   "assets": {
     // Astro's client-side assets. The binding name `ASSETS` is not arbitrary:
     // the adapter's generated Worker entry looks up `env.ASSETS` to serve

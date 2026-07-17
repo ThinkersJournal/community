@@ -2,11 +2,31 @@ import { fileURLToPath } from "node:url";
 
 import { runner } from "node-pg-migrate";
 import { Client } from "pg";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 // Runs in the Node vitest project (environment: 'node') with a direct pg TCP
-// connection — NOT in workerd. The schema is applied by the root globalSetup
-// (test/global-setup.ts) before this file runs.
+// connection — NOT in workerd.
+//
+// ⚠️ THIS FILE HAS ITS OWN DATABASE, AND THAT IS LOAD-BEARING.
+// It proves the migration SQL by RUNNING it: `down` drops every table in the
+// stack (media, posts, profiles, users), then `up` recreates them. On the
+// shared fixture DB that is a race, not a test: vitest runs test PROJECTS in
+// parallel unless `sequence.groupOrder` says otherwise, so the "pool" project's
+// Worker tests (signup/login/logout/email-verify/epoch-revoke/soft-gate/
+// hyperdrive — all reaching the SAME database through Hyperdrive) can be
+// mid-query in the window where this file has `users` dropped, and fail with
+// `relation "users" does not exist`. This file needs *a* database, not the
+// shared one, so it gets its own: the hazard is then structurally impossible
+// rather than a scheduling constraint a future edit can quietly drop.
+//
+// The database is created by db/init/01-create-test-db.sql (fresh volumes) and,
+// for volumes that predate it, by test/global-setup.ts. Its SCHEMA state is
+// owned HERE (globalSetup migrates only the shared DB) — hence the beforeAll.
+const MIGRATIONS_TEST_DATABASE_URL =
+  process.env.MIGRATIONS_TEST_DATABASE_URL ??
+  "postgres://postgres:postgres@localhost:5432/thinkersjournal_migrations_test";
+
+/** The SHARED fixture DB — read-only here, only to prove we never touch it. */
 const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://postgres:postgres@localhost:5432/thinkersjournal_test";
@@ -15,16 +35,25 @@ const migrationsDir = fileURLToPath(new URL("../migrations", import.meta.url));
 
 async function migrate(direction: "up" | "down"): Promise<void> {
   await runner({
-    databaseUrl: TEST_DATABASE_URL,
+    databaseUrl: MIGRATIONS_TEST_DATABASE_URL,
     dir: migrationsDir,
     direction,
     migrationsTable: "pgmigrations",
-    count: direction === "down" ? 1 : Infinity,
+    // Infinity in BOTH directions: "down" must revert the ENTIRE applied
+    // stack, not just the most-recently-applied file. With count: 1, adding
+    // migrations/0002 on top of 0001 made "down" revert 0002 ONLY (posts +
+    // media), leaving users/profiles in place — this test would then assert
+    // those tables are gone and fail. Reverting the whole stack keeps this
+    // round-trip test correct regardless of how many migrations exist.
+    count: Infinity,
   });
 }
 
-async function withClient<T>(fn: (client: Client) => Promise<T>): Promise<T> {
-  const client = new Client({ connectionString: TEST_DATABASE_URL });
+async function withClient<T>(
+  fn: (client: Client) => Promise<T>,
+  connectionString: string = MIGRATIONS_TEST_DATABASE_URL,
+): Promise<T> {
+  const client = new Client({ connectionString });
   await client.connect();
   try {
     return await fn(client);
@@ -41,6 +70,12 @@ async function tableExists(client: Client, table: string): Promise<boolean> {
   );
   return rows.length === 1;
 }
+
+// globalSetup migrates the SHARED DB; this one is ours to set up. Idempotent
+// (node-pg-migrate's `pgmigrations` table), so this is a no-op after run 1.
+beforeAll(async () => {
+  await migrate("up");
+});
 
 describe("0001 users + profiles migration", () => {
   it("creates users with password_hash, email_verified_at (nullable), and citext email", async () => {
@@ -100,23 +135,41 @@ describe("0001 users + profiles migration", () => {
     });
   });
 
-  it("down drops both tables and up restores them (round-trip); leaves DB migrated", async () => {
+  it("down drops every table and up restores them (round-trip); leaves DB migrated", async () => {
     await withClient(async (client) => {
       expect(await tableExists(client, "users")).toBe(true);
       expect(await tableExists(client, "profiles")).toBe(true);
+      expect(await tableExists(client, "posts")).toBe(true);
+      expect(await tableExists(client, "media")).toBe(true);
     });
 
     await migrate("down");
     await withClient(async (client) => {
       expect(await tableExists(client, "users")).toBe(false);
       expect(await tableExists(client, "profiles")).toBe(false);
+      expect(await tableExists(client, "posts")).toBe(false);
+      expect(await tableExists(client, "media")).toBe(false);
     });
+
+    // THE ISOLATION PROPERTY, pinned. The stack is torn down above — in OUR
+    // database. If this file ever gets pointed back at the shared fixture DB,
+    // this assertion fails HERE, loudly and deterministically, instead of
+    // surfacing as an intermittent `relation "users" does not exist` in an
+    // unrelated pool test that happened to query during the drop window.
+    await withClient(async (client) => {
+      expect(
+        await tableExists(client, "users"),
+        "the destructive migration round-trip reached the SHARED test DB. It must run against MIGRATIONS_TEST_DATABASE_URL (its own database) — the pool project's Worker tests query the shared DB through Hyperdrive CONCURRENTLY with this project.",
+      ).toBe(true);
+    }, TEST_DATABASE_URL);
 
     await migrate("up");
     await withClient(async (client) => {
       expect(await tableExists(client, "users")).toBe(true);
       expect(await tableExists(client, "profiles")).toBe(true);
+      expect(await tableExists(client, "posts")).toBe(true);
+      expect(await tableExists(client, "media")).toBe(true);
     });
-    // Intentionally left in the migrated (up) state so Task 6 can reuse the DB.
+    // Intentionally left in the migrated (up) state.
   });
 });

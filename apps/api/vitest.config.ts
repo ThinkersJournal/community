@@ -103,6 +103,51 @@ export default defineConfig({
                 HYPERDRIVE_CACHED: TEST_DATABASE_URL,
                 HYPERDRIVE_FRESH: TEST_DATABASE_URL,
               },
+              // Miniflare simulates R2 locally with an in-memory bucket. The
+              // name need only match wrangler.jsonc's binding.
+              r2Buckets: ["MEDIA"],
+              // ⚠️ REQUIRED, NOT OPTIONAL — the pool will not START without it.
+              // wrangler.jsonc declares `services: [{ binding: "WEB", service:
+              // "thinkersjournal-web" }]` (the purge hop), and miniflare
+              // resolves service bindings by NAME against workers it actually
+              // has. `web` is a different package that is not in this pool, so
+              // without this override every test file dies before it runs with:
+              //
+              //   Worker "core:user:vitest-pool-workers-runner-pool"'s binding
+              //   "WEB" refers to a service "core:user:thinkersjournal-web",
+              //   but no such service is defined.
+              //
+              // A 200 is the RIGHT default rather than a throw: test/posts.test.ts
+              // drives the real handlers with the real `env`, so publishing a post
+              // there genuinely dispatches a purge through this binding. Answering
+              // "web accepted it" keeps that suite's output pristine (purgeTags
+              // logs on a non-2xx) without asserting anything about purging.
+              //
+              // ⚠️ THIS STUB PROVES NOTHING ABOUT THE HOP — AND IT DISPROVES
+              // NOTHING EITHER, WHICH IS THE DANGEROUS HALF. It creates `WEB`
+              // regardless of what wrangler.jsonc says, so DELETING the `services`
+              // block there leaves all api tests GREEN while production gets
+              // `env.WEB === undefined` -> TypeError -> swallowed by purgeTags'
+              // own catch -> one log line and every purge silently dead forever.
+              // Verified by doing exactly that.
+              //
+              // ⚠️ THAT HOLE IS NOW PINNED ELSEWHERE, BY NECESSITY:
+              // test/purge-binding.node.test.ts asserts the real `services` block
+              // from the real file. It cannot live in THIS project — workerd's
+              // filesystem is virtual (`/bundle`), so a pool test cannot read
+              // wrangler.jsonc at all. Do not delete that test thinking this stub
+              // covers it; it is the only thing that does.
+              //
+              // The tests that care about behaviour (test/purge.test.ts,
+              // test/purge-wiring.test.ts) pass their OWN `WEB` stub in the `env`
+              // they hand to `worker.fetch`, and observe that.
+              serviceBindings: {
+                WEB: () =>
+                  new Response(JSON.stringify({ purged: 0 }), {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                  }),
+              },
               // Values for vars/secrets that live in the gitignored
               // `apps/api/.dev.vars`, so CI checkouts never have them. Supplied
               // directly here to keep the suite CI-safe without depending on
@@ -121,6 +166,10 @@ export default defineConfig({
                 // which makes that route 404 like any nonexistent path.
                 // test/email-verify.test.ts covers BOTH states.
                 TEST_ROUTES: "1",
+                // A SECRET (src/cache/purge.ts). Supplied here so the suite is
+                // CI-safe without .dev.vars. Must match apps/web/.dev.vars for
+                // the E2E's cross-process purge hop to authenticate.
+                PURGE_SECRET: "dev-purge-secret-not-for-production",
               },
             },
           }),
@@ -128,14 +177,32 @@ export default defineConfig({
         test: {
           name: "pool",
           include: ["test/**/*.test.ts"],
-          exclude: [...configDefaults.exclude, "test/**/*.db.test.ts"],
+          // ⚠️ `*.node.test.ts` is excluded for a REASON THAT IS NOT STYLE: workerd
+          // has a VIRTUAL filesystem rooted at `/bundle`, so a test in this project
+          // cannot read the repo's own files at all — `readFileSync("wrangler.jsonc")`
+          // fails with `no such file or directory, readAll '/bundle/wrangler.jsonc'`
+          // (verified). Any test that must ASSERT ON CONFIG SOURCE therefore has to
+          // run in the Node project below.
+          exclude: [...configDefaults.exclude, "test/**/*.db.test.ts", "test/**/*.node.test.ts"],
         },
       },
       {
         test: {
           name: "node",
           environment: "node",
-          include: ["test/**/*.db.test.ts"],
+          // `*.db.test.ts` — needs pg/node-pg-migrate/information_schema.
+          // `*.node.test.ts` — needs the REAL filesystem to assert on config
+          // source (workerd's is virtual; see the pool project's exclude).
+          include: ["test/**/*.db.test.ts", "test/**/*.node.test.ts"],
+          // NOTE: no `fileParallelism: false` here, deliberately. The
+          // destructive full-stack drop/recreate that would have required it
+          // (migrations.db.test.ts) now runs against its OWN database, so
+          // nothing in this project can drop a table another test — in this
+          // project OR in the concurrently-running "pool" project — is querying.
+          // Serializing would only have covered THIS project anyway: vitest runs
+          // projects in parallel unless `sequence.groupOrder` is set, so the
+          // pool's Hyperdrive tests were still exposed. The database split fixes
+          // both, and cannot be lost the way a scheduling constraint can.
         },
       },
     ],

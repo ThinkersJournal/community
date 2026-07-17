@@ -15,7 +15,7 @@ import type { SessionData } from "@thinkersjournal/shared";
 /**
  * Task 13 — the SOFT email-verification gate: unverified users may
  * READ/browse freely, but CONTENT MUTATION (here, `POST /posts`) requires a
- * verified email. `GET /posts` proves reads stay open regardless.
+ * verified email. `GET /posts/:id` proves reads stay open regardless.
  *
  * Runs in the POOL project (real workerd) — needs the `SESSIONS` KV binding
  * (for `createSession`/`readSession`), `HYPERDRIVE_FRESH` (for the `users`
@@ -41,7 +41,17 @@ const PASSWORD_HASH = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$ZGlnZXN0";
 /** Rows created by a test, deleted in `afterEach`. */
 const createdUserIds: string[] = [];
 
-/** INSERT an UNVERIFIED user (`email_verified_at IS NULL`) with a per-run-unique email; returns its id. */
+/**
+ * INSERT an UNVERIFIED user (`email_verified_at IS NULL`) with a per-run-unique
+ * email; returns its id.
+ *
+ * ⚠️ ALSO INSERTS A `profiles` ROW — every real user has one (signup creates
+ * both together; see src/routes/signup.ts), and T17's `POST /posts` response
+ * now resolves the author's `username` via `profiles.user_id`
+ * (src/routes/posts.ts's `usernameFor`). Without this, the one case here that
+ * reaches a SUCCESSFUL `POST /posts` (post-verification) would 500 on a
+ * data-integrity state the real system never produces.
+ */
 async function insertUnverifiedUser(): Promise<string> {
   const ctx = createExecutionContext();
   const email = `t13_${crypto.randomUUID()}@example.com`;
@@ -50,7 +60,12 @@ async function insertUnverifiedUser(): Promise<string> {
       "INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id",
       [email, PASSWORD_HASH],
     );
-    return rows[0].id as string;
+    const userId = rows[0].id as string;
+    await c.query("INSERT INTO profiles (user_id, username) VALUES ($1, $2)", [
+      userId,
+      `t13_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`,
+    ]);
+    return userId;
   });
   await waitOnExecutionContext(ctx);
   createdUserIds.push(id);
@@ -107,6 +122,12 @@ async function sessionTokenFor(userId: string): Promise<Authed> {
  * allowed `Origin` and the `X-CSRF-Token` the pipeline requires — a real
  * browser client sends both, and without them the pipeline rejects the request
  * before the email gate under test runs at all.
+ *
+ * ⚠️ A NON-GET ALSO CARRIES A VALID `CreatePostInput` BODY (Task 9). `POST
+ * /posts` is a real handler now and 400s a bodyless request — AFTER the gate, so
+ * every 403 case below would still pass without one and only the 201 case would
+ * notice. The gate's positive half is the case that proves the request reached
+ * the handler at all, so the body is what keeps the other half meaningful.
  */
 function requestWithCookie(
   path: string,
@@ -114,11 +135,21 @@ function requestWithCookie(
   authed: Authed,
 ): Request {
   const headers = new Headers({ Cookie: `tj_session=${authed.token}` });
-  if (method !== "GET" && method !== "HEAD") {
-    headers.set("Origin", ALLOWED_ORIGIN);
-    headers.set("X-CSRF-Token", authed.csrfToken);
+  if (method === "GET" || method === "HEAD") {
+    return new Request(`https://api.test${path}`, { method, headers });
   }
-  return new Request(`https://api.test${path}`, { method, headers });
+
+  headers.set("Origin", ALLOWED_ORIGIN);
+  headers.set("X-CSRF-Token", authed.csrfToken);
+  headers.set("content-type", "application/json");
+  return new Request(`https://api.test${path}`, {
+    method,
+    headers,
+    body: JSON.stringify({
+      title: `Soft gate probe ${crypto.randomUUID()}`,
+      markdownSource: "body",
+    }),
+  });
 }
 
 beforeEach(async () => {
@@ -180,10 +211,23 @@ describe("soft email-verification gate", () => {
     // success, so the assertion would have stayed green while the thing it
     // claims to test had stopped happening entirely.
     expect(response.status).toBe(201);
-    // The handler's own stub body — proof this is `handleCreatePost`'s response
-    // and that the pipeline handed it the right validated session.
-    const body = (await response.json()) as { ok: boolean; authorId: string };
-    expect(body).toEqual({ ok: true, authorId: userId });
+
+    // Proof this is `handleCreatePost`'s response and that the pipeline handed it
+    // the right validated session. Task 9 note: this used to read `authorId`
+    // straight out of the stub's body; the real handler does not echo it (and
+    // must not — author_id is session-derived, never client-visible input), so
+    // the check moves to the row that was actually written.
+    const { id } = (await response.json()) as { id: string };
+    const ctx2 = createExecutionContext();
+    const authorId = await withClient(env.HYPERDRIVE_FRESH, ctx2, async (c) => {
+      const { rows } = await c.query<{ author_id: string }>(
+        "SELECT author_id FROM posts WHERE id = $1",
+        [id],
+      );
+      return rows[0]?.author_id ?? null;
+    });
+    await waitOnExecutionContext(ctx2);
+    expect(authorId).toBe(userId);
   });
 
   /**
@@ -219,13 +263,39 @@ describe("soft email-verification gate", () => {
     expect(body.code).toBe("EMAIL_NOT_VERIFIED");
   });
 
-  it("GET /posts with the SAME unverified session -> 200 (reads are open)", async () => {
+  /**
+   * ⚠️ TASK 9 REPLACED M0's `GET /posts` STUB HERE, AND STRENGTHENED THE CASE.
+   *
+   * The gate's defining property is that it is SOFT: it gates content MUTATION
+   * and nothing else, so an unverified user must still be able to read. That was
+   * pinned against the `{posts: []}` stub feed, which read no session at all —
+   * so it could not have failed no matter what the gate did.
+   *
+   * This is the version that can fail: an unverified user reading their OWN post
+   * through `GET /posts/:id`, a route that DOES authenticate. If someone ever
+   * adds `requireVerifiedEmail` to a read path, this goes red. The anonymous half
+   * (a read that never sees a session) is covered by test/public-reads.test.ts.
+   */
+  it("GET /posts/:id with an unverified session -> 200 (reads are open; the gate is MUTATION-only)", async () => {
     const userId = await insertUnverifiedUser();
     const authed = await sessionTokenFor(userId);
 
+    // Inserted directly: the user is unverified, so the gate (correctly) refuses
+    // to let them CREATE one — which is the very thing under test.
+    const setupCtx = createExecutionContext();
+    const postId = await withClient(env.HYPERDRIVE_FRESH, setupCtx, async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status)
+         VALUES ($1, 'Unverified draft', $2, 'body', 'draft') RETURNING id`,
+        [userId, `unverified-${crypto.randomUUID()}`],
+      );
+      return rows[0]!.id;
+    });
+    await waitOnExecutionContext(setupCtx);
+
     const ctx = createExecutionContext();
     const response = await worker.fetch(
-      requestWithCookie("/posts", "GET", authed),
+      requestWithCookie(`/posts/${postId}`, "GET", authed),
       env,
       ctx,
     );

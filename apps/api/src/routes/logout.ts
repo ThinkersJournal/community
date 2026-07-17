@@ -21,6 +21,15 @@
  * reverse order would risk the opposite: a destroyed local session but a
  * failed bump, leaving every OTHER session (the actual point of "log out
  * everywhere") untouched.
+ *
+ * ⚠️ THAT ORDERING IS ONLY OBSERVABLE WHEN THE BUMP FAILS — on the success path
+ * both orders behave identically, so no ordinary test can distinguish them, and
+ * for a while none did (inverting this left the suite passing 9/9). It is now
+ * pinned by "leaves the caller's session INTACT if logout-all's epoch bump
+ * fails" in test/logout.test.ts, which fault-injects the DO via
+ * test/helpers/broken-bump.ts. src/routes/signup.ts's step 5 documents the same
+ * revoke-then-mutate rule and is pinned the same way; if you add a third such
+ * site, pin it too.
  */
 import { runMutatingPipeline } from "../auth/pipeline";
 import { destroySession } from "../auth/session";

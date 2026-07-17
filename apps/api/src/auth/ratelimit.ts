@@ -35,6 +35,7 @@
  * multi-IP attacker. Anything needing exact accounting wants a Durable Object
  * (src/durable-objects/UserSecurityDO.ts), not this binding.
  */
+import { errorResponse } from "../http/errors";
 
 /**
  * Consume one unit of `limiter`'s quota for `key`. Resolves `null` when the
@@ -46,5 +47,5 @@ export async function enforceRateLimit(
   key: string,
 ): Promise<Response | null> {
   const { success } = await limiter.limit({ key });
-  return success ? null : new Response("Too many requests", { status: 429 });
+  return success ? null : errorResponse("RATE_LIMITED", 429);
 }

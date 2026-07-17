@@ -7,6 +7,13 @@
  * keeps the api unreachable from the browser at all.
  */
 import { apiFetch, applyCookies } from "../lib/api";
+import { markPrivate } from "../lib/cache";
+
+// ⚠️ Per-viewer: signup is where a session first comes to exist — the api's
+// `Set-Cookie` rides out on this very response. Cookie is NOT in the Workers
+// Cache key and does NOT trigger a bypass, so a cacheable render here would
+// serve one signup's outcome to every later visitor. See src/lib/cache.ts.
+markPrivate(Astro);
 
 /** Rendered outcome. `null` = first visit, nothing submitted yet. */
 let result: "created" | "error" | null = null;
@@ -15,7 +22,7 @@ let message = "";
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
 
-  const response = await apiFetch<{ code?: string; error?: string }>(
+  const response = await apiFetch<{ code?: string }>(
     "/auth/signup",
     {
       method: "POST",

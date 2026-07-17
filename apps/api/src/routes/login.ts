@@ -76,6 +76,7 @@ import { hashPassword, needsRehash, verifyPassword } from "../auth/password";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { createSession } from "../auth/session";
 import { withClient } from "../db/client";
+import { errorResponse } from "../http/errors";
 
 /**
  * A fixed, valid Argon2id PHC hash used ONLY to equalize timing on the
@@ -133,7 +134,7 @@ function json(body: unknown, status: number, headers: HeadersInit = {}): Respons
  * defense (b) is what makes both call sites take comparably long to reach it.
  */
 function unauthorized(): Response {
-  return json({ error: "Invalid email or password" }, 401);
+  return errorResponse("INVALID_CREDENTIALS", 401);
 }
 
 /**
@@ -150,20 +151,16 @@ export async function handleLogin(
     raw = await request.json();
   } catch {
     // A malformed body is the client's error, not a 500.
-    return json({ error: "Invalid JSON body" }, 400);
+    return errorResponse("INVALID_JSON", 400);
   }
 
   const parsed = LoginInput.safeParse(raw);
   if (!parsed.success) {
     // Only the offending FIELD NAMES are echoed — never the submitted values,
     // one of which is the password.
-    return json(
-      {
-        error: "Invalid login input",
-        fields: parsed.error.issues.map((issue) => issue.path.map(String).join(".")),
-      },
-      400,
-    );
+    return errorResponse("INVALID_INPUT", 400, {
+      fields: parsed.error.issues.map((issue) => issue.path.map(String).join(".")),
+    });
   }
   const { email, password } = parsed.data;
 
@@ -171,7 +168,7 @@ export async function handleLogin(
   // See the file header's CHECKORIGIN RECONCILIATION and ORIGIN BEFORE THE
   // LIMITER notes.
   if (!checkOrigin(env, request)) {
-    return json({ error: "Forbidden" }, 403);
+    return errorResponse("FORBIDDEN", 403);
   }
 
   // ---- 3. Rate limit ---------------------------------------------------------

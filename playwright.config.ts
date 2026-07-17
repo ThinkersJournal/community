@@ -46,6 +46,20 @@ import { defineConfig, devices } from "@playwright/test";
  * Playwright sets webServers up in array order, each waiting for its `url`
  * before the next starts. The api must be listening before web starts, or web's
  * `API` binding comes up `[not connected]` and every page 500s.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ⚠️ WORKERS CACHE IS NOT SIMULATED LOCALLY — A CACHE HIT/PURGE IS UNOBSERVABLE.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * miniflare (what `wrangler dev` runs under) does NOT simulate Workers Cache, so
+ * two GETs of the same public URL here are two independent Worker invocations with
+ * no cache in between. A real cache HIT-then-purge — what the publish->edit spec
+ * conceptually exercises — is therefore UNOBSERVABLE locally BY CONSTRUCTION:
+ * there is no local cache to hit or to invalidate. What the E2E CAN pin locally is
+ * the cache-HEADER contract our code emits (`cloudflare-cdn-cache-control` + the
+ * `cache-tag` set); the HIT/purge proof itself (`Cf-Cache-Status`: MISS -> HIT ->
+ * edit -> MISS) is DEPLOY-GATE-ONLY (Task 20). This fact lived only in
+ * e2e/publish.spec.ts's header; it is recorded here too so a reader of the config
+ * does not re-derive it.
  */
 
 /** The `web` Worker — the ONLY origin the browser is allowed to know about. */
@@ -101,7 +115,24 @@ const hyperdriveEnv = {
  *     Domain/Secure so a browser can actually store it on http://127.0.0.1.
  *     It MUST be unset in production — the deploy-gate checklist in README.md
  *     covers both consequences.
+ *   • PURGE_SECRET is a dev placeholder, and it is passed to BOTH Workers below
+ *     (`apiVars` and `webVars`) because it must MATCH on both ends. Production
+ *     sets a real high-entropy value with `wrangler secret put` on each.
  */
+
+/**
+ * The purge hop's shared secret. ⚠️ THE SAME VALUE ON BOTH WORKERS, deliberately:
+ * `api` sends it over the `WEB` binding and `web` compares it in constant time,
+ * so a mismatch is a 403 and a silently un-purged cache.
+ *
+ * ⚠️ THE PURGE HOP IS THE ONE api->web DIRECTION. It works across the dev registry
+ * exactly the way web->api does (the same mechanism that makes the `API` binding
+ * resolve between these two processes) — which is what makes the bindings CIRCULAR
+ * here as in production. See apps/api/wrangler.jsonc's `services` block for the
+ * first-deploy ordering that circularity forces.
+ */
+const PURGE_SECRET = "dev-purge-secret-not-for-production";
+
 const apiVars = [
   "--var",
   "TEST_ROUTES:1",
@@ -109,7 +140,12 @@ const apiVars = [
   "TURNSTILE_SECRET_KEY:1x0000000000000000000000000000000AA",
   "--var",
   "POSTMARK_SERVER_TOKEN:dummy-postmark-token-not-a-real-secret",
+  "--var",
+  `PURGE_SECRET:${PURGE_SECRET}`,
 ].join(" ");
+
+/** The `web` Worker's vars — same reasoning as `apiVars`, same dummy secret. */
+const webVars = ["--var", `PURGE_SECRET:${PURGE_SECRET}`].join(" ");
 
 export default defineConfig({
   testDir: "./e2e",
@@ -185,7 +221,7 @@ export default defineConfig({
       // your configuration is missing the required `directory` property." The
       // config this serves is build output, which is the other reason the build
       // must already have run.
-      command: `pnpm --filter @thinkersjournal/web exec wrangler dev -c dist/server/wrangler.json --port ${WEB_PORT}`,
+      command: `pnpm --filter @thinkersjournal/web exec wrangler dev -c dist/server/wrangler.json --port ${WEB_PORT} ${webVars}`,
       url: WEB_URL,
       reuseExistingServer: !process.env.CI,
       timeout: 180_000,

@@ -4,9 +4,10 @@
   // module (env, createExecutionContext, waitOnExecutionContext, ...). Runtime
   // globals + `Cloudflare.Env` come from `../src/worker-configuration.d.ts`.
   //
-  // The Node DB tests (`*.db.test.ts`) and the migration globalSetup use Node
-  // types and the `pg`/`node-pg-migrate` modules, so they are EXCLUDED here and
-  // type-checked by `tsconfig.node.json` instead.
+  // The Node tests (`*.db.test.ts`, `*.node.test.ts`) and the migration
+  // globalSetup use Node types and the `pg`/`node-pg-migrate`/`jsonc-parser`
+  // modules, so they are EXCLUDED here and type-checked by `tsconfig.node.json`
+  // instead.
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "types": ["@cloudflare/vitest-pool-workers/types"]
@@ -16,5 +17,5 @@
     "../src/worker-configuration.d.ts",
     "../src/wasm.d.ts"
   ],
-  "exclude": ["./**/*.db.test.ts", "./global-setup.ts"]
+  "exclude": ["./**/*.db.test.ts", "./**/*.node.test.ts", "./global-setup.ts"]
 }

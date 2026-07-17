@@ -12,10 +12,11 @@
  * fetches this over the Service Binding, forwarding the browser's session
  * cookie, and embeds the result in the HTML it renders.
  *
- * ⚠️ Deliberately NOT run through the mutating pipeline (src/auth/pipeline.ts).
+ * ⚠️ Deliberately NOT run through `runMutatingPipeline` (src/auth/pipeline.ts).
  * It is a GET, and the pipeline's CSRF step would demand the very token this
- * route exists to issue. Authentication here is `readSession` PLUS the epoch
- * check below — see that step's note for why `readSession` alone was not enough.
+ * route exists to issue. Authentication here is `readCurrentSession` — the
+ * session read PLUS the epoch check, which is what every session-bearing GET
+ * owes; see its doc-comment for why `readSession` alone was not enough.
  *
  * ⚠️ Being a GET is safe, and the reasoning is load-bearing — do not "harden"
  * this into something that leaks:
@@ -28,7 +29,8 @@
  * `SameSite=None`, would break both of those at once.
  */
 import { csrfTokenFor } from "../auth/csrf";
-import { destroySession, readSession } from "../auth/session";
+import { readCurrentSession } from "../auth/pipeline";
+import { errorResponse } from "../http/errors";
 
 /**
  * The ONE 401 for every "no usable session" case here: no cookie, an unknown
@@ -48,10 +50,7 @@ import { destroySession, readSession } from "../auth/session";
  * instance silently yields `{}` — dropping the cleared cookie with no error.
  */
 function loginRequired(extraHeaders: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify({ code: "LOGIN_REQUIRED" }), {
-    status: 401,
-    headers: { "content-type": "application/json", ...extraHeaders },
-  });
+  return errorResponse("LOGIN_REQUIRED", 401, { headers: extraHeaders });
 }
 
 /**
@@ -62,39 +61,13 @@ function loginRequired(extraHeaders: Record<string, string> = {}): Response {
  * itself stays server-side and the token cannot be worked back into it.
  */
 export async function handleCsrf(request: Request, env: Env): Promise<Response> {
-  const session = await readSession(env, request);
-  if (session === null) {
-    return loginRequired();
-  }
-
-  // ---- Security epoch (revocation) ------------------------------------------
-  // ⚠️ `readSession` ALONE IS NOT ENOUGH, even though this route is a GET that
-  // mutates nothing. Its KV record outlives revocation — bumping a user's epoch
-  // (re-signup, "log out everywhere") invalidates every outstanding session
-  // WITHOUT enumerating them, which is exactly what makes revocation O(1). So a
-  // revoked-but-still-in-KV session resolves here perfectly well.
-  //
-  // Without this check that session got a 200 + a valid token while a garbage
-  // cookie got a 401 — reintroducing, on this route, precisely the oracle
-  // src/auth/pipeline.ts goes out of its way to suppress (it makes "no session"
-  // and "revoked session" indistinguishable). The token itself was never the
-  // risk: it is inert, because any mutation carrying it dies at the pipeline's
-  // own epoch step. The leak was the STATUS, plus leaving the dead cookie in the
-  // browser to be replayed.
-  //
-  // Same reasoning, same fix as `GET /verify-email` (src/routes/verify-email.ts),
-  // which is the other session-bearing GET and checks the epoch inline for the
-  // same reason. Read fresh from the DO, never cached — a revocation honored a
-  // cache-TTL late is the window a stolen cookie needs.
-  const currentEpoch = await env.USER_SECURITY.getByName(
-    session.userId,
-  ).getEpoch();
-  if (currentEpoch !== session.securityEpoch) {
-    // Destroy it rather than merely rejecting it: the KV record is dead
-    // server-side from here on, and the cleared cookie (`Max-Age=0`) stops the
-    // browser replaying a token that can never succeed again.
-    const { cookie } = await destroySession(env, request);
-    return loginRequired({ "Set-Cookie": cookie });
+  // Session + epoch, not `readSession` alone: a revoked session's KV record
+  // outlives its revocation. `readCurrentSession` (src/auth/pipeline.ts) owns
+  // that reasoning in full — it is the same two steps every session-bearing GET
+  // owes, and `loginRequired` above is this route's answer for both failures.
+  const session = await readCurrentSession(env, request, loginRequired);
+  if (session instanceof Response) {
+    return session;
   }
 
   return new Response(JSON.stringify({ csrfToken: await csrfTokenFor(session) }), {

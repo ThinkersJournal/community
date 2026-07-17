@@ -52,6 +52,14 @@ const createdUserIds: string[] = [];
  * INSERT a user with a per-run-unique email; returns its id. `verified`
  * controls `email_verified_at`, i.e. which side of the soft gate (Task 13)
  * the user lands on.
+ *
+ * ⚠️ ALSO INSERTS A `profiles` ROW — every real user has one (signup creates
+ * both in the same transaction; see src/routes/signup.ts), and T17's
+ * `POST /posts` response now resolves the author's `username` via
+ * `profiles.user_id` (src/routes/posts.ts's `usernameFor`). Without this a
+ * user built by this fixture is not a real user at all, and every case here
+ * that reaches `POST /posts` would 500 on a data-integrity state the real
+ * system never produces — a fixture gap, not a bug in the handler.
  */
 async function insertUser(verified: boolean): Promise<string> {
   const ctx = createExecutionContext();
@@ -62,7 +70,12 @@ async function insertUser(verified: boolean): Promise<string> {
        VALUES ($1, $2, ${verified ? "now()" : "NULL"}) RETURNING id`,
       [email, PASSWORD_HASH],
     );
-    return rows[0].id as string;
+    const userId = rows[0].id as string;
+    await c.query("INSERT INTO profiles (user_id, username) VALUES ($1, $2)", [
+      userId,
+      `t16_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`,
+    ]);
+    return userId;
   });
   await waitOnExecutionContext(ctx);
   createdUserIds.push(id);
@@ -100,12 +113,31 @@ async function authenticate(userId: string): Promise<Authed> {
   return { token: match[1]!, csrfToken: await csrfTokenFor(data) };
 }
 
-/** A fully valid `POST /posts`: session cookie + allowed Origin + CSRF token. */
+/**
+ * A fully valid `POST /posts`: session cookie + allowed Origin + CSRF token +
+ * a body that satisfies `CreatePostInput`.
+ *
+ * ⚠️ THE BODY IS REQUIRED SINCE TASK 9, and its absence would be invisible here.
+ * `POST /posts` is a real handler now: a bodyless request 400s (INVALID_JSON) at
+ * the step AFTER the pipeline. Every case below that asserts a REJECTION (403,
+ * 401) would still pass without a body — the pipeline short-circuits first — so
+ * only the 201 baselines would have caught it. Those baselines are exactly what
+ * makes the rejection cases meaningful ("the same request shape succeeds before
+ * the bump"), so the body is what keeps this suite honest rather than an
+ * incidental fix.
+ *
+ * A unique title per call: `posts_author_slug_key` is (author_id, slug), and the
+ * handler's collision retry would mask a same-title create rather than fail —
+ * but these cases are about the pipeline, so they should not lean on it.
+ */
 function postPosts(
   authed: Authed,
   overrides: { origin?: string | null; csrfToken?: string | null } = {},
 ): Request {
-  const headers = new Headers({ Cookie: `tj_session=${authed.token}` });
+  const headers = new Headers({
+    Cookie: `tj_session=${authed.token}`,
+    "content-type": "application/json",
+  });
 
   const origin = "origin" in overrides ? overrides.origin : ALLOWED_ORIGIN;
   if (origin !== null && origin !== undefined) {
@@ -118,7 +150,14 @@ function postPosts(
     headers.set("X-CSRF-Token", csrfToken);
   }
 
-  return new Request("https://api.test/posts", { method: "POST", headers });
+  return new Request("https://api.test/posts", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      title: `Epoch probe ${crypto.randomUUID()}`,
+      markdownSource: "body",
+    }),
+  });
 }
 
 /** Drive the Worker through a full request lifecycle. */
@@ -177,19 +216,58 @@ describe("epoch revocation", () => {
     expect(await readSession(env, probe)).toBeNull();
   });
 
-  it("a GET with the SAME stale cookie -> still 200 (GETs skip session/epoch/CSRF)", async () => {
+  /**
+   * ⚠️ TASK 9 SPLIT THIS CASE IN TWO, AND THE SPLIT IS THE POINT.
+   *
+   * This was ONE case asserting "a GET with the SAME stale cookie -> still 200
+   * (GETs skip session/epoch/CSRF)", driven against M0's `GET /posts` stub feed.
+   * That route is gone, and — more importantly — its stated property is now only
+   * HALF true. "GET" is no longer one category:
+   *
+   *   • an ANONYMOUS read (src/routes/public.ts) reads no session at all, so a
+   *     stale epoch has nothing to revoke. Still 200. That is the half below.
+   *   • a SESSION-BEARING read (`GET /posts/:id`) authenticates via
+   *     `readCurrentSession`, which DOES check the epoch — deliberately, because
+   *     a session's KV record outlives its revocation. It 401s.
+   *
+   * Repointing the old case at a still-200 route and calling it done would have
+   * kept a green test whose NAME asserts something false, and would have left
+   * the epoch check on session-bearing GETs — a security property that did not
+   * exist before this task — pinned by nothing.
+   */
+  it("an ANONYMOUS read with the SAME stale cookie -> still 200 (it reads no session)", async () => {
     const userId = await insertUser(true);
     const authed = await authenticate(userId);
 
     await env.USER_SECURITY.getByName(userId).bumpEpoch();
 
     const response = await fetchWorker(
-      new Request("https://api.test/posts", {
+      new Request("https://api.test/public/recent?limit=1", {
         headers: { Cookie: `tj_session=${authed.token}` },
       }),
     );
 
     expect(response.status).toBe(200);
+  });
+
+  it("a SESSION-BEARING read with the SAME stale cookie -> 401 + cleared cookie", async () => {
+    const userId = await insertUser(true);
+    const authed = await authenticate(userId);
+
+    await env.USER_SECURITY.getByName(userId).bumpEpoch();
+
+    // Any well-formed id: `readCurrentSession` rejects before the post is ever
+    // looked up, which is itself the property — a revoked session must not be
+    // able to probe for the existence of a row.
+    const response = await fetchWorker(
+      new Request("https://api.test/posts/00000000-0000-7000-8000-000000000000", {
+        headers: { Cookie: `tj_session=${authed.token}` },
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    // Destroyed, not merely rejected — the same contract the mutating path owes.
+    expect(response.headers.get("Set-Cookie")).toContain("Max-Age=0");
   });
 });
 
@@ -271,6 +349,13 @@ describe("mutating pipeline chain order", () => {
     expect(body.code).toBe("EMAIL_NOT_VERIFIED");
   });
 
+  /**
+   * ⚠️ ASSERTED ON THE ROW, NOT THE RESPONSE. M0's stub echoed `authorId` in its
+   * body, so this case simply read it back. The real handler does not echo it —
+   * and it must not: the whole point is that author_id comes from the SESSION and
+   * is never client-visible input. So the proof moves to the only place that can
+   * still carry it, which is the row the handler actually wrote.
+   */
   it("step 7 — the handler receives the VALIDATED session", async () => {
     const userId = await insertUser(true);
     const authed = await authenticate(userId);
@@ -278,8 +363,19 @@ describe("mutating pipeline chain order", () => {
     const response = await fetchWorker(postPosts(authed));
 
     expect(response.status).toBe(201);
-    const body = (await response.json()) as { authorId: string };
-    expect(body.authorId).toBe(userId);
+    const { id } = (await response.json()) as { id: string };
+
+    const ctx = createExecutionContext();
+    const authorId = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query<{ author_id: string }>(
+        "SELECT author_id FROM posts WHERE id = $1",
+        [id],
+      );
+      return rows[0]?.author_id ?? null;
+    });
+    await waitOnExecutionContext(ctx);
+
+    expect(authorId).toBe(userId);
   });
 });
 

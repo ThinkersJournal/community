@@ -31,6 +31,10 @@
  */
 import { env } from "cloudflare:workers";
 
+import { isApiErrorBody, type ApiErrorCode } from "@thinkersjournal/shared";
+
+import { resolveOutgoingBody } from "./outgoing-body";
+
 /** What every call through this module returns. */
 export interface ApiResponse<T> {
   status: number;
@@ -38,7 +42,8 @@ export interface ApiResponse<T> {
    * The parsed JSON body, or `null` when the response had no body / a non-JSON
    * body. ⚠️ `null` is NOT an error signal — `POST /auth/logout` answers 200
    * with a genuinely EMPTY body, so a 2xx with `data: null` is a success. Check
-   * `status`, never truthiness of `data`.
+   * `status`, never truthiness of `data`. A non-2xx, however, is now ALWAYS the
+   * {code, message?} envelope; read it with apiErrorCode().
    */
   data: T | null;
   /**
@@ -116,6 +121,21 @@ export interface ApiFetchOptions {
   origin?: string;
   /** The api's per-session CSRF token, echoed as `X-CSRF-Token`. */
   csrfToken?: string;
+  /**
+   * A raw body, forwarded UNTOUCHED — no JSON serialization, no content-type.
+   *
+   * For binary passthrough (`POST /media` takes raw image bytes; see that
+   * route's header for why it is not multipart). Mutually exclusive with
+   * `body`: setting both would serialize one and drop the other silently —
+   * `resolveOutgoingBody` below picks `rawBody` when both are somehow set,
+   * which is a fallback for a call that never should have set both, not a
+   * feature to rely on.
+   *
+   * ⚠️ Pass a ReadableStream (`Astro.request.body` / `context.request.body`)
+   * rather than buffering: a 15MB upload buffered here would be a 15MB
+   * allocation in a 128MB Worker, on top of the one the api makes.
+   */
+  rawBody?: BodyInit;
 }
 
 /**
@@ -129,7 +149,7 @@ export async function apiFetch<T = unknown>(
   path: string,
   options: ApiFetchOptions = {},
 ): Promise<ApiResponse<T>> {
-  const { method = "GET", body, request, origin, csrfToken } = options;
+  const { method = "GET", body, request, origin, csrfToken, rawBody } = options;
 
   const headers = new Headers();
 
@@ -151,15 +171,39 @@ export async function apiFetch<T = unknown>(
     headers.set("X-CSRF-Token", csrfToken);
   }
 
+  // ⚠️ Keyed on `body`, NOT on whether an outgoing body ends up present —
+  // `rawBody` must NEVER get a content-type from here. The api sniffs a raw
+  // upload's bytes itself (apps/api/src/media/sniff.ts); a caller-declared
+  // content-type would only be something to (mis)trust.
   if (body !== undefined) {
     headers.set("content-type", "application/json");
   }
 
+  // `body` (JSON) and `rawBody` (passthrough) are mutually exclusive; rawBody
+  // wins if both are somehow set, and the type comment says not to. Pulled
+  // into its own pure function (src/lib/outgoing-body.ts) so it has a real
+  // unit test — this file imports `cloudflare:workers`, so IT cannot.
+  const outgoingBody = resolveOutgoingBody(body, rawBody);
+
   // THE Service-Binding hop: dispatched Worker-to-Worker, never over the wire.
+  //
+  // ⚠️ NO `duplex: "half"`, AND THAT WAS VERIFIED, NOT ASSUMED. Node's
+  // undici-based fetch (and the browser's) requires `duplex: "half"` the
+  // instant `body` is a `ReadableStream`, per the Fetch spec's half-duplex
+  // mode — but workerd's `Fetcher.fetch()` type (this file's generated
+  // `RequestInit`) has no `duplex` field at all, and a streamed `rawBody`
+  // (media-upload.ts passing `context.request.body` straight through) was
+  // hand-tested end-to-end against real `wrangler dev` (see the task report):
+  // the upload succeeded with no init option beyond what is typed here.
+  // workerd has supported a streamed request body natively since before the
+  // Fetch spec added this requirement for browsers/Node, so there is nothing
+  // to opt into. If a future workerd version starts throwing the same
+  // "duplex option is required" TypeError, add it here — WITH a comment
+  // naming that error, per this file's own rule for undocumented options.
   const response = await env.API.fetch(`${SERVICE_ORIGIN}${path}`, {
     method,
     headers,
-    ...(body !== undefined && { body: JSON.stringify(body) }),
+    ...(outgoingBody !== undefined && { body: outgoingBody }),
   });
 
   // The body can only be consumed ONCE, so read it as text and parse from that
@@ -195,6 +239,20 @@ function parseJson<T>(text: string): T | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The api's error `code` for a non-2xx response, or null for a 2xx / a body
+ * that is not the envelope.
+ *
+ * ⚠️ Branch on THIS, never on `message` and never on the status alone: 403 is
+ * both "cross-site origin" (FORBIDDEN) and "verify your email first"
+ * (EMAIL_NOT_VERIFIED), and the pages must tell them apart. See the envelope
+ * contract in packages/shared/src/errors.ts.
+ */
+export function apiErrorCode(response: ApiResponse<unknown>): ApiErrorCode | null {
+  if (response.status < 400) return null;
+  return isApiErrorBody(response.data) ? response.data.code : null;
 }
 
 /**

@@ -6,6 +6,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
+import { envWithBrokenBump } from "./helpers/broken-bump";
+import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 import { TEST_LAST_TOKEN_KEY } from "../src/auth/email-verify";
 import { withClient } from "../src/db/client";
 
@@ -30,8 +32,9 @@ const ORIGIN = "https://thinkersjournal.com";
 
 /**
  * The origin every emailed verification link must be built on (production only —
- * see `verificationLinkOrigin` in src/routes/signup.ts). NOT derived from the
- * request URL, and NOT every origin `checkOrigin` accepts.
+ * see `verificationLinkOrigin` in src/auth/email-verify.ts, which BOTH mailing
+ * routes share). NOT derived from the request URL, and NOT every origin
+ * `checkOrigin` accepts.
  */
 const CANONICAL_ORIGIN = "https://thinkersjournal.com";
 
@@ -123,6 +126,21 @@ async function signup(
   await waitOnExecutionContext(ctx);
   return response;
 }
+
+/**
+ * POST /auth/signup against a PATCHED `env` — the seam used to fault-inject the
+ * `USER_SECURITY` DO. `src/index.ts` does not catch handler errors, so a signup
+ * that throws REJECTS here rather than returning a 500.
+ */
+async function signupWithEnv(body: unknown, patchedEnv: Env): Promise<Response> {
+  const ctx = createExecutionContext();
+  try {
+    return await worker.fetch(signupRequest(body), patchedEnv, ctx);
+  } finally {
+    await waitOnExecutionContext(ctx);
+  }
+}
+
 
 function validBody(email: string, password: string = VALID_PASSWORD) {
   return { email, password, turnstileToken: "dummy-turnstile-token" };
@@ -317,6 +335,59 @@ describe("POST /auth/signup", () => {
   });
 
   /**
+   * ⚠️ THE GUARD ON THE UPSERT — why `ON CONFLICT (email) DO UPDATE` carries a
+   * `WHERE users.email_verified_at IS NULL`.
+   *
+   * The 409 above pins the STATUS; this pins the CONSEQUENCE, and they are not
+   * the same assertion. An UNGUARDED `DO UPDATE SET password_hash =
+   * EXCLUDED.password_hash` — the obvious way to make signup atomic, and the
+   * form M0 explicitly rejected — would let ANY stranger's signup on a VERIFIED
+   * address overwrite that account's password: a one-request, no-authentication
+   * account takeover of a proven owner. The status assertion alone would notice
+   * (409 -> 201), but nothing would say WHY it mattered.
+   *
+   * Deleting the `WHERE` from the upsert in src/routes/signup.ts must turn this
+   * RED (mutation-verified).
+   */
+  it("never overwrites a VERIFIED account's password (the upsert's WHERE guard)", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+
+    expect((await signup(validBody(email))).status).toBe(201);
+    await query("UPDATE users SET email_verified_at = now() WHERE email = $1", [
+      email,
+    ]);
+    const before = await query(
+      "SELECT id, password_hash FROM users WHERE email = $1",
+      [email],
+    );
+    const userId = String(before[0]!.id);
+    const epochBefore = await env.USER_SECURITY.getByName(userId).getEpoch();
+
+    const response = await signup(validBody(email, "attacker-password-here"));
+
+    expect(response.status).toBe(409);
+    // No session was minted for the stranger ...
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+
+    const after = await query(
+      "SELECT password_hash, email_verified_at FROM users WHERE email = $1",
+      [email],
+    );
+    // ... the owner's password is UNTOUCHED — this is the whole point of the
+    // guard: zero rows came back, so nothing was written ...
+    expect(after[0]!.password_hash).toBe(before[0]!.password_hash);
+    // ... the account is still verified ...
+    expect(after[0]!.email_verified_at).not.toBeNull();
+    // ... and the owner's live sessions were NOT revoked. A 409 must be inert:
+    // an unguarded upsert would have bumped here (it would have looked like a
+    // re-signup), letting a stranger log the real owner out at will.
+    expect(await env.USER_SECURITY.getByName(userId).getEpoch()).toBe(
+      epochBefore,
+    );
+  });
+
+  /**
    * An UNVERIFIED account has no proven owner, so a later signup TAKES IT OVER
    * rather than 409ing (which would leak that the address is registered) or
    * 500ing on the `users.email` unique violation.
@@ -396,6 +467,90 @@ describe("POST /auth/signup", () => {
       cookieFrom(response),
     );
     expect(verify.status).toBe(200);
+  });
+
+  /**
+   * ⚠️ REVOKE-THEN-MUTATE — the ORDER half of the account-takeover fix, and the
+   * property the atomic upsert is most likely to drop silently.
+   *
+   * A re-signup does TWO things: it revokes the displaced claimant's sessions
+   * (`bumpEpoch`) and it changes the password. The bump is a Durable Object call
+   * and is therefore NOT part of the Postgres transaction — so the two can fail
+   * independently, and only one of the two orderings is safe:
+   *
+   *   • bump, then commit  -> a crash leaves the OLD password live with sessions
+   *                           revoked. Harmless: the displaced party re-logs in.
+   *   • commit, then bump  -> a crash leaves the NEW password live with the
+   *                           victim's session S1 UNREVOKED and its epoch still
+   *                           MATCHING. That is exactly the takeover state the
+   *                           regression test below exists to prevent: the
+   *                           victim's own click on T1 then verifies an account
+   *                           holding the attacker's password. `bumpEpoch` is
+   *                           load-bearing precisely WHEN it fails.
+   *
+   * So the bump is issued INSIDE the transaction, BEFORE the COMMIT. What makes
+   * that correct is not durability ordering but VISIBILITY: no observer can ever
+   * see the new password unless the bump already succeeded.
+   *
+   * The window only exists when the bump fails, so it cannot be observed without
+   * injecting the fault. Moving the bump after the COMMIT (or after the
+   * `withClient` returns) must turn this RED (mutation-verified).
+   */
+  it("leaves the OLD password live if a re-signup's epoch bump fails", async () => {
+    stubFetch(true);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const email = uniqueEmail();
+
+    expect((await signup(validBody(email))).status).toBe(201);
+    const before = await query(
+      "SELECT password_hash FROM users WHERE email = $1",
+      [email],
+    );
+
+    // The re-signup cannot revoke the victim's sessions -> it must not land.
+    await expect(
+      signupWithEnv(
+        validBody(email, "attacker-password-here"),
+        envWithBrokenBump(),
+      ),
+    ).rejects.toThrow(/bumpEpoch/);
+
+    // The takeover did not HALF-land: the password the surviving sessions were
+    // issued against is still the one the account holds.
+    const after = await query(
+      "SELECT password_hash FROM users WHERE email = $1",
+      [email],
+    );
+    expect(
+      after[0]!.password_hash,
+      "the new password committed even though the epoch bump failed — the displaced claimant's session is now live against a password they do not know",
+    ).toBe(before[0]!.password_hash);
+  });
+
+  /**
+   * The profile insert is `ON CONFLICT (user_id) DO NOTHING` and runs on EVERY
+   * path, not just the insert — so a `users` row that somehow has no profile
+   * heals on the next signup instead of the re-signup silently assuming one is
+   * already there. (The conflict target is `user_id`; a `username` collision is
+   * a DIFFERENT index and still retries under the savepoint.)
+   */
+  it("heals a missing profile row on a re-signup", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+
+    expect((await signup(validBody(email))).status).toBe(201);
+    const userId = await userIdFor(email);
+    await query("DELETE FROM profiles WHERE user_id = $1", [userId]);
+
+    expect(
+      (await signup(validBody(email, "a-completely-different-password"))).status,
+    ).toBe(201);
+
+    const profiles = await query(
+      "SELECT username FROM profiles WHERE user_id = $1",
+      [userId],
+    );
+    expect(profiles).toHaveLength(1);
   });
 
   it("issues a session and token that verify the account end to end", async () => {
@@ -534,17 +689,26 @@ describe("POST /auth/signup", () => {
    * — which also proves the limiter runs BEFORE Turnstile: the 6th request is
    * rejected by the limiter, not the (also-failing) challenge.
    */
-  it("429s once over the rate limit (5/60s per ip+email)", async () => {
-    stubFetch(false);
-    const email = uniqueEmail();
-    const body = validBody(email);
+  it(
+    "429s once over the rate limit (5/60s per ip+email)",
+    async () => {
+      stubFetch(false);
+      const email = uniqueEmail();
+      const body = validBody(email);
+      await awaitLimiterBurstWindow();
 
-    for (let i = 0; i < 5; i++) {
-      expect((await signup(body)).status).toBe(403);
-    }
+      for (let i = 0; i < 5; i++) {
+        expect((await signup(body)).status).toBe(403);
+      }
 
-    expect((await signup(body)).status).toBe(429);
-  });
+      expect((await signup(body)).status).toBe(429);
+    },
+    // `awaitLimiterBurstWindow` may hold the burst for up to ~10s waiting for a
+    // clean window, which does not fit vitest's 5s default. NOT a flake-hiding
+    // timeout bump: the wait is bounded and deliberate, and the burst it guards
+    // still takes well under a second.
+    60_000,
+  );
 
   /**
    * ⚠️ THE MULTI-IP CEILING — the reason signup consumes TWO limiter buckets
@@ -573,6 +737,7 @@ describe("POST /auth/signup", () => {
       stubFetch(false);
       const email = uniqueEmail();
       const body = validBody(email);
+      await awaitLimiterBurstWindow();
 
       // 5 attempts, each from a different IP => 5 distinct `ip:email` buckets,
       // each still holding 4 unused slots.
@@ -678,5 +843,86 @@ describe("POST /auth/signup", () => {
     expect(await query("SELECT id FROM users WHERE email = $1", [email])).toHaveLength(
       1,
     );
+  });
+});
+
+/**
+ * ⚠️ THE M0 CARRY-OVER: the dup-check -> INSERT race (deviation E).
+ *
+ * M0 did `SELECT … WHERE email = $1` and then, separately, `INSERT`. Between the
+ * two sits a full Argon2id hash (~40-60ms, deliberately), so the window is not
+ * theoretical — it is the widest check-then-act window in the codebase. Two
+ * concurrent signups for one address both read "no row", both INSERT, and the
+ * second dies on the `users_email_key` unique index: a clean rollback, but a
+ * 500. It is also the one place that disobeys M0's own Global Constraint —
+ * "transaction-mode pooler => all uniqueness/races via DB constraints +
+ * INSERT … ON CONFLICT".
+ */
+describe("POST /auth/signup — concurrent same-email signups", () => {
+  /**
+   * ⚠️ THE ASSERTION IS "NO 500", not a specific pair of statuses. Both requests
+   * may legitimately 201 (the second is a re-signup over the unverified row the
+   * first just created — see the re-signup test above); which one wins is a
+   * genuine race and pinning an order here would be pinning the scheduler. What
+   * must NEVER happen is the unique index surfacing as a server error.
+   *
+   * Both requests run in ONE workerd isolate, so the interleaving is real: the
+   * dup-check `await` yields, and under M0's shape both requests reached their
+   * INSERT having each seen an empty table.
+   */
+  it("resolve to 201/409 — never a 500 from the unique index", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+    const body = validBody(email);
+
+    const [a, b] = await Promise.all([signup(body), signup(body)]);
+
+    expect(
+      [a.status, b.status],
+      "a concurrent same-email signup surfaced the users_email_key violation instead of resolving it",
+    ).toSatisfy((statuses: number[]) =>
+      statuses.every((s) => s === 201 || s === 409),
+    );
+
+    // And the constraint still did its job: exactly ONE row, ONE profile.
+    const users = await query(
+      "SELECT id FROM users WHERE email = $1",
+      [email],
+    );
+    expect(users).toHaveLength(1);
+    const profiles = await query(
+      "SELECT user_id FROM profiles WHERE user_id = $1",
+      [users[0]!.id],
+    );
+    expect(profiles).toHaveLength(1);
+  });
+
+  /**
+   * The race must be closed WITHOUT loosening the guard: a VERIFIED address is
+   * still 409, even when the duplicate signups arrive together.
+   */
+  it("still 409 a VERIFIED address when they arrive together", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+
+    expect((await signup(validBody(email))).status).toBe(201);
+    await query("UPDATE users SET email_verified_at = now() WHERE email = $1", [
+      email,
+    ]);
+    const before = await query(
+      "SELECT password_hash FROM users WHERE email = $1",
+      [email],
+    );
+
+    const body = validBody(email, "attacker-password-here");
+    const [a, b] = await Promise.all([signup(body), signup(body)]);
+
+    expect(a.status).toBe(409);
+    expect(b.status).toBe(409);
+    const after = await query(
+      "SELECT password_hash FROM users WHERE email = $1",
+      [email],
+    );
+    expect(after[0]!.password_hash).toBe(before[0]!.password_hash);
   });
 });

@@ -6,9 +6,14 @@ import {
 import { describe, expect, it } from "vitest";
 
 import worker from "../src";
-// The ROUTER'S OWN SOURCE, as text. See `discoverRoutes` — this is what makes
-// the suite an INVENTORY rather than a list someone has to remember to update.
+// The ROUTER'S OWN SOURCE, as text — used for ONE assertion only (the tripwire
+// below), not to enumerate routes. The inventory itself is structural: it
+// IMPORTS the table.
 import indexSource from "../src/index.ts?raw";
+import { ROUTES } from "../src/routes";
+import { findRoute } from "../src/routing";
+
+import type { RouteDef } from "../src/routing";
 
 /**
  * THE ROUTE-PROTECTION INVENTORY — a DEFAULT-DENY BACKSTOP for every mutating
@@ -27,15 +32,26 @@ import indexSource from "../src/index.ts?raw";
  * mutation endpoint. Typecheck passes. Every existing test passes — they all
  * test the routes that DO call the pipeline. Nothing anywhere goes red.
  *
- * So this file does not assert anything about a fixed list of routes. It reads
- * the router's source, ENUMERATES the (method, path) pairs it actually matches,
- * and holds every non-GET one to the two properties the pipeline guarantees:
+ * So this file does not assert anything about a fixed list of routes. It
+ * IMPORTS the router's route table (src/routes.ts), enumerates the
+ * (method, pattern) pairs it actually dispatches, and holds every non-GET one to
+ * the two properties the pipeline guarantees:
  *
  *   • no `Origin`  -> 403   (the pipeline's step 1 — before ANY I/O)
  *   • no session   -> 401   (its step 2)
  *
+ * ⚠️ THIS DISCOVERY USED TO BE A REGEX over src/index.ts's `pathname ===
+ * "/literal"` if-chain, and that had a BLIND SPOT that mattered: a
+ * parameterized route (`PATCH /posts/:id`) is not a string literal, so the
+ * pattern could not see it — and the old tripwire would not have fired either,
+ * because it only required the STATIC sanity routes to still be found. A new
+ * mutating route would have shipped silently un-inventoried through the blind
+ * spot of the very file written to prevent that. Importing the table closes it:
+ * the inventory cannot be defeated by formatting, by a dynamic segment, or by a
+ * future rewrite. Do not regress this to source-text matching.
+ *
  * A NEW mutating route is therefore covered the moment it is added to the
- * router, whether or not anyone thought about this file. If it runs the
+ * table, whether or not anyone thought about this file. If it runs the
  * pipeline, it passes. If it does not, it fails here — and the only way to make
  * it pass without the pipeline is to add it to `PIPELINE_EXEMPT` below, which is
  * a deliberate, reviewable act with a documented justification, not an omission.
@@ -65,53 +81,29 @@ const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   "POST /auth/login",
 ]);
 
-/**
- * The router's dispatch shape, as written in src/index.ts:
- *
- *     if (request.method === "POST" && pathname === "/auth/signup") {
- *
- * ⚠️ This regex is coupled to that literal style ON PURPOSE — a source-text
- * inventory is only as good as its ability to see every route. `SANITY_ROUTES`
- * below is the tripwire: if the router is ever rewritten in a shape this pattern
- * cannot read (a table, a `switch`, a helper), the match count collapses and
- * that assertion fails LOUDLY, demanding this file be taught the new shape —
- * rather than silently discovering zero routes and passing vacuously, which is
- * the one failure mode that would make this whole suite decorative.
- */
-const ROUTE_PATTERN = /request\.method === "([A-Z]+)"\s*&&\s*pathname === "([^"]+)"/g;
-
-interface Route {
-  method: string;
-  path: string;
-}
-
-/** Every (method, path) pair the router matches, read out of its source. */
-function discoverRoutes(): Route[] {
-  return [...indexSource.matchAll(ROUTE_PATTERN)].map(([, method, path]) => ({
-    method: method!,
-    path: path!,
-  }));
-}
-
-const DISCOVERED = discoverRoutes();
-
 /** `"POST /posts"` — the key used by `PIPELINE_EXEMPT` and the test names. */
-function label(route: Route): string {
-  return `${route.method} ${route.path}`;
+function label(route: RouteDef): string {
+  return `${route.method} ${route.pattern}`;
 }
-
-/**
- * GET routes that must be discoverable if `ROUTE_PATTERN` is still reading the
- * router correctly. Deliberately the READ routes: they are stable, they are not
- * what this file asserts about, and requiring them proves the parse works
- * without coupling the tripwire to the mutating routes under test.
- */
-const SANITY_ROUTES = ["/health", "/auth/csrf", "/verify-email", "/posts"];
 
 /** The non-GET routes — what this suite is about. */
-const MUTATING = DISCOVERED.filter(
-  (r) => r.method !== "GET" && r.method !== "HEAD",
-);
+const MUTATING = ROUTES.filter((r) => r.method !== "GET" && r.method !== "HEAD");
+
+/**
+ * Concrete sample values for `:param` segments, so a pattern can be probed as a
+ * real URL. The values need only be well-formed — every assertion below rejects
+ * the request long before a handler could look one up.
+ */
+const PARAM_SAMPLES: Readonly<Record<string, string>> = {
+  id: "00000000-0000-7000-8000-000000000000",
+};
+
+function concretePath(pattern: string): string {
+  return pattern
+    .split("/")
+    .map((s) => (s.startsWith(":") ? (PARAM_SAMPLES[s.slice(1)] ?? "sample") : s))
+    .join("/");
+}
 
 /**
  * A body that satisfies BOTH `SignupInput` and `LoginInput` (zod strips the
@@ -131,8 +123,8 @@ function probeBody(): string {
 /** An origin in `checkOrigin`'s allowlist (dev — the suite runs TEST_ROUTES=1). */
 const ALLOWED_ORIGIN = "http://localhost:8787";
 
-function probe(route: Route, headers: Record<string, string>): Request {
-  return new Request(`https://api.test${route.path}`, {
+function probe(route: RouteDef, headers: Record<string, string>): Request {
+  return new Request(`https://api.test${concretePath(route.pattern)}`, {
     method: route.method,
     headers: { "content-type": "application/json", ...headers },
     body: probeBody(),
@@ -147,20 +139,69 @@ async function fetchWorker(request: Request): Promise<Response> {
   return response;
 }
 
-describe("route inventory", () => {
-  it("can still read the router's route table (tripwire for ROUTE_PATTERN)", () => {
-    const getPaths = DISCOVERED.filter((r) => r.method === "GET").map((r) => r.path);
+/**
+ * src/index.ts with block comments stripped and all whitespace collapsed — the
+ * form `the dispatcher is pinned` compares. Normalizing means reformatting or
+ * re-commenting the file does not fail the pin; changing what it DOES will.
+ */
+const DISPATCHER_BODY = indexSource
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/\s+/g, " ")
+  .trim();
 
+/**
+ * ⚠️ THE PINNED DISPATCHER — the exact normalized body of src/index.ts.
+ *
+ * This is a SNAPSHOT, deliberately hand-maintained. Do not "fix" a failure by
+ * pasting in the new value without reading the diff: the assertion exists to
+ * make you look.
+ */
+const EXPECTED_DISPATCHER_BODY =
+  'import { notFoundResponse } from "./http/errors"; ' +
+  'import { ROUTES } from "./routes"; ' +
+  'import { findRoute } from "./routing"; ' +
+  'export { UserSecurityDO } from "./durable-objects/UserSecurityDO"; ' +
+  "export default { async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> { " +
+  "const { pathname } = new URL(request.url); " +
+  "const match = findRoute(ROUTES, request.method, pathname); " +
+  "if (match === null) return notFoundResponse(); " +
+  "return await match.route.handler(request, env, ctx, match.params); " +
+  "}, } satisfies ExportedHandler<Env>;";
+
+describe("route inventory", () => {
+  it("index.ts dispatches ONLY through ROUTES — its whole body is pinned", () => {
+    // ⚠️ THE TRIPWIRE. Every assertion in this file enumerates ROUTES, so a
+    // route reachable any OTHER way is invisible here and this suite passes
+    // vacuously about it. That is the one property that cannot be checked
+    // structurally, so it is checked textually.
+    //
+    // ⚠️ WHY THE WHOLE BODY, AND NOT `toContain("findRoute(ROUTES,")` PLUS A
+    // BAN ON SOME IDIOM. Presence is not exclusivity. This passes both of
+    // those checks and serves /admin to the world, un-inventoried:
+    //
+    //     if (pathname.startsWith("/admin")) return handleAdmin(req, env, ctx, {});
+    //     const match = findRoute(ROUTES, request.method, pathname);
+    //
+    // So would `switch (pathname)`, `pathname.match(...)`, Yoda
+    // (`"/admin" === pathname`), aliasing (`const p = pathname`), or a second
+    // `findRoute(EXTRA, ...)`. A blocklist can only ban the idioms someone
+    // imagined; this file's own history proves that is not good enough —
+    // `startsWith` is the idiom M0's router ACTUALLY used for /__test/, and the
+    // one a dynamic route reaches for first. An allowlist of exactly one body
+    // inverts the burden: every unimagined idiom fails by default.
+    //
+    // This file is 20 lines and should essentially never change, so the cost of
+    // pinning it is ~zero and any edit becomes a deliberate, reviewed act.
     expect(
-      getPaths,
-      "ROUTE_PATTERN found none of the router's known GET routes — src/index.ts has probably been rewritten in a dispatch shape this file cannot parse. FIX THE PATTERN, do not delete this test: every assertion in this file iterates over what the pattern discovers, so a pattern that matches nothing makes the whole route-protection suite pass vacuously.",
-    ).toEqual(expect.arrayContaining(SANITY_ROUTES));
+      DISPATCHER_BODY,
+      "src/index.ts changed. It is pinned because every assertion in this file enumerates ROUTES: a route reachable any other way is NOT covered by the default-deny checks below. If this change adds dispatch, move the route to src/routes.ts. If it is genuinely benign, update this snapshot deliberately.",
+    ).toBe(EXPECTED_DISPATCHER_BODY);
   });
 
   it("found at least one mutating route to check", () => {
     expect(
       MUTATING.length,
-      "no non-GET routes were discovered in src/index.ts — see the tripwire above",
+      "no non-GET routes were found in src/routes.ts — see the tripwire above",
     ).toBeGreaterThan(0);
   });
 
@@ -175,6 +216,26 @@ describe("route inventory", () => {
       ).toContain(exempt);
     }
   });
+
+  /**
+   * ⚠️ A ROW IN ROUTES MUST MEAN WHAT IT SAYS. `findRoute` is first-match-wins,
+   * so an earlier pattern can SHADOW a later one (register `/posts/:id` before
+   * `/posts/new` and the literal is dead code). That is not a default-deny
+   * bypass — dispatch and the probes below both resolve through `findRoute`, so
+   * the shadowed path is still protected by whatever answers it. It is worse in
+   * a different way: the table is a SECURITY INVENTORY, and a shadowed row makes
+   * it attest to a handler that never runs, while every assertion "about" that
+   * row is really exercising the other route's handler. Green, and lying.
+   */
+  it.each(ROUTES.map((r) => [label(r), r] as const))(
+    "%s is reachable at its own path (not shadowed by an earlier pattern)",
+    (name, route) => {
+      expect(
+        findRoute(ROUTES, route.method, concretePath(route.pattern))?.route,
+        `${name} is shadowed by an earlier entry in ROUTES — it can never be served, and every assertion about it is actually testing the other route's handler. Register the more specific pattern first.`,
+      ).toBe(route);
+    },
+  );
 });
 
 /**

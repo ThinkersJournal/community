@@ -16,6 +16,7 @@ import type { SessionData } from "@thinkersjournal/shared";
 import type { computeHash } from "argon2id/lib/setup.js";
 
 import worker from "../src";
+import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 import { hashPassword, needsRehash } from "../src/auth/password";
 import { readSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
@@ -308,6 +309,7 @@ describe("POST /auth/login", () => {
       // that was never inserted still consumes quota rather than short-circuiting.
       const email = uniqueEmail();
       const body = validBody(email);
+      await awaitLimiterBurstWindow();
 
       for (let i = 0; i < 10; i++) {
         expect((await login(body)).status).toBe(401);
@@ -385,6 +387,7 @@ describe("POST /auth/login", () => {
       // Same address, case-rotated: citext resolves both to one row.
       const rotated = email.toUpperCase();
       expect(rotated).not.toBe(email);
+      await awaitLimiterBurstWindow();
 
       // Exhaust the 10/60s quota using the LOWERCASE spelling. These are
       // nonexistent-user 401s, which is all the limiter needs to count.
@@ -423,6 +426,7 @@ describe("POST /auth/login", () => {
     async () => {
       const email = uniqueEmail();
       const body = validBody(email);
+      await awaitLimiterBurstWindow();
 
       // 10 attempts, each from a different IP => 10 distinct `ip:email` buckets,
       // every one of them holding 9 unused slots. These are nonexistent-user

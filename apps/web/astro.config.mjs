@@ -1,5 +1,6 @@
 // @ts-check
 import cloudflare from "@astrojs/cloudflare";
+import { cacheCloudflare } from "@astrojs/cloudflare/cache";
 import { defineConfig } from "astro/config";
 
 /**
@@ -22,11 +23,95 @@ import { defineConfig } from "astro/config";
  *   • `configPath` defaults to this directory's `wrangler.jsonc`, so the
  *     bindings declared there are what dev and build both see. Not set
  *     explicitly — the default is already correct.
+ *
+ * ⚠️ WORKERS CACHE — WHAT M1 TASK 12 STEP 1 ACTUALLY FOUND (2026-07-15).
+ * Workers Cache shipped 2026-07-06 and Astro's CDN cache-provider API is
+ * flagged EXPERIMENTAL, so every shape below was read out of the INSTALLED
+ * packages rather than a blog post. Re-run this on any bump of either.
+ * PATH TAKEN: **the provider API** — the manual-header fallback was not needed.
+ *
+ *   • `@astrojs/cloudflare@14.1.3` DOES export `cacheCloudflare` from
+ *     `@astrojs/cloudflare/cache` (exports map: `"./cache"`, `"./cache/provider"`).
+ *     It returns `{ name: "cloudflare", entrypoint: "@astrojs/cloudflare/cache/provider" }`.
+ *   • astro@7.0.9 accepts a TOP-LEVEL `cache: { provider }` (base.js:330,
+ *     `CacheSchema`). Verified.
+ *   • ⚠️ `routeRules` is TOP-LEVEL (base.js:331), **NOT** `experimental.routeRules`.
+ *     `experimental` is a zod STRICT object (clientPrerender, contentIntellisense,
+ *     chromeDevtoolsWorkspace, svgOptimizer only), so `experimental.routeRules`
+ *     would be a hard config ERROR. We set no routeRules: every page here is
+ *     session-bearing, and a route rule would cache authed HTML (see below).
+ *   • Runtime is `Astro.cache` / `context.cache` (`CacheLike`):
+ *       `set(CacheOptions | CacheHint | LiveDataEntry | false)` — merges across calls
+ *       `invalidate({ path?, tags? })` — T14's purge hop
+ *       `.tags`, `.options`, `.enabled`
+ *     `CacheOptions = { maxAge?, swr?, tags?, lastModified?, etag? }`.
+ *     ⚠️ `.enabled` is FALSE in `astro dev` — the object exists but no-ops
+ *     (`NoopAstroCache`). Cache behaviour is not observable in dev.
+ *   • ⚠️ The provider writes **`Cloudflare-CDN-Cache-Control`**, not
+ *     `Cache-Control` (RFC 9213 targeted cache control — Cloudflare honours it
+ *     and strips it before the browser sees it). It also auto-appends an
+ *     `astro-path:<pathname>` tag to `Cache-Tag`. Both pinned in
+ *     test/workers-cache.test.ts.
+ *
+ * ⚠️ NEVER `s-maxage`. `s-maxage`, `must-revalidate` and `proxy-revalidate`
+ * SILENTLY DISABLE stale-while-revalidate (RFC 9111 §4.2.4): revalidation goes
+ * FOREGROUND and the whole cost lever dies with no error anywhere. VERIFIED at
+ * source: the provider builds directives with astro's
+ * `buildCacheControlDirectives`, which emits only `public`, `max-age=N` and
+ * `stale-while-revalidate=M` — `s-maxage` is not reachable through this API.
+ * (On a TARGETED header `max-age` already IS the CDN's lifetime, so `s-maxage`
+ * would be redundant as well as harmful.) test/workers-cache.test.ts asserts the
+ * emitted bytes so a bump cannot regress it quietly. The helper in
+ * src/lib/cache.ts (T13) is the only place TTLs are chosen — do not set cache
+ * headers by hand in a page.
  */
 export default defineConfig({
   // Every page here is server-rendered: they read the session cookie and call
   // the api per-request, so nothing may be baked at build time.
   output: "server",
+
+  // Turns `Astro.cache.set({ maxAge, swr, tags })` into the
+  // `Cloudflare-CDN-Cache-Control` + `Cache-Tag` response headers that the
+  // Workers Cache in front of this Worker reads (see wrangler.jsonc), and
+  // `context.cache.invalidate({ tags })` into `cache.purge({ tags })` from
+  // `cloudflare:workers` (T14's purge hop). See the version notes above for the
+  // verified shapes.
+  //
+  // ⚠️ THIS LINE IS THE ON/OFF SWITCH FOR THE WHOLE FEATURE, AND IT IS ALSO A
+  // SAFETY MECHANISM. Both halves are counter-intuitive, so read both.
+  //
+  // ⚠️ IT IS THE *ONLY* OFF SWITCH. Not wrangler.jsonc. The adapter's config
+  // customizer (dist/wrangler.js:32) does:
+  //     cache: needsWorkerCache && !config.cache?.enabled ? { enabled: true } : void 0
+  // so with this line present, wrangler.jsonc's `"cache"` block is DECORATIVE:
+  // absent -> the adapter injects `{ enabled: true }`; set to `{ enabled: false }`
+  // -> ALSO inverted to `{ enabled: true }`. Verified by calling the customizer
+  // directly. To turn the cache off you delete THIS line — and if you do, also
+  // remove the now-live `"cache"` block from wrangler.jsonc, because without
+  // this line that block stops being decorative and becomes the unsafe combo
+  // described below.
+  //
+  // ⚠️ DO NOT REMOVE IT WHILE LEAVING `"cache": { "enabled": true }` IN
+  // wrangler.jsonc. The two are COUPLED, and the asymmetry is the whole point:
+  //
+  //   • Presence of a provider named "cloudflare" here is what sets the
+  //     adapter's `needsWorkerCache` (dist/index.js:119), which makes its
+  //     request handler stamp `Cloudflare-CDN-Cache-Control: no-store` on any
+  //     response that did NOT opt in via `Astro.cache.set(...)`
+  //     (dist/utils/handler.js:78). Its own docstring: "so that opting in to the
+  //     cache provider never accidentally caches routes that don't use it."
+  //     That is DEFAULT-DENY, and it is why enabling the cache before T13's
+  //     per-viewer guard exists is safe.
+  //
+  //   • Remove this line but leave the wrangler flag on, and that stamp
+  //     disappears. Pages then emit NO cache directives at all — which is NOT
+  //     "uncached": Workers Cache applies RFC 9111 HEURISTIC freshness and
+  //     stores every 200 for TWO HOURS. Cookie is not in the cache key and does
+  //     not bypass, so an authed render would be cached and served to everyone.
+  //     A mass session leak, produced by DELETING a line. Nothing would warn you.
+  //
+  // test/workers-cache.test.ts pins the pair together for exactly this reason.
+  cache: { provider: cacheCloudflare() },
 
   adapter: cloudflare({
     // ⚠️ NOT the default. Left unset, `imageService` is `"cloudflare-binding"`,
