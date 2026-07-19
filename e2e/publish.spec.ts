@@ -180,9 +180,17 @@ test("⚠️ an AUTHED render of a public page is NEVER cacheable", async ({ pag
   // ⚠️ LOCAL-DEV-ONLY PROOF. wrangler dev has no real Cloudflare edge to
   // consume/strip `Cache-Tag`, so this legitimately observes what OUR code emits
   // — but it does NOT hold against a deployed page (Cloudflare strips the header
-  // before any client sees it). The tags are post:/author:/listing/pipeline:,
-  // plus Astro core's own `astro-path:` — so it CONTAINS "listing".
-  expect(anon.headers()["cache-tag"]).toContain("listing");
+  // before any client sees it). The post page depends on post:/author:/pipeline:
+  // (plus Astro core's own `astro-path:`) and DELIBERATELY NOT the platform-wide
+  // `listing` tag — removed in the M1 final review, because a single post's page
+  // must not be evicted every time a DIFFERENT author publishes (see
+  // apps/web/src/pages/[handle]/[slug].astro + apps/web/test/post-page.test.ts).
+  // This is the LIVE, on-the-wire tripwire against `listing` coming back here.
+  const anonTag = anon.headers()["cache-tag"];
+  expect(anonTag).toContain("post:");
+  expect(anonTag).toContain("author:");
+  expect(anonTag).toContain("pipeline:");
+  expect(anonTag).not.toContain("listing");
   expect(anon.headers()["content-security-policy"]).toContain("script-src 'self'");
   expect(anon.headers()["content-security-policy"]).not.toContain(
     "script-src 'self' 'unsafe-inline'",
