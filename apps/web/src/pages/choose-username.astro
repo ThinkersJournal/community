@@ -1,0 +1,82 @@
+---
+import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
+import { markPrivate } from "../lib/cache";
+
+import type { Me } from "@thinkersjournal/shared";
+
+// Authed page — never cacheable. Declares exactly one cache helper.
+markPrivate(Astro);
+
+// A CSRF token proves a live session; null means "not logged in".
+const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
+const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
+
+let error: string | null = null;
+
+if (csrfToken !== null) {
+  // Already onboarded? Nothing to do here.
+  const me = await apiFetch<Me>("/profile/me", { request: Astro.request });
+  if (me.status === 200 && me.data?.usernameChosen === true) {
+    return Astro.redirect("/feed");
+  }
+
+  if (Astro.request.method === "POST") {
+    const form = await Astro.request.formData();
+    const username = String(form.get("username") ?? "");
+    const submittedToken = String(form.get("csrfToken") ?? "");
+
+    const response = await apiFetch<Me>("/profile/username", {
+      method: "POST",
+      body: { username },
+      request: Astro.request,
+      origin: Astro.request.headers.get("Origin") ?? "",
+      csrfToken: submittedToken,
+    });
+    applyCookies(Astro.response.headers, response.setCookies);
+
+    if (response.status === 200) return Astro.redirect("/feed");
+
+    switch (apiErrorCode(response)) {
+      case "USERNAME_TAKEN":
+        error = "That handle is already taken — try another.";
+        break;
+      case "USERNAME_ALREADY_SET":
+        return Astro.redirect("/feed");
+      case "EMAIL_NOT_VERIFIED":
+        error = "Please verify your email before choosing a handle.";
+        break;
+      default:
+        error = "That handle isn’t valid. Use 3–30 lowercase letters, numbers, or underscores.";
+    }
+  }
+}
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Choose your handle — Thinker’s Journal</title>
+  </head>
+  <body>
+    <main>
+      <h1>Choose your handle</h1>
+      {csrfToken === null ? (
+        <p>You need to <a href="/login">log in</a> to choose a handle.</p>
+      ) : (
+        <>
+          <p>Pick a permanent <code>@handle</code> — 3–30 lowercase letters, numbers, or underscores. This can’t be changed later.</p>
+          {error && <p id="error" role="alert">{error}</p>}
+          <form method="POST">
+            <input type="hidden" name="csrfToken" value={csrfToken} />
+            <label for="username">Handle</label>
+            <input id="username" name="username" required minlength="3" maxlength="30"
+                   pattern="[a-z0-9_]{3,30}" autocapitalize="none" autocomplete="off" />
+            <button type="submit">Claim handle</button>
+          </form>
+        </>
+      )}
+    </main>
+  </body>
+</html>
