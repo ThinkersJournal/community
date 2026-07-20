@@ -22,6 +22,7 @@ export type ApiErrorCode =
   | "INVALID_JSON"           // 400 — the body was not JSON at all
   | "INVALID_INPUT"          // 400 — zod rejected it; `fields` names the paths
   | "INVALID_TOKEN"          // 400 — a verification token is unknown/expired/used
+  | "CANNOT_FOLLOW_SELF"     // 400 — a user cannot follow themselves (M2.1)
   // --- authentication ------------------------------------------------------
   | "UNAUTHORIZED"           // 401 — no usable session (pipeline)
   | "LOGIN_REQUIRED"         // 401 — this route needs a session to proceed
@@ -31,10 +32,13 @@ export type ApiErrorCode =
   | "EMAIL_NOT_VERIFIED"     // 403 — the soft gate
   | "ALREADY_VERIFIED"       // 409 — resend-verification on a verified account (T10)
   | "QUOTA_EXCEEDED"         // 403 — per-user media quota (T8)
+  | "USERNAME_REQUIRED"      // 409 — must choose a durable handle before publish/follow (M2.1)
   // --- resources -----------------------------------------------------------
   | "NOT_FOUND"              // 404 — no such route, or no such visible resource
   | "EMAIL_TAKEN"            // 409 — a VERIFIED duplicate at signup
   | "SLUG_TAKEN"             // 409 — could not place a unique slug (T9)
+  | "USERNAME_TAKEN"         // 409 — the requested handle is already in use (M2.1)
+  | "USERNAME_ALREADY_SET"   // 409 — the handle was already chosen; it is immutable (M2.1)
   // --- payloads ------------------------------------------------------------
   | "PAYLOAD_TOO_LARGE"      // 413 — over the streaming size cap (T8)
   | "UNSUPPORTED_MEDIA_TYPE" // 415 — failed the magic-byte allowlist (T7/T8)
