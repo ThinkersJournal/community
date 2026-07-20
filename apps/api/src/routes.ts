@@ -18,6 +18,7 @@
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
 import { handleCsrf } from "./routes/csrf";
+import { handleFollow, handleUnfollow } from "./routes/follows";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleUploadMedia } from "./routes/media";
@@ -82,6 +83,12 @@ export const ROUTES: readonly RouteDef[] = [
   // Durable-handle onboarding + the viewer's own profile state (M2.1).
   { method: "POST", pattern: "/profile/username", handler: handleChooseUsername },
   { method: "GET", pattern: "/profile/me", handler: handleGetMe },
+
+  // Social-graph writes (M2.1). The literal `DELETE /follows/:followeeId` and
+  // `POST /follows` share a first segment; no dynamic-vs-literal shadowing
+  // exists here (different methods).
+  { method: "POST", pattern: "/follows", handler: handleFollow },
+  { method: "DELETE", pattern: "/follows/:followeeId", handler: handleUnfollow },
 
   // ANONYMOUS reads — what the edge caches. See src/routes/public.ts's header:
   // no session is read here, by construction.

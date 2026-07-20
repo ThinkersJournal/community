@@ -108,6 +108,14 @@
       "name": "RESEND_LIMITER",
       "namespace_id": "1004",
       "simple": { "limit": 3, "period": 60 }
+    },
+    // Bounds `POST /follows` (see src/routes/follows.ts). Keyed on the SESSION's
+    // user, same reasoning as MEDIA_LIMITER/RESEND_LIMITER — the caller is always
+    // authenticated (and verified) by the time this is consumed.
+    {
+      "name": "FOLLOW_LIMITER",
+      "namespace_id": "1005",
+      "simple": { "limit": 30, "period": 60 }
     }
   ],
   "observability": {

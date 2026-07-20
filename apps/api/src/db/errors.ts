@@ -40,3 +40,19 @@ export function isInvalidTextRepresentation(err: unknown): boolean {
     (err as { code?: unknown }).code === INVALID_TEXT_REPRESENTATION
   );
 }
+
+/** Postgres SQLSTATE for `foreign_key_violation`. */
+const FOREIGN_KEY_VIOLATION = "23503";
+
+/**
+ * Whether `err` is a Postgres foreign-key-constraint violation — for us, always
+ * a client-supplied id that references a row that does not exist (e.g. `POST
+ * /follows` naming a nonexistent `followeeId`). That is a 404, never a 500.
+ */
+export function isForeignKeyViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: unknown }).code === FOREIGN_KEY_VIOLATION
+  );
+}
