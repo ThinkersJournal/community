@@ -5,7 +5,7 @@
  * blocked in the app AND by the DB CHECK (defense in depth). The verified-email
  * soft gate and the username-onboarding gate both apply before any write.
  */
-import { runMutatingPipeline } from "../auth/pipeline";
+import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isCheckViolation, isForeignKeyViolation } from "../db/errors";
@@ -103,4 +103,48 @@ export async function handleUnfollow(
     c.query("DELETE FROM follows WHERE follower_id = $1 AND followee_id = $2", [userId, followeeId]),
   );
   return new Response(null, { status: 200 });
+}
+
+/**
+ * GET /follows/status?id=<uuid>&id=<uuid>… — for the signed-in viewer, which of
+ * the given ids they already follow. A GET (not POST) so it needs no CSRF and is
+ * not held to the mutating default-deny; it authenticates via readCurrentSession.
+ * Bounded so an over-long query string can't fan out an unbounded IN-list.
+ */
+const STATUS_MAX_IDS = 100;
+
+export async function handleFollowStatus(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const session = await readCurrentSession(env, request, () =>
+    errorResponse("LOGIN_REQUIRED", 401),
+  );
+  if (session instanceof Response) return session;
+
+  const ids = new URL(request.url).searchParams
+    .getAll("id")
+    .filter((id) => UUID_RE.test(id))
+    .slice(0, STATUS_MAX_IDS);
+
+  if (ids.length === 0) {
+    return new Response(JSON.stringify({ following: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  const following = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ followee_id: string }>(
+      `SELECT followee_id FROM follows
+        WHERE follower_id = $1 AND followee_id = ANY($2::uuid[])`,
+      [session.userId, ids],
+    );
+    return rows.map((r) => r.followee_id);
+  });
+  return new Response(JSON.stringify({ following }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 }

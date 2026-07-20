@@ -18,7 +18,7 @@
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
 import { handleCsrf } from "./routes/csrf";
-import { handleFollow, handleUnfollow } from "./routes/follows";
+import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleUploadMedia } from "./routes/media";
@@ -30,6 +30,11 @@ import {
 } from "./routes/public";
 import { handleResendVerification } from "./routes/resend-verification";
 import { handleSignup } from "./routes/signup";
+import {
+  handlePublicFollowers,
+  handlePublicFollowing,
+  handlePublicSocial,
+} from "./routes/social-public";
 import { handleChooseUsername, handleGetMe } from "./routes/username";
 import { handleVerifyEmail } from "./routes/verify-email";
 
@@ -90,6 +95,11 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "POST", pattern: "/follows", handler: handleFollow },
   { method: "DELETE", pattern: "/follows/:followeeId", handler: handleUnfollow },
 
+  // The viewer's own follow status for a batch of ids (M2.1). A GET literal —
+  // no dynamic-vs-literal shadowing risk with `DELETE /follows/:followeeId`
+  // above (different methods) or `POST /follows` (different method).
+  { method: "GET", pattern: "/follows/status", handler: handleFollowStatus },
+
   // ANONYMOUS reads — what the edge caches. See src/routes/public.ts's header:
   // no session is read here, by construction.
   //
@@ -100,6 +110,13 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/public/posts", handler: handlePublicPost },
   { method: "GET", pattern: "/public/profile", handler: handlePublicProfile },
   { method: "GET", pattern: "/public/recent", handler: handlePublicRecent },
+
+  // ANONYMOUS social reads (M2.1) — see src/routes/social-public.ts's header:
+  // viewer-independent like the routes above, but NOT edge-cached (they change
+  // on every follow), so HYPERDRIVE_FRESH with no cache-tag.
+  { method: "GET", pattern: "/public/social", handler: handlePublicSocial },
+  { method: "GET", pattern: "/public/followers", handler: handlePublicFollowers },
+  { method: "GET", pattern: "/public/following", handler: handlePublicFollowing },
 
   // The image upload pipeline: sniff -> cross-check -> quota -> transform to
   // WebP -> content-addressed R2 -> row. Takes RAW image bytes as the body, not

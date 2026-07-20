@@ -208,6 +208,34 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /public/recent",
     build: () => new Request("https://api.test/public/recent?limit=abc"),
   },
+  // GET /public/social's owner lookup runs first, same shape as GET
+  // /public/profile above — an unknown username 404s (M2.1).
+  {
+    name: "404 public social with an unknown username",
+    route: "GET /public/social",
+    build: () => new Request("https://api.test/public/social?username=nobody"),
+  },
+  // The UNKNOWN-USERNAME 404, deliberately — not the malformed-cursor 400, for
+  // the same reason as GET /public/profile above: the owner lookup runs FIRST,
+  // so a probe with both would 404 before the cursor was ever cast. The cursor
+  // 400 needs a real profile to reach; test/social-reads.test.ts owns it.
+  {
+    name: "404 public followers with an unknown username",
+    route: "GET /public/followers",
+    build: () => new Request("https://api.test/public/followers?username=nobody"),
+  },
+  {
+    name: "404 public following with an unknown username",
+    route: "GET /public/following",
+    build: () => new Request("https://api.test/public/following?username=nobody"),
+  },
+  // GET /follows/status authenticates via readCurrentSession, same as GET
+  // /profile/me above — its only error path (M2.1).
+  {
+    name: "401 follows/status with no session",
+    route: "GET /follows/status",
+    build: () => new Request("https://api.test/follows/status?id=00000000-0000-7000-8000-000000000000"),
+  },
   // TEST_ROUTES is "1" in this suite (vitest.config.ts), so the gate is OPEN and
   // the route runs — with no token stashed in KV it takes its own not-found
   // path. That is the branch worth pinning here: it must be the SAME envelope as
