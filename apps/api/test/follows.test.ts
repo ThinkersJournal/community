@@ -92,6 +92,15 @@ describe("POST /follows", () => {
     expect(((await response.json()) as { code: string }).code).toBe("CANNOT_FOLLOW_SELF");
   });
 
+  it("400s CANNOT_FOLLOW_SELF when the self-uuid's case differs from the app guard's", async () => {
+    // zod's uuid regex accepts mixed-case hex, so an upper-cased self-id slips
+    // past the case-sensitive `followeeId === userId` app guard and must be
+    // caught by the `follows_no_self` DB CHECK (23514) instead.
+    const response = await follow(alice, alice.userId.toUpperCase());
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { code: string }).code).toBe("CANNOT_FOLLOW_SELF");
+  });
+
   it("404s NOT_FOUND for a nonexistent followee", async () => {
     const response = await follow(alice, crypto.randomUUID());
     expect(response.status).toBe(404);

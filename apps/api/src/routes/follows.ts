@@ -8,7 +8,7 @@
 import { runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
-import { isForeignKeyViolation } from "../db/errors";
+import { isCheckViolation, isForeignKeyViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
 
 import { FollowInput } from "@thinkersjournal/shared";
@@ -71,6 +71,11 @@ export async function handleFollow(
   } catch (err) {
     // followee_id references a nonexistent user → FK violation (23503).
     if (isForeignKeyViolation(err)) return errorResponse("NOT_FOUND", 404);
+    // Backstop for the app guard above: zod's uuid regex accepts mixed-case
+    // hex and Postgres normalizes case at cast time, so a same-user uuid
+    // submitted in a different case slips past `followeeId === userId` and
+    // trips the `follows_no_self` CHECK instead (23514).
+    if (isCheckViolation(err)) return errorResponse("CANNOT_FOLLOW_SELF", 400);
     throw err;
   }
   return new Response(null, { status: 201 });
@@ -87,8 +92,9 @@ export async function handleUnfollow(
   const { userId } = result.session;
 
   const followeeId = params.followeeId ?? "";
-  // The router does not decode/validate the shape — reject a non-uuid before the
-  // DB throws 22P02 on it (matches the public-reads cursor discipline).
+  // The router decodes but does not validate the segment's shape — reject a
+  // non-uuid before the DB throws 22P02 on it (matches the public-reads cursor
+  // discipline).
   if (!UUID_RE.test(followeeId)) {
     return errorResponse("INVALID_INPUT", 400, { fields: ["followeeId"] });
   }
