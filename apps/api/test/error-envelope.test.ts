@@ -181,6 +181,13 @@ const CASES: readonly ErrorCase[] = [
     build: () =>
       new Request("https://api.test/posts/00000000-0000-7000-8000-000000000000"),
   },
+  // GET /profile/me authenticates via readCurrentSession, same as GET
+  // /posts/:id above — its only error path (M2.1).
+  {
+    name: "401 profile/me with no session",
+    route: "GET /profile/me",
+    build: () => new Request("https://api.test/profile/me"),
+  },
   {
     name: "404 public post with no username/slug",
     route: "GET /public/posts",

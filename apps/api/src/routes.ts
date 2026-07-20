@@ -29,6 +29,7 @@ import {
 } from "./routes/public";
 import { handleResendVerification } from "./routes/resend-verification";
 import { handleSignup } from "./routes/signup";
+import { handleChooseUsername, handleGetMe } from "./routes/username";
 import { handleVerifyEmail } from "./routes/verify-email";
 
 import type { RouteDef } from "./routing";
@@ -77,6 +78,10 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "POST", pattern: "/posts", handler: handleCreatePost },
   { method: "PATCH", pattern: "/posts/:id", handler: handleUpdatePost },
   { method: "GET", pattern: "/posts/:id", handler: handleGetPost },
+
+  // Durable-handle onboarding + the viewer's own profile state (M2.1).
+  { method: "POST", pattern: "/profile/username", handler: handleChooseUsername },
+  { method: "GET", pattern: "/profile/me", handler: handleGetMe },
 
   // ANONYMOUS reads — what the edge caches. See src/routes/public.ts's header:
   // no session is read here, by construction.
