@@ -18,6 +18,7 @@
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
 import { handleCsrf } from "./routes/csrf";
+import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
@@ -99,6 +100,9 @@ export const ROUTES: readonly RouteDef[] = [
   // no dynamic-vs-literal shadowing risk with `DELETE /follows/:followeeId`
   // above (different methods) or `POST /follows` (different method).
   { method: "GET", pattern: "/follows/status", handler: handleFollowStatus },
+
+  // Per-viewer home feed (M2.1) — no-store, never edge-cached.
+  { method: "GET", pattern: "/feed", handler: handleFeed },
 
   // ANONYMOUS reads — what the edge caches. See src/routes/public.ts's header:
   // no session is read here, by construction.

@@ -236,6 +236,16 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /follows/status",
     build: () => new Request("https://api.test/follows/status?id=00000000-0000-7000-8000-000000000000"),
   },
+  // GET /feed authenticates via readCurrentSession, same as GET /profile/me
+  // and GET /follows/status above — its 401 path. The malformed-cursor 400
+  // needs a real session to reach (readCurrentSession runs first); that path
+  // is owned by test/feed.test.ts, the same split public-reads.test.ts and
+  // social-reads.test.ts use for their own cursor 400s.
+  {
+    name: "401 feed with no session",
+    route: "GET /feed",
+    build: () => new Request("https://api.test/feed"),
+  },
   // TEST_ROUTES is "1" in this suite (vitest.config.ts), so the gate is OPEN and
   // the route runs — with no token stashed in KV it takes its own not-found
   // path. That is the branch worth pinning here: it must be the SAME envelope as
