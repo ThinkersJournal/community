@@ -1,5 +1,7 @@
 # Thinker's Journal — Community Platform
 
+![CI](https://github.com/ThinkersJournal/community/actions/workflows/ci.yml/badge.svg)
+
 The flagship of [Thinker's Journal](https://thinkersjournal.com): a public **social publishing platform for thinkers** with **live, precise @-references** into their work (the exact file + lines, CI check, PR, or issue on GitHub/GitLab, plus web/YouTube/X).
 
 > **▶ New session / new agent?** Start with **[`HANDOFF.md`](HANDOFF.md)** — the self-contained entry point (this repo's Claude memory is separate from the marketing-site project).
@@ -572,18 +574,26 @@ Check every box before the first production deploy.
       M1 never deletes an object inline; reclamation is an offline GC (M4, with moderation
       deletion). Do not add an inline delete without refcounting first.
 
-**⚠️ NO CI EXISTS IN THIS REPO — these guards are HUMAN-RUN (owner decision):**
+**✅ CI IS WIRED — but the deploy-time guards STILL can't run in CI (owner step remains):**
 
-- [ ] **Decide: wire the human-run guards into CI, or accept the risk in writing.** There is
-      no `.github/` and no Workers Builds pre-deploy step, so several safety guards fire ONLY
-      if a person remembers to run them: `pnpm smoke:deploy` (`scripts/deploy-smoke.mjs`),
-      `pnpm --filter @thinkersjournal/markdown run check:workerd` (the WASM/`node:`-import
-      gate), and the **build-gated** web manifest/route tests, which `it.skipIf(!existsSync(
-      dist/server/entry.mjs))` — i.e. on a fresh clone with no build they SILENTLY SKIP the
-      only real proof that `/internal/purge` survived the build (a silent 404 there = every
-      purge fails). M0's own final review called an automated deploy assertion "the single
-      highest-leverage item." This is an **owner call on cost/hosting**, not a code task:
-      either add a `.github/workflows` (or a Workers Builds pre-deploy command) that runs the
-      full green sweep **and** `smoke:deploy` against a staging Worker before promoting, or
-      record here, explicitly, that the project accepts running them by hand. Do not leave it
-      implicit — an unlisted human step is how a broken deploy ships green.
+- [x] **CI now exists at `.github/workflows/ci.yml`** and runs on every push to `main` and on
+      every PR: the full green sweep — `pnpm run typecheck`, the whole `pnpm -r test` suite
+      against a real **Postgres 18** (brought up with `docker compose up -d --wait db`, which
+      creates all three databases), **with `apps/web` built FIRST** so the build-gated
+      manifest/route guards actually **FIRE** instead of silently skipping — most importantly
+      the `/internal/purge` survival proof (`apps/web/test/purge.test.ts`), the only real check
+      that a silent 404 there won't make every cache purge fail forever. A dedicated step then
+      asserts `apps/web/dist/server/entry.mjs` exists so a silent build failure can't leave the
+      gate unsatisfied. CI also runs `pnpm --filter @thinkersjournal/markdown run check:workerd`
+      (the WASM/`node:`-import gate) and the Playwright **E2E** across BOTH Workers.
+- [ ] **The remaining owner step is a staging `smoke:deploy`.** CI does **NOT** and **CANNOT**
+      cover `pnpm smoke:deploy` (`scripts/deploy-smoke.mjs`): it needs a **REAL** deployed/staging
+      Worker plus real Cloudflare secrets, neither of which exists in CI. So it stays a human/owner
+      step before promoting a deploy (or a future deploy-pipeline step once a staging Worker + CI
+      secrets exist). The deploy gate's real-infra assertions are **deploy-time, not CI-time**:
+      argon2 `.wasm` bundling on a real `wrangler deploy`, `TEST_ROUTES` unset in prod, the session
+      cookie's `Domain`/`Secure`, and the circular-binding first-deploy order. M0's own final review
+      called an automated deploy assertion "the single highest-leverage item"; that item is now
+      **partly** paid down (the full green sweep is automated), but the deploy-time proof still
+      requires the owner's Cloudflare account. Do not leave it implicit — an unlisted human step is
+      how a broken deploy ships green.

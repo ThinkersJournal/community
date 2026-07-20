@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One in-flight run per ref; a newer push cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test / build / typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Activate the pnpm version pinned in package.json (packageManager:
+      # pnpm@9.15.9). Must run BEFORE setup-node so its pnpm cache can find pnpm.
+      - name: Enable corepack (activates pinned pnpm)
+        run: corepack enable
+
+      - name: Set up Node (from .nvmrc)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Reuse the repo's compose file: Postgres 18 + the three databases created
+      # by db/init/01-create-test-db.sql. --wait blocks until the healthcheck is
+      # healthy. The vitest/global-setup configs default their connection strings
+      # to postgres://postgres:postgres@localhost:5432/..., which this provides,
+      # so no database env vars are needed here.
+      - name: Start Postgres 18 (docker compose)
+        run: docker compose up -d --wait db
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      # ⚠️ MUST precede the test run. Several web tests are build-gated
+      # (it.skipIf(!existsSync('apps/web/dist/server/entry.mjs'))) — most
+      # importantly apps/web/test/purge.test.ts's built-manifest test, the only
+      # real proof that /internal/purge survived the Astro build. Without dist/
+      # present, those guards SILENTLY SKIP. Building first makes them fire.
+      - name: Build web (so build-gated tests actually fire)
+        run: pnpm --filter @thinkersjournal/web build
+
+      # If the build produced no server entry, fail loudly here rather than let
+      # the build-gated guards skip and the suite go false-green.
+      - name: Assert web server entry exists
+        run: |
+          test -f apps/web/dist/server/entry.mjs
+          echo "OK: apps/web/dist/server/entry.mjs present — build-gated tests will fire."
+
+      - name: Run tests
+        run: pnpm -r run test
+
+      - name: "Markdown workerd gate (WASM / node: imports)"
+        run: pnpm --filter @thinkersjournal/markdown run check:workerd
+
+  e2e:
+    name: e2e (Playwright, both Workers)
+    runs-on: ubuntu-latest
+    env:
+      # Keep wrangler quiet and offline-friendly.
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable corepack (activates pinned pnpm)
+        run: corepack enable
+
+      - name: Set up Node (from .nvmrc)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # The E2E uses the DEV database (thinkersjournal), also created by compose.
+      - name: Start Postgres 18 (docker compose)
+        run: docker compose up -d --wait db
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ⚠️ Migrate the DEV database (thinkersjournal). docker compose creates it
+      # EMPTY (POSTGRES_DB) — db/init/01-create-test-db.sql only CREATE DATABASEs,
+      # it applies NO schema — and the E2E signs REAL users up against this dev DB
+      # through the Service Binding. The `test` job gets its schema from vitest's
+      # globalSetup, which does NOT run here, so without this step every signup
+      # 500s on a schema-less Postgres and every spec fails. On a persistent local
+      # volume this is invisible (the dev DB was migrated once, long ago); on a
+      # fresh CI runner it is fatal. (`migrate` = node scripts/migrate.mjs dev up,
+      # which targets the localhost dev DB by default.)
+      - name: Migrate the dev database (E2E writes real users to it)
+        run: pnpm --filter @thinkersjournal/api run migrate
+
+      - name: Install Playwright browser + OS deps
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Playwright's own webServer config builds web and starts BOTH wrangler dev
+      # processes (api on 8788, web on 8787). GitHub sets CI=true automatically,
+      # which the config reads (forbidOnly + fresh servers, no reuse).
+      - name: Run Playwright E2E
+        run: pnpm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
