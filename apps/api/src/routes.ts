@@ -32,6 +32,7 @@ import {
 import { handleResendVerification } from "./routes/resend-verification";
 import { handleSignup } from "./routes/signup";
 import {
+  handlePublicAuthors,
   handlePublicFollowers,
   handlePublicFollowing,
   handlePublicSocial,
@@ -121,6 +122,7 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/public/social", handler: handlePublicSocial },
   { method: "GET", pattern: "/public/followers", handler: handlePublicFollowers },
   { method: "GET", pattern: "/public/following", handler: handlePublicFollowing },
+  { method: "GET", pattern: "/public/authors", handler: handlePublicAuthors },
 
   // The image upload pipeline: sniff -> cross-check -> quota -> transform to
   // WebP -> content-addressed R2 -> row. Takes RAW image bytes as the body, not

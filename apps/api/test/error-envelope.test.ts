@@ -229,6 +229,15 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /public/following",
     build: () => new Request("https://api.test/public/following?username=nobody"),
   },
+  // GET /public/authors has no username to look up (it lists authors, not a
+  // single user's page) — so unlike /public/social|followers|following above,
+  // its malformed-cursor 400 is directly reachable with no owner lookup gating
+  // it first. Same shape as /public/recent's malformed-limit case below.
+  {
+    name: "400 public authors with a malformed cursor",
+    route: "GET /public/authors",
+    build: () => new Request("https://api.test/public/authors?cursor=not-a-uuid"),
+  },
   // GET /follows/status authenticates via readCurrentSession, same as GET
   // /profile/me above — its only error path (M2.1).
   {
