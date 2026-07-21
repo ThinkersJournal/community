@@ -33,12 +33,18 @@ export const GET: APIRoute = async (context) => {
     const statusResp = await apiFetch<FollowStatusResult>(`/follows/status?${idsQuery}`, {
       request: context.request,
     });
-    if (statusResp.status !== 200) {
+    if (statusResp.status === 401) {
       // 401 → not logged in: buttons render as "Follow" that prompt login on click.
       return new Response(JSON.stringify({ following: [], viewerLoggedIn: false, csrfToken: null }), {
         status: 200,
         headers,
       });
+    }
+    if (statusResp.status !== 200) {
+      // Any other non-200 is a genuine upstream error (500/502/429/…) — do not
+      // masquerade as logged-out. Propagate it honestly so it's distinguishable
+      // from a real 401 in logs/devtools; the island falls back safely on !resp.ok.
+      return new Response(statusResp.text, { status: statusResp.status, headers });
     }
     const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: context.request });
     return new Response(

@@ -39,6 +39,19 @@ describe.each([
   });
 });
 
+describe("social.ts distinguishes 401 (not logged in) from other upstream errors", () => {
+  const code = stripComments(readFileSync(join(DIR, "social.ts"), "utf8"));
+
+  it("checks for 401 explicitly rather than collapsing all non-200s", () => {
+    expect(code).toMatch(/401/);
+  });
+
+  it("propagates non-401 upstream failures instead of masquerading as logged-out", () => {
+    expect(code).toMatch(/statusResp\.status\s*!==\s*200/);
+    expect(code).toMatch(/status:\s*statusResp\.status/);
+  });
+});
+
 describe("mutating proxies forward the CSRF token + origin", () => {
   it.each(["follow.ts", "unfollow.ts"])("%s echoes X-CSRF-Token and Origin", (file) => {
     const code = stripComments(readFileSync(join(DIR, file), "utf8"));
