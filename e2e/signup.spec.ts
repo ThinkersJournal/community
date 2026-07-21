@@ -18,7 +18,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { signUp, signUpAndVerify, uniqueEmail } from "./helpers";
+import { chooseUsername, signUp, signUpAndVerify, uniqueEmail, uniqueHandle } from "./helpers";
 
 test.describe("signup -> verify -> post, across both Workers", () => {
   test("a verified user can create a post", async ({ page, request }) => {
@@ -27,6 +27,15 @@ test.describe("signup -> verify -> post, across both Workers", () => {
     // to inline: the 'check your email' state, the browser actually STORING the
     // tj_session cookie, and #verified after the session-carrying verify hop.
     await signUpAndVerify(page, request);
+
+    // ⚠️ MILESTONE-REVIEW ADDITION. new-post.astro now gates the editor
+    // FORM itself on having a chosen handle (the content-loss fix — see
+    // e2e/social.spec.ts's onboarding test) — a not-yet-onboarded visitor
+    // gets a "choose your handle" prompt, not `#title`/`#markdownSource`.
+    // This test's payoff is specifically about the EMAIL-VERIFICATION soft
+    // gate, not the handle gate, so onboard here to reach the form at all;
+    // the handle gate itself is proven separately by social.spec.ts.
+    await chooseUsername(page, uniqueHandle("verified"));
 
     // ---- 4. THE PAYOFF: posting now succeeds --------------------------------
     // Identical to the negative case below in every respect except that this
@@ -64,6 +73,21 @@ test.describe("signup -> verify -> post, across both Workers", () => {
    * sides, and posting-then-verifying in one test would leave the failure
    * ambiguous. Calls `signUp` (NOT `signUpAndVerify`) precisely to stop BEFORE
    * verification.
+   *
+   * ⚠️ MILESTONE-REVIEW REWRITE. This used to fill the editor form directly
+   * and assert `#unverified`. new-post.astro's new content-loss fix gates the
+   * FORM ITSELF on having a chosen handle — so an unverified user, who is
+   * *also* never onboarded (handle.astro's soft gate on this file — see
+   * apps/api/src/routes/username.ts's `handleChooseUsername`, which itself
+   * requires `requireVerifiedEmail: true` — is unreachable without a
+   * verified email), now never even sees `#title`/`#markdownSource` to fill.
+   * The underlying security property THIS TEST EXISTS TO PROVE — an
+   * unverified user cannot get a post published — still holds, and holds
+   * more strongly (blocked at editor-open, before any content is typed, not
+   * just at submit); this rewrite proves it via the mechanism that ACTUALLY
+   * blocks them now: the onboarding prompt, and — one level down — the SAME
+   * EMAIL_NOT_VERIFIED soft gate this test always meant to exercise, now
+   * surfaced on /choose-username instead of on /new-post's own POST handler.
    */
   test("an UNVERIFIED user is blocked from posting by the soft gate", async ({
     page,
@@ -76,25 +100,26 @@ test.describe("signup -> verify -> post, across both Workers", () => {
     // Authenticated (the signup minted a session) but NOT verified. Deliberately
     // no /verify-email visit.
     await page.goto("/new-post");
-    await page.fill('input[name="title"]', "Too early");
-    await page.fill('textarea[name="markdownSource"]', "This account never verified.");
-    await page.click('button[name="intent"][value="draft"]');
+
+    // Blocked before the form even exists — not onboarded (and, one level
+    // down, CANNOT onboard while unverified; asserted next).
+    await expect(page.locator("#onboarding-required")).toBeVisible();
+    await expect(page.locator("#editor-form")).toHaveCount(0);
+    await expect(page.locator('input[name="title"]')).toHaveCount(0);
+
+    // Following the prompt confirms WHY: choosing a handle itself demands a
+    // verified email — the same soft gate this test always meant to prove,
+    // now enforced one hop earlier.
+    await page.click('a[href="/choose-username?next=/new-post"]');
+    await page.fill('input[name="username"]', uniqueHandle("stillunverified"));
+    await page.click('button[type="submit"]');
 
     await expect(
-      page.locator("#unverified"),
-      "an UNVERIFIED user was not stopped by the soft gate",
-    ).toBeVisible();
-    // The post must NOT have been created.
-    await expect(page.locator("#saved")).toHaveCount(0);
-    await expect(page.locator("#published")).toHaveCount(0);
-
-    // ⚠️ Distinguishes the SOFT GATE (403 EMAIL_NOT_VERIFIED) from the other
-    // ways this page can fail. #unverified is only rendered after the request
-    // cleared origin + session + CSRF + epoch and was stopped by the gate
-    // itself; a CSRF/origin 403 renders #error and a dead session renders
-    // #session-expired. Without this, a broken CSRF token could masquerade as a
-    // working gate.
-    await expect(page.locator("#error")).toHaveCount(0);
-    await expect(page.locator("#session-expired")).toHaveCount(0);
+      page.locator("#error"),
+      "an UNVERIFIED user was not stopped by the email-verification soft gate on /choose-username",
+    ).toContainText("verify your email");
+    // Still on /choose-username, not redirected anywhere — no handle was
+    // claimed and no post could ever have been created.
+    await expect(page).toHaveURL(/\/choose-username/);
   });
 });

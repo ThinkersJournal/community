@@ -2,6 +2,7 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
+import { withClient } from "../src/db/client";
 import {
   createPostRequest,
   createPublished,
@@ -33,6 +34,22 @@ import type { Actor } from "./actor";
  */
 let actor: Actor;
 
+/**
+ * A verified actor who has ALSO chosen a handle (so Task 8's publish-username
+ * gate passes). Every case here publishes through the real API, so a fixture
+ * must be past that gate already — mirroring test/follows.test.ts's
+ * `onboardedActor()`.
+ */
+async function onboardedActor(): Promise<Actor> {
+  const created = await createVerifiedActor();
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE profiles SET username_chosen = true WHERE user_id = $1", [created.userId]),
+  );
+  await waitOnExecutionContext(ctx);
+  return created;
+}
+
 /** Drive the Worker with a stubbed WEB binding, capturing every purge call. */
 async function fetchCapturingPurges(
   request: Request,
@@ -51,7 +68,7 @@ async function fetchCapturingPurges(
 }
 
 beforeAll(async () => {
-  actor = await createVerifiedActor();
+  actor = await onboardedActor();
 });
 
 afterAll(deleteCreatedUsers);
@@ -94,7 +111,11 @@ describe("PATCH /posts/:id purges on edit", () => {
     // any caller could burn the 5/min purge budget for a post they cannot touch —
     // by PATCHing ids they do not own, at no cost to themselves.
     const id = await createPublished(actor);
-    const attacker = await createVerifiedActor();
+    // Onboarded: a `status: "published"` PATCH gates on the SESSION's own
+    // username_chosen (Task 8) before the ownership check in the UPDATE's WHERE
+    // clause ever runs. An un-onboarded attacker would 409 for that unrelated
+    // reason, never reaching the 404 this case exists to pin.
+    const attacker = await onboardedActor();
     const { response, purges } = await fetchCapturingPurges(
       patchPostRequest(attacker, id, "published"),
     );

@@ -181,6 +181,13 @@ const CASES: readonly ErrorCase[] = [
     build: () =>
       new Request("https://api.test/posts/00000000-0000-7000-8000-000000000000"),
   },
+  // GET /profile/me authenticates via readCurrentSession, same as GET
+  // /posts/:id above — its only error path (M2.1).
+  {
+    name: "401 profile/me with no session",
+    route: "GET /profile/me",
+    build: () => new Request("https://api.test/profile/me"),
+  },
   {
     name: "404 public post with no username/slug",
     route: "GET /public/posts",
@@ -200,6 +207,53 @@ const CASES: readonly ErrorCase[] = [
     name: "400 public recent with a malformed limit",
     route: "GET /public/recent",
     build: () => new Request("https://api.test/public/recent?limit=abc"),
+  },
+  // GET /public/social's owner lookup runs first, same shape as GET
+  // /public/profile above — an unknown username 404s (M2.1).
+  {
+    name: "404 public social with an unknown username",
+    route: "GET /public/social",
+    build: () => new Request("https://api.test/public/social?username=nobody"),
+  },
+  // The UNKNOWN-USERNAME 404, deliberately — not the malformed-cursor 400, for
+  // the same reason as GET /public/profile above: the owner lookup runs FIRST,
+  // so a probe with both would 404 before the cursor was ever cast. The cursor
+  // 400 needs a real profile to reach; test/social-reads.test.ts owns it.
+  {
+    name: "404 public followers with an unknown username",
+    route: "GET /public/followers",
+    build: () => new Request("https://api.test/public/followers?username=nobody"),
+  },
+  {
+    name: "404 public following with an unknown username",
+    route: "GET /public/following",
+    build: () => new Request("https://api.test/public/following?username=nobody"),
+  },
+  // GET /public/authors has no username to look up (it lists authors, not a
+  // single user's page) — so unlike /public/social|followers|following above,
+  // its malformed-cursor 400 is directly reachable with no owner lookup gating
+  // it first. Same shape as /public/recent's malformed-limit case below.
+  {
+    name: "400 public authors with a malformed cursor",
+    route: "GET /public/authors",
+    build: () => new Request("https://api.test/public/authors?cursor=not-a-uuid"),
+  },
+  // GET /follows/status authenticates via readCurrentSession, same as GET
+  // /profile/me above — its only error path (M2.1).
+  {
+    name: "401 follows/status with no session",
+    route: "GET /follows/status",
+    build: () => new Request("https://api.test/follows/status?id=00000000-0000-7000-8000-000000000000"),
+  },
+  // GET /feed authenticates via readCurrentSession, same as GET /profile/me
+  // and GET /follows/status above — its 401 path. The malformed-cursor 400
+  // needs a real session to reach (readCurrentSession runs first); that path
+  // is owned by test/feed.test.ts, the same split public-reads.test.ts and
+  // social-reads.test.ts use for their own cursor 400s.
+  {
+    name: "401 feed with no session",
+    route: "GET /feed",
+    build: () => new Request("https://api.test/feed"),
   },
   // TEST_ROUTES is "1" in this suite (vitest.config.ts), so the gate is OPEN and
   // the route runs — with no token stashed in KV it takes its own not-found

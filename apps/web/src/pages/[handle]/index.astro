@@ -153,6 +153,23 @@ const displayDate = (value: string): string => {
     <h1>{displayName}</h1>
     {profile.bio !== null && <p>{profile.bio}</p>}
 
+    {/* Social: hydrated client-side (cached HTML carries no viewer state). */}
+    <section data-social-counts data-username={profile.username}>
+      <span><strong data-followers-count>—</strong> followers</span>
+      <span><strong data-following-count>—</strong> following</span>
+    </section>
+    <button data-follow-btn data-user-id={profile.userId} hidden>Follow</button>
+
+    {/* Follower/following lists — load client-side on click; the disclosure
+        buttons carry only the profile owner's username (viewer-independent),
+        so no viewer state enters this cached HTML. */}
+    <div>
+      <button data-load-list="followers" data-username={profile.username}>Followers</button>
+      <ul data-list-panel="followers"></ul>
+      <button data-load-list="following" data-username={profile.username}>Following</button>
+      <ul data-list-panel="following"></ul>
+    </div>
+
     {
       profile.posts.length === 0 ? (
         <p id="no-posts">No posts yet.</p>
@@ -182,5 +199,10 @@ const displayDate = (value: string): string => {
         Older posts
       </a>
     )}
+
+    <script>
+      import { initSocialIsland } from "../../scripts/social";
+      initSocialIsland();
+    </script>
   </body>
 </html>

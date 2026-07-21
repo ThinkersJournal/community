@@ -2,6 +2,7 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import worker from "../src";
+import { withClient } from "../src/db/client";
 import { createVerifiedActor, deleteCreatedUsers } from "./actor";
 
 import type { Actor } from "./actor";
@@ -54,10 +55,27 @@ async function create(actor: Actor, payload: PostPayload): Promise<{ id: string;
   return (await response.json()) as { id: string; slug: string };
 }
 
+/**
+ * A verified actor who has ALSO chosen a handle (so Task 8's publish-username
+ * gate passes). This suite creates PUBLISHED posts through the real API to
+ * prove what the anonymous reads show; the gate itself belongs to
+ * test/publish-username-gate.test.ts. Mirrors test/follows.test.ts's
+ * `onboardedActor()`.
+ */
+async function onboardedActor(): Promise<Actor> {
+  const created = await createVerifiedActor();
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE profiles SET username_chosen = true WHERE user_id = $1", [created.userId]),
+  );
+  await waitOnExecutionContext(ctx);
+  return created;
+}
+
 let actor: Actor;
 
 beforeAll(async () => {
-  actor = await createVerifiedActor();
+  actor = await onboardedActor();
 });
 
 afterAll(async () => {
@@ -125,7 +143,7 @@ describe("GET /public/posts", () => {
 
 describe("GET /public/profile", () => {
   it("paginates newest-first by keyset", async () => {
-    const author = await createVerifiedActor();
+    const author = await onboardedActor();
     for (let i = 0; i < 25; i++) {
       await create(author, { title: `Post ${i}`, markdownSource: "x", status: "published" });
     }
@@ -150,7 +168,7 @@ describe("GET /public/profile", () => {
   });
 
   it("excludes drafts", async () => {
-    const author = await createVerifiedActor();
+    const author = await onboardedActor();
     await create(author, { title: "Draft", markdownSource: "x" });
     await create(author, { title: "Live", markdownSource: "x", status: "published" });
     const profile = (await (
@@ -177,7 +195,7 @@ describe("GET /public/profile", () => {
 
 describe("GET /public/recent", () => {
   it("returns published posts with their author's username", async () => {
-    const author = await createVerifiedActor();
+    const author = await onboardedActor();
     const { id } = await create(author, {
       title: "Recent One",
       markdownSource: "x",

@@ -1,0 +1,76 @@
+---
+/**
+ * `GET /authors` — recent-authors discovery page, keyset-paginated via
+ * `?cursor=`.
+ *
+ * ⚠️ ANONYMOUS + EDGE-CACHEABLE, same class as sitemap.xml/rss.xml
+ * (`markFeedCacheable`: untagged, short-TTL — see src/lib/cache.ts). The
+ * `/public/authors` fetch below omits `request`, so no Cookie is forwarded —
+ * the list is viewer-independent, and there is no viewer-specific value in
+ * this render to leak. Unlike the XML feed pages, this IS an HTML rendering
+ * context and it carries the bundled follow island, so it also calls
+ * `setPublicPageCsp(Astro)` (script-src 'self' — the bundled `<script>`
+ * below is externalized by Astro to `/_astro/*.js`, served from 'self').
+ *
+ * ⚠️ ORDER MATTERS: both calls happen AFTER the fetch, UNCONDITIONALLY —
+ * there is no `notFound` early-return here (an empty author list is a valid
+ * 200), so both the populated and the empty/error case reach them.
+ */
+import { apiFetch } from "../lib/api";
+import { markFeedCacheable } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+
+import type { AuthorsPage } from "@thinkersjournal/shared";
+
+const cursor = Astro.url.searchParams.get("cursor");
+const query = new URLSearchParams();
+if (cursor !== null) query.set("cursor", cursor);
+
+// ⚠️ ANONYMOUS — no `request`. The list is viewer-independent; follow-state
+// hydrates client-side via the island, so this HTML is shared across viewers.
+const response = await apiFetch<AuthorsPage>(
+  query.toString() === "" ? "/public/authors" : `/public/authors?${query.toString()}`,
+);
+
+const page: AuthorsPage = response.status === 200 && response.data !== null
+  ? response.data
+  : { authors: [], nextCursor: null };
+
+// Short-TTL, untagged edge cache (same class as sitemap/rss). CSP for the island.
+markFeedCacheable(Astro);
+setPublicPageCsp(Astro);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Recent authors — Thinker’s Journal</title>
+  </head>
+  <body>
+    <main>
+      <h1>Recent authors</h1>
+      {page.authors.length === 0 ? (
+        <p>No authors yet — be the first to <a href="/new-post">publish</a>.</p>
+      ) : (
+        <ul>
+          {page.authors.map((author) => (
+            <li>
+              <a href={`/@${author.username}`}>{author.displayName ?? `@${author.username}`}</a>
+              <span> @{author.username}</span>
+              <button data-follow-btn data-user-id={author.userId} hidden>Follow</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {page.nextCursor !== null && (
+        <a rel="next" href={`/authors?cursor=${encodeURIComponent(page.nextCursor)}`}>More →</a>
+      )}
+    </main>
+    <script>
+      import { initSocialIsland } from "../scripts/social";
+      initSocialIsland();
+    </script>
+  </body>
+</html>

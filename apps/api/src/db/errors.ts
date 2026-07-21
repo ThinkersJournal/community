@@ -40,3 +40,38 @@ export function isInvalidTextRepresentation(err: unknown): boolean {
     (err as { code?: unknown }).code === INVALID_TEXT_REPRESENTATION
   );
 }
+
+/** Postgres SQLSTATE for `foreign_key_violation`. */
+const FOREIGN_KEY_VIOLATION = "23503";
+
+/**
+ * Whether `err` is a Postgres foreign-key-constraint violation — for us, always
+ * a client-supplied id that references a row that does not exist (e.g. `POST
+ * /follows` naming a nonexistent `followeeId`). That is a 404, never a 500.
+ */
+export function isForeignKeyViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: unknown }).code === FOREIGN_KEY_VIOLATION
+  );
+}
+
+/** Postgres SQLSTATE for `check_violation`. */
+const CHECK_VIOLATION = "23514";
+
+/**
+ * Whether `err` is a Postgres CHECK-constraint violation — for us, the DB-side
+ * backstop for invariants the app already guards but cannot guard perfectly
+ * (e.g. `follows_no_self`, since `zod`'s uuid regex accepts mixed-case hex and
+ * Postgres normalizes case at cast time, so a same-user uuid submitted in a
+ * different case slips past a case-sensitive app-level equality check). That is
+ * a 400, never a 500.
+ */
+export function isCheckViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: unknown }).code === CHECK_VIOLATION
+  );
+}

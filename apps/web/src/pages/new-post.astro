@@ -37,7 +37,7 @@
  * hidden field to a real header on the Service-Binding call.
  */
 import { renderMarkdown } from "@thinkersjournal/markdown";
-import type { AuthoredPost } from "@thinkersjournal/shared";
+import type { AuthoredPost, Me } from "@thinkersjournal/shared";
 
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
@@ -69,6 +69,21 @@ const origin = Astro.request.headers.get("Origin") ?? "";
  */
 const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
 const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
+
+/**
+ * ⚠️ THE CONTENT-LOSS FIX (milestone review). Gate at EDITOR-OPEN, not at
+ * publish: a not-yet-onboarded author who types a title + body and only
+ * THEN hits the api's 409 USERNAME_REQUIRED (see the redirect below) loses
+ * that typed text the moment new-post.astro → choose-username.astro →
+ * /feed bounces them through two redirects with no form in between. Fetch
+ * onboarding state the SAME way the csrf token above answers "logged in or
+ * not" — a null/false result here means "show a prompt, not a form" further
+ * down, so an unonboarded author never sees a fillable editor and so never
+ * has anything to lose. Only asked when there IS a session — an anonymous
+ * visitor already gets the login prompt below and never reaches this call.
+ */
+const me = csrfToken === null ? null : await apiFetch<Me>("/profile/me", { request: Astro.request });
+const notOnboarded = me !== null && me.status === 200 && me.data?.usernameChosen === false;
 
 let postId = Astro.url.searchParams.get("post");
 let title = "";
@@ -134,6 +149,25 @@ if (Astro.request.method === "POST") {
           });
 
     const succeeded = response.status === 201 || response.status === 200;
+
+    if (apiErrorCode(response) === "USERNAME_REQUIRED") {
+      // ⚠️ Reached only past the api's full mutating pipeline (session
+      // valid, email verified — see apps/api/src/routes/posts.ts) when a
+      // not-yet-onboarded author tries to PUBLISH. This response carries NO
+      // Set-Cookie of its own, so a plain `Astro.redirect()` would be safe
+      // here in isolation — but built by hand + `applyCookies` anyway, the
+      // SAME way as the two redirects below, so this is not a special case
+      // that could silently start dropping a cookie if that ever changes.
+      const redirect = new Response(null, {
+        status: 302,
+        // `?next=/new-post` — same reasoning as the prompt link below: a
+        // direct POST that somehow reached this backstop should still land
+        // the author back on the editor after onboarding, not on /feed.
+        headers: { Location: "/choose-username?next=/new-post" },
+      });
+      applyCookies(redirect.headers, response.setCookies);
+      return redirect;
+    }
 
     if (succeeded && status === "published" && response.data !== null) {
       // ⚠️ DO NOT REPLACE THIS WITH `Astro.redirect(...)`. That helper builds a
@@ -246,6 +280,14 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
       csrfToken === null ? (
         <p id="login-required">
           <a href={loginHref}>Log in to write a post</a>
+        </p>
+      ) : notOnboarded ? (
+        // ⚠️ The content-loss fix: NO form is rendered here at all for a
+        // not-yet-onboarded author, so there is nothing typed to lose. `next`
+        // carries them straight back to this exact page once they've picked
+        // a handle — see choose-username.astro's `isSafeLocalPath` guard.
+        <p id="onboarding-required">
+          <a href="/choose-username?next=/new-post">Choose your handle to start writing</a>
         </p>
       ) : (
         <form method="POST" id="editor-form">
