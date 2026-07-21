@@ -273,7 +273,8 @@ cd ../web  && wrangler secret put PURGE_SECRET
 | Neon Postgres major | **18** — Neon's default for new projects since 2026-06-05 |
 | Neon connection string | the **DIRECT** (non-pooled) host with `sslmode=require`, NOT the PgBouncer/pooler endpoint (feeding Hyperdrive Neon's pooler double-pools) |
 | R2 bucket | `tj-media`, bound as `MEDIA` on `api` |
-| R2 custom domain | `cdn.thinkersjournal.com` (requires a zone) |
+| R2 custom domain | `cdn.thinkersjournal.com` (requires a zone) — attached to the `tj-media` bucket (R2 → Settings → Custom Domains), serves media DIRECTLY from R2 (no Worker) |
+| Web app custom domain | `community.thinkersjournal.com` on the `web` Worker (requires the `thinkersjournal.com` zone). Attached at **deploy time** (dashboard/API), **NOT** a committed `wrangler.jsonc` route — see the deploy gate for why |
 | Images binding | `IMAGES` on `api` — **no subscription, no zone, no base fee** |
 | Secrets (both Workers) | `PURGE_SECRET` — identical value; ⚠️ on `web` it is baked in at BUILD time (rebuild + redeploy to change it) |
 
@@ -497,10 +498,25 @@ Check every box before the first production deploy.
       Cloudflare defaults it to `true` — this is an active change, not a confirmation.)
       ⚠️ **It also removes `pnpm smoke:deploy`'s access.** Run every real-infra
       validation BEFORE closing the public URL, or against a staging Worker that keeps one.
-- [ ] **www → apex redirect is live.** ⚠️ **HOST IS NOT IN THE CACHE KEY** — apex and
-      `www` share entries, so without the redirect a `www` render is served at the apex
-      and vice versa. (Canonical/OG URLs are already built from a constant origin for
-      this exact reason — `CANONICAL_ORIGIN` in `apps/web/src/lib/canonical.ts`.)
+- [ ] **The `web` Worker's custom domain `community.thinkersjournal.com` is attached at
+      DEPLOY time** (dashboard: *Workers & Pages → thinkersjournal-web → Settings → Domains &
+      Routes → Add → Custom Domain*; or the API/CI equivalent) — **NOT** via a
+      `routes`/`custom_domain` entry in the committed `apps/web/wrangler.jsonc`. Cloudflare
+      auto-creates the proxied DNS record + edge TLS cert on attach; prereq: the
+      `thinkersjournal.com` zone is in the deploying account (it already hosts the apex marketing
+      Pages site + the `cdn.` R2 domain). ⚠️ **Do NOT commit a `custom_domain` route** — it breaks
+      the local **two-Worker e2e harness**: `wrangler dev` presents requests under the custom host,
+      the api's Origin/CSRF check then rejects every mutation (signup/publish/follow all fail), and
+      `dist/server/wrangler.json` is shared by dev+deploy so the route can't be scoped away there.
+      For IaC later, use an `env.production.routes` override (invisible to `wrangler dev`) once a
+      deploy pipeline exists. (This is what unblocks the marketing site flipping its "Open the app"
+      cross-links live — they stay flag-gated OFF until this host actually resolves.)
+- [ ] **The app is a SINGLE host (`community.thinkersjournal.com`)** — no apex/`www` split for the
+      app to reconcile (apex + `www` are the marketing Pages site, a different project). ⚠️ **HOST
+      IS NOT IN THE CACHE KEY**, which is why `workers_dev = false` above matters (the `*.workers.dev`
+      URL would otherwise share cache entries with the custom domain). Canonical/OG URLs are built
+      from a constant origin (`CANONICAL_ORIGIN = https://community.thinkersjournal.com` in
+      `apps/web/src/lib/canonical.ts`) for the same reason.
 - [ ] **Assert a real cache `MISS` then `HIT` via `Cf-Cache-Status`, on a public
       page, BEFORE trusting anything else about caching.** This is the ONLY
       client-visible proof Workers Cache is active at all — the header the Astro
