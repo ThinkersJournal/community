@@ -135,6 +135,22 @@ if (Astro.request.method === "POST") {
 
     const succeeded = response.status === 201 || response.status === 200;
 
+    if (apiErrorCode(response) === "USERNAME_REQUIRED") {
+      // ⚠️ Reached only past the api's full mutating pipeline (session
+      // valid, email verified — see apps/api/src/routes/posts.ts) when a
+      // not-yet-onboarded author tries to PUBLISH. This response carries NO
+      // Set-Cookie of its own, so a plain `Astro.redirect()` would be safe
+      // here in isolation — but built by hand + `applyCookies` anyway, the
+      // SAME way as the two redirects below, so this is not a special case
+      // that could silently start dropping a cookie if that ever changes.
+      const redirect = new Response(null, {
+        status: 302,
+        headers: { Location: "/choose-username" },
+      });
+      applyCookies(redirect.headers, response.setCookies);
+      return redirect;
+    }
+
     if (succeeded && status === "published" && response.data !== null) {
       // ⚠️ DO NOT REPLACE THIS WITH `Astro.redirect(...)`. That helper builds a
       // response it owns ITSELF, which does not carry `Astro.response.headers`
