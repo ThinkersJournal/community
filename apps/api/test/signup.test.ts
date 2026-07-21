@@ -28,7 +28,7 @@ import { withClient } from "../src/db/client";
  */
 
 /** An allowlisted origin (src/auth/csrf.ts) — signup 403s without one. */
-const ORIGIN = "https://thinkersjournal.com";
+const ORIGIN = "https://community.thinkersjournal.com";
 
 /**
  * The origin every emailed verification link must be built on (production only —
@@ -36,7 +36,7 @@ const ORIGIN = "https://thinkersjournal.com";
  * routes share). NOT derived from the request URL, and NOT every origin
  * `checkOrigin` accepts.
  */
-const CANONICAL_ORIGIN = "https://thinkersjournal.com";
+const CANONICAL_ORIGIN = "https://community.thinkersjournal.com";
 
 const VALID_PASSWORD = "correct-horse-battery-staple";
 

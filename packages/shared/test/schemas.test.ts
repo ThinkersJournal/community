@@ -1,13 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { SignupInput, LoginInput, SESSION_COOKIE_NAME, COOKIE_DOMAIN } from '../src/index';
+import { SignupInput, LoginInput, SESSION_COOKIE_NAME } from '../src/index';
 
 describe('cookie constants', () => {
   it('has the exact session cookie name', () => {
     expect(SESSION_COOKIE_NAME).toBe('tj_session');
-  });
-
-  it('has the exact cookie domain', () => {
-    expect(COOKIE_DOMAIN).toBe('.thinkersjournal.com');
   });
 });
 

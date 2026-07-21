@@ -9,7 +9,7 @@
  *
  * Cookie lifetime and KV `expirationTtl` are both 30 days (2_592_000 seconds).
  */
-import { COOKIE_DOMAIN, SESSION_COOKIE_NAME } from "@thinkersjournal/shared";
+import { SESSION_COOKIE_NAME } from "@thinkersjournal/shared";
 
 import { base64urlEncode, sha256Hex } from "./encoding";
 
@@ -51,18 +51,19 @@ function parseSessionCookie(request: Request): string | null {
  *
  * ⚠️ THE ATTRIBUTES ARE ENVIRONMENT-DEPENDENT, AND THAT IS DELIBERATE.
  *
- * Production emits `Domain=.thinkersjournal.com; Secure` — the Global
- * Constraint, and non-negotiable there: `Secure` keeps the session token off
- * plaintext http, and the `Domain` scopes it across our subdomains.
+ * Production emits `Secure` and is HOST-ONLY — it carries NO `Domain`
+ * attribute at all, so the browser scopes it to the exact host that served
+ * it (`community.thinkersjournal.com`) and nothing else. `Secure` keeps the
+ * session token off plaintext http.
  *
- * But those same two attributes make the cookie IMPOSSIBLE to store in local
- * dev. At `http://127.0.0.1:8787` a browser rejects `Secure` (not https) and
- * rejects a `Domain` the origin does not belong to — so it silently drops the
- * cookie, `readSession` returns null on the next request, and every
- * authenticated flow 401s. No session can exist at all: a real-browser E2E is
- * impossible, and a human clicking through localhost cannot stay logged in.
- * So dev omits EXACTLY those two attributes and nothing else — `HttpOnly`,
- * `SameSite=Lax`, `Path`, and `Max-Age` are identical in both modes.
+ * But `Secure` makes the cookie IMPOSSIBLE to store in local dev. At
+ * `http://127.0.0.1:8787` a browser rejects `Secure` (not https) — so it
+ * silently drops the cookie, `readSession` returns null on the next request,
+ * and every authenticated flow 401s. No session can exist at all: a
+ * real-browser E2E is impossible, and a human clicking through localhost
+ * cannot stay logged in. So dev omits EXACTLY that one attribute and nothing
+ * else — `HttpOnly`, `SameSite=Lax`, `Path`, and `Max-Age` are identical in
+ * both modes, and neither mode ever sets `Domain`.
  *
  * ⚠️ WHY THIS IS KEYED ON `TEST_ROUTES` AND MUST NOT GET ITS OWN FLAG.
  * `TEST_ROUTES` is already the most deploy-gated var in the system: it gates
@@ -87,15 +88,16 @@ function parseSessionCookie(request: Request): string | null {
  * the production shape would otherwise go entirely unexercised.
  */
 function buildCookie(env: Env, token: string, maxAge: number): string {
-  // DEV/CI ONLY — omits Domain + Secure. Unreachable in production: see above.
+  // DEV/CI ONLY — omits Secure. Unreachable in production: see above.
   if (env.TEST_ROUTES === "1") {
     return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
   }
 
   // PRODUCTION. Both branches are spelled out in full rather than assembled
   // from shared fragments, so each string is readable (and greppable) exactly
-  // as the browser will receive it.
-  return `${SESSION_COOKIE_NAME}=${token}; Path=/; Domain=${COOKIE_DOMAIN}; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+  // as the browser will receive it. HOST-ONLY: no Domain attribute, so the
+  // browser scopes this to exactly the host that served it.
+  return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
 /**
@@ -171,7 +173,7 @@ export async function destroySession(
   }
 
   // ⚠️ Built with the SAME `env`, so the cleared cookie carries the same
-  // Domain/Path/Secure as the one that set it — a browser only drops a cookie
+  // Path/Secure as the one that set it — a browser only drops a cookie
   // when those match. A mismatch would leave a dead session cookie in place.
   return { cookie: buildCookie(env, "", 0) };
 }

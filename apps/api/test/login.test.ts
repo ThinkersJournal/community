@@ -36,7 +36,7 @@ import { DUMMY_HASH } from "../src/routes/login";
  * it deliberately, which is the entire point of that test.
  */
 
-const ORIGIN = "https://thinkersjournal.com";
+const ORIGIN = "https://community.thinkersjournal.com";
 const VALID_PASSWORD = "correct-horse-battery-staple";
 
 /** Emails created by a test, deleted in `afterEach`. */

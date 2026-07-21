@@ -335,7 +335,7 @@ describe("sendVerificationEmail", () => {
       }),
     );
 
-    const url = "https://thinkersjournal.com/verify-email?token=abc123";
+    const url = "https://community.thinkersjournal.com/verify-email?token=abc123";
     await sendVerificationEmail(env, "reader@example.com", url);
 
     expect(capturedUrl).toBe("https://api.postmarkapp.com/email");

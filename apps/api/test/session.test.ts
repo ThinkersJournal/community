@@ -53,7 +53,7 @@ function prodEnv(): Env {
 
 /** The EXACT `Set-Cookie` production must emit. Any drift here is a real defect. */
 function expectedProdCookie(token: string, maxAge: number): string {
-  return `tj_session=${token}; Path=/; Domain=.thinkersjournal.com; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+  return `tj_session=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
 const sampleData: SessionData = {
@@ -83,7 +83,8 @@ describe("session primitive (opaque KV token)", () => {
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("Secure");
     expect(cookie).toContain("SameSite=Lax");
-    expect(cookie).toContain("Domain=.thinkersjournal.com");
+    // HOST-ONLY: the production cookie carries NO Domain attribute at all.
+    expect(cookie).not.toContain("Domain=");
     expect(cookie).toContain("Path=/");
     expect(cookie).toContain("Max-Age=2592000");
     expect(cookie.startsWith("tj_session=")).toBe(true);
@@ -143,12 +144,14 @@ describe("session primitive (opaque KV token)", () => {
  * ⚠️ SECURITY-CRITICAL — the cookie's attributes are environment-dependent, and
  * BOTH modes are pinned here because each protects against a different failure.
  *
- * WHY THE SPLIT EXISTS AT ALL. The production attributes (`Domain=
- * .thinkersjournal.com; Secure`) make the cookie IMPOSSIBLE for any browser to
- * store at `http://127.0.0.1:8787`: `Secure` requires https, and a `Domain` the
- * origin does not belong to is rejected outright. So a real-browser E2E — and a
- * human clicking through localhost — could never hold a session. The dev shape
- * omits exactly those two attributes and nothing else.
+ * WHY THE SPLIT EXISTS AT ALL. The production `Secure` attribute makes the
+ * cookie IMPOSSIBLE for any browser to store at `http://127.0.0.1:8787`:
+ * `Secure` requires https. So a real-browser E2E — and a human clicking
+ * through localhost — could never hold a session. The dev shape omits exactly
+ * that one attribute and nothing else. NEITHER mode ever sets `Domain`: the
+ * production cookie is HOST-ONLY, scoped to exactly
+ * `community.thinkersjournal.com` (the single host the app is served from) by
+ * the browser's default same-origin cookie scoping.
  *
  * WHY IT IS KEYED ON `TEST_ROUTES` and NOT a second flag. `TEST_ROUTES` is
  * already the single most deploy-gated var in the system: it gates the
@@ -167,15 +170,16 @@ describe("session primitive (opaque KV token)", () => {
  */
 describe("session cookie attributes are environment-aware", () => {
   describe("dev/CI (TEST_ROUTES=1)", () => {
-    it("createSession OMITS Domain and Secure so a browser can store it on http://127.0.0.1", async () => {
+    it("createSession OMITS Secure so a browser can store it on http://127.0.0.1", async () => {
       const { cookie } = await createSession(env, sampleData);
 
-      // THE POINT: these two are what make the cookie unstorable in local dev.
+      // THE POINT: this is what makes the cookie unstorable in local dev.
       expect(cookie).not.toContain("Secure");
+      // Neither mode ever sets Domain — the cookie is host-only in both.
       expect(cookie).not.toContain("Domain");
 
       // Everything else is unchanged from production — the dev shape relaxes
-      // exactly two attributes, not the cookie's other defenses.
+      // exactly one attribute, not the cookie's other defenses.
       expect(cookie).toContain("HttpOnly");
       expect(cookie).toContain("SameSite=Lax");
       expect(cookie).toContain("Path=/");
@@ -190,9 +194,9 @@ describe("session cookie attributes are environment-aware", () => {
       const { cookie: clearCookie } = await destroySession(env, request);
 
       // ⚠️ A browser only drops a cookie when the clearing Set-Cookie carries
-      // the SAME Domain/Path/Secure as the one that set it. A mismatch here
-      // means logout leaves the session cookie in the browser — it would look
-      // like a successful logout while the cookie survived.
+      // the SAME Path/Secure as the one that set it. A mismatch here means
+      // logout leaves the session cookie in the browser — it would look like a
+      // successful logout while the cookie survived.
       expect(clearCookie).not.toContain("Secure");
       expect(clearCookie).not.toContain("Domain");
       expect(clearCookie).toBe(
@@ -210,7 +214,8 @@ describe("session cookie attributes are environment-aware", () => {
       // and the full set are both pinned, so nothing can be quietly dropped.
       expect(cookie).toBe(expectedProdCookie(token, 2_592_000));
       expect(cookie).toContain("Secure");
-      expect(cookie).toContain("Domain=.thinkersjournal.com");
+      // HOST-ONLY: no Domain attribute — scoped to the exact serving host.
+      expect(cookie).not.toContain("Domain=");
     });
 
     it("destroySession emits the EXACT cleared production cookie string", async () => {
@@ -221,7 +226,7 @@ describe("session cookie attributes are environment-aware", () => {
 
       expect(clearCookie).toBe(expectedProdCookie("", 0));
       expect(clearCookie).toContain("Secure");
-      expect(clearCookie).toContain("Domain=.thinkersjournal.com");
+      expect(clearCookie).not.toContain("Domain=");
     });
 
     it("treats any TEST_ROUTES value other than exactly \"1\" as production", async () => {
@@ -235,7 +240,7 @@ describe("session cookie attributes are environment-aware", () => {
           sampleData,
         );
         expect(cookie).toContain("Secure");
-        expect(cookie).toContain("Domain=.thinkersjournal.com");
+        expect(cookie).not.toContain("Domain=");
       }
     });
   });

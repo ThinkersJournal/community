@@ -57,13 +57,22 @@ const UNSAFE_METHODS = ["POST", "PUT", "PATCH", "DELETE"] as const;
 
 describe("checkOrigin", () => {
   it("allows a POST from an allowed Origin", () => {
-    const request = postRequest({ Origin: "https://thinkersjournal.com" });
+    const request = postRequest({ Origin: "https://community.thinkersjournal.com" });
     expect(checkOrigin(DEV_ENV, request)).toBe(true);
   });
 
-  it("allows a POST from the www subdomain Origin", () => {
-    const request = postRequest({ Origin: "https://www.thinkersjournal.com" });
-    expect(checkOrigin(DEV_ENV, request)).toBe(true);
+  /**
+   * SINGLE-HOST NOW: the app is served only from `community.thinkersjournal.com`.
+   * The apex and `www` origins used to be accepted alongside it; they are NOT
+   * anymore, and a regression that widened the allowlist back to include them
+   * would let a CSRF check pass on a host the app is never served from.
+   */
+  it.each([
+    "https://thinkersjournal.com",
+    "https://www.thinkersjournal.com",
+  ])("rejects the stale, no-longer-allowed Origin %s", (origin) => {
+    const request = postRequest({ Origin: origin });
+    expect(checkOrigin(DEV_ENV, request)).toBe(false);
   });
 
   it("rejects a POST from a disallowed Origin", () => {
@@ -88,14 +97,14 @@ describe("checkOrigin", () => {
   it("rejects a disallowed Origin EVEN WITH a valid allowed Referer", () => {
     const request = postRequest({
       Origin: "https://evil.com",
-      Referer: "https://thinkersjournal.com/x",
+      Referer: "https://community.thinkersjournal.com/x",
     });
     expect(checkOrigin(DEV_ENV, request)).toBe(false);
   });
 
   it("falls back to a valid allowed Referer when Origin is absent", () => {
     const request = postRequest({
-      Referer: "https://thinkersjournal.com/some/page?query=1",
+      Referer: "https://community.thinkersjournal.com/some/page?query=1",
     });
     expect(checkOrigin(DEV_ENV, request)).toBe(true);
   });
@@ -169,12 +178,14 @@ describe("checkOrigin — the TEST_ROUTES gate on the dev origins", () => {
     },
   );
 
-  it.each(["https://thinkersjournal.com", "https://www.thinkersjournal.com"])(
-    "still allows the production origin %s in production (TEST_ROUTES unset)",
-    (origin) => {
-      expect(checkOrigin(PROD_ENV, postRequest({ Origin: origin }))).toBe(true);
-    },
-  );
+  it("still allows the production origin in production (TEST_ROUTES unset)", () => {
+    expect(
+      checkOrigin(
+        PROD_ENV,
+        postRequest({ Origin: "https://community.thinkersjournal.com" }),
+      ),
+    ).toBe(true);
+  });
 
   it("rejects a dev-origin Referer fallback in production too (not just the Origin header)", () => {
     // The gate must apply to BOTH branches of `checkOrigin`. A fix that only
@@ -196,7 +207,10 @@ describe("checkOrigin — the TEST_ROUTES gate on the dev origins", () => {
       ).toBe(false);
       // Production origins are unaffected by the gate in every mode.
       expect(
-        checkOrigin(weirdEnv, postRequest({ Origin: "https://thinkersjournal.com" })),
+        checkOrigin(
+          weirdEnv,
+          postRequest({ Origin: "https://community.thinkersjournal.com" }),
+        ),
       ).toBe(true);
     },
   );
@@ -212,7 +226,7 @@ describe("checkOrigin — the TEST_ROUTES gate on the dev origins", () => {
 describe("checkOrigin across unsafe methods", () => {
   it.each(UNSAFE_METHODS)("allows %s from an allowed Origin", (method) => {
     const request = requestWithMethod(method, {
-      Origin: "https://thinkersjournal.com",
+      Origin: "https://community.thinkersjournal.com",
     });
     expect(checkOrigin(DEV_ENV, request)).toBe(true);
   });
@@ -259,20 +273,20 @@ describe("checkCsrf", () => {
   it("accepts a POST carrying the correct X-CSRF-Token", async () => {
     const token = await csrfTokenFor(sampleSession);
     const request = postRequest({
-      Origin: "https://thinkersjournal.com",
+      Origin: "https://community.thinkersjournal.com",
       "X-CSRF-Token": token,
     });
     expect(await checkCsrf(request, sampleSession)).toBe(true);
   });
 
   it("rejects a POST with a missing X-CSRF-Token", async () => {
-    const request = postRequest({ Origin: "https://thinkersjournal.com" });
+    const request = postRequest({ Origin: "https://community.thinkersjournal.com" });
     expect(await checkCsrf(request, sampleSession)).toBe(false);
   });
 
   it("rejects a POST with an incorrect X-CSRF-Token", async () => {
     const request = postRequest({
-      Origin: "https://thinkersjournal.com",
+      Origin: "https://community.thinkersjournal.com",
       "X-CSRF-Token": "0".repeat(64),
     });
     expect(await checkCsrf(request, sampleSession)).toBe(false);

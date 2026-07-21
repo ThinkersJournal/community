@@ -12,7 +12,7 @@
  * mistake is unavailable here, not merely discouraged. test/canonical.test.ts
  * pins that the resulting origin is always ours whatever the input.
  */
-export const CANONICAL_ORIGIN = "https://thinkersjournal.com";
+export const CANONICAL_ORIGIN = "https://community.thinkersjournal.com";
 
 export function profileUrl(username: string): string {
   return `${CANONICAL_ORIGIN}/@${encodeURIComponent(username)}`;

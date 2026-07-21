@@ -19,7 +19,7 @@
  *    with a deploy check" and no such check existed. That flag now gates TWO
  *    security properties, not one — `GET /__test/last-verify-token` (which hands
  *    out a live account-takeover credential) AND the session cookie's
- *    `Domain`/`Secure` (apps/api/src/auth/session.ts) — and it is enforced only
+ *    `Secure` attribute (apps/api/src/auth/session.ts) — and it is enforced only
  *    by its ABSENCE, i.e. by nobody having typed it into the Workers Builds
  *    dashboard. Concentrating two properties on one silent, absence-enforced
  *    flag is exactly what raises the value of asserting it mechanically. Steps 1
@@ -34,12 +34,13 @@
  *
  * ⚠️ WHY A NON-BROWSER CLIENT CAN DO THIS AT ALL, PRE-CUTOVER. The first deploy
  * lands on `*.workers.dev`, and `checkOrigin`'s allowlist contains no
- * `workers.dev` origin while the session cookie is scoped to
- * `Domain=.thinkersjournal.com`. So from a BROWSER on the workers.dev URL every
- * POST 403s and the cookie is rejected — the browser path simply cannot be
- * validated before DNS cutover. But `checkOrigin` reads a CLIENT-SUPPLIED
- * header, and the api has a public URL, so a script can set
- * `Origin: https://thinkersjournal.com` and exercise the true production path
+ * `workers.dev` origin while the session cookie is HOST-ONLY (no `Domain`
+ * attribute), scoped to exactly `community.thinkersjournal.com`. So from a
+ * BROWSER on the workers.dev URL every POST 403s and the cookie is rejected —
+ * the browser path simply cannot be validated before DNS cutover. But
+ * `checkOrigin` reads a CLIENT-SUPPLIED header, and the api has a public URL,
+ * so a script can set `Origin: https://community.thinkersjournal.com` and
+ * exercise the true production path
  * end to end. That is not a bypass of anything: the Origin allowlist defends
  * BROWSERS (a page on evil.com cannot forge the header), never non-browser
  * clients, and the api's real guards against those are `TEST_ROUTES` unset,
@@ -67,10 +68,10 @@ const SIGNUP_PATH = "/auth/signup";
  * allowlist (apps/api/src/auth/csrf.ts) — deliberately not the workers.dev URL
  * under test, which is not on that allowlist and never should be.
  */
-const PRODUCTION_ORIGIN = "https://thinkersjournal.com";
+const PRODUCTION_ORIGIN = "https://community.thinkersjournal.com";
 
 /** The exact cookie attributes production MUST emit (apps/api/src/auth/session.ts). */
-const REQUIRED_COOKIE_ATTRS = ["Secure", "Domain=.thinkersjournal.com"];
+const REQUIRED_COOKIE_ATTRS = ["Secure"];
 
 /** A password satisfying `SignupInput` (>= 12 chars). Never reused. */
 const SMOKE_PASSWORD = "smoke-correct-horse-battery-staple";
@@ -186,7 +187,7 @@ async function checkTestRoutesDisabled(baseUrl) {
       `${url} answered ${response.status}, expected 404.\n` +
         `      TEST_ROUTES HAS LEAKED INTO PRODUCTION. This route hands out a live\n` +
         `      verification token (= account takeover), and the SAME flag also strips\n` +
-        `      Secure/Domain from the session cookie. Unset TEST_ROUTES in the Workers\n` +
+        `      Secure from the session cookie. Unset TEST_ROUTES in the Workers\n` +
         `      Builds project vars and redeploy before doing anything else.\n` +
         `      Body: ${body}`,
     );
@@ -222,12 +223,12 @@ async function checkHealth(baseUrl) {
  *   • The DURABLE OBJECT round-trip (`USER_SECURITY.getEpoch()`).
  *   • Turnstile against the real secret.
  *
- * Then the cookie: `Secure` + `Domain=.thinkersjournal.com` is the OTHER half of
- * the `TEST_ROUTES` gate (apps/api/src/auth/session.ts), and its failure mode is
- * silent — session tokens riding plaintext http, with every test still green.
- * Step 1 already proves the flag is unset; this proves the consequence directly,
- * which is what actually matters. Both are asserted because they are the two
- * independent things one flag now controls.
+ * Then the cookie: `Secure` (the session cookie is otherwise HOST-ONLY, with no
+ * `Domain` attribute) is the OTHER half of the `TEST_ROUTES` gate
+ * (apps/api/src/auth/session.ts), and its failure mode is silent — session
+ * tokens riding plaintext http, with every test still green. Step 1 already
+ * proves the flag is unset; this proves the consequence directly, which is
+ * what actually matters.
  *
  * ⚠️ `getSetCookie()`, not `headers.get("Set-Cookie")`: the latter joins
  * multiple cookies with ", " into one unparseable string.
@@ -278,7 +279,7 @@ async function checkSignup(baseUrl, turnstileToken) {
     fail(
       `the session cookie is MISSING ${missing.join(" and ")}.\n` +
         `      TEST_ROUTES has leaked into production (apps/api/src/auth/session.ts\n` +
-        `      strips exactly these two attributes when it is "1"), which means session\n` +
+        `      strips this attribute when it is "1"), which means session\n` +
         `      tokens are riding plaintext http. Unset it and redeploy.\n` +
         `      Cookie: ${session}`,
     );
