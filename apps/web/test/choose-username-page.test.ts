@@ -32,11 +32,11 @@ describe("choose-username.astro", () => {
     expect(code).toContain("apiErrorCode(");
   });
 
-  it("redirects to /feed by default on success (no safe ?next=)", () => {
-    expect(code).toMatch(/isSafeLocalPath\(next\)\s*\?\s*next\s*:\s*["']\/feed["']/);
+  it("redirects to /feed by default when no ?next= is present at all", () => {
+    expect(code).toMatch(/raw\s*===\s*null\s*\?\s*["']\/feed["']\s*:\s*resolveNext\(raw,\s*Astro\.url\)/);
   });
 
-  it("⚠️ honors a safe ?next= param on every success/redirect path, via the shared `dest`", () => {
+  it("⚠️ honors a ?next= param on every success/redirect path, via the shared `dest`", () => {
     // Positive first (anti-vacuity): `dest` is actually computed from `next`.
     expect(code).toContain('Astro.url.searchParams.get("next")');
     // All three redirect sites (already-onboarded GET short-circuit, POST
@@ -46,17 +46,19 @@ describe("choose-username.astro", () => {
     expect(code).toMatch(/Location:\s*dest/);
   });
 
-  it("⚠️ rejects an unsafe next — protocol-relative (//) or a URL with a scheme (:) — via isSafeLocalPath", () => {
-    // Guards against an open redirect: next is caller-controlled (a query
-    // param), so it must be constrained to a same-origin path before ever
-    // being used as a redirect target.
-    expect(code).toMatch(/function isSafeLocalPath/);
-    expect(code).toMatch(/startsWith\(["']\/["']\)/);
-    // Rules out a protocol-relative path (leading double slash) — written as
-    // an indexed char comparison rather than `.startsWith("//")` in the page
-    // itself to dodge this file's own `//`-as-line-comment stripper below.
-    expect(code).toMatch(/p\[1\]\s*!==\s*["']\/["']/);
-    expect(code).toMatch(/!p\.includes\(["']:["']\)/);
+  it("⚠️ delegates the open-redirect guard to the shared, hardened `resolveNext` helper — not a hand-rolled check", () => {
+    // A prior hand-rolled `isSafeLocalPath` (leading-`/`-and-no-`:` check) was
+    // bypassable via `/\evil.com` (browsers normalize `\` to `/`, landing on
+    // `//evil.com` — scheme-relative, off-origin). Rather than re-patch that
+    // regex, this page must delegate to the SAME hardened guard login.astro
+    // uses — see src/lib/next-url.ts and its exhaustive hostile corpus in
+    // test/next-url.test.ts (which already covers `/\evil.com`, `//evil.com`,
+    // `/..//evil.com`, `javascript:`, `blob:`, the `@`-userinfo trick, etc.)
+    // — no need to duplicate that corpus here.
+    expect(code).toContain('import { resolveNext } from "../lib/next-url"');
+    expect(code).not.toMatch(/function isSafeLocalPath/);
+    expect(code).not.toContain("isSafeLocalPath");
+    expect(code).toMatch(/resolveNext\(raw,\s*Astro\.url\)/);
   });
 
   it("⚠️ handles EMAIL_NOT_VERIFIED and links to the existing /verify-email page — not an invented resend route", () => {

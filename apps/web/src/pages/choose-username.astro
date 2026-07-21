@@ -1,6 +1,7 @@
 ---
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
+import { resolveNext } from "../lib/next-url";
 
 import type { ApiErrorCode, Me } from "@thinkersjournal/shared";
 
@@ -18,24 +19,25 @@ const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
  * having a handle yet returns to it — instead of always landing on /feed,
  * which would strand them with nothing to show for having onboarded.
  *
- * ⚠️ OPEN-REDIRECT GUARD. `next` is caller-controlled (it is a query
- * param), so it must be constrained to a same-origin path before it is ever
- * used as a redirect target: `/evil.com` is fine (a same-origin path
- * literally named that), but `//evil.com` (protocol-relative — the browser
- * treats a leading `//` as "keep the scheme, replace the host") and
- * `https://evil.com` (an explicit scheme) are NOT. A single leading `/`
- * with no second `/` and no `:` anywhere rules out both.
+ * ⚠️ OPEN-REDIRECT GUARD, delegated to `resolveNext` (src/lib/next-url.ts) —
+ * the SAME hardened, exhaustively-tested guard login.astro uses. Do NOT
+ * hand-roll a check here again: a prior hand-rolled `isSafeLocalPath` (a
+ * leading-`/`-and-no-`:` regex-style check) was bypassable via
+ * `/\evil.com`, which browsers normalize to `//evil.com` (WHATWG URL), i.e.
+ * a scheme-relative redirect straight off-origin. `resolveNext` runs the
+ * browser's OWN URL parser against this page's URL and returns an ABSOLUTE
+ * same-origin URL, degrading to this origin's home for anything not
+ * provably same-origin — see that file for the full "why a regex can't do
+ * this job" writeup and `test/next-url.test.ts` for the hostile corpus
+ * (including this exact `/\evil.com` payload).
+ *
+ * `/feed` stays the default ONLY for "no `next` at all" — resolveNext's own
+ * default is `origin + "/"`, but this page's pre-existing no-next default is
+ * `/feed`, so that one case is special-cased before the call rather than
+ * folded into resolveNext.
  */
-const next = Astro.url.searchParams.get("next");
-function isSafeLocalPath(p: string | null): p is string {
-  // `p[1] !== "/"` rules out a protocol-relative path (a leading double
-  // slash) the same as `!p.startsWith("//")` would — written this way only
-  // to dodge this repo's test-source comment-stripper, which (correctly,
-  // for real `//` comments) treats an unescaped `//` as a line comment and
-  // would otherwise truncate this very line when read back as text.
-  return typeof p === "string" && p.startsWith("/") && p[1] !== "/" && !p.includes(":");
-}
-const dest = isSafeLocalPath(next) ? next : "/feed";
+const raw = Astro.url.searchParams.get("next");
+const dest = raw === null ? "/feed" : resolveNext(raw, Astro.url);
 
 let error: string | null = null;
 // The raw error CODE (not just its message), so the template can conditionally
