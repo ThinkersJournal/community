@@ -1,0 +1,78 @@
+---
+/**
+ * `GET /feed` — the signed-in viewer's home feed, keyset-paginated via
+ * `?cursor=`.
+ *
+ * ⚠️ Per-viewer, uncached (markPrivate below): the api's `/feed` response
+ * depends on who the viewer follows, so nothing here may ever reach the
+ * Workers Cache.
+ */
+import { apiFetch, applyCookies } from "../lib/api";
+import { markPrivate } from "../lib/cache";
+
+import type { Feed } from "@thinkersjournal/shared";
+
+// Per-viewer, uncached.
+markPrivate(Astro);
+
+const cursor = Astro.url.searchParams.get("cursor");
+
+const response = await apiFetch<Feed>(
+  cursor === null ? "/feed" : `/feed?cursor=${encodeURIComponent(cursor)}`,
+  { request: Astro.request },
+);
+
+// No session (or a stale one) → the api answered 401.
+//
+// ⚠️ DO NOT REPLACE THIS WITH `Astro.redirect("/login")`. That helper builds
+// a Response it owns ITSELF, which does not carry `Astro.response.headers`
+// — so the api's `Set-Cookie` on this very 401 (a stale/expired session can
+// be CLEARED on this reachable path) would be silently dropped, leaving a
+// cleared-but-still-present cookie on the browser. Same bug class login.astro
+// and choose-username.astro's headers document at length; the fix is
+// identical — build the redirect by hand and apply cookies to IT.
+if (response.status === 401) {
+  const redirect = new Response(null, {
+    status: 302,
+    headers: { Location: "/login" },
+  });
+  applyCookies(redirect.headers, response.setCookies);
+  return redirect;
+}
+
+// Any other outcome renders THIS page, so `Astro.response` IS the outgoing
+// response — propagate whatever cookie the api sent (if any) onto it.
+applyCookies(Astro.response.headers, response.setCookies);
+
+const feed: Feed = response.data ?? { posts: [], nextCursor: null };
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Your feed — Thinker’s Journal</title>
+  </head>
+  <body>
+    <main>
+      <h1>Your feed</h1>
+      {feed.posts.length === 0 ? (
+        <p>Your feed is empty. <a href="/authors">Discover authors to follow →</a></p>
+      ) : (
+        <ul>
+          {feed.posts.map((post) => (
+            <li>
+              <h2><a href={`/@${post.username}/${post.slug}`}>{post.title}</a></h2>
+              <p>by <a href={`/@${post.username}`}>@{post.username}</a> · <time datetime={post.publishedAt}>{post.publishedAt.slice(0, 10)}</time></p>
+              <p>{post.excerptSource.slice(0, 200)}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {feed.nextCursor !== null && (
+        <a rel="next" href={`/feed?cursor=${encodeURIComponent(feed.nextCursor)}`}>Older posts →</a>
+      )}
+    </main>
+  </body>
+</html>
