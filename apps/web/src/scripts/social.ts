@@ -54,6 +54,44 @@ async function toggleFollow(btn: HTMLButtonElement): Promise<void> {
   if (resp.ok) renderButton(btn, !following);
 }
 
+interface FollowUserRow {
+  username: string;
+  displayName: string | null;
+}
+
+async function loadList(username: string, list: "followers" | "following"): Promise<FollowUserRow[]> {
+  const resp = await fetch(
+    `/api/social?list=${list}&username=${encodeURIComponent(username)}`,
+  );
+  if (!resp.ok) return [];
+  const data = (await resp.json()) as { users: FollowUserRow[] };
+  return data.users;
+}
+
+function wireListButtons(): void {
+  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-load-list]"));
+  for (const btn of buttons) {
+    const list = btn.dataset.loadList === "following" ? "following" : "followers";
+    const username = btn.dataset.username ?? "";
+    const target = document.querySelector<HTMLElement>(`[data-list-panel="${list}"]`);
+    btn.addEventListener("click", () => {
+      void loadList(username, list).then((users) => {
+        if (target === null) return;
+        target.replaceChildren(
+          ...users.map((u) => {
+            const li = document.createElement("li");
+            const a = document.createElement("a");
+            a.href = `/@${u.username}`;
+            a.textContent = u.displayName ?? `@${u.username}`;
+            li.appendChild(a);
+            return li;
+          }),
+        );
+      });
+    });
+  }
+}
+
 export function initSocialIsland(): void {
   const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-follow-btn]"));
   const counts = document.querySelector<HTMLElement>("[data-social-counts]");
@@ -88,4 +126,6 @@ export function initSocialIsland(): void {
       }
     });
   }
+
+  wireListButtons();
 }
