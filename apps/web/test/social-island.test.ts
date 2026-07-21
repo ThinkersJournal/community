@@ -47,4 +47,15 @@ describe("the island module", () => {
     // Never reaches the api Worker directly (it has no public origin).
     expect(island).not.toMatch(/https?:\/\//);
   });
+
+  it("hides the Follow button on the viewer's own profile via viewerId, not a dead dataset.self flag", () => {
+    const island = stripComments(readFileSync(ISLAND, "utf8"));
+    // Positive: the self-hide branch compares the button's id to the viewer's
+    // own id, learned live from the authed /follows/status response — the
+    // cached anonymous page has no way to know this at render time.
+    expect(island).toMatch(/id\s*===\s*status\.viewerId/);
+    expect(island).toContain("viewerId");
+    // Negative: the old dead branch (nothing ever set data-self) is gone.
+    expect(island).not.toMatch(/dataset\.self/);
+  });
 });

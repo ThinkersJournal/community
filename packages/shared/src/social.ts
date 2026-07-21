@@ -49,6 +49,8 @@ export interface FollowList {
 /** `GET /follows/status?id=…&id=…` — the subset of ids the viewer follows. */
 export interface FollowStatusResult {
   following: string[];
+  /** The signed-in viewer's own user id (so a caller can self-exclude/hide). */
+  viewerId: string;
 }
 
 /** A feed card: a published post plus its author's handle. */

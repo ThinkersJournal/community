@@ -35,10 +35,10 @@ export const GET: APIRoute = async (context) => {
     });
     if (statusResp.status === 401) {
       // 401 → not logged in: buttons render as "Follow" that prompt login on click.
-      return new Response(JSON.stringify({ following: [], viewerLoggedIn: false, csrfToken: null }), {
-        status: 200,
-        headers,
-      });
+      return new Response(
+        JSON.stringify({ following: [], viewerLoggedIn: false, csrfToken: null, viewerId: null }),
+        { status: 200, headers },
+      );
     }
     if (statusResp.status !== 200) {
       // Any other non-200 is a genuine upstream error (500/502/429/…) — do not
@@ -52,6 +52,7 @@ export const GET: APIRoute = async (context) => {
         following: statusResp.data?.following ?? [],
         viewerLoggedIn: true,
         csrfToken: csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null,
+        viewerId: statusResp.data?.viewerId ?? null,
       }),
       { status: 200, headers },
     );

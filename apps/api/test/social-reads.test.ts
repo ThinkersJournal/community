@@ -90,9 +90,10 @@ describe("GET /follows/status", () => {
       }),
     );
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { following: string[] };
+    const body = (await response.json()) as { following: string[]; viewerId: string };
     expect(body.following).toContain(star.userId);
     expect(body.following).not.toContain(other.userId);
+    expect(body.viewerId).toBe(fan.userId);
   });
 
   it("401s without a session", async () => {

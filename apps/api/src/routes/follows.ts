@@ -129,7 +129,7 @@ export async function handleFollowStatus(
     .slice(0, STATUS_MAX_IDS);
 
   if (ids.length === 0) {
-    return new Response(JSON.stringify({ following: [] }), {
+    return new Response(JSON.stringify({ following: [], viewerId: session.userId }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -143,7 +143,7 @@ export async function handleFollowStatus(
     );
     return rows.map((r) => r.followee_id);
   });
-  return new Response(JSON.stringify({ following }), {
+  return new Response(JSON.stringify({ following, viewerId: session.userId }), {
     status: 200,
     headers: { "content-type": "application/json" },
   });

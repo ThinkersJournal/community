@@ -52,6 +52,19 @@ describe("social.ts distinguishes 401 (not logged in) from other upstream errors
   });
 });
 
+describe("social.ts ?status= mode threads the viewer's own id for self-hide", () => {
+  const code = stripComments(readFileSync(join(DIR, "social.ts"), "utf8"));
+
+  it("includes viewerId on the logged-in (200) path, sourced from the api response", () => {
+    // Positive: the 200 branch forwards the api's viewerId through to the island.
+    expect(code).toMatch(/viewerId:\s*statusResp\.data\?\.\s*viewerId\s*\?\?\s*null/);
+  });
+
+  it("includes viewerId: null on the logged-out (401) path", () => {
+    expect(code).toMatch(/viewerLoggedIn:\s*false,\s*csrfToken:\s*null,\s*viewerId:\s*null/);
+  });
+});
+
 describe("mutating proxies forward the CSRF token + origin", () => {
   it.each(["follow.ts", "unfollow.ts"])("%s echoes X-CSRF-Token and Origin", (file) => {
     const code = stripComments(readFileSync(join(DIR, file), "utf8"));

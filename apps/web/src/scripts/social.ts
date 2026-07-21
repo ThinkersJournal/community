@@ -9,14 +9,17 @@ interface StatusResponse {
   following: string[];
   viewerLoggedIn: boolean;
   csrfToken: string | null;
+  viewerId: string | null;
 }
 
 let csrfToken: string | null = null;
 
 async function loadStatus(userIds: string[]): Promise<StatusResponse> {
-  if (userIds.length === 0) return { following: [], viewerLoggedIn: false, csrfToken: null };
+  if (userIds.length === 0) {
+    return { following: [], viewerLoggedIn: false, csrfToken: null, viewerId: null };
+  }
   const resp = await fetch(`/api/social?status=${encodeURIComponent(userIds.join(","))}`);
-  if (!resp.ok) return { following: [], viewerLoggedIn: false, csrfToken: null };
+  if (!resp.ok) return { following: [], viewerLoggedIn: false, csrfToken: null, viewerId: null };
   return (await resp.json()) as StatusResponse;
 }
 
@@ -76,7 +79,7 @@ export function initSocialIsland(): void {
         if (!status.viewerLoggedIn) {
           // Show a Follow button that will route to /login on click.
           renderButton(btn, false);
-        } else if (btn.dataset.self === "true") {
+        } else if (id === status.viewerId) {
           btn.hidden = true; // no self-follow affordance
         } else {
           renderButton(btn, status.following.includes(id));
