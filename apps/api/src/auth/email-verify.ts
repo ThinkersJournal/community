@@ -61,7 +61,8 @@ const VERIFICATION_LINK_ORIGINS: Set<string> = new Set([
 
 /**
  * The origin to build a verification link on: the request's `Origin` when it is
- * a production origin (so a signup on `www.` keeps the user on `www.`), and
+ * a production origin (there is now a single production origin,
+ * `community.thinkersjournal.com`, so this always resolves to it), and
  * `CANONICAL_ORIGIN` for EVERYTHING else — a missing Origin, a `Referer`-only
  * request, and any non-production origin `checkOrigin` tolerates.
  *

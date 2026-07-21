@@ -310,18 +310,19 @@ pnpm smoke:deploy https://thinkersjournal-api.<subdomain>.workers.dev \
 | 1 | `GET /__test/last-verify-token` → **404** | `TEST_ROUTES` leaked into prod — the route hands out a live verification token (account takeover). |
 | 2 | `GET /health` → **200** | The api is not serving. |
 | 3 | A real signup → **201** | Hyperdrive/Neon, the argon2id `.wasm` bundling, the KV write, or the DO round-trip is broken on real infra. |
-| 4 | That signup's `Set-Cookie` carries **`Secure`** *and* **`Domain=.thinkersjournal.com`** | `TEST_ROUTES` leaked — session tokens are riding plaintext http. |
+| 4 | That signup's `Set-Cookie` carries **`Secure`** and is **HOST-ONLY** (no `Domain=` attribute) | `TEST_ROUTES` leaked — session tokens are riding plaintext http. |
 
 **Why a `curl`-shaped check and not a browser.** The first deploy is on `*.workers.dev`,
-which is **not** in `ALLOWED_ORIGINS`, and the session cookie is scoped to
-`Domain=.thinkersjournal.com` — so from a *browser* on the workers.dev URL every POST
-403s and the cookie is rejected. The browser path simply **cannot** be validated before
-cutover. But `checkOrigin` reads a *client-supplied* header and the api has a public URL,
-so a non-browser client closes the gap completely:
+which is **not** in `PRODUCTION_ORIGINS`, and the session cookie is HOST-ONLY (no
+`Domain=` attribute, scoped to exactly `community.thinkersjournal.com`) — so from a
+*browser* on the workers.dev URL every POST 403s and the cookie is rejected. The browser
+path simply **cannot** be validated before cutover. But `checkOrigin` reads a
+*client-supplied* header and the api has a public URL, so a non-browser client closes the
+gap completely:
 
 ```bash
 curl -X POST https://thinkersjournal-api.<sub>.workers.dev/auth/signup \
-  -H 'Origin: https://thinkersjournal.com' -H 'content-type: application/json' \
+  -H 'Origin: https://community.thinkersjournal.com' -H 'content-type: application/json' \
   -d '{"email":"smoke-<uuid>@example.com","password":"<12+ chars>","turnstileToken":"<real>"}'
 ```
 
@@ -340,9 +341,11 @@ checks. `scripts/deploy-smoke.mjs` is exactly this request, plus the cookie asse
 > `cf-turnstile-response` value. Tokens are single-use and expire in ~300s.
 >
 > **To validate the BROWSER path too**, add a `staging.thinkersjournal.com` custom domain
-> to `ALLOWED_ORIGINS` (`apps/api/src/auth/csrf.ts`) — a real origin the cookie's
-> `Domain=.thinkersjournal.com` also covers, which makes a genuine browser signup
-> testable before cutover. Not required for M0.
+> to `PRODUCTION_ORIGINS` (`apps/api/src/auth/csrf.ts`) — but note the session cookie is
+> now HOST-ONLY (no `Domain=` attribute), so nothing is shared across subdomains: a
+> `staging.thinkersjournal.com` origin needs its own signup and gets its own separate
+> cookie, not one "covered" by `community.thinkersjournal.com`'s. Still useful for
+> testing the browser path before cutover; not required for M0.
 
 The `web` Worker has no equivalent script: smoke-hit a rendered page by hand.
 
@@ -364,10 +367,10 @@ Check every box before the first production deploy.
 
 - [ ] **`TEST_ROUTES` unset gates TWO things, not one.** Besides the `__test` token route, it
       controls the session cookie's attributes (`apps/api/src/auth/session.ts`): set, the
-      cookie drops `Domain` and `Secure` so a browser can store it on `http://127.0.0.1`.
-      **Verify against the deployed api that `Set-Cookie` really carries `Secure` and
-      `Domain=.thinkersjournal.com`** — if it does not, `TEST_ROUTES` leaked into prod and
-      session tokens are riding plaintext http. `apps/api/test/session.test.ts` pins both
+      cookie drops `Secure` so a browser can store it on `http://127.0.0.1`.
+      **Verify against the deployed api that `Set-Cookie` really carries `Secure` and is
+      HOST-ONLY (no `Domain=` attribute)** — if it does not, `TEST_ROUTES` leaked into prod
+      and session tokens are riding plaintext http. `apps/api/test/session.test.ts` pins both
       modes, including the exact production string, and **`pnpm smoke:deploy` step 4
       asserts it on the real deploy** (two properties on one silent flag is exactly why
       this is mechanical rather than a checkbox).
@@ -446,7 +449,7 @@ Check every box before the first production deploy.
       mechanism is unproven until it runs deployed. Publish a post, edit it, confirm the
       change is live before `maxAge` would have expired.
 - [ ] **Hardening (free): block `/internal/*` from the public internet at the edge.**
-      `web` is the public Worker, so `https://thinkersjournal.com/internal/purge` is a real,
+      `web` is the public Worker, so `https://community.thinkersjournal.com/internal/purge` is a real,
       routable URL and the shared secret is its **only** guard — there is no way to prove a
       request arrived over a Service Binding. A WAF custom rule blocking `/internal/*` costs
       nothing and **will not break the hop**: Service-Binding dispatch is isolate-to-isolate
@@ -505,7 +508,7 @@ Check every box before the first production deploy.
       handle are both invisible client-side on a real deploy (Cloudflare strips `Cache-Tag`
       before the client ever sees it, and plain `Cache-Control` — the name every local/unit
       check in this plan used to read — is never set at all).
-      `curl -is https://thinkersjournal.com/@<user>/<slug>` twice in a row → first request
+      `curl -is https://community.thinkersjournal.com/@<user>/<slug>` twice in a row → first request
       `cf-cache-status: MISS`, second `cf-cache-status: HIT`. If this never flips to `HIT`,
       nothing downstream (purge, TTLs, tags) can be trusted either, no matter how green the
       local suites are. (This is distinct from the purge-hop's "verify a real purge": that
