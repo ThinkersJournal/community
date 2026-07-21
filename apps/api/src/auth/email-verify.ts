@@ -34,7 +34,7 @@ const VERIFY_TTL_SECONDS = 86_400; // 24h
  * sent from OUR confirmed sender at a host they control — a phishing/token-theft
  * vector (see the escaping note on `escapeHtml` below).
  */
-const CANONICAL_ORIGIN = "https://thinkersjournal.com";
+const CANONICAL_ORIGIN = "https://community.thinkersjournal.com";
 
 /**
  * The ONLY origins an emailed verification link may point at.
@@ -56,13 +56,13 @@ const CANONICAL_ORIGIN = "https://thinkersjournal.com";
  * token instead — do NOT re-add localhost here to make dev email links clickable.
  */
 const VERIFICATION_LINK_ORIGINS: Set<string> = new Set([
-  "https://thinkersjournal.com",
-  "https://www.thinkersjournal.com",
+  "https://community.thinkersjournal.com",
 ]);
 
 /**
  * The origin to build a verification link on: the request's `Origin` when it is
- * a production origin (so a signup on `www.` keeps the user on `www.`), and
+ * a production origin (there is now a single production origin,
+ * `community.thinkersjournal.com`, so this always resolves to it), and
  * `CANONICAL_ORIGIN` for EVERYTHING else — a missing Origin, a `Referer`-only
  * request, and any non-production origin `checkOrigin` tolerates.
  *

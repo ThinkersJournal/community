@@ -129,11 +129,11 @@ describe("buildSitemapXml — well-formedness", () => {
     const locs = parsed.urlset.url.map((u) => u.loc);
     // homepage + 2 unique authors (alice, bob) + 3 posts = 6
     expect(locs).toHaveLength(6);
-    expect(locs).toContain("https://thinkersjournal.com/");
-    expect(locs).toContain("https://thinkersjournal.com/@alice");
-    expect(locs).toContain("https://thinkersjournal.com/@bob");
-    expect(locs).toContain("https://thinkersjournal.com/@alice/one");
-    expect(locs).toContain("https://thinkersjournal.com/@bob/three");
+    expect(locs).toContain("https://community.thinkersjournal.com/");
+    expect(locs).toContain("https://community.thinkersjournal.com/@alice");
+    expect(locs).toContain("https://community.thinkersjournal.com/@bob");
+    expect(locs).toContain("https://community.thinkersjournal.com/@alice/one");
+    expect(locs).toContain("https://community.thinkersjournal.com/@bob/three");
   });
 
   it("⚠️ stays well-formed when a username survives URL-encoding with an apostrophe intact", () => {
@@ -152,7 +152,7 @@ describe("buildSitemapXml — well-formedness", () => {
 
     const parser = new XMLParser({ isArray: (name) => name === "url" });
     const parsed = parser.parse(xml) as { urlset: { url: { loc: string }[] } };
-    expect(parsed.urlset.url.map((u) => u.loc)).toContain("https://thinkersjournal.com/@o'brien");
+    expect(parsed.urlset.url.map((u) => u.loc)).toContain("https://community.thinkersjournal.com/@o'brien");
   });
 });
 
@@ -178,7 +178,7 @@ describe("buildRssXml — well-formedness", () => {
       };
     };
     expect(parsed.rss.channel.item).toHaveLength(2);
-    expect(parsed.rss.channel["atom:link"]["@_href"]).toBe("https://thinkersjournal.com/rss.xml");
+    expect(parsed.rss.channel["atom:link"]["@_href"]).toBe("https://community.thinkersjournal.com/rss.xml");
     expect(parsed.rss.channel["atom:link"]["@_rel"]).toBe("self");
     // A stable, permanent identifier — the post's uuid, never the URL.
     expect(parsed.rss.channel.item[0]!.guid["@_isPermaLink"]).toBe("false");

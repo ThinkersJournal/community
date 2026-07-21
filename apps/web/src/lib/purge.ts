@@ -12,7 +12,7 @@
  * only place it means anything.
  *
  * ⚠️ THE ROUTE IS PUBLICLY REACHABLE, AND THE SECRET IS ITS ONLY GUARD.
- * `web` is the public Worker: https://thinkersjournal.com/internal/purge is a
+ * `web` is the public Worker: https://community.thinkersjournal.com/internal/purge is a
  * real, routable URL. There is NO way to prove a request arrived over the Service
  * Binding — no header a caller cannot forge, no address to check. So the shared
  * secret IS the authorization, it is compared in constant time, and it must be a

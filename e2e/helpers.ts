@@ -118,16 +118,18 @@ export async function signUpAndVerify(
 
   // ⚠️ THE ASSERTION THAT WOULD HAVE CAUGHT THE ORIGINAL BLOCKER. The api
   // mints the session on 201, `web` propagates the Set-Cookie, and the browser
-  // must actually STORE it. With production cookie attributes
-  // (`Domain=.thinkersjournal.com; Secure`) no browser can store it on
-  // http://127.0.0.1 — it is silently dropped, and every step below fails with
+  // must actually STORE it. The production cookie is HOST-ONLY (no `Domain=`
+  // attribute, scoped to exactly `community.thinkersjournal.com`) and carries
+  // `Secure` — and `Secure` alone is enough to make no browser store it on
+  // http://127.0.0.1: it is silently dropped, and every step below fails with
   // a misleading "please log in". Pinned here so that failure is named at the
-  // point it happens. (apps/api/src/auth/session.ts relaxes exactly those two
-  // attributes when TEST_ROUTES=1; test/session.test.ts pins BOTH modes.)
+  // point it happens. (apps/api/src/auth/session.ts drops `Secure` in dev when
+  // TEST_ROUTES=1 — `Domain` is never set in either mode; test/session.test.ts
+  // pins both modes.)
   const cookies = await page.context().cookies();
   expect(
     cookies.find((c) => c.name === "tj_session"),
-    "the browser did not store the tj_session cookie — check the cookie's Domain/Secure attributes for dev",
+    "the browser did not store the tj_session cookie — check the cookie's Secure attribute for dev",
   ).toBeDefined();
 
   // ---- 2. Read the token the api "emailed" ---------------------------------

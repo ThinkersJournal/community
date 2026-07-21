@@ -37,7 +37,7 @@ const ALLOWED_ORIGIN = "http://localhost:8787";
  * (src/auth/email-verify.ts) — shared with signup, and NOT derived from the
  * request URL.
  */
-const CANONICAL_ORIGIN = "https://thinkersjournal.com";
+const CANONICAL_ORIGIN = "https://community.thinkersjournal.com";
 
 /** Drive the Worker through a full request lifecycle. */
 async function fetchWorker(request: Request): Promise<Response> {
@@ -224,17 +224,24 @@ describe("POST /auth/resend-verification", () => {
    * (src/auth/email-verify.ts) for exactly that reason. This route first shipped
    * with a private `CANONICAL_ORIGIN` copy that matched signup's SECURITY
    * property but not its BEHAVIOUR: it always mailed an apex link, so a user
-   * browsing `www.` got a link to a different subdomain than the one they were
-   * on. Reverting to a bare constant must turn this RED.
+   * browsing on the production origin got a link to a different host than the
+   * one they were on. Reverting to a bare constant must turn this RED.
+   *
+   * SINGLE-HOST NOW: the app is served only from `community.thinkersjournal.com`,
+   * so "keep the user on the origin they signed up from" always resolves to that
+   * one host — there is no longer a second production origin (e.g. `www.`) to
+   * diverge to.
    */
-  it("keeps a www. user on www. — the same rule signup applies", async () => {
+  it("keeps the user on the production origin — the same rule signup applies", async () => {
     const postmarkCalls = stubPostmark();
     const { actor } = await unverifiedActorWithPendingToken();
 
-    expect((await resend(actor, "https://www.thinkersjournal.com")).status).toBe(202);
+    expect(
+      (await resend(actor, "https://community.thinkersjournal.com")).status,
+    ).toBe(202);
 
     expect(String(postmarkBody(postmarkCalls).TextBody)).toContain(
-      "https://www.thinkersjournal.com/verify-email?token=",
+      "https://community.thinkersjournal.com/verify-email?token=",
     );
   });
 

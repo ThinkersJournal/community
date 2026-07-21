@@ -22,10 +22,7 @@ import { sha256Hex } from "./encoding";
 import type { SessionData } from "@thinkersjournal/shared";
 
 /** The origins allowed to make non-GET requests in PRODUCTION. */
-const PRODUCTION_ORIGINS = [
-  "https://thinkersjournal.com",
-  "https://www.thinkersjournal.com",
-] as const;
+const PRODUCTION_ORIGINS = ["https://community.thinkersjournal.com"] as const;
 
 /**
  * The local dev-server origins, added to the allowlist ONLY when
@@ -42,8 +39,9 @@ const DEV_ORIGINS = ["http://localhost:8787", "http://127.0.0.1:8787"] as const;
  * Shipping `http://localhost:8787` in the PRODUCTION allowlist is low-risk but
  * not zero: mutations still need `checkCsrf`'s per-session double-submit token,
  * which a cross-site attacker cannot read, and a localhost login-CSRF cannot
- * stick the resulting cookie because production scopes it to
- * `Domain=.thinkersjournal.com`. It was, however, the ONE env-dependent security
+ * stick the resulting cookie because production emits a HOST-ONLY cookie
+ * (no `Domain` attribute), scoped to exactly `community.thinkersjournal.com`.
+ * It was, however, the ONE env-dependent security
  * affordance in this Worker NOT behind `TEST_ROUTES` — inconsistent with the
  * branch's own principle that dev-only relaxations must be unreachable in
  * production for one reason, checked by one gate.
