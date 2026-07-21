@@ -149,9 +149,22 @@ export async function signUpAndVerify(
   return { email };
 }
 
+/** A valid chosen handle: lowercase, 3–30 of [a-z0-9_]. */
+export function uniqueHandle(prefix: string): string {
+  return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+
+/** Claim a durable @handle via the onboarding page. Assumes not-yet-onboarded. */
+export async function chooseUsername(page: Page, handle: string): Promise<void> {
+  await page.goto("/choose-username");
+  await page.fill('input[name="username"]', handle);
+  await page.click('button[type="submit"]');
+  await page.waitForURL(/\/feed$/);
+}
+
 /** What `publishPost` resolves to once the post is live at its public URL. */
 export interface PublishedPost {
-  /** The author's minted username (random-suffixed; only knowable from here). */
+  /** The author's chosen @handle (random-suffixed; minted by `publishPost` itself). */
   username: string;
   /** The slug the api derived from the title. */
   slug: string;
@@ -165,6 +178,13 @@ export interface PublishedPost {
  * Author a post through the real editor and PUBLISH it, returning everything the
  * public page cannot tell you: the author's username, the slug, and the post id.
  *
+ * ⚠️ M2.1: publishing is gated on a CHOSEN @handle (Task 8's `USERNAME_REQUIRED`,
+ * apps/api/src/routes/posts.ts). Signup still mints an internal default username,
+ * but that one can never publish — so this helper claims a durable handle via
+ * `chooseUsername` FIRST, and returns THAT handle, not anything scraped off the
+ * signup-minted default. `chooseUsername` assumes the caller has not already
+ * onboarded, so callers of `publishPost` must not have called it already.
+ *
  * ⚠️ SAVES A DRAFT FIRST, THEN PUBLISHES — and that two-step is load-bearing, not
  * laziness. The post id appears NOWHERE on the public page or the profile, and
  * the publish redirect (`/@user/slug`) does not carry it either; the editor's
@@ -173,33 +193,27 @@ export interface PublishedPost {
  * PATCHes that same draft to `published` (the slug is preserved across the
  * PATCH — apps/api/src/routes/posts.ts's UPDATE never re-slugifies). The
  * intermediate draft is invisible to every other test.
- *
- * The username + slug are then parsed out of the publish redirect URL — the
- * single browser-reachable place the minted username is ever exposed.
  */
 export async function publishPost(
   page: Page,
   post: { title: string; markdownSource: string },
 ): Promise<PublishedPost> {
+  // M2.1: a public post needs a chosen @handle. Claim one, then publish.
+  const username = uniqueHandle("author");
+  await chooseUsername(page, username);
+
   await page.goto("/new-post");
   await page.fill("#title", post.title);
   await page.fill("#markdownSource", post.markdownSource);
 
-  // Draft-save to surface the id, then publish.
   await page.click("button[value='draft']");
   await expect(page.locator("#saved")).toBeVisible();
   const postId = new URL(page.url()).searchParams.get("post");
-  expect(postId, "draft save did not surface ?post=<id> in the URL").not.toBeNull();
+  expect(postId, "draft save did not surface ?post=<id>").not.toBeNull();
 
   await page.click("button[value='publish']");
-  // The editor redirects to the public page on a successful publish.
   await page.waitForURL(/\/@[^/]+\/[^/]+$/);
 
-  const { pathname, href } = new URL(page.url());
-  // pathname is "/@<username>/<slug>" -> ["", "@<username>", "<slug>"].
-  const segments = pathname.split("/");
-  const username = segments[1]!.replace(/^@/, "");
-  const slug = segments[2]!;
-
-  return { username, slug, postId: postId!, url: href };
+  const slug = new URL(page.url()).pathname.split("/")[2]!;
+  return { username, slug, postId: postId!, url: page.url() };
 }
