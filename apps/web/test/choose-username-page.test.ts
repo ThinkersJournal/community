@@ -32,8 +32,31 @@ describe("choose-username.astro", () => {
     expect(code).toContain("apiErrorCode(");
   });
 
-  it("redirects to /feed on success", () => {
-    expect(code).toMatch(/redirect\(["']\/feed["']\)|Location:\s*["']\/feed["']/);
+  it("redirects to /feed by default on success (no safe ?next=)", () => {
+    expect(code).toMatch(/isSafeLocalPath\(next\)\s*\?\s*next\s*:\s*["']\/feed["']/);
+  });
+
+  it("⚠️ honors a safe ?next= param on every success/redirect path, via the shared `dest`", () => {
+    // Positive first (anti-vacuity): `dest` is actually computed from `next`.
+    expect(code).toContain('Astro.url.searchParams.get("next")');
+    // All three redirect sites (already-onboarded GET short-circuit, POST
+    // success, USERNAME_ALREADY_SET — the latter two share one code path)
+    // use `dest`, never a hardcoded "/feed".
+    expect(code).toMatch(/Astro\.redirect\(dest\)/);
+    expect(code).toMatch(/Location:\s*dest/);
+  });
+
+  it("⚠️ rejects an unsafe next — protocol-relative (//) or a URL with a scheme (:) — via isSafeLocalPath", () => {
+    // Guards against an open redirect: next is caller-controlled (a query
+    // param), so it must be constrained to a same-origin path before ever
+    // being used as a redirect target.
+    expect(code).toMatch(/function isSafeLocalPath/);
+    expect(code).toMatch(/startsWith\(["']\/["']\)/);
+    // Rules out a protocol-relative path (leading double slash) — written as
+    // an indexed char comparison rather than `.startsWith("//")` in the page
+    // itself to dodge this file's own `//`-as-line-comment stripper below.
+    expect(code).toMatch(/p\[1\]\s*!==\s*["']\/["']/);
+    expect(code).toMatch(/!p\.includes\(["']:["']\)/);
   });
 
   it("⚠️ handles EMAIL_NOT_VERIFIED and links to the existing /verify-email page — not an invented resend route", () => {

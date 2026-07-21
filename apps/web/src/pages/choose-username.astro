@@ -11,6 +11,32 @@ markPrivate(Astro);
 const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
 const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
 
+/**
+ * ⚠️ WHERE `next` SENDS A JUST-ONBOARDED USER BACK TO (milestone review —
+ * the content-loss fix). new-post.astro links here with
+ * `?next=/new-post` so an author who was gated out of the editor for not
+ * having a handle yet returns to it — instead of always landing on /feed,
+ * which would strand them with nothing to show for having onboarded.
+ *
+ * ⚠️ OPEN-REDIRECT GUARD. `next` is caller-controlled (it is a query
+ * param), so it must be constrained to a same-origin path before it is ever
+ * used as a redirect target: `/evil.com` is fine (a same-origin path
+ * literally named that), but `//evil.com` (protocol-relative — the browser
+ * treats a leading `//` as "keep the scheme, replace the host") and
+ * `https://evil.com` (an explicit scheme) are NOT. A single leading `/`
+ * with no second `/` and no `:` anywhere rules out both.
+ */
+const next = Astro.url.searchParams.get("next");
+function isSafeLocalPath(p: string | null): p is string {
+  // `p[1] !== "/"` rules out a protocol-relative path (a leading double
+  // slash) the same as `!p.startsWith("//")` would — written this way only
+  // to dodge this repo's test-source comment-stripper, which (correctly,
+  // for real `//` comments) treats an unescaped `//` as a line comment and
+  // would otherwise truncate this very line when read back as text.
+  return typeof p === "string" && p.startsWith("/") && p[1] !== "/" && !p.includes(":");
+}
+const dest = isSafeLocalPath(next) ? next : "/feed";
+
 let error: string | null = null;
 // The raw error CODE (not just its message), so the template can conditionally
 // render extra affordances per-code — e.g. the resend/verify link below,
@@ -22,7 +48,7 @@ if (csrfToken !== null) {
   // this probe, so a plain Astro.redirect is fine — unlike the paths below.
   const me = await apiFetch<Me>("/profile/me", { request: Astro.request });
   if (me.status === 200 && me.data?.usernameChosen === true) {
-    return Astro.redirect("/feed");
+    return Astro.redirect(dest);
   }
 
   if (Astro.request.method === "POST") {
@@ -50,7 +76,7 @@ if (csrfToken !== null) {
       // redirect by hand and applying cookies to IT is the fix.
       const redirect = new Response(null, {
         status: 302,
-        headers: { Location: "/feed" },
+        headers: { Location: dest },
       });
       applyCookies(redirect.headers, response.setCookies);
       return redirect;

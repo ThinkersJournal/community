@@ -40,13 +40,29 @@ test("follow → the feed shows the followee's post → unfollow removes it", as
   }
 });
 
-test("publishing before choosing a handle routes to onboarding", async ({ page }) => {
+test("a not-yet-onboarded user opening the editor sees a choose-handle prompt, not a fillable form", async ({ page }) => {
+  // ⚠️ MILESTONE-REVIEW FIX (content-loss). Before this fix, an unonboarded
+  // author could type a title + body and only THEN discover (on publish)
+  // that they needed a handle — losing everything typed across the
+  // new-post → choose-username → /feed redirect chain. The fix gates at
+  // EDITOR-OPEN: an unonboarded visitor never sees the form at all, so
+  // there's nothing to fill or lose. Do NOT fill/publish here — there is no
+  // form to fill.
   await signUpAndVerify(page, page.request);
   await page.goto("/new-post");
-  await page.fill("#title", "Too Early");
-  await page.fill("#markdownSource", "body");
-  await page.click("button[value='publish']");
-  await expect(page).toHaveURL(/\/choose-username$/);
+
+  await expect(page.locator("#onboarding-required")).toBeVisible();
+  const link = page.locator('a[href="/choose-username?next=/new-post"]');
+  await expect(link).toBeVisible();
+  await expect(page.locator("#editor-form")).toHaveCount(0);
+
+  // Following the prompt to onboard returns the author to the editor
+  // (?next= honored), where the form is now actually present.
+  await link.click();
+  await page.fill('input[name="username"]', uniqueHandle("late"));
+  await page.click('button[type="submit"]');
+  await page.waitForURL(/\/new-post$/);
+  await expect(page.locator("#editor-form")).toBeVisible();
 });
 
 test("a new user's feed is empty and points at discovery", async ({ page }) => {
