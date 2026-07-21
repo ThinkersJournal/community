@@ -2,7 +2,7 @@
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 
-import type { Me } from "@thinkersjournal/shared";
+import type { ApiErrorCode, Me } from "@thinkersjournal/shared";
 
 // Authed page — never cacheable. Declares exactly one cache helper.
 markPrivate(Astro);
@@ -12,9 +12,14 @@ const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astr
 const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
 
 let error: string | null = null;
+// The raw error CODE (not just its message), so the template can conditionally
+// render extra affordances per-code — e.g. the resend/verify link below,
+// which no other error case gets.
+let errorCode: ApiErrorCode | null = null;
 
 if (csrfToken !== null) {
-  // Already onboarded? Nothing to do here.
+  // Already onboarded? Nothing to do here. No authed POST/cookie is in play on
+  // this probe, so a plain Astro.redirect is fine — unlike the paths below.
   const me = await apiFetch<Me>("/profile/me", { request: Astro.request });
   if (me.status === 200 && me.data?.usernameChosen === true) {
     return Astro.redirect("/feed");
@@ -32,16 +37,34 @@ if (csrfToken !== null) {
       origin: Astro.request.headers.get("Origin") ?? "",
       csrfToken: submittedToken,
     });
+
+    const responseCode = apiErrorCode(response);
+
+    if (response.status === 200 || responseCode === "USERNAME_ALREADY_SET") {
+      // ⚠️ DO NOT REPLACE THIS WITH `Astro.redirect("/feed")`. That helper
+      // builds a response it owns ITSELF, which does not carry
+      // `Astro.response.headers` — the api's `Set-Cookie` (from this very
+      // apiFetch call, just above) would be silently dropped on the response
+      // that navigates the browser away. login.astro and new-post.astro hit
+      // this exact bug first (see their identical warnings); building the
+      // redirect by hand and applying cookies to IT is the fix.
+      const redirect = new Response(null, {
+        status: 302,
+        headers: { Location: "/feed" },
+      });
+      applyCookies(redirect.headers, response.setCookies);
+      return redirect;
+    }
+
+    // Every other outcome re-renders THIS page, so `Astro.response` IS the
+    // outgoing response.
     applyCookies(Astro.response.headers, response.setCookies);
 
-    if (response.status === 200) return Astro.redirect("/feed");
-
-    switch (apiErrorCode(response)) {
+    errorCode = responseCode;
+    switch (responseCode) {
       case "USERNAME_TAKEN":
         error = "That handle is already taken — try another.";
         break;
-      case "USERNAME_ALREADY_SET":
-        return Astro.redirect("/feed");
       case "EMAIL_NOT_VERIFIED":
         error = "Please verify your email before choosing a handle.";
         break;
@@ -67,7 +90,17 @@ if (csrfToken !== null) {
       ) : (
         <>
           <p>Pick a permanent <code>@handle</code> — 3–30 lowercase letters, numbers, or underscores. This can’t be changed later.</p>
-          {error && <p id="error" role="alert">{error}</p>}
+          {error && (
+            <p id="error" role="alert">
+              {error}
+              {errorCode === "EMAIL_NOT_VERIFIED" && (
+                <>
+                  {" "}
+                  <a href="/verify-email">Verify your email</a>
+                </>
+              )}
+            </p>
+          )}
           <form method="POST">
             <input type="hidden" name="csrfToken" value={csrfToken} />
             <label for="username">Handle</label>
