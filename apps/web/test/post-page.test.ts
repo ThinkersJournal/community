@@ -80,6 +80,12 @@ describe("routing shape — the two documented traps", () => {
   });
 });
 
+describe("themed shell", () => {
+  it("renders inside BaseLayout (head slot owns <title>/canonical/RSS/OG/ld+json)", () => {
+    expect(code).toMatch(/<BaseLayout\s/);
+  });
+});
+
 describe("⚠️ anonymous by construction — the leak defense", () => {
   it("reads exactly the anonymous public endpoint", () => {
     // Positive: the page's data source is the anonymous public read, whose api

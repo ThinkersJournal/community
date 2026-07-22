@@ -27,6 +27,7 @@
  */
 import { markdownExcerpt, renderMarkdown } from "@thinkersjournal/markdown";
 
+import BaseLayout from "../../components/BaseLayout.astro";
 import { apiFetch } from "../../lib/api";
 import { markPublicCacheable } from "../../lib/cache";
 import { postUrl, profileUrl } from "../../lib/canonical";
@@ -116,16 +117,10 @@ const jsonLd = {
 };
 ---
 
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{post.title}</title>
-    <meta name="description" content={description} />
-    {/* ⚠️ Built from a CONSTANT origin, never Astro.url — HOST IS NOT IN THE
-        CACHE KEY, so a host-derived canonical would be cached under whichever
-        host filled the entry and served under all of them. */}
-    <link rel="canonical" href={canonical} />
+<BaseLayout title={post.title} description={description} canonical={canonical}>
+  <Fragment slot="head">
+    {/* ⚠️ RSS discovery link kept LITERALLY here (not folded into BaseHead) —
+        feed-pages.test.ts greps this file's source for exactly this string. */}
     <link rel="alternate" type="application/rss+xml" title={FEED_TITLE} href="/rss.xml" />
 
     <meta property="og:type" content="article" />
@@ -151,23 +146,33 @@ const jsonLd = {
         withdrawn by a future refactor. It does NOT weaken the CSP: script-src
         governs EXECUTED script, and a non-JS `type` is inert data. */}
     <script is:inline type="application/ld+json" set:html={jsonLdScript(jsonLd)} />
-  </head>
-  <body>
-    <article>
-      <h1>{post.title}</h1>
-      <p>
-        {/* ⚠️ encodeURIComponent on the username in the HREF (Astro escapes it as
-            TEXT, but a URL needs percent-encoding): usernames are `[a-z0-9_]` today
-            so this is a no-op, but M2 relaxes the charset. Defense-in-depth. The
-            display text below is intentionally NOT encoded — Astro `{}` handles it. */}
-        <a href={`/@${encodeURIComponent(post.username)}`}>{post.displayName ?? post.username}</a>
-        <time datetime={post.publishedAt}>{publishedDisplay}</time>
-      </p>
-      {/* ⚠️ THE ONE PLACE THIS APP EMITS UNESCAPED HTML. It is safe for exactly
-          one reason: `html` came out of packages/markdown, whose LAST UNSAFE
-          THING is rehype-sanitize. Never `set:html` anything else here, and never
-          interpolate a user value into this element. */}
-      <div id="post-body" set:html={html} />
-    </article>
-  </body>
-</html>
+  </Fragment>
+
+  <article class="wrap post">
+    <h1>{post.title}</h1>
+    <p class="meta">
+      {/* ⚠️ encodeURIComponent on the username in the HREF (Astro escapes it as
+          TEXT, but a URL needs percent-encoding): usernames are `[a-z0-9_]` today
+          so this is a no-op, but M2 relaxes the charset. Defense-in-depth. The
+          display text below is intentionally NOT encoded — Astro `{}` handles it. */}
+      <a class="link" href={`/@${encodeURIComponent(post.username)}`}>{post.displayName ?? post.username}</a>
+      · <time datetime={post.publishedAt}>{publishedDisplay}</time>
+    </p>
+    {/* ⚠️ THE ONE PLACE THIS APP EMITS UNESCAPED HTML (alongside the ld+json
+        script above). It is safe for exactly one reason: `html` came out of
+        packages/markdown, whose LAST UNSAFE THING is rehype-sanitize. Never
+        `set:html` anything else here, and never interpolate a user value into
+        this element. */}
+    <div id="post-body" set:html={html} />
+  </article>
+</BaseLayout>
+<style>
+  .post{padding:clamp(40px,7vw,80px) 0;max-width:min(var(--wrap),760px)}
+  .post .meta{color:var(--dim);margin:8px 0 28px}
+  #post-body{line-height:1.7}
+  #post-body :global(h2),#post-body :global(h3){margin:1.6em 0 .5em}
+  #post-body :global(p){margin:0 0 1em}
+  #post-body :global(pre){background:var(--ink2);border:1px solid var(--line);
+    border-radius:10px;padding:16px;overflow-x:auto;margin:1.2em 0}
+  #post-body :global(a){color:var(--green)}
+</style>
