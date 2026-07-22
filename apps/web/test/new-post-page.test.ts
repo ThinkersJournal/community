@@ -210,6 +210,14 @@ describe("⚠️ image upload — the same-origin proxy, raw body, not multipart
     expect(islandRawSource).toContain('fetch("/media-upload"');
   });
 
+  it("⚠️ the page does NOT duplicate the island's upload fetch — it's fully extracted, not copied", () => {
+    // Positive above proves the real upload fetch lives in media-upload.ts.
+    // This negative proves new-post.astro carries no inline copy of it — a
+    // duplicate would silently drift from the CSP-safe bundled version (and
+    // an inline copy would be blocked outright by setPublicPageCsp anyway).
+    expect(rawSource).not.toContain('fetch("/media-upload"');
+  });
+
   it("sends the raw File as the body — no FormData/multipart wrapping", () => {
     expect(islandCode).toMatch(/body:\s*file/);
     expect(islandCode).not.toContain("FormData");

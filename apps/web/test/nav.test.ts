@@ -31,5 +31,11 @@ describe("Nav", () => {
     expect(s).toContain('type="checkbox"');
     expect(s).toContain('id="nav-toggle"');
     expect(s).toMatch(/for="nav-toggle"/);
+    expect(s).toContain('id="nav-links"');
+    expect(s).toMatch(/aria-controls="nav-links"/);
+  });
+  it("mounts the nav-toggle island as a bundled module (honest aria-expanded)", () => {
+    const s = src();
+    expect(s).toMatch(/import\s+\{\s*initNavToggle\s*\}\s+from\s+["']\.\.\/scripts\/nav-toggle["']/);
   });
 });

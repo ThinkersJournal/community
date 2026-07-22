@@ -5,12 +5,12 @@ import Wordmark from './Wordmark.astro';
   <div class="wrap bar">
     <a href="https://thinkersjournal.com/" class="brand" aria-label="Thinker's Journal home"><Wordmark /></a>
 
-    <input type="checkbox" id="nav-toggle" class="nav-toggle" />
+    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-controls="nav-links" />
     <label for="nav-toggle" class="burger" aria-label="Toggle navigation menu">
       <span class="bars" aria-hidden="true"></span>
     </label>
 
-    <nav class="links" aria-label="Primary">
+    <nav class="links" id="nav-links" aria-label="Primary">
       <a href="/feed">Feed</a>
       <a href="/authors">Authors</a>
       <span class="auth" data-auth-slot>
@@ -27,6 +27,8 @@ import Wordmark from './Wordmark.astro';
   .links{display:flex;gap:26px;align-items:center;font-size:14px;color:var(--muted)}
   .links a:hover{color:var(--text)}
   .auth{display:flex;gap:26px;align-items:center}
+  .auth .signout{font:inherit;color:var(--muted);background:none;border:0;padding:0;cursor:pointer}
+  .auth .signout:hover{color:var(--text)}
   .support{font-size:13.5px;font-weight:600;color:var(--on-green) !important;background:var(--green);
     padding:9px 17px;border-radius:999px;box-shadow:0 0 20px var(--green-glow)}
   .nav-toggle{display:none}
@@ -52,10 +54,13 @@ import Wordmark from './Wordmark.astro';
     .links a{padding:13px clamp(20px,6vw,48px);font-size:16px}
     .links a:not(.support):hover{background:rgba(255,255,255,.04);color:var(--text)}
     .auth{flex-direction:column;align-items:stretch;gap:0}
+    .auth .signout{padding:13px clamp(20px,6vw,48px);text-align:left;width:100%}
     .support{margin:12px clamp(20px,6vw,48px) 4px;text-align:center}
   }
 </style>
 <script>
   import { initNavAuth } from "../scripts/nav-auth";
+  import { initNavToggle } from "../scripts/nav-toggle";
   initNavAuth();
+  initNavToggle();
 </script>

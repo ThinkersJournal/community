@@ -19,6 +19,15 @@ describe("nav-auth island", () => {
     expect(s).toMatch(/loggedIn/);
     expect(s).toMatch(/X-CSRF-Token/i);
   });
+  it("puts the primary-CTA pill on New post, never on Sign out", () => {
+    const s = island();
+    expect(s).toMatch(/newPost\.className\s*=\s*["']support["']/);
+    expect(s).not.toMatch(/out\.className\s*=\s*["']support["']/);
+  });
+  it("terminates the /api/me fetch chain with a .catch() (network failure swallows cleanly)", () => {
+    const s = island();
+    expect(s).toMatch(/\.catch\(/);
+  });
 });
 
 describe("Nav mounts the island as a bundled module", () => {

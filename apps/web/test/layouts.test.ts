@@ -30,5 +30,9 @@ describe("PageLayout", () => {
     expect(src).toContain("SectionLabel");
     expect(src).toMatch(/class="band"/);
     expect(src).toMatch(/<slot\s*\/>/);
+    // Forwards the named "head" slot up to BaseLayout — a page using
+    // PageLayout for per-page <head> content (e.g. a canonical <link> or
+    // ld+json block) must not be silently swallowed.
+    expect(src).toMatch(/<slot\s+name="head"\s+slot="head"\s*\/>/);
   });
 });

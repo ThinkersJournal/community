@@ -30,6 +30,7 @@ export function initNavAuth(): void {
 
       const newPost = document.createElement("a");
       newPost.href = "/new-post";
+      newPost.className = "support";
       newPost.textContent = "New post";
 
       const profile = document.createElement("a");
@@ -38,7 +39,7 @@ export function initNavAuth(): void {
 
       const out = document.createElement("button");
       out.type = "button";
-      out.className = "support";
+      out.className = "signout";
       out.textContent = "Sign out";
       out.addEventListener("click", () => void signOut(me.csrfToken));
 
@@ -50,5 +51,6 @@ export function initNavAuth(): void {
       slot.appendChild(newPost);
       slot.appendChild(profile);
       slot.appendChild(out);
-    });
+    })
+    .catch(() => { /* network failed → keep the SSR anonymous default */ });
 }

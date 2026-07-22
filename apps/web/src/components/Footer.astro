@@ -8,13 +8,13 @@ import Wordmark from './Wordmark.astro';
       <p>The community for thinkers who build — publish your work, follow other builders, and reference the exact thing you're talking about.</p>
     </div>
     <div class="col">
-      <h4>Community</h4>
+      <p class="col-title">Community</p>
       <a href="/feed">Your feed</a>
       <a href="/authors">Discover authors</a>
       <a href="/new-post">Write a post</a>
     </div>
     <div class="col">
-      <h4>Thinker's Journal</h4>
+      <p class="col-title">Thinker's Journal</p>
       <a href="https://thinkersjournal.com/">← thinkersjournal.com</a>
       <a href="https://thinkersjournal.com/mission">Our mission</a>
     </div>
@@ -29,7 +29,7 @@ import Wordmark from './Wordmark.astro';
   .grid{display:grid;grid-template-columns:1.6fr 1fr 1fr;gap:34px}
   @media(max-width:760px){.grid{grid-template-columns:1fr 1fr}}
   .brand p{color:var(--dim);font-size:14px;margin-top:12px;max-width:38ch}
-  .col h4{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-bottom:14px}
+  .col .col-title{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-bottom:14px}
   .col a{display:block;color:var(--muted);font-size:14.5px;padding:5px 0}
   .col a:hover{color:var(--text)}
   .note{margin-top:44px;padding-top:22px;border-top:1px solid var(--line);

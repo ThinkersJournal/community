@@ -18,4 +18,8 @@ describe("Footer", () => {
     expect(s).not.toContain("apiFetch");
     expect(s).not.toMatch(/mark(Private|PublicCacheable|FeedCacheable)/);
   });
+  it("introduces NO heading elements (a landmark, not document flow — WCAG 1.3.1 heading-order)", () => {
+    const s = src();
+    expect(s).not.toMatch(/<h[1-6][\s>]/i);
+  });
 });
