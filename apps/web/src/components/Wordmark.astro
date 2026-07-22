@@ -1,0 +1,11 @@
+---
+interface Props { size?: 'lg' | 'sm' }
+const { size = 'lg' } = Astro.props;
+---
+<span class:list={["wm", `wm-${size}`]}>Thinker's Journal<span class="dot">.</span></span>
+<style>
+  .wm{font-family:var(--serif);font-weight:500;color:var(--head)}
+  .wm-lg{font-size:21px}
+  .wm-sm{font-size:20px}
+  .dot{color:var(--green);text-shadow:0 0 14px var(--green-glow)}
+</style>

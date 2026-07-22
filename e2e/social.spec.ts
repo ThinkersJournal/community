@@ -69,5 +69,9 @@ test("a new user's feed is empty and points at discovery", async ({ page }) => {
   await signUpAndVerify(page, page.request);
   await chooseUsername(page, uniqueHandle("lonely"));
   await page.goto("/feed");
-  await expect(page.locator("a", { hasText: "Discover authors" })).toBeVisible();
+  // Scoped to <main>: the themed shell's global footer (a sibling of <main>,
+  // see BaseLayout.astro) now ALSO has a "Discover authors" link, so an
+  // unscoped `a` locator is ambiguous (strict-mode violation). Scoping to
+  // main targets this page's own empty-state prompt, not chrome.
+  await expect(page.locator("main a", { hasText: "Discover authors" })).toBeVisible();
 });

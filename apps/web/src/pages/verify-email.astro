@@ -37,8 +37,10 @@
  * double-submit, since a cross-site attacker can make the browser POST here but
  * cannot read the token out of the page to fill the field in.
  */
+import BaseLayout from "../components/BaseLayout.astro";
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
 
 // ⚠️ Per-viewer: this page's own URL carries the verification token, and the
 // rendered login link + hidden CSRF input both carry per-request secrets.
@@ -46,6 +48,11 @@ import { markPrivate } from "../lib/cache";
 // cacheable render here would serve one user's verification outcome — and CSRF
 // token — to everyone. See src/lib/cache.ts.
 markPrivate(Astro);
+
+// Now carries the shared nav island + fonts (BaseLayout, below). No inline
+// `<script>` on this page, so `script-src 'self'` (setPublicPageCsp's policy)
+// is safe.
+setPublicPageCsp(Astro);
 
 const token = Astro.url.searchParams.get("token");
 
@@ -159,12 +166,8 @@ const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
 const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
 ---
 
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Verify email</title>
-  </head>
-  <body>
+<BaseLayout title="Verify email" description="Verify your Thinker's Journal email address.">
+  <div class="wrap form-page">
     <h1>Verify email</h1>
 
     {outcome === "verified" && <p id="verified">Your email is verified.</p>}
@@ -177,7 +180,7 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
             your email again. The link is still valid.
           </p>
           <p>
-            <a href={loginHref}>Log in and continue</a>
+            <a class="link" href={loginHref}>Log in and continue</a>
           </p>
         </div>
       )
@@ -202,7 +205,7 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
         <div id="resend-unauthenticated">
           <p>Your session has expired.</p>
           <p>
-            <a href={loginHref}>Log in and continue</a>
+            <a class="link" href={loginHref}>Log in and continue</a>
           </p>
         </div>
       )
@@ -217,16 +220,20 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
 
     {
       csrfToken !== null && (
-        <form method="POST" action="/verify-email">
+        <form method="POST" action="/verify-email" class="form">
           {/*
             The api's per-session CSRF token. Promoted to the `X-CSRF-Token`
             header server-side on submit (see the frontmatter) — a form cannot
             set a header itself.
           */}
           <input type="hidden" name="csrfToken" value={csrfToken} />
-          <button type="submit">Resend verification email</button>
+          <button type="submit" class="btn btn-primary">Resend verification email</button>
         </form>
       )
     }
-  </body>
-</html>
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+</style>

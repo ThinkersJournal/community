@@ -165,6 +165,40 @@ export default defineConfig({
 
   vite: {
     build: {
+      // ⚠️ FORCES EVERY BUNDLED <script> EXTERNAL — found while retrofitting
+      // new-post.astro's media-upload island onto `setPublicPageCsp`
+      // (`script-src 'self'`, no `'unsafe-inline'`).
+      //
+      // csp.ts's own header claims "Astro bundles <script> into external
+      // modules by default, so nothing here needs inline script" — TRUE only
+      // for a script chunk that is (a) imported by 2+ pages (Rollup then
+      // extracts a shared chunk, which is never eligible for inlining) or (b)
+      // ≥4096 bytes once bundled. Astro's `@astro/plugin-scripts`
+      // (astro/dist/core/build/plugins/plugin-scripts.js`shouldInlineScriptChunk`)
+      // inlines any OTHER script chunk — single-importer AND under 4kb — into
+      // the SSR-rendered HTML directly (`internals.inlinedScripts`), `import`
+      // or not. Verified against the built manifest: BOTH
+      // src/scripts/media-upload.ts (this task, one importer: new-post.astro)
+      // AND src/components/Nav.astro's own `<script>` (initNavAuth — Nav is
+      // rendered by every page via BaseLayout, but Vite sees Nav.astro's own
+      // hoisted script as ONE entry, not one per page that renders it) landed
+      // in `inlinedScripts`, which `runtime/server/render/script.js` then
+      // renders as a literal `<script type="module">…</script>` with no
+      // `src` — exactly what `script-src 'self'` (no nonce, no hash) blocks.
+      // That is a LIVE bug on every already-CSP'd page (login.astro,
+      // signup.astro, choose-username.astro, verify-email.astro all render
+      // Nav via BaseLayout) predating this task — see the task report.
+      //
+      // `assetsInlineLimit: 0` is Astro's own documented escape hatch:
+      // `shouldInlineAsset` (plugins/util.js) does
+      // `Buffer.byteLength(content) < Number(assetsInlineLimit)`, so 0 is
+      // never satisfied and every script chunk — regardless of size or
+      // importer count — gets emitted as a real `dist/…/_astro/*.js` file
+      // instead. (This also disables base64-inlining for small imported
+      // binary assets; this app currently imports none, so that half is a
+      // no-op today.)
+      assetsInlineLimit: 0,
+
       // ⚠️ NOT a preference — this DISABLES A BROKEN CODE PATH, and removing it
       // makes `astro build` fail on the second and every later run on Windows
       // with a message that names neither the cause nor the real file:

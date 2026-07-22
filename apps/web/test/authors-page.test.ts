@@ -38,6 +38,13 @@ describe("authors.astro", () => {
   it("pages via a ?cursor= link", () => {
     expect(code).toMatch(/\/authors\?cursor=/);
   });
+
+  it("adopts the PageLayout band while keeping cache + CSP + island", () => {
+    expect(code).toMatch(/<PageLayout\s/);
+    expect(code).toContain("markFeedCacheable(");
+    expect(code).toContain("setPublicPageCsp(");
+    expect(code).toMatch(/initSocialIsland/);
+  });
 });
 
 describe("home page nav (index.astro)", () => {

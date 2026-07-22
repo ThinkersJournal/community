@@ -1,0 +1,17 @@
+:root{
+  --ink:#060608;
+  --ink2:#0a0a0d;
+  --green:#3dff95;
+  --green-bright:#7dffbc;
+  --green-glow:rgba(61,255,149,.5);
+  --text:#f3f3f5;
+  --muted:#a8a8b3;
+  --dim:#7a7a85;
+  --head:#fafafc;
+  --emph:#e9e9ee;
+  --on-green:#03130a;
+  --line:rgba(255,255,255,.08);
+  --serif:'Fraunces Variable',Georgia,'Times New Roman',serif;
+  --sans:'Inter Variable',-apple-system,'Segoe UI',system-ui,sans-serif;
+  --wrap:1120px;
+}

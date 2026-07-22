@@ -6,8 +6,10 @@
  * here and send them straight back to their verification link afterwards (see
  * that page's LOGIN_REQUIRED handling).
  */
+import BaseLayout from "../components/BaseLayout.astro";
 import { apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
 import { resolveNext } from "../lib/next-url";
 
 // ⚠️ Per-viewer: this page mints a session (the api's `Set-Cookie` rides out on
@@ -15,6 +17,11 @@ import { resolveNext } from "../lib/next-url";
 // in the Workers Cache key and does NOT trigger a bypass, so a cacheable render
 // here could serve one login's outcome to the next visitor. See src/lib/cache.ts.
 markPrivate(Astro);
+
+// Now carries the shared nav island + fonts (BaseLayout, below). No inline
+// `<script>` on this page, so `script-src 'self'` (setPublicPageCsp's policy)
+// is safe.
+setPublicPageCsp(Astro);
 
 /**
  * Where to send the user after a successful login. `next` is
@@ -71,17 +78,13 @@ if (Astro.request.method === "POST") {
 }
 ---
 
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Log in</title>
-  </head>
-  <body>
+<BaseLayout title="Log in" description="Sign in to Thinker's Journal.">
+  <div class="wrap form-page">
     <h1>Log in</h1>
 
-    {error !== null && <p id="error">{error}</p>}
+    {error !== null && <p id="error" role="alert">{error}</p>}
 
-    <form method="POST">
+    <form method="POST" class="form">
       <label>
         Email
         <input type="email" name="email" required />
@@ -90,9 +93,17 @@ if (Astro.request.method === "POST") {
         Password
         <input type="password" name="password" required />
       </label>
-      <button type="submit">Log in</button>
+      <button type="submit" class="btn btn-primary">Log in</button>
     </form>
 
-    <p><a href="/signup">Need an account? Sign up</a></p>
-  </body>
-</html>
+    <p><a class="link" href="/signup">Need an account? Sign up</a></p>
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .form input{background:var(--ink2);border:1px solid var(--line);border-radius:8px;
+    padding:11px 13px;color:var(--text);font:inherit}
+  .form input:focus-visible{border-color:var(--green)}
+</style>

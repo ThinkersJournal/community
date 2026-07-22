@@ -1,0 +1,38 @@
+---
+import Wordmark from './Wordmark.astro';
+---
+<footer class="ft">
+  <div class="wrap grid">
+    <div class="brand">
+      <Wordmark size="sm" />
+      <p>The community for thinkers who build — publish your work, follow other builders, and reference the exact thing you're talking about.</p>
+    </div>
+    <div class="col">
+      <p class="col-title">Community</p>
+      <a href="/feed">Your feed</a>
+      <a href="/authors">Discover authors</a>
+      <a href="/new-post">Write a post</a>
+    </div>
+    <div class="col">
+      <p class="col-title">Thinker's Journal</p>
+      <a href="https://thinkersjournal.com/">← thinkersjournal.com</a>
+      <a href="https://thinkersjournal.com/mission">Our mission</a>
+    </div>
+  </div>
+  <div class="wrap note">
+    <span>Thinker's Journal is a non-profit in formation. <span class="green">No thinker should have to build alone.</span></span>
+    <span><a href="https://thinkersjournal.com/privacy">Privacy</a> · <a href="https://github.com/thinkersjournal">github.com/thinkersjournal</a></span>
+  </div>
+</footer>
+<style>
+  .ft{background:#040405;border-top:1px solid var(--line);padding:64px 0 40px}
+  .grid{display:grid;grid-template-columns:1.6fr 1fr 1fr;gap:34px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr 1fr}}
+  .brand p{color:var(--dim);font-size:14px;margin-top:12px;max-width:38ch}
+  .col .col-title{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-bottom:14px}
+  .col a{display:block;color:var(--muted);font-size:14.5px;padding:5px 0}
+  .col a:hover{color:var(--text)}
+  .note{margin-top:44px;padding-top:22px;border-top:1px solid var(--line);
+    color:var(--dim);font-size:13px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+  .note .green{color:var(--green)}
+</style>

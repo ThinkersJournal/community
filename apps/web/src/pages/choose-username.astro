@@ -1,12 +1,19 @@
 ---
+import BaseLayout from "../components/BaseLayout.astro";
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
 import { resolveNext } from "../lib/next-url";
 
 import type { ApiErrorCode, Me } from "@thinkersjournal/shared";
 
 // Authed page — never cacheable. Declares exactly one cache helper.
 markPrivate(Astro);
+
+// Now carries the shared nav island + fonts (BaseLayout, below). No inline
+// `<script>` on this page, so `script-src 'self'` (setPublicPageCsp's policy)
+// is safe.
+setPublicPageCsp(Astro);
 
 // A CSRF token proves a live session; null means "not logged in".
 const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
@@ -103,41 +110,41 @@ if (csrfToken !== null) {
 }
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Choose your handle — Thinker’s Journal</title>
-  </head>
-  <body>
-    <main>
-      <h1>Choose your handle</h1>
-      {csrfToken === null ? (
-        <p>You need to <a href="/login">log in</a> to choose a handle.</p>
-      ) : (
-        <>
-          <p>Pick a permanent <code>@handle</code> — 3–30 lowercase letters, numbers, or underscores. This can’t be changed later.</p>
-          {error && (
-            <p id="error" role="alert">
-              {error}
-              {errorCode === "EMAIL_NOT_VERIFIED" && (
-                <>
-                  {" "}
-                  <a href="/verify-email">Verify your email</a>
-                </>
-              )}
-            </p>
-          )}
-          <form method="POST">
-            <input type="hidden" name="csrfToken" value={csrfToken} />
-            <label for="username">Handle</label>
-            <input id="username" name="username" required minlength="3" maxlength="30"
-                   pattern="[a-z0-9_]{3,30}" autocapitalize="none" autocomplete="off" />
-            <button type="submit">Claim handle</button>
-          </form>
-        </>
-      )}
-    </main>
-  </body>
-</html>
+<BaseLayout title="Choose your handle" description="Pick your permanent Thinker's Journal handle.">
+  <div class="wrap form-page">
+    <h1>Choose your handle</h1>
+    {csrfToken === null ? (
+      <p>You need to <a class="link" href="/login">log in</a> to choose a handle.</p>
+    ) : (
+      <>
+        <p>Pick a permanent <code>@handle</code> — 3–30 lowercase letters, numbers, or underscores. This can’t be changed later.</p>
+        {error && (
+          <p id="error" role="alert">
+            {error}
+            {errorCode === "EMAIL_NOT_VERIFIED" && (
+              <>
+                {" "}
+                <a class="link" href="/verify-email">Verify your email</a>
+              </>
+            )}
+          </p>
+        )}
+        <form method="POST" class="form">
+          <input type="hidden" name="csrfToken" value={csrfToken} />
+          <label for="username">Handle</label>
+          <input id="username" name="username" required minlength="3" maxlength="30"
+                 pattern="[a-z0-9_]{3,30}" autocapitalize="none" autocomplete="off" />
+          <button type="submit" class="btn btn-primary">Claim handle</button>
+        </form>
+      </>
+    )}
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .form input{background:var(--ink2);border:1px solid var(--line);border-radius:8px;
+    padding:11px 13px;color:var(--text);font:inherit}
+  .form input:focus-visible{border-color:var(--green)}
+</style>

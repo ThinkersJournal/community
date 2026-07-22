@@ -6,14 +6,21 @@
  * to the api. Doing it server-side rather than with client `fetch` is what
  * keeps the api unreachable from the browser at all.
  */
+import BaseLayout from "../components/BaseLayout.astro";
 import { apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
 
 // ⚠️ Per-viewer: signup is where a session first comes to exist — the api's
 // `Set-Cookie` rides out on this very response. Cookie is NOT in the Workers
 // Cache key and does NOT trigger a bypass, so a cacheable render here would
 // serve one signup's outcome to every later visitor. See src/lib/cache.ts.
 markPrivate(Astro);
+
+// Now carries the shared nav island + fonts (BaseLayout, below). No inline
+// `<script>` on this page, so `script-src 'self'` (setPublicPageCsp's policy)
+// is safe.
+setPublicPageCsp(Astro);
 
 /** Rendered outcome. `null` = first visit, nothing submitted yet. */
 let result: "created" | "error" | null = null;
@@ -70,12 +77,8 @@ if (Astro.request.method === "POST") {
 }
 ---
 
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Sign up</title>
-  </head>
-  <body>
+<BaseLayout title="Sign up" description="Create your Thinker's Journal account.">
+  <div class="wrap form-page">
     <h1>Sign up</h1>
 
     {
@@ -85,8 +88,8 @@ if (Astro.request.method === "POST") {
         </p>
       ) : (
         <>
-          {result === "error" && <p id="error">{message}</p>}
-          <form method="POST">
+          {result === "error" && <p id="error" role="alert">{message}</p>}
+          <form method="POST" class="form">
             <label>
               Email
               <input type="email" name="email" required />
@@ -105,12 +108,20 @@ if (Astro.request.method === "POST") {
               Turnstile token
               <input type="text" name="turnstileToken" value="dummy-token" />
             </label>
-            <button type="submit">Sign up</button>
+            <button type="submit" class="btn btn-primary">Sign up</button>
           </form>
         </>
       )
     }
 
-    <p><a href="/login">Already have an account? Log in</a></p>
-  </body>
-</html>
+    <p><a class="link" href="/login">Already have an account? Log in</a></p>
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .form input{background:var(--ink2);border:1px solid var(--line);border-radius:8px;
+    padding:11px 13px;color:var(--text);font:inherit}
+  .form input:focus-visible{border-color:var(--green)}
+</style>
