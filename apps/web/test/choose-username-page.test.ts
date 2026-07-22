@@ -76,6 +76,13 @@ describe("choose-username.astro", () => {
     // EMAIL_NOT_VERIFIED case, never on USERNAME_TAKEN or the generic default.
     expect(code).toMatch(/errorCode\s*===\s*["']EMAIL_NOT_VERIFIED["']/);
   });
+
+  it("adopts the shared chrome + CSP while staying markPrivate", () => {
+    // `code` is the comment-stripped source already read in this file
+    expect(code).toMatch(/<BaseLayout\s/);
+    expect(code).toContain("setPublicPageCsp(Astro)");
+    expect(code).toContain("markPrivate(Astro)");
+  });
 });
 
 describe("⚠️ Set-Cookie propagation on the redirect paths — the login.astro / new-post.astro Astro.redirect() bug", () => {
