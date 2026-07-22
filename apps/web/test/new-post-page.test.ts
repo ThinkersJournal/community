@@ -36,6 +36,18 @@ import { describe, expect, it } from "vitest";
  */
 
 const PAGE = join(import.meta.dirname, "../src/pages/new-post.astro");
+/**
+ * ⚠️ THE MEDIA-UPLOAD ISLAND, BUNDLED OUT — the theming/CSP retrofit moved the
+ * fetch/DOM logic that used to sit inline in new-post.astro's `<script>` into
+ * this module (src/scripts/media-upload.ts), so new-post.astro can carry
+ * `setPublicPageCsp`'s `script-src 'self'` (no `'unsafe-inline'`) without
+ * blocking its own upload handler. The invariants that used to be pinned
+ * against new-post.astro's raw source below now live against THIS file's
+ * source instead — same technique test/social-island.test.ts uses for the
+ * social island. new-post.astro itself now only needs to prove it MOUNTS the
+ * island via a bundled `import` (see the theming describe block below).
+ */
+const ISLAND = join(import.meta.dirname, "../src/scripts/media-upload.ts");
 
 /**
  * Strip comments so PROSE cannot satisfy an assertion — same technique as
@@ -50,6 +62,8 @@ function stripComments(source: string): string {
 
 const rawSource = readFileSync(PAGE, "utf8");
 const code = stripComments(rawSource);
+const islandRawSource = readFileSync(ISLAND, "utf8");
+const islandCode = stripComments(islandRawSource);
 
 describe("exists, and is the one page for both create and edit", () => {
   it("lives at src/pages/new-post.astro", () => {
@@ -187,34 +201,45 @@ describe("⚠️ preview — server-side, through the SAME pipeline, never a cli
 });
 
 describe("⚠️ image upload — the same-origin proxy, raw body, not multipart", () => {
+  it("the island exists at src/scripts/media-upload.ts and exports initMediaUpload", () => {
+    expect(existsSync(ISLAND)).toBe(true);
+    expect(islandCode).toMatch(/export function initMediaUpload\(\)/);
+  });
+
   it("uploads to /media-upload, never directly to the api", () => {
-    expect(rawSource).toContain('fetch("/media-upload"');
+    expect(islandRawSource).toContain('fetch("/media-upload"');
   });
 
   it("sends the raw File as the body — no FormData/multipart wrapping", () => {
-    expect(code).toMatch(/body:\s*file/);
-    expect(code).not.toContain("FormData");
+    expect(islandCode).toMatch(/body:\s*file/);
+    expect(islandCode).not.toContain("FormData");
   });
 
   it("promotes the hidden csrfToken field to the X-CSRF-Token header client-side", () => {
-    expect(code).toMatch(/["']X-CSRF-Token["']:\s*tokenField\.value/);
+    expect(islandCode).toMatch(/["']X-CSRF-Token["']:\s*tokenField\.value/);
   });
 
   it("inserts the returned url as a Markdown image reference at the cursor", () => {
-    expect(code).toMatch(/!\[\]\(\$\{data\.url\}\)/);
+    expect(islandCode).toMatch(/!\[\]\(\$\{data\.url\}\)/);
   });
 
-  it("the upload script uses no inline event-handler attributes and no `is:inline`", () => {
-    // ⚠️ NOT a claim that Astro externalizes this <script> into its own file —
-    // verified against the built output that it does NOT (this script has no
-    // `import`, so Astro leaves it as a plain inline `<script type="module">`;
-    // see the frontmatter's own corrected comment on the island). What IS
-    // pinned here: no `onclick=`-style attribute and no `is:inline` directive,
-    // which would both be strictly worse (an attribute handler cannot be
-    // allowed by ANY CSP directive short of 'unsafe-inline', and `is:inline`
-    // is what public pages use for the ld+json block, never for executable JS).
+  it("the upload island uses no inline event-handler attributes and no `is:inline`", () => {
+    // ⚠️ Positive above (the previous test in this block) proves the real
+    // fetch/DOM logic lives in this module. What is pinned here: no
+    // `onclick=`-style attribute and no `is:inline` directive could sneak into
+    // the MOUNT point left behind in new-post.astro — both would be strictly
+    // worse than a bundled import (an attribute handler cannot be allowed by
+    // ANY CSP directive short of 'unsafe-inline', and `is:inline` is what
+    // public pages use for the ld+json block, never for executable JS).
     expect(rawSource).not.toMatch(/\son\w+\s*=\s*["']/);
     expect(rawSource).not.toMatch(/<script\s+is:inline[^>]*>[\s\S]*media-file/);
+  });
+
+  it("new-post.astro mounts the island as a BUNDLED module (an import), not inline JS", () => {
+    // A <script> containing an import → Astro externalizes it → satisfies
+    // script-src 'self' (setPublicPageCsp's policy, applied below).
+    expect(code).toMatch(/import\s+\{\s*initMediaUpload\s*\}\s+from\s+["']\.\.\/scripts\/media-upload["']/);
+    expect(code).toMatch(/\binitMediaUpload\(\)/);
   });
 });
 
@@ -230,6 +255,17 @@ describe("CSRF token delivery (unchanged from M0)", () => {
   it("shows a login link instead of the form when there is no session", () => {
     expect(code).toMatch(/csrfToken === null/);
     expect(rawSource).toContain('id="login-required"');
+  });
+});
+
+describe("⚠️ theming + CSP retrofit — the media-upload island must be BUNDLED, not inline", () => {
+  it("has NO inline script and carries the shared chrome + CSP", () => {
+    // `code` = comment-stripped source read in this file
+    // the media-upload island is now a bundled import, not inline JS
+    expect(code).toMatch(/import\s+.*from\s+["']\.\.\/scripts\/media-upload["']/);
+    expect(code).toContain("setPublicPageCsp(Astro)");
+    expect(code).toMatch(/<BaseLayout\s/);
+    expect(code).toContain("markPrivate(Astro)");
   });
 });
 

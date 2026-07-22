@@ -39,14 +39,25 @@
 import { renderMarkdown } from "@thinkersjournal/markdown";
 import type { AuthoredPost, Me } from "@thinkersjournal/shared";
 
+import BaseLayout from "../components/BaseLayout.astro";
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
 
 // ⚠️ Per-session secrets (the CSRF token below) and unpublished text are
 // rendered here — never let a shared cache hold this. Cookie is NOT in the
 // Workers Cache key and does NOT trigger a bypass, so a cacheable render here
 // would hand one viewer's CSRF token — and another's draft — to everyone else.
 markPrivate(Astro);
+
+// Now carries the shared nav island + fonts (BaseLayout, below), and a real
+// CSP: `script-src 'self'` (setPublicPageCsp's policy), no `'unsafe-inline'`.
+// Safe ONLY because the media-upload island below is a BUNDLED import
+// (src/scripts/media-upload.ts), not the inline `<script type="module">`
+// this page used to carry — an inline script with no `import` would have
+// been silently blocked by this exact directive. See media-upload.ts's
+// header for the full story.
+setPublicPageCsp(Astro);
 
 type Outcome = "saved" | "published" | "unauthenticated" | "unverified" | "error" | null;
 let outcome: Outcome = null;
@@ -262,12 +273,8 @@ if (postId !== null && Astro.request.method === "GET") {
 const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
 ---
 
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>{postId === null ? "New post" : "Edit post"}</title>
-  </head>
-  <body>
+<BaseLayout title={postId === null ? "New post" : "Edit post"}>
+  <div class="wrap form-page">
     <h1>{postId === null ? "New post" : "Edit post"}</h1>
 
     {outcome === "saved" && <p id="saved">Draft saved.</p>}
@@ -279,7 +286,7 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     {
       csrfToken === null ? (
         <p id="login-required">
-          <a href={loginHref}>Log in to write a post</a>
+          <a class="link" href={loginHref}>Log in to write a post</a>
         </p>
       ) : notOnboarded ? (
         // ⚠️ The content-loss fix: NO form is rendered here at all for a
@@ -287,10 +294,10 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
         // carries them straight back to this exact page once they've picked
         // a handle — see choose-username.astro's `isSafeLocalPath` guard.
         <p id="onboarding-required">
-          <a href="/choose-username?next=/new-post">Choose your handle to start writing</a>
+          <a class="link" href="/choose-username?next=/new-post">Choose your handle to start writing</a>
         </p>
       ) : (
-        <form method="POST" id="editor-form">
+        <form method="POST" id="editor-form" class="form">
           {/* The api's per-session CSRF token, promoted to the X-CSRF-Token
               header server-side on submit (see the frontmatter) — a form
               cannot set a header itself. */}
@@ -314,9 +321,11 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
             <p id="media-status" role="status" />
           </fieldset>
 
-          <button type="submit" name="intent" value="preview">Preview</button>
-          <button type="submit" name="intent" value="draft">Save draft</button>
-          <button type="submit" name="intent" value="publish">Publish</button>
+          <div class="actions">
+            <button type="submit" name="intent" value="preview" class="btn btn-ghost">Preview</button>
+            <button type="submit" name="intent" value="draft" class="btn btn-ghost">Save draft</button>
+            <button type="submit" name="intent" value="publish" class="btn btn-primary">Publish</button>
+          </div>
         </form>
       )
     }
@@ -333,74 +342,28 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
         </section>
       )
     }
+  </div>
 
-    <script>
-      /**
-       * THE ONE ISLAND. Everything else on this page is a plain form POST; a
-       * file is the one thing that cannot reach the server without JS.
-       *
-       * ⚠️ CORRECTED CLAIM, VERIFIED AGAINST THE BUILT OUTPUT — an earlier draft
-       * of this comment asserted Astro emits this as an external
-       * `<script type="module" src=…>`. It does not: with no `import` inside it
-       * to bundle, Astro leaves a plain `<script type="module">` INLINE in the
-       * rendered HTML (confirmed by fetching a built `/new-post` and inspecting
-       * the response — see the task report). That is harmless TODAY only
-       * because this page sets NO Content-Security-Policy at all — same as
-       * every other authed page (login.astro, signup.astro, verify-email.astro)
-       * — so there is no `script-src` for an inline script to violate. It is
-       * NOT harmless in general: if an authed-page CSP is ever added with
-       * `script-src 'self'` (no `'unsafe-inline'`), this script would need a
-       * nonce or to gain an `import` so Astro externalizes it — either fix
-       * belongs to whoever adds that CSP, informed by this note.
-       *
-       * ⚠️ Uploads to /media-upload (same-origin), NOT to the api directly: the
-       * api has no public route, and same-origin-by-construction is what makes
-       * its Origin allowlist meaningful.
-       */
-      const input = document.querySelector<HTMLInputElement>("#media-file");
-      const status = document.querySelector<HTMLParagraphElement>("#media-status");
-      const textarea = document.querySelector<HTMLTextAreaElement>("#markdownSource");
-      const tokenField = document.querySelector<HTMLInputElement>("input[name='csrfToken']");
-
-      input?.addEventListener("change", async () => {
-        const file = input.files?.[0];
-        if (file === undefined || status === null || textarea === null || tokenField === null) return;
-
-        status.textContent = "Uploading…";
-        input.disabled = true;
-        try {
-          const response = await fetch("/media-upload", {
-            method: "POST",
-            // The api demands this header and a form cannot set one — which is
-            // exactly why the token round-trips through the page.
-            headers: { "X-CSRF-Token": tokenField.value },
-            // The raw File, sent as-is. NOT FormData/multipart: POST /media
-            // takes raw bytes (apps/api/src/routes/media.ts's header explains
-            // why), and a browser `fetch` body of a `File` is already exactly
-            // that — no wrapping needed.
-            body: file,
-          });
-          const data = (await response.json()) as { url?: string; code?: string };
-          if (!response.ok || data.url === undefined) {
-            // The api's error envelope: {code, message?}. Show the code — the
-            // messages are deliberately generic (they must not echo a
-            // filename), and the code is enough to tell 413/415/403 apart.
-            status.textContent = `Upload failed (${data.code ?? response.status}).`;
-            return;
-          }
-          // Insert at the cursor rather than appending: an image belongs
-          // where the author was typing.
-          const at = textarea.selectionStart ?? textarea.value.length;
-          const markdown = `\n![](${data.url})\n`;
-          textarea.value = textarea.value.slice(0, at) + markdown + textarea.value.slice(at);
-          status.textContent = "Inserted.";
-        } catch {
-          status.textContent = "Upload failed.";
-        } finally {
-          input.disabled = false;
-          input.value = "";
-        }
-      });
-    </script>
-  </body>
-</html>
+  <script>
+    // The media-upload island. An `import`, deliberately — that is what makes
+    // Astro externalize this to a bundled `/_astro/*.js` module instead of
+    // leaving it inline (see media-upload.ts's header and setPublicPageCsp
+    // above, which would otherwise block an inline script outright).
+    import { initMediaUpload } from "../scripts/media-upload";
+    initMediaUpload();
+  </script>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:760px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .form input[type="text"],
+  .form textarea{background:var(--ink2);border:1px solid var(--line);border-radius:8px;
+    padding:11px 13px;color:var(--text);font:inherit}
+  .form input:focus-visible,
+  .form textarea:focus-visible{border-color:var(--green)}
+  .form fieldset{border:1px solid var(--line);border-radius:8px;padding:16px;
+    display:flex;flex-direction:column;gap:8px}
+  .form legend{color:var(--muted);font-size:14px;padding:0 6px}
+  .actions{display:flex;gap:12px;flex-wrap:wrap}
+</style>
