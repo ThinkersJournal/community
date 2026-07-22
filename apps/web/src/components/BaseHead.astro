@@ -1,0 +1,22 @@
+---
+import '@fontsource-variable/fraunces';
+import '@fontsource-variable/inter';
+import '../styles/global.css';
+
+import { CANONICAL_ORIGIN } from '../lib/canonical';
+
+interface Props { title: string; description?: string; canonical?: string }
+const { title, description, canonical } = Astro.props;
+// Constant origin + path (path IS in the Workers Cache key; host is NOT — so we
+// must never build this from the request host). Pages with a computed canonical
+// (post/profile) pass it explicitly.
+const canonicalUrl = canonical ?? `${CANONICAL_ORIGIN}${Astro.url.pathname}`;
+---
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{title}</title>
+{description && <meta name="description" content={description} />}
+<link rel="canonical" href={canonicalUrl} />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<meta name="theme-color" content="#060608" />
+<meta property="og:site_name" content="Thinker's Journal" />
