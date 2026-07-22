@@ -57,6 +57,12 @@ describe("feed.astro", () => {
   it("pages older posts via a ?cursor= link", () => {
     expect(code).toMatch(/\/feed\?cursor=/);
   });
+
+  it("adopts the chrome + CSP while staying markPrivate", () => {
+    expect(code).toMatch(/<BaseLayout\s/);
+    expect(code).toContain("setPublicPageCsp(Astro)");
+    expect(code).toContain("markPrivate(");
+  });
 });
 
 describe("built route manifest (when dist/ is present)", () => {

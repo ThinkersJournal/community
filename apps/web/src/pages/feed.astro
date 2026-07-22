@@ -7,13 +7,20 @@
  * depends on who the viewer follows, so nothing here may ever reach the
  * Workers Cache.
  */
+import BaseLayout from "../components/BaseLayout.astro";
 import { apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
 
 import type { Feed } from "@thinkersjournal/shared";
 
 // Per-viewer, uncached.
 markPrivate(Astro);
+
+// Now carries the shared nav island + fonts (BaseLayout, below). No inline
+// `<script>` on this page, so `script-src 'self'` (setPublicPageCsp's policy)
+// is safe.
+setPublicPageCsp(Astro);
 
 const cursor = Astro.url.searchParams.get("cursor");
 
@@ -47,32 +54,31 @@ applyCookies(Astro.response.headers, response.setCookies);
 const feed: Feed = response.data ?? { posts: [], nextCursor: null };
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Your feed — Thinker’s Journal</title>
-  </head>
-  <body>
-    <main>
-      <h1>Your feed</h1>
-      {feed.posts.length === 0 ? (
-        <p>Your feed is empty. <a href="/authors">Discover authors to follow →</a></p>
-      ) : (
-        <ul>
-          {feed.posts.map((post) => (
-            <li>
-              <h2><a href={`/@${post.username}/${post.slug}`}>{post.title}</a></h2>
-              <p>by <a href={`/@${post.username}`}>@{post.username}</a> · <time datetime={post.publishedAt}>{post.publishedAt.slice(0, 10)}</time></p>
-              <p>{post.excerptSource.slice(0, 200)}</p>
-            </li>
-          ))}
-        </ul>
-      )}
-      {feed.nextCursor !== null && (
-        <a rel="next" href={`/feed?cursor=${encodeURIComponent(feed.nextCursor)}`}>Older posts →</a>
-      )}
-    </main>
-  </body>
-</html>
+<BaseLayout title="Your feed">
+  <div class="wrap feed">
+    <h1>Your feed</h1>
+    {feed.posts.length === 0 ? (
+      <p>Your feed is empty. <a class="link" href="/authors">Discover authors to follow →</a></p>
+    ) : (
+      <ul class="cards">
+        {feed.posts.map((post) => (
+          <li class="card">
+            <h2><a href={`/@${post.username}/${post.slug}`}>{post.title}</a></h2>
+            <p class="meta">by <a class="link" href={`/@${post.username}`}>@{post.username}</a> · <time datetime={post.publishedAt}>{post.publishedAt.slice(0, 10)}</time></p>
+            <p>{post.excerptSource.slice(0, 200)}</p>
+          </li>
+        ))}
+      </ul>
+    )}
+    {feed.nextCursor !== null && (
+      <a class="link" rel="next" href={`/feed?cursor=${encodeURIComponent(feed.nextCursor)}`}>Older posts →</a>
+    )}
+  </div>
+</BaseLayout>
+<style>
+  .feed{padding:clamp(40px,7vw,80px) 0}
+  .cards{list-style:none;display:flex;flex-direction:column;gap:28px;margin:28px 0}
+  .card{border:1px solid var(--line);border-radius:12px;padding:22px;background:var(--ink2)}
+  .card h2{font-size:22px;margin-bottom:6px}
+  .card .meta{color:var(--dim);font-size:14px;margin-bottom:10px}
+</style>
