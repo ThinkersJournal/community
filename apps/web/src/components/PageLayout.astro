@@ -1,0 +1,27 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import SectionLabel from './SectionLabel.astro';
+
+interface Props { title: string; eyebrow: string; heading: string; intro?: string; description?: string; canonical?: string }
+const { title, eyebrow, heading, intro, description, canonical } = Astro.props;
+---
+<BaseLayout title={title} description={description} canonical={canonical}>
+  <slot name="head" slot="head" />
+  <div class="band"><div class="wrap">
+    <SectionLabel>{eyebrow}</SectionLabel>
+    <h1>{heading}</h1>
+    {intro && <p class="intro">{intro}</p>}
+  </div></div>
+  <div class="wrap body"><slot /></div>
+</BaseLayout>
+<style>
+  .band{padding:clamp(56px,8vw,96px) 0 clamp(30px,4vw,44px);
+    background:linear-gradient(180deg,#111114 0%,#060608 100%);
+    border-bottom:1px solid var(--line);position:relative;overflow:hidden}
+  .band::after{content:"";position:absolute;inset:-40% -10% 0;filter:blur(70px);opacity:.6;z-index:0;
+    background:radial-gradient(36% 60% at 22% 20%,rgba(61,255,149,.14),transparent 70%)}
+  .band .wrap{position:relative;z-index:2}
+  h1{font-size:clamp(32px,5.2vw,54px);line-height:1.06;margin-top:16px}
+  .intro{color:var(--muted);font-size:clamp(16px,2vw,19px);margin-top:20px;max-width:60ch}
+  .body{padding:clamp(48px,7vw,88px) 0}
+</style>
