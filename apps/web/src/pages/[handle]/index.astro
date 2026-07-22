@@ -50,6 +50,7 @@
  */
 import { markdownExcerpt } from "@thinkersjournal/markdown";
 
+import BaseLayout from "../../components/BaseLayout.astro";
 import { apiFetch } from "../../lib/api";
 import { markPublicCacheable } from "../../lib/cache";
 import { profileUrl } from "../../lib/canonical";
@@ -127,19 +128,11 @@ const displayDate = (value: string): string => {
 };
 ---
 
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{displayName}</title>
-    <meta name="description" content={description} />
-    {/* ⚠️ ALWAYS the first page's URL, and ALWAYS a CONSTANT origin, never
-        Astro.url: (1) a cursor page is the same collection as page 1, and
-        pointing each page at itself would split the profile's ranking across
-        pages; (2) HOST IS NOT IN THE WORKERS CACHE KEY (src/lib/canonical.ts),
-        so a host-derived canonical would be cached under whichever host filled
-        the entry and served under all of them. */}
-    <link rel="canonical" href={canonical} />
+<BaseLayout title={displayName} description={description} canonical={canonical}>
+  <Fragment slot="head">
+    {/* ⚠️ RSS discovery link kept LITERALLY here (not folded into BaseHead) —
+        feed-pages.test.ts:108-118 greps this file's source for exactly this
+        string. */}
     <link rel="alternate" type="application/rss+xml" title={FEED_TITLE} href="/rss.xml" />
     {/* Cursor pages are pagination, not distinct content — keep them out of the
         index while still letting a crawler follow through to the posts. */}
@@ -148,25 +141,26 @@ const displayDate = (value: string): string => {
     <meta property="og:title" content={displayName} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
-  </head>
-  <body>
+  </Fragment>
+
+  <div class="wrap profile">
     <h1>{displayName}</h1>
-    {profile.bio !== null && <p>{profile.bio}</p>}
+    {profile.bio && <p class="bio">{profile.bio}</p>}
 
     {/* Social: hydrated client-side (cached HTML carries no viewer state). */}
-    <section data-social-counts data-username={profile.username}>
+    <section class="social" data-social-counts data-username={profile.username}>
       <span><strong data-followers-count>—</strong> followers</span>
       <span><strong data-following-count>—</strong> following</span>
     </section>
-    <button data-follow-btn data-user-id={profile.userId} hidden>Follow</button>
+    <button class="btn btn-primary follow" data-follow-btn data-user-id={profile.userId} hidden>Follow</button>
 
     {/* Follower/following lists — load client-side on click; the disclosure
         buttons carry only the profile owner's username (viewer-independent),
         so no viewer state enters this cached HTML. */}
-    <div>
-      <button data-load-list="followers" data-username={profile.username}>Followers</button>
+    <div class="lists">
+      <button class="btn btn-ghost" data-load-list="followers" data-username={profile.username}>Followers</button>
       <ul data-list-panel="followers"></ul>
-      <button data-load-list="following" data-username={profile.username}>Following</button>
+      <button class="btn btn-ghost" data-load-list="following" data-username={profile.username}>Following</button>
       <ul data-list-panel="following"></ul>
     </div>
 
@@ -174,16 +168,18 @@ const displayDate = (value: string): string => {
       profile.posts.length === 0 ? (
         <p id="no-posts">No posts yet.</p>
       ) : (
-        <ul>
+        <ul class="posts">
           {profile.posts.map((post) => (
-            <li>
+            <li class="post">
               {/* ⚠️ encodeURIComponent on BOTH username and slug in the HREF (URL
                   needs percent-encoding; Astro `{}` only HTML-escapes). Both are
                   constrained today, so this is a no-op — future-proofs the M2
                   charset relaxation. The link TEXT is not encoded — Astro handles it. */}
-              <a href={`/@${encodeURIComponent(profile.username)}/${encodeURIComponent(post.slug)}`}>
-                {post.title}
-              </a>
+              <h2>
+                <a href={`/@${encodeURIComponent(profile.username)}/${encodeURIComponent(post.slug)}`}>
+                  {post.title}
+                </a>
+              </h2>
               {/* markdownExcerpt returns TEXT; Astro escapes it into the element.
                   Never set:html here — this is untrusted source, unsanitized. */}
               <p>{markdownExcerpt(post.excerptSource)}</p>
@@ -195,14 +191,21 @@ const displayDate = (value: string): string => {
     }
 
     {nextHref !== null && (
-      <a id="next-page" rel="next" href={nextHref}>
-        Older posts
+      <a id="next-page" class="link" rel="next" href={nextHref}>
+        Older posts →
       </a>
     )}
+  </div>
 
-    <script>
-      import { initSocialIsland } from "../../scripts/social";
-      initSocialIsland();
-    </script>
-  </body>
-</html>
+  <script>
+    import { initSocialIsland } from "../../scripts/social";
+    initSocialIsland();
+  </script>
+</BaseLayout>
+<style>
+  .profile{padding:clamp(40px,7vw,80px) 0}
+  .bio{color:var(--muted);margin:12px 0}
+  .social{display:flex;gap:22px;color:var(--muted);margin:18px 0}
+  .lists{display:flex;flex-wrap:wrap;gap:12px;margin:18px 0}
+  .posts{list-style:none;display:flex;flex-direction:column;gap:24px;margin-top:28px}
+</style>
