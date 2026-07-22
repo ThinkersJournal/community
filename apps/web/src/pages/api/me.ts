@@ -1,0 +1,36 @@
+/**
+ * BROWSER read hop for the nav auth slot. Forwards the session cookie to the api
+ * and reports whether the viewer is signed in (+ their handle, onboarding state,
+ * and a CSRF token for the logout button). Never cached (markPrivate) — the nav
+ * consuming it renders on cached pages, so this per-viewer state stays client-side.
+ */
+import { apiFetch } from "../../lib/api";
+import { markPrivate } from "../../lib/cache";
+
+import type { Me } from "@thinkersjournal/shared";
+import type { APIRoute } from "astro";
+
+export const prerender = false;
+
+export const GET: APIRoute = async (context) => {
+  const headers = new Headers({ "content-type": "application/json" });
+  markPrivate({ request: context.request, response: { headers }, cache: context.cache });
+
+  const me = await apiFetch<Me>("/profile/me", { request: context.request });
+  if (me.status !== 200 || me.data === null) {
+    return new Response(
+      JSON.stringify({ loggedIn: false, username: null, usernameChosen: false, csrfToken: null }),
+      { status: 200, headers },
+    );
+  }
+  const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: context.request });
+  return new Response(
+    JSON.stringify({
+      loggedIn: true,
+      username: me.data.username,
+      usernameChosen: me.data.usernameChosen,
+      csrfToken: csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null,
+    }),
+    { status: 200, headers },
+  );
+};
