@@ -114,3 +114,90 @@ export async function handleCreateComment(
   await purgeTags(env, [`post:${postId}`]);
   return json({ id: outcome.id }, 201);
 }
+
+export async function handleUpdateComment(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: Readonly<Record<string, string>>,
+): Promise<Response> {
+  const result = await runMutatingPipeline(request, env, ctx, { requireVerifiedEmail: true });
+  if (result instanceof Response) return result;
+  const { userId } = result.session;
+
+  const id = params.id ?? "";
+  if (!UUID_RE.test(id)) return errorResponse("INVALID_INPUT", 400, { fields: ["id"] });
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("INVALID_JSON", 400);
+  }
+  const parsed = UpdateCommentInput.safeParse(body);
+  if (!parsed.success) {
+    return errorResponse("INVALID_INPUT", 400, { fields: ["markdownSource"] });
+  }
+
+  // Ownership + liveness in the WHERE (atomic; no existence leak): a not-mine
+  // and a not-there answer identically. No username re-check — the author
+  // necessarily passed it to create this row (documented deviation 1).
+  const postId = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ postId: string }>(
+      `UPDATE comments SET body_markdown = $3, edited_at = now()
+        WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL
+       RETURNING post_id AS "postId"`,
+      [id, userId, parsed.data.markdownSource],
+    );
+    return rows[0]?.postId ?? null;
+  });
+  if (postId === null) return errorResponse("COMMENT_NOT_FOUND", 404);
+
+  await purgeTags(env, [`post:${postId}`]);
+  return json({});
+}
+
+export async function handleDeleteComment(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: Readonly<Record<string, string>>,
+): Promise<Response> {
+  const result = await runMutatingPipeline(request, env, ctx, { requireVerifiedEmail: true });
+  if (result instanceof Response) return result;
+  const { userId } = result.session;
+
+  const id = params.id ?? "";
+  if (!UUID_RE.test(id)) return errorResponse("INVALID_INPUT", 400, { fields: ["id"] });
+
+  const outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    // TOMBSTONE, never DELETE: children keep their parent row; the body is
+    // genuinely emptied (privacy). Ownership predicate = comment author OR
+    // post author (spec decision 7), atomic in the WHERE.
+    const { rows } = await c.query<{ postId: string }>(
+      `UPDATE comments c
+          SET deleted_at = now(), body_markdown = ''
+         FROM posts p
+        WHERE c.id = $1 AND p.id = c.post_id
+          AND c.deleted_at IS NULL
+          AND (c.author_id = $2 OR p.author_id = $2)
+       RETURNING c.post_id AS "postId"`,
+      [id, userId],
+    );
+    if (rows[0] !== undefined) return { purged: rows[0].postId };
+
+    // Nothing updated: idempotent-success iff it IS tombstoned and this caller
+    // COULD have deleted it; anything else (missing, third party) is the same 404.
+    const probe = await c.query<{ mine: boolean }>(
+      `SELECT (c.author_id = $2 OR p.author_id = $2) AS mine
+         FROM comments c JOIN posts p ON p.id = c.post_id
+        WHERE c.id = $1 AND c.deleted_at IS NOT NULL`,
+      [id, userId],
+    );
+    return probe.rows[0]?.mine === true ? { alreadyGone: true as const } : { notFound: true as const };
+  });
+
+  if ("notFound" in outcome) return errorResponse("COMMENT_NOT_FOUND", 404);
+  if ("purged" in outcome) await purgeTags(env, [`post:${outcome.purged}`]);
+  return json({}); // both fresh-tombstone and already-tombstoned answer 200
+}

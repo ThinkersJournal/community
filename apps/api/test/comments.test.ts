@@ -65,6 +65,43 @@ function createComment(
   );
 }
 
+function updateComment(actor: Actor, id: string, markdownSource: string): Promise<Response> {
+  return fetchWorker(
+    new Request(`https://api.test/comments/${id}`, {
+      method: "PATCH",
+      headers: mutatingHeaders(actor),
+      body: JSON.stringify({ markdownSource }),
+    }),
+  );
+}
+
+function deleteComment(actor: Actor, id: string): Promise<Response> {
+  return fetchWorker(
+    new Request(`https://api.test/comments/${id}`, {
+      method: "DELETE",
+      headers: {
+        Origin: ALLOWED_ORIGIN,
+        Cookie: actor.cookie,
+        "X-CSRF-Token": actor.csrfToken,
+      },
+    }),
+  );
+}
+
+async function tombstoned(id: string): Promise<{ deleted: boolean; body: string } | null> {
+  const ctx = createExecutionContext();
+  const row = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ deleted: boolean; body: string }>(
+      `SELECT (deleted_at IS NOT NULL) AS deleted, body_markdown AS body
+         FROM comments WHERE id = $1`,
+      [id],
+    );
+    return rows[0] ?? null;
+  });
+  await waitOnExecutionContext(ctx);
+  return row;
+}
+
 async function commentRow(id: string): Promise<{ path: string; depth: number } | null> {
   const ctx = createExecutionContext();
   const row = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
@@ -86,6 +123,24 @@ beforeAll(async () => {
   reader = await onboardedActor();
   postId = await insertPost(author.userId, "published");
 });
+
+// ⚠️ BUDGET: `reader` above already spends EXACTLY 10/10 of COMMENT_LIMITER's
+// 10-per-60s window across "POST /comments" — zero slack. `author` also has
+// existing writes. Task 4's PATCH/DELETE cases therefore use their OWN fresh
+// actors (never `reader`/`author`) for every `createComment(...)` call, so
+// they cannot push either actor's window over the limit and flake this file.
+// `editor` plays the "reader" role (writes/owns comments); `modAuthor` plays
+// the "author" role (owns `modPostId`, exercising decision-7 moderation and
+// the PATCH ownership-leak case).
+let editor: Actor;
+let modAuthor: Actor;
+let modPostId: string;
+beforeAll(async () => {
+  editor = await onboardedActor();
+  modAuthor = await onboardedActor();
+  modPostId = await insertPost(modAuthor.userId, "published");
+});
+
 afterAll(deleteCreatedUsers);
 
 describe("POST /comments", () => {
@@ -181,5 +236,98 @@ describe("POST /comments", () => {
     expect(empty.status).toBe(400);
     const over = await createComment(reader, { postId, markdownSource: "a".repeat(10_001) });
     expect(over.status).toBe(400);
+  });
+});
+
+describe("PATCH /comments/:id", () => {
+  it("edits own comment, sets edited_at, 200s", async () => {
+    const created = await createComment(editor, { postId: modPostId, markdownSource: "v1" });
+    const { id } = (await created.json()) as { id: string };
+    const response = await updateComment(editor, id, "v2");
+    expect(response.status).toBe(200);
+    const ctx = createExecutionContext();
+    const row = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query<{ body: string; edited: boolean }>(
+        `SELECT body_markdown AS body, (edited_at IS NOT NULL) AS edited
+           FROM comments WHERE id = $1`,
+        [id],
+      );
+      return rows[0]!;
+    });
+    await waitOnExecutionContext(ctx);
+    expect(row).toEqual({ body: "v2", edited: true });
+  });
+
+  it("404s COMMENT_NOT_FOUND editing someone ELSE'S comment (no ownership leak)", async () => {
+    const created = await createComment(editor, { postId: modPostId, markdownSource: "mine" });
+    const { id } = (await created.json()) as { id: string };
+    const response = await updateComment(modAuthor, id, "hijack"); // author of the POST, not the comment
+    expect(response.status).toBe(404);
+    expect(((await response.json()) as { code: string }).code).toBe("COMMENT_NOT_FOUND");
+  });
+
+  it("404s editing a tombstoned comment", async () => {
+    const created = await createComment(editor, { postId: modPostId, markdownSource: "bye" });
+    const { id } = (await created.json()) as { id: string };
+    await deleteComment(editor, id);
+    const response = await updateComment(editor, id, "necro");
+    expect(response.status).toBe(404);
+  });
+
+  it("400s INVALID_INPUT for a non-uuid id", async () => {
+    const response = await updateComment(editor, "not-a-uuid", "x");
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("DELETE /comments/:id", () => {
+  it("comment author tombstones own comment: body emptied, row + children remain", async () => {
+    const top = await createComment(editor, { postId: modPostId, markdownSource: "parent text" });
+    const { id: parentId } = (await top.json()) as { id: string };
+    const child = await createComment(modAuthor, {
+      postId: modPostId,
+      parentId,
+      markdownSource: "child",
+    });
+    const { id: childId } = (await child.json()) as { id: string };
+
+    const response = await deleteComment(editor, parentId);
+    expect(response.status).toBe(200);
+    expect(await tombstoned(parentId)).toEqual({ deleted: true, body: "" });
+    // The child SURVIVES — tombstone, not row delete.
+    expect(await tombstoned(childId)).toEqual({ deleted: false, body: "child" });
+  });
+
+  it("POST AUTHOR may tombstone another user's comment on their post (decision 7)", async () => {
+    const created = await createComment(editor, {
+      postId: modPostId,
+      markdownSource: "on author's post",
+    });
+    const { id } = (await created.json()) as { id: string };
+    const response = await deleteComment(modAuthor, id); // modAuthor owns the POST
+    expect(response.status).toBe(200);
+    expect(await tombstoned(id)).toEqual({ deleted: true, body: "" });
+  });
+
+  it("a THIRD PARTY (neither comment nor post author) gets 404", async () => {
+    const third = await onboardedActor();
+    const created = await createComment(editor, { postId: modPostId, markdownSource: "x" });
+    const { id } = (await created.json()) as { id: string };
+    const response = await deleteComment(third, id);
+    expect(response.status).toBe(404);
+    expect(await tombstoned(id)).toEqual({ deleted: false, body: "x" });
+  });
+
+  it("is idempotent: deleting an already-tombstoned comment 200s", async () => {
+    const created = await createComment(editor, { postId: modPostId, markdownSource: "x" });
+    const { id } = (await created.json()) as { id: string };
+    await deleteComment(editor, id);
+    const again = await deleteComment(editor, id);
+    expect(again.status).toBe(200);
+  });
+
+  it("400s INVALID_INPUT for a non-uuid id", async () => {
+    const response = await deleteComment(editor, "nope");
+    expect(response.status).toBe(400);
   });
 });
