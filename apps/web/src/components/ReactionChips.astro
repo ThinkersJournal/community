@@ -1,0 +1,22 @@
+---
+/**
+ * Static reaction chips — counts and pressed-state hydrate CLIENT-SIDE
+ * (scripts/reactions.ts): reaction state is per-viewer/volatile and must never
+ * enter this cached HTML (spec decision 5). Buttons ship disabled; the island
+ * enables them once it knows the viewer.
+ */
+import { REACTION_KINDS, REACTION_LABELS } from "@thinkersjournal/shared";
+
+interface Props {
+  postId?: string;
+  commentId?: string;
+}
+const { postId, commentId } = Astro.props;
+---
+<div class="reactions" data-reactions data-target-post={postId} data-target-comment={commentId}>
+  {REACTION_KINDS.map((kind) => (
+    <button type="button" class="chip" data-kind={kind} aria-pressed="false" disabled>
+      {REACTION_LABELS[kind]} <span data-count>—</span>
+    </button>
+  ))}
+</div>

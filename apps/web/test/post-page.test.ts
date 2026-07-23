@@ -162,6 +162,57 @@ describe("security headers + the ld+json escape", () => {
   it("marks the ld+json block is:inline so Astro does not bundle it away", () => {
     expect(rawSource).toMatch(/<script\s+is:inline\s+type="application\/ld\+json"/);
   });
+
+  it("⚠️ set:html sink inventory: EXACTLY THREE, each named — never a fourth", () => {
+    // M2.2 strengthens this pin, it does not loosen it: the page grows ONE named
+    // sink (the SSR comment body) on top of the M1 pair. Every `set:html={...}` in
+    // the whole file must be one of these three EXACT bindings — post body
+    // (renderMarkdown output), ld+json (jsonLdScript output), comment body
+    // (renderMarkdown output, per comment) — and there must be no fourth.
+    const setHtmlUses = rawSource.match(/set:html=\{[^}]*\}/g) ?? [];
+    expect(setHtmlUses).toHaveLength(3);
+    expect(setHtmlUses).toContain("set:html={html}");
+    expect(setHtmlUses).toContain("set:html={jsonLdScript(jsonLd)}");
+    expect(setHtmlUses).toContain("set:html={c.html}");
+  });
+});
+
+describe("comments SSR (M2.2)", () => {
+  it("fetches /public/comments ANONYMOUSLY and renders through renderMarkdown", () => {
+    expect(code).toContain("/public/comments");
+    // The comments fetch, like the post fetch, must omit `request:` — positive
+    // anchor first, then the page-wide negative the M1 tripwires already pin.
+    expect(code).toContain("apiFetch<CommentsPage>");
+    expect(code).toContain("renderMarkdown(c.bodyMarkdown)");
+  });
+
+  it("exposes EXACTLY the island data contract", () => {
+    expect(code).toContain("data-comments");
+    expect(code).toContain(`data-post-id={post.id}`);
+    expect(code).toContain(`data-post-author-id={post.authorId}`);
+    expect(code).toContain("data-comment-id={c.id}");
+    expect(code).toContain("data-depth={c.depth}");
+    expect(code).toContain("data-comment-form-slot");
+  });
+
+  it("tombstones render [deleted] with NO author link and NO author id", () => {
+    expect(code).toContain("[deleted]");
+    // authorId is undefined for tombstones (flat map below) → Astro omits the attr:
+    expect(code).toContain("data-author-id={c.authorId}");
+    expect(code).toContain("authorId: c.author?.userId");
+    expect(code).toMatch(/c\.deleted\s*\?/);
+  });
+
+  it("paginates via ?comments= cursor and noindexes cursor variants", () => {
+    expect(code).toContain('Astro.url.searchParams.get("comments")');
+    expect(code).toContain("?comments=${encodeURIComponent(");
+    expect(code).toContain('name="robots" content="noindex, follow"');
+  });
+
+  it("mounts BOTH islands as bundled imports", () => {
+    expect(code).toContain('import { initCommentsIsland } from "../../scripts/comments"');
+    expect(code).toContain('import { initReactionsIsland } from "../../scripts/reactions"');
+  });
 });
 
 /**
