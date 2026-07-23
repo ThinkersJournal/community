@@ -57,6 +57,24 @@ test("comment → reply → edit → react → anonymous sees it → author mode
     await expect(readerPage.locator('[data-depth="1"]')).toContainText("Edited reply.");
     await expect(readerPage.locator('[data-depth="1"] .edited')).toBeVisible();
 
+    // ---- React to the reply (comment-level reactions) ----------------------
+    // Reactions have no self-restriction (unlike follows), so the reader
+    // reacting to their own reply is valid. Scoped to the reply's own chip
+    // row so this can never accidentally hit the post's reactions section.
+    const replyChips = readerPage.locator('[data-depth="1"] [data-reactions][data-target-comment]');
+    const curious = replyChips.locator('button[data-kind="curious"]');
+    await expect(curious).toBeEnabled(); // island hydrated
+    await curious.click();
+    await expect(curious).toHaveAttribute("aria-pressed", "true");
+    await expect(curious.locator("[data-count]")).toHaveText("1");
+    // Survives a reload (server state, not client optimism).
+    await readerPage.reload();
+    await expect(
+      readerPage
+        .locator('[data-depth="1"] [data-reactions][data-target-comment] button[data-kind="curious"]')
+        .locator("[data-count]"),
+    ).toHaveText("1");
+
     // ---- React to the post -------------------------------------------------
     const postChips = readerPage.locator('[data-reactions][data-target-post]');
     const insightful = postChips.locator('button[data-kind="insightful"]');
