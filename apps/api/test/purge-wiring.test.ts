@@ -228,6 +228,38 @@ describe("comment edit/delete purge the post page", () => {
   });
 });
 
+describe("reactions NEVER purge (spec decision 5)", () => {
+  it("react + unreact both purge NOTHING", async () => {
+    const postId = await createPublished(actor);
+    const on = await fetchCapturingPurges(
+      new Request("https://api.test/reactions", {
+        method: "POST",
+        headers: {
+          Origin: "http://localhost:8787",
+          Cookie: actor.cookie,
+          "X-CSRF-Token": actor.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, kind: "insightful" }),
+      }),
+    );
+    expect(on.response.status).toBe(201);
+    expect(on.purges).toHaveLength(0);
+    const off = await fetchCapturingPurges(
+      new Request(`https://api.test/reactions?postId=${postId}&kind=insightful`, {
+        method: "DELETE",
+        headers: {
+          Origin: "http://localhost:8787",
+          Cookie: actor.cookie,
+          "X-CSRF-Token": actor.csrfToken,
+        },
+      }),
+    );
+    expect(off.response.status).toBe(200);
+    expect(off.purges).toHaveLength(0);
+  });
+});
+
 describe("a purge failure NEVER fails the write", () => {
   it("still 200s when the purge hop rejects", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});

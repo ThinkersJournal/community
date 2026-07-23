@@ -31,6 +31,7 @@ import {
   handlePublicProfile,
   handlePublicRecent,
 } from "./routes/public";
+import { handleAddReaction, handleRemoveReaction } from "./routes/reactions";
 import { handleResendVerification } from "./routes/resend-verification";
 import { handleSignup } from "./routes/signup";
 import {
@@ -110,6 +111,11 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "PATCH", pattern: "/comments/:id", handler: handleUpdateComment },
   { method: "DELETE", pattern: "/comments/:id", handler: handleDeleteComment },
 
+  // Reaction toggles (M2.2) — idempotent both directions, NEITHER purges (spec
+  // decision 5). See src/routes/reactions.ts's header.
+  { method: "POST", pattern: "/reactions", handler: handleAddReaction },
+  { method: "DELETE", pattern: "/reactions", handler: handleRemoveReaction },
+
   // Per-viewer home feed (M2.1) — no-store, never edge-cached.
   { method: "GET", pattern: "/feed", handler: handleFeed },
 
@@ -123,15 +129,19 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/public/posts", handler: handlePublicPost },
   { method: "GET", pattern: "/public/profile", handler: handlePublicProfile },
   { method: "GET", pattern: "/public/recent", handler: handlePublicRecent },
-  { method: "GET", pattern: "/public/comments", handler: handlePublicComments },
 
   // ANONYMOUS social reads (M2.1) — see src/routes/social-public.ts's header:
   // viewer-independent like the routes above, but NOT edge-cached (they change
   // on every follow), so HYPERDRIVE_FRESH with no cache-tag.
+  //
+  // ⚠️ `GET /public/comments` lives HERE, not in the edge-cached block above:
+  // its handler (src/routes/comments-public.ts) reads HYPERDRIVE_FRESH with no
+  // cache-tag, same as the social reads beside it — it is NOT edge-cached.
   { method: "GET", pattern: "/public/social", handler: handlePublicSocial },
   { method: "GET", pattern: "/public/followers", handler: handlePublicFollowers },
   { method: "GET", pattern: "/public/following", handler: handlePublicFollowing },
   { method: "GET", pattern: "/public/authors", handler: handlePublicAuthors },
+  { method: "GET", pattern: "/public/comments", handler: handlePublicComments },
 
   // The image upload pipeline: sniff -> cross-check -> quota -> transform to
   // WebP -> content-addressed R2 -> row. Takes RAW image bytes as the body, not
