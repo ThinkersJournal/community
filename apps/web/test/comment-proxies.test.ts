@@ -38,6 +38,12 @@ describe("GET /api/comments (anonymous passthrough)", () => {
   });
   it("forwards NO cookie — the upstream is anonymous", () => {
     expect(code).toContain("apiFetch"); // anti-vacuity anchor
-    expect(code).not.toContain("request: context.request");
+    // Scope the check to the apiFetch call site itself (not the whole file —
+    // markPrivate legitimately needs context.request). This is the last
+    // meaningful statement in the file, so slicing to EOF covers the whole
+    // call. Assert NO `request` reference at all, catching both
+    // `request: context.request` and the `{ request }` shorthand.
+    const apiFetchCall = code.slice(code.lastIndexOf("apiFetch"));
+    expect(apiFetchCall).not.toMatch(/request/);
   });
 });

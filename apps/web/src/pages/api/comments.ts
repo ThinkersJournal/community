@@ -14,9 +14,8 @@ export const prerender = false;
 
 export const GET: APIRoute = async (context) => {
   const headers = new Headers({ "content-type": "application/json" });
-  const { request, cache } = context;
-  markPrivate({ request, response: { headers }, cache });
-  const url = new URL(request.url);
+  markPrivate({ request: context.request, response: { headers }, cache: context.cache });
+  const url = new URL(context.request.url);
   const q = new URLSearchParams({ postId: url.searchParams.get("postId") ?? "" });
   const cursor = url.searchParams.get("cursor");
   if (cursor !== null) q.set("cursor", cursor);
