@@ -243,12 +243,23 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /public/comments",
     build: () => new Request("https://api.test/public/comments"),
   },
+  {
+    name: "404 public reactions without a postId",
+    route: "GET /public/reactions",
+    build: () => new Request("https://api.test/public/reactions"),
+  },
   // GET /follows/status authenticates via readCurrentSession, same as GET
   // /profile/me above — its only error path (M2.1).
   {
     name: "401 follows/status with no session",
     route: "GET /follows/status",
     build: () => new Request("https://api.test/follows/status?id=00000000-0000-7000-8000-000000000000"),
+  },
+  {
+    name: "401 reactions/mine with no session",
+    route: "GET /reactions/mine",
+    build: () =>
+      new Request("https://api.test/reactions/mine?postId=00000000-0000-7000-8000-000000000000"),
   },
   // GET /feed authenticates via readCurrentSession, same as GET /profile/me
   // and GET /follows/status above — its 401 path. The malformed-cursor 400

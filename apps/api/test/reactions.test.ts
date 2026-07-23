@@ -216,3 +216,62 @@ describe("DELETE /reactions", () => {
     expect((await unreact(reader, {}, "agree")).status).toBe(400);
   });
 });
+
+function getPublicReactions(postId: string): Promise<Response> {
+  return fetchWorker(new Request(`https://api.test/public/reactions?postId=${postId}`));
+}
+
+function getMine(actor: Actor, postId: string): Promise<Response> {
+  return fetchWorker(
+    new Request(`https://api.test/reactions/mine?postId=${postId}`, {
+      headers: { Cookie: actor.cookie },
+    }),
+  );
+}
+
+describe("GET /public/reactions", () => {
+  it("zero-fills all four kinds for post and listed comments", async () => {
+    const p = await insertPost(author.userId, "published");
+    const c = await insertComment(p, author.userId);
+    await react(reader, { postId: p, kind: "insightful" });
+    await react(author, { postId: p, kind: "insightful" });
+    await react(reader, { commentId: c.id, kind: "challenging" });
+    const body = (await (await getPublicReactions(p)).json()) as {
+      post: Record<string, number>;
+      comments: Record<string, Record<string, number>>;
+    };
+    expect(body.post).toEqual({ insightful: 2, curious: 0, agree: 0, challenging: 0 });
+    expect(body.comments[c.id]).toEqual({ insightful: 0, curious: 0, agree: 0, challenging: 1 });
+  });
+
+  it("404s draft/nonexistent posts and a missing postId", async () => {
+    const draft = await insertPost(author.userId, "draft");
+    expect((await getPublicReactions(draft)).status).toBe(404);
+    expect((await getPublicReactions(crypto.randomUUID())).status).toBe(404);
+    expect((await fetchWorker(new Request("https://api.test/public/reactions"))).status).toBe(404);
+  });
+});
+
+describe("GET /reactions/mine", () => {
+  it("returns ONLY the viewer's toggles, two-level", async () => {
+    const p = await insertPost(author.userId, "published");
+    const c = await insertComment(p, author.userId);
+    await react(reader, { postId: p, kind: "agree" });
+    await react(reader, { commentId: c.id, kind: "curious" });
+    await react(author, { postId: p, kind: "challenging" }); // someone else's — must not appear
+    const body = (await (await getMine(reader, p)).json()) as {
+      post: string[];
+      comments: Record<string, string[]>;
+    };
+    expect(body.post).toEqual(["agree"]);
+    expect(body.comments[c.id]).toEqual(["curious"]);
+  });
+
+  it("401s LOGIN_REQUIRED with no session", async () => {
+    const response = await fetchWorker(
+      new Request(`https://api.test/reactions/mine?postId=${postId}`),
+    );
+    expect(response.status).toBe(401);
+    expect(((await response.json()) as { code: string }).code).toBe("LOGIN_REQUIRED");
+  });
+});

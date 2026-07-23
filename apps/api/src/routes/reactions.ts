@@ -7,7 +7,7 @@
  * Removal skips target-state validation on purpose: a user must always be able
  * to retract, even from a since-tombstoned comment.
  */
-import { runMutatingPipeline } from "../auth/pipeline";
+import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
@@ -16,7 +16,7 @@ import { errorResponse } from "../http/errors";
 
 import { REACTION_KINDS, ReactionInput } from "@thinkersjournal/shared";
 
-import type { ReactionKind } from "@thinkersjournal/shared";
+import type { MyReactions, PublicReactions, ReactionCounts, ReactionKind } from "@thinkersjournal/shared";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -128,4 +128,82 @@ export async function handleRemoveReaction(
       : c.query("DELETE FROM reactions WHERE user_id=$1 AND kind=$2 AND comment_id=$3", [userId, kind, commentId]),
   );
   return json({});
+}
+
+function zeroCounts(): ReactionCounts {
+  return { insightful: 0, curious: 0, agree: 0, challenging: 0 };
+}
+
+/** Shared 404-parity gate for the two reads. Returns true iff postId names a published post. */
+async function postIsPublished(env: Env, ctx: ExecutionContext, postId: string): Promise<boolean> {
+  return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ status: string }>(
+      "SELECT status FROM posts WHERE id = $1",
+      [postId],
+    );
+    return rows[0]?.status === "published";
+  });
+}
+
+export async function handlePublicReactions(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const postId = new URL(request.url).searchParams.get("postId") ?? "";
+  if (!UUID_RE.test(postId)) return errorResponse("NOT_FOUND", 404);
+  if (!(await postIsPublished(env, ctx, postId))) return errorResponse("NOT_FOUND", 404);
+
+  const body = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const post = await c.query<{ kind: ReactionKind; n: number }>(
+      "SELECT kind, count(*)::int AS n FROM reactions WHERE post_id = $1 GROUP BY kind",
+      [postId],
+    );
+    const comments = await c.query<{ commentId: string; kind: ReactionKind; n: number }>(
+      `SELECT r.comment_id AS "commentId", r.kind, count(*)::int AS n
+         FROM reactions r JOIN comments c2 ON c2.id = r.comment_id
+        WHERE c2.post_id = $1
+        GROUP BY r.comment_id, r.kind`,
+      [postId],
+    );
+    const result: PublicReactions = { post: zeroCounts(), comments: {} };
+    for (const row of post.rows) result.post[row.kind] = row.n;
+    for (const row of comments.rows) {
+      (result.comments[row.commentId] ??= zeroCounts())[row.kind] = row.n;
+    }
+    return result;
+  });
+  return json(body);
+}
+
+export async function handleMyReactions(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const session = await readCurrentSession(env, request, () =>
+    errorResponse("LOGIN_REQUIRED", 401),
+  );
+  if (session instanceof Response) return session;
+
+  const postId = new URL(request.url).searchParams.get("postId") ?? "";
+  if (!UUID_RE.test(postId)) return errorResponse("NOT_FOUND", 404);
+  if (!(await postIsPublished(env, ctx, postId))) return errorResponse("NOT_FOUND", 404);
+
+  const body = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const post = await c.query<{ kind: ReactionKind }>(
+      "SELECT kind FROM reactions WHERE user_id = $1 AND post_id = $2",
+      [session.userId, postId],
+    );
+    const comments = await c.query<{ commentId: string; kind: ReactionKind }>(
+      `SELECT r.comment_id AS "commentId", r.kind
+         FROM reactions r JOIN comments c2 ON c2.id = r.comment_id
+        WHERE r.user_id = $1 AND c2.post_id = $2`,
+      [session.userId, postId],
+    );
+    const result: MyReactions = { post: post.rows.map((r) => r.kind), comments: {} };
+    for (const row of comments.rows) (result.comments[row.commentId] ??= []).push(row.kind);
+    return result;
+  });
+  return json(body);
 }

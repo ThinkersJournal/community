@@ -31,7 +31,12 @@ import {
   handlePublicProfile,
   handlePublicRecent,
 } from "./routes/public";
-import { handleAddReaction, handleRemoveReaction } from "./routes/reactions";
+import {
+  handleAddReaction,
+  handleMyReactions,
+  handlePublicReactions,
+  handleRemoveReaction,
+} from "./routes/reactions";
 import { handleResendVerification } from "./routes/resend-verification";
 import { handleSignup } from "./routes/signup";
 import {
@@ -105,6 +110,11 @@ export const ROUTES: readonly RouteDef[] = [
   // above (different methods) or `POST /follows` (different method).
   { method: "GET", pattern: "/follows/status", handler: handleFollowStatus },
 
+  // The viewer's own reaction toggles for a post + its comments (M2.2) —
+  // session-read GET, like /follows/status above. See
+  // src/routes/reactions.ts's handleMyReactions.
+  { method: "GET", pattern: "/reactions/mine", handler: handleMyReactions },
+
   // Engagement writes (M2.2). Comment writes purge `post:<id>` — see
   // src/routes/comments.ts's header. PATCH/DELETE own their gates per-handler.
   { method: "POST", pattern: "/comments", handler: handleCreateComment },
@@ -142,6 +152,11 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/public/following", handler: handlePublicFollowing },
   { method: "GET", pattern: "/public/authors", handler: handlePublicAuthors },
   { method: "GET", pattern: "/public/comments", handler: handlePublicComments },
+
+  // Public reaction counts (M2.2) — anonymous, zero-filled per kind for the
+  // post and every comment on it. Same NOT-edge-cached shelf as the social
+  // reads above: HYPERDRIVE_FRESH, no cache-tag. See src/routes/reactions.ts.
+  { method: "GET", pattern: "/public/reactions", handler: handlePublicReactions },
 
   // The image upload pipeline: sniff -> cross-check -> quota -> transform to
   // WebP -> content-addressed R2 -> row. Takes RAW image bytes as the body, not
