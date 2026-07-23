@@ -125,10 +125,14 @@ export function initCommentsIsland(): void {
   const slot = section.querySelector<HTMLElement>("[data-comment-form-slot]");
 
   void loadMe().then((me) => {
-    // 1. The form slot: logged-out keeps the SSR login link; un-onboarded gets
-    //    the choose-handle affordance; onboarded gets the real form.
+    // 1. The form slot, three distinct logged-in cases (logged-out keeps the SSR
+    //    login link). ⚠️ !usernameChosen and csrfToken===null are SEPARATE states
+    //    and must not be conflated: an ONBOARDED viewer whose /auth/csrf hop
+    //    transiently failed still has a handle, so "Choose your handle" would
+    //    misdirect them to /choose-username (which 409s USERNAME_ALREADY_SET).
     if (slot !== null && me.loggedIn) {
-      if (!me.usernameChosen || me.csrfToken === null) {
+      if (!me.usernameChosen) {
+        // Not onboarded — choose a durable handle before commenting.
         const p = document.createElement("p");
         const a = document.createElement("a");
         a.className = "link";
@@ -136,6 +140,14 @@ export function initCommentsIsland(): void {
         a.textContent = "Choose your handle";
         p.appendChild(a);
         p.appendChild(document.createTextNode(" to join the conversation."));
+        slot.replaceChildren(p);
+      } else if (me.csrfToken === null) {
+        // Onboarded, but no CSRF token — a transient degraded state, NOT an
+        // onboarding gap. A working form can't be built without the token, so
+        // prompt a reload rather than mislabel this as needing a handle.
+        const p = document.createElement("p");
+        p.className = "comment-degraded";
+        p.textContent = "Couldn't load the comment form — reload the page to comment.";
         slot.replaceChildren(p);
       } else {
         const csrfToken = me.csrfToken;
