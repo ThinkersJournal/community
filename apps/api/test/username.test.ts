@@ -53,7 +53,8 @@ describe("POST /profile/username", () => {
     const unique = `u${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
     const response = await chooseUsername(actor, unique);
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { username: string; usernameChosen: boolean };
+    const body = (await response.json()) as { userId: string; username: string; usernameChosen: boolean };
+    expect(body.userId).toBe(actor.userId);
     expect(body.username).toBe(unique);
     expect(body.usernameChosen).toBe(true);
     expect(await usernameChosenFlag(actor.userId)).toBe(true);
@@ -113,7 +114,8 @@ describe("GET /profile/me", () => {
       new Request("https://api.test/profile/me", { headers: { Cookie: a.cookie } }),
     );
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { username: string; usernameChosen: boolean };
+    const body = (await response.json()) as { userId: string; username: string; usernameChosen: boolean };
+    expect(body.userId).toBe(a.userId);
     expect(body.username).toBe(a.username);
     expect(body.usernameChosen).toBe(false);
   });

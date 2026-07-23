@@ -124,6 +124,142 @@ describe("PATCH /posts/:id purges on edit", () => {
   });
 });
 
+function createCommentRequest(actor: Actor, postId: string): Request {
+  return new Request("https://api.test/comments", {
+    method: "POST",
+    headers: {
+      Origin: "http://localhost:8787",
+      Cookie: actor.cookie,
+      "X-CSRF-Token": actor.csrfToken,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ postId, markdownSource: "purge probe" }),
+  });
+}
+
+describe("POST /comments purges the post page", () => {
+  it("a comment purges post:<id> in ONE call", async () => {
+    const postId = await createPublished(actor);
+    const { response, purges } = await fetchCapturingPurges(createCommentRequest(actor, postId));
+    expect(response.status).toBe(201);
+    expect(purges).toHaveLength(1);
+    expect(purges[0]).toEqual([`post:${postId}`]);
+  });
+
+  it("a rejected comment (draft post) purges NOTHING", async () => {
+    const { response: draft } = await fetchCapturingPurges(createPostRequest(actor, "draft"));
+    const draftId = ((await draft.json()) as { id: string }).id;
+    const { response, purges } = await fetchCapturingPurges(createCommentRequest(actor, draftId));
+    expect(response.status).toBe(404);
+    expect(purges).toHaveLength(0);
+  });
+});
+
+describe("comment edit/delete purge the post page", () => {
+  async function seedComment(postId: string): Promise<string> {
+    const { response } = await fetchCapturingPurges(createCommentRequest(actor, postId));
+    return ((await response.json()) as { id: string }).id;
+  }
+
+  it("PATCH purges post:<id> in ONE call", async () => {
+    const postId = await createPublished(actor);
+    const commentId = await seedComment(postId);
+    const { response, purges } = await fetchCapturingPurges(
+      new Request(`https://api.test/comments/${commentId}`, {
+        method: "PATCH",
+        headers: {
+          Origin: "http://localhost:8787",
+          Cookie: actor.cookie,
+          "X-CSRF-Token": actor.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ markdownSource: "edited" }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(purges).toHaveLength(1);
+    expect(purges[0]).toEqual([`post:${postId}`]);
+  });
+
+  it("DELETE purges once; a 404 delete (third party) purges NOTHING", async () => {
+    const postId = await createPublished(actor);
+    const commentId = await seedComment(postId);
+    const attacker = await onboardedActor();
+    const miss = await fetchCapturingPurges(
+      new Request(`https://api.test/comments/${commentId}`, {
+        method: "DELETE",
+        headers: {
+          Origin: "http://localhost:8787",
+          Cookie: attacker.cookie,
+          "X-CSRF-Token": attacker.csrfToken,
+        },
+      }),
+    );
+    expect(miss.response.status).toBe(404);
+    expect(miss.purges).toHaveLength(0);
+
+    const hit = await fetchCapturingPurges(
+      new Request(`https://api.test/comments/${commentId}`, {
+        method: "DELETE",
+        headers: {
+          Origin: "http://localhost:8787",
+          Cookie: actor.cookie,
+          "X-CSRF-Token": actor.csrfToken,
+        },
+      }),
+    );
+    expect(hit.response.status).toBe(200);
+    expect(hit.purges).toHaveLength(1);
+    expect(hit.purges[0]).toEqual([`post:${postId}`]);
+
+    // Idempotent repeat: nothing changed, nothing purged.
+    const again = await fetchCapturingPurges(
+      new Request(`https://api.test/comments/${commentId}`, {
+        method: "DELETE",
+        headers: {
+          Origin: "http://localhost:8787",
+          Cookie: actor.cookie,
+          "X-CSRF-Token": actor.csrfToken,
+        },
+      }),
+    );
+    expect(again.response.status).toBe(200);
+    expect(again.purges).toHaveLength(0);
+  });
+});
+
+describe("reactions NEVER purge (spec decision 5)", () => {
+  it("react + unreact both purge NOTHING", async () => {
+    const postId = await createPublished(actor);
+    const on = await fetchCapturingPurges(
+      new Request("https://api.test/reactions", {
+        method: "POST",
+        headers: {
+          Origin: "http://localhost:8787",
+          Cookie: actor.cookie,
+          "X-CSRF-Token": actor.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, kind: "insightful" }),
+      }),
+    );
+    expect(on.response.status).toBe(201);
+    expect(on.purges).toHaveLength(0);
+    const off = await fetchCapturingPurges(
+      new Request(`https://api.test/reactions?postId=${postId}&kind=insightful`, {
+        method: "DELETE",
+        headers: {
+          Origin: "http://localhost:8787",
+          Cookie: actor.cookie,
+          "X-CSRF-Token": actor.csrfToken,
+        },
+      }),
+    );
+    expect(off.response.status).toBe(200);
+    expect(off.purges).toHaveLength(0);
+  });
+});
+
 describe("a purge failure NEVER fails the write", () => {
   it("still 200s when the purge hop rejects", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -28,6 +28,7 @@
 import { markdownExcerpt, renderMarkdown } from "@thinkersjournal/markdown";
 
 import BaseLayout from "../../components/BaseLayout.astro";
+import ReactionChips from "../../components/ReactionChips.astro";
 import { apiFetch } from "../../lib/api";
 import { markPublicCacheable } from "../../lib/cache";
 import { postUrl, profileUrl } from "../../lib/canonical";
@@ -35,7 +36,7 @@ import { setPublicPageCsp } from "../../lib/csp";
 import { jsonLdScript } from "../../lib/json-ld";
 import { FEED_TITLE } from "../../lib/xml";
 
-import type { PublicPost } from "@thinkersjournal/shared";
+import type { CommentsPage, PublicPost } from "@thinkersjournal/shared";
 
 const { handle, slug } = Astro.params;
 if (handle === undefined || slug === undefined || !handle.startsWith("@")) {
@@ -80,6 +81,41 @@ const publishedDisplay = Number.isNaN(publishedDate.getTime())
   ? post.publishedAt
   : publishedDate.toISOString().slice(0, 10);
 
+// ⚠️ ANONYMOUS, like the post fetch above — no `request`, no Cookie, nothing
+// viewer-specific in this render. Comments are CONTENT: they live in this
+// cached HTML and every comment write purges post:<id> (api routes/comments.ts).
+const commentsCursor = Astro.url.searchParams.get("comments");
+const commentsQ = new URLSearchParams({ postId: post.id });
+if (commentsCursor !== null) commentsQ.set("cursor", commentsCursor);
+const commentsResp = await apiFetch<CommentsPage>(`/public/comments?${commentsQ.toString()}`);
+// Fail-soft: a comments hiccup must not 404 a healthy post page.
+const commentsPage: CommentsPage =
+  commentsResp.status === 200 && commentsResp.data !== null
+    ? commentsResp.data
+    : { comments: [], nextCursor: null };
+// READ-TIME RENDER through the same sanitize-first pipeline as the post body —
+// the ONLY producer of comment HTML. Tombstones render no body at all.
+// FLATTENED for the template: `author` is nullable and JSX can't narrow it off
+// `deleted`, so derive plain fields here (authorId undefined on tombstones →
+// Astro omits the data attribute entirely).
+const renderedComments = await Promise.all(
+  commentsPage.comments.map(async (c) => ({
+    id: c.id,
+    depth: c.depth,
+    deleted: c.deleted,
+    createdAt: c.createdAt,
+    edited: c.editedAt !== null,
+    authorId: c.author?.userId,
+    authorUsername: c.author?.username ?? "",
+    authorName: c.author === null ? null : (c.author.displayName ?? c.author.username),
+    html: c.deleted ? "" : await renderMarkdown(c.bodyMarkdown),
+  })),
+);
+const olderCommentsHref =
+  commentsPage.nextCursor === null
+    ? null
+    : `?comments=${encodeURIComponent(commentsPage.nextCursor)}`;
+
 markPublicCacheable(Astro, [
   // ⚠️ THESE LITERALS MUST MATCH apps/api/src/cache/purge.ts's CALL SITES EXACTLY
   // for the tags this page DOES subscribe to — a typo here is INVISIBLE (miniflare
@@ -123,6 +159,11 @@ const jsonLd = {
         feed-pages.test.ts greps this file's source for exactly this string. */}
     <link rel="alternate" type="application/rss+xml" title={FEED_TITLE} href="/rss.xml" />
 
+    {/* Cursor pages are pagination, not distinct content — the profile page's
+        exact pattern: keep them out of the index while still letting a
+        crawler follow through to the comments. */}
+    {commentsCursor !== null && <meta name="robots" content="noindex, follow" />}
+
     <meta property="og:type" content="article" />
     <meta property="og:title" content={post.title} />
     <meta property="og:description" content={description} />
@@ -165,6 +206,60 @@ const jsonLd = {
         this element. */}
     <div id="post-body" set:html={html} />
   </article>
+
+  <section class="wrap comments" data-comments data-post-id={post.id} data-post-author-id={post.authorId}>
+    <h2>Comments</h2>
+
+    <ReactionChips postId={post.id} />
+
+    {/* SSR default = the logged-out affordance. The comments island REPLACES
+        this for signed-in viewers (form) / un-onboarded ones (choose-handle
+        link) — progressive enhancement, nav-auth style; the cached HTML is
+        identical for everyone. */}
+    <div data-comment-form-slot>
+      <p><a class="link" href="/login">Log in</a> to join the conversation.</p>
+    </div>
+
+    {renderedComments.length === 0 && <p class="no-comments">No comments yet.</p>}
+    <ol class="comment-list">
+      {renderedComments.map((c) => (
+        <li
+          class={`comment depth-${Math.min(c.depth, 6)}`}
+          data-comment-id={c.id}
+          data-depth={c.depth}
+          data-author-id={c.authorId}
+          data-deleted={c.deleted ? "true" : undefined}
+        >
+          {c.deleted ? (
+            <p class="tombstone">[deleted]</p>
+          ) : (
+            <>
+              <p class="meta">
+                <a class="link" href={`/@${encodeURIComponent(c.authorUsername)}`}>
+                  {c.authorName}
+                </a>
+                · <time datetime={c.createdAt}>{c.createdAt.slice(0, 10)}</time>
+                {c.edited && <span class="edited">(edited)</span>}
+              </p>
+              {/* The third and FINAL set:html sink — renderMarkdown output only,
+                  same safety class as #post-body. Never bind anything else here. */}
+              <div class="comment-body" set:html={c.html} />
+              <ReactionChips commentId={c.id} />
+              <div data-comment-actions></div>
+            </>
+          )}
+        </li>
+      ))}
+    </ol>
+    {olderCommentsHref !== null && <a class="link" href={olderCommentsHref}>Older comments →</a>}
+  </section>
+
+  <script>
+    import { initCommentsIsland } from "../../scripts/comments";
+    import { initReactionsIsland } from "../../scripts/reactions";
+    initCommentsIsland();
+    initReactionsIsland();
+  </script>
 </BaseLayout>
 <style>
   .post{padding:clamp(40px,7vw,80px) 0;max-width:min(var(--wrap),760px)}
@@ -175,4 +270,16 @@ const jsonLd = {
   #post-body :global(pre){background:var(--ink2);border:1px solid var(--line);
     border-radius:10px;padding:16px;overflow-x:auto;margin:1.2em 0}
   #post-body :global(a){color:var(--green)}
+
+  .comments{padding:0 0 clamp(40px,7vw,80px);max-width:min(var(--wrap),760px)}
+  .comment-list{list-style:none;margin:18px 0;padding:0;display:grid;gap:14px}
+  .comment{border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .comment .meta{color:var(--dim);margin:0 0 6px}
+  .comment .edited{color:var(--dim);font-size:.85em;margin-left:6px}
+  .tombstone{color:var(--dim);font-style:italic;margin:0}
+  .depth-1{margin-left:16px}.depth-2{margin-left:32px}.depth-3{margin-left:48px}
+  .depth-4{margin-left:64px}.depth-5{margin-left:80px}.depth-6{margin-left:96px}
+  .reactions{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+  .chip{font-size:.85em}
+  .chip[aria-pressed="true"]{outline:1px solid var(--green)}
 </style>

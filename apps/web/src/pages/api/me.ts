@@ -19,7 +19,7 @@ export const GET: APIRoute = async (context) => {
   const me = await apiFetch<Me>("/profile/me", { request: context.request });
   if (me.status !== 200 || me.data === null) {
     return new Response(
-      JSON.stringify({ loggedIn: false, username: null, usernameChosen: false, csrfToken: null }),
+      JSON.stringify({ loggedIn: false, userId: null, username: null, usernameChosen: false, csrfToken: null }),
       { status: 200, headers },
     );
   }
@@ -27,6 +27,7 @@ export const GET: APIRoute = async (context) => {
   return new Response(
     JSON.stringify({
       loggedIn: true,
+      userId: me.data.userId,
       username: me.data.username,
       usernameChosen: me.data.usernameChosen,
       csrfToken: csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null,

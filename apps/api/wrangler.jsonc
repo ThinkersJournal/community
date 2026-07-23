@@ -116,6 +116,21 @@
       "name": "FOLLOW_LIMITER",
       "namespace_id": "1005",
       "simple": { "limit": 30, "period": 60 }
+    },
+    // Bounds POST /comments (see src/routes/comments.ts). Session-user-keyed,
+    // same reasoning as FOLLOW_LIMITER. Comments are heavier rows than follows
+    // (10k body + a purge per write) — tighter limit.
+    {
+      "name": "COMMENT_LIMITER",
+      "namespace_id": "1006",
+      "simple": { "limit": 10, "period": 60 }
+    },
+    // Bounds POST/DELETE /reactions (Task 6 — added now so wrangler types runs once).
+    // Toggles are cheap and bursty (a reader reacting down a thread) — looser.
+    {
+      "name": "REACTION_LIMITER",
+      "namespace_id": "1007",
+      "simple": { "limit": 60, "period": 60 }
     }
   ],
   "observability": {

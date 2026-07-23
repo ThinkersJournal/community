@@ -9,26 +9,12 @@ import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isCheckViolation, isForeignKeyViolation } from "../db/errors";
+import { hasChosenUsername } from "../db/onboarding";
 import { errorResponse } from "../http/errors";
 
 import { FollowInput } from "@thinkersjournal/shared";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** true iff this user has chosen a durable handle (onboarding gate). */
-async function hasChosenUsername(
-  env: Env,
-  ctx: ExecutionContext,
-  userId: string,
-): Promise<boolean> {
-  return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    const { rows } = await c.query<{ username_chosen: boolean }>(
-      "SELECT username_chosen FROM profiles WHERE user_id = $1",
-      [userId],
-    );
-    return rows[0]?.username_chosen === true;
-  });
-}
 
 export async function handleFollow(
   request: Request,

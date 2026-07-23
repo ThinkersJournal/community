@@ -77,7 +77,7 @@ export async function handleChooseUsername(
         // since the row always exists for a session user.
         return errorResponse("USERNAME_ALREADY_SET", 409);
       }
-      return json({ username, usernameChosen: true } satisfies Me);
+      return json({ userId, username, usernameChosen: true } satisfies Me);
     });
   } catch (err) {
     if (isUniqueViolation(err)) return errorResponse("USERNAME_TAKEN", 409);
@@ -97,8 +97,8 @@ export async function handleGetMe(
 
   const ctx = _ctx;
   const me = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    const { rows } = await c.query<{ username: string; usernameChosen: boolean }>(
-      `SELECT username, username_chosen AS "usernameChosen"
+    const { rows } = await c.query<{ userId: string; username: string; usernameChosen: boolean }>(
+      `SELECT user_id AS "userId", username, username_chosen AS "usernameChosen"
          FROM profiles WHERE user_id = $1`,
       [session.userId],
     );

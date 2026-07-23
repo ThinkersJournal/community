@@ -17,6 +17,8 @@
  */
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
+import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
+import { handlePublicComments } from "./routes/comments-public";
 import { handleCsrf } from "./routes/csrf";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
@@ -29,6 +31,12 @@ import {
   handlePublicProfile,
   handlePublicRecent,
 } from "./routes/public";
+import {
+  handleAddReaction,
+  handleMyReactions,
+  handlePublicReactions,
+  handleRemoveReaction,
+} from "./routes/reactions";
 import { handleResendVerification } from "./routes/resend-verification";
 import { handleSignup } from "./routes/signup";
 import {
@@ -102,6 +110,22 @@ export const ROUTES: readonly RouteDef[] = [
   // above (different methods) or `POST /follows` (different method).
   { method: "GET", pattern: "/follows/status", handler: handleFollowStatus },
 
+  // The viewer's own reaction toggles for a post + its comments (M2.2) —
+  // session-read GET, like /follows/status above. See
+  // src/routes/reactions.ts's handleMyReactions.
+  { method: "GET", pattern: "/reactions/mine", handler: handleMyReactions },
+
+  // Engagement writes (M2.2). Comment writes purge `post:<id>` — see
+  // src/routes/comments.ts's header. PATCH/DELETE own their gates per-handler.
+  { method: "POST", pattern: "/comments", handler: handleCreateComment },
+  { method: "PATCH", pattern: "/comments/:id", handler: handleUpdateComment },
+  { method: "DELETE", pattern: "/comments/:id", handler: handleDeleteComment },
+
+  // Reaction toggles (M2.2) — idempotent both directions, NEITHER purges (spec
+  // decision 5). See src/routes/reactions.ts's header.
+  { method: "POST", pattern: "/reactions", handler: handleAddReaction },
+  { method: "DELETE", pattern: "/reactions", handler: handleRemoveReaction },
+
   // Per-viewer home feed (M2.1) — no-store, never edge-cached.
   { method: "GET", pattern: "/feed", handler: handleFeed },
 
@@ -119,10 +143,20 @@ export const ROUTES: readonly RouteDef[] = [
   // ANONYMOUS social reads (M2.1) — see src/routes/social-public.ts's header:
   // viewer-independent like the routes above, but NOT edge-cached (they change
   // on every follow), so HYPERDRIVE_FRESH with no cache-tag.
+  //
+  // ⚠️ `GET /public/comments` lives HERE, not in the edge-cached block above:
+  // its handler (src/routes/comments-public.ts) reads HYPERDRIVE_FRESH with no
+  // cache-tag, same as the social reads beside it — it is NOT edge-cached.
   { method: "GET", pattern: "/public/social", handler: handlePublicSocial },
   { method: "GET", pattern: "/public/followers", handler: handlePublicFollowers },
   { method: "GET", pattern: "/public/following", handler: handlePublicFollowing },
   { method: "GET", pattern: "/public/authors", handler: handlePublicAuthors },
+  { method: "GET", pattern: "/public/comments", handler: handlePublicComments },
+
+  // Public reaction counts (M2.2) — anonymous, zero-filled per kind for the
+  // post and every comment on it. Same NOT-edge-cached shelf as the social
+  // reads above: HYPERDRIVE_FRESH, no cache-tag. See src/routes/reactions.ts.
+  { method: "GET", pattern: "/public/reactions", handler: handlePublicReactions },
 
   // The image upload pipeline: sniff -> cross-check -> quota -> transform to
   // WebP -> content-addressed R2 -> row. Takes RAW image bytes as the body, not

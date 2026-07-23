@@ -23,6 +23,8 @@ export type FollowValue = z.infer<typeof FollowInput>;
 
 /** `GET /profile/me` — the signed-in viewer's own handle + onboarding state. */
 export interface Me {
+  /** The viewer's own user id — the comments island compares it to data-author-id. */
+  userId: string;
   username: string;
   usernameChosen: boolean;
 }

@@ -23,6 +23,7 @@ export type ApiErrorCode =
   | "INVALID_INPUT"          // 400 — zod rejected it; `fields` names the paths
   | "INVALID_TOKEN"          // 400 — a verification token is unknown/expired/used
   | "CANNOT_FOLLOW_SELF"     // 400 — a user cannot follow themselves (M2.1)
+  | "INVALID_REACTION_KIND"  // 400 — kind not in the four-tone set (M2.2)
   // --- authentication ------------------------------------------------------
   | "UNAUTHORIZED"           // 401 — no usable session (pipeline)
   | "LOGIN_REQUIRED"         // 401 — this route needs a session to proceed
@@ -39,6 +40,9 @@ export type ApiErrorCode =
   | "SLUG_TAKEN"             // 409 — could not place a unique slug (T9)
   | "USERNAME_TAKEN"         // 409 — the requested handle is already in use (M2.1)
   | "USERNAME_ALREADY_SET"   // 409 — the handle was already chosen; it is immutable (M2.1)
+  | "COMMENT_NOT_FOUND"      // 404 — no such visible comment / parent (M2.2)
+  | "COMMENT_DELETED"        // 409 — the target comment is tombstoned (M2.2)
+  | "COMMENT_DEPTH_EXCEEDED" // 409 — reply would exceed the depth-8 cap (M2.2)
   // --- payloads ------------------------------------------------------------
   | "PAYLOAD_TOO_LARGE"      // 413 — over the streaming size cap (T8)
   | "UNSUPPORTED_MEDIA_TYPE" // 415 — failed the magic-byte allowlist (T7/T8)
