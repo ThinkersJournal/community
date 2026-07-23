@@ -132,12 +132,27 @@ beforeAll(async () => {
 // `editor` plays the "reader" role (writes/owns comments); `modAuthor` plays
 // the "author" role (owns `modPostId`, exercising decision-7 moderation and
 // the PATCH ownership-leak case).
+//
+// ⚠️ PATCH/DELETE NOW ALSO SPEND COMMENT_LIMITER (milestone fix wave: closing
+// the unbounded-purge DoS meant giving handleUpdateComment/handleDeleteComment
+// the same `enforceRateLimit(COMMENT_LIMITER, comment:${userId})` gate as
+// create). Tallied per actor across this whole file (create+patch+delete
+// combined, since they share one key/window):
+//   `editor`   — PATCH block only: 7 ops (create/patch/delete mixed).
+//   `modAuthor`— PATCH block hijack-patch (1) + DELETE block create+delete (2) = 3 ops.
+// That left NO headroom for the DELETE block's own create+delete traffic (8
+// more ops) on top of `editor`'s 7 — 15 total would blow the 10/60s window.
+// So the DELETE describe block below uses a THIRD fresh actor, `deleter`
+// (8 ops, plays the exact same "comment author" role `editor` used to play
+// there), instead of reusing `editor`.
 let editor: Actor;
 let modAuthor: Actor;
+let deleter: Actor;
 let modPostId: string;
 beforeAll(async () => {
   editor = await onboardedActor();
   modAuthor = await onboardedActor();
+  deleter = await onboardedActor();
   modPostId = await insertPost(modAuthor.userId, "published");
 });
 
@@ -278,11 +293,33 @@ describe("PATCH /comments/:id", () => {
     const response = await updateComment(editor, "not-a-uuid", "x");
     expect(response.status).toBe(400);
   });
+
+  // Milestone fix wave: PATCH now shares COMMENT_LIMITER with create/delete —
+  // proves the unbounded-purge DoS is closed. DEDICATED fresh actor (never
+  // `editor`/`modAuthor`/`deleter`) so this loop's own budget burn cannot
+  // pollute any other test in this file.
+  it("throttles rapid PATCHes on the caller's own comment (429 RATE_LIMITED)", async () => {
+    const spammer = await onboardedActor();
+    const created = await createComment(spammer, { postId: modPostId, markdownSource: "v0" });
+    const { id } = (await created.json()) as { id: string };
+
+    let sawRateLimited = false;
+    for (let i = 0; i < 12 && !sawRateLimited; i++) {
+      const response = await updateComment(spammer, id, `v${i}`);
+      if (response.status === 429) {
+        expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
+        sawRateLimited = true;
+      } else {
+        expect(response.status).toBe(200);
+      }
+    }
+    expect(sawRateLimited).toBe(true);
+  });
 });
 
 describe("DELETE /comments/:id", () => {
   it("comment author tombstones own comment: body emptied, row + children remain", async () => {
-    const top = await createComment(editor, { postId: modPostId, markdownSource: "parent text" });
+    const top = await createComment(deleter, { postId: modPostId, markdownSource: "parent text" });
     const { id: parentId } = (await top.json()) as { id: string };
     const child = await createComment(modAuthor, {
       postId: modPostId,
@@ -291,7 +328,7 @@ describe("DELETE /comments/:id", () => {
     });
     const { id: childId } = (await child.json()) as { id: string };
 
-    const response = await deleteComment(editor, parentId);
+    const response = await deleteComment(deleter, parentId);
     expect(response.status).toBe(200);
     expect(await tombstoned(parentId)).toEqual({ deleted: true, body: "" });
     // The child SURVIVES — tombstone, not row delete.
@@ -299,7 +336,7 @@ describe("DELETE /comments/:id", () => {
   });
 
   it("POST AUTHOR may tombstone another user's comment on their post (decision 7)", async () => {
-    const created = await createComment(editor, {
+    const created = await createComment(deleter, {
       postId: modPostId,
       markdownSource: "on author's post",
     });
@@ -311,7 +348,7 @@ describe("DELETE /comments/:id", () => {
 
   it("a THIRD PARTY (neither comment nor post author) gets 404", async () => {
     const third = await onboardedActor();
-    const created = await createComment(editor, { postId: modPostId, markdownSource: "x" });
+    const created = await createComment(deleter, { postId: modPostId, markdownSource: "x" });
     const { id } = (await created.json()) as { id: string };
     const response = await deleteComment(third, id);
     expect(response.status).toBe(404);
@@ -319,15 +356,15 @@ describe("DELETE /comments/:id", () => {
   });
 
   it("is idempotent: deleting an already-tombstoned comment 200s", async () => {
-    const created = await createComment(editor, { postId: modPostId, markdownSource: "x" });
+    const created = await createComment(deleter, { postId: modPostId, markdownSource: "x" });
     const { id } = (await created.json()) as { id: string };
-    await deleteComment(editor, id);
-    const again = await deleteComment(editor, id);
+    await deleteComment(deleter, id);
+    const again = await deleteComment(deleter, id);
     expect(again.status).toBe(200);
   });
 
   it("400s INVALID_INPUT for a non-uuid id", async () => {
-    const response = await deleteComment(editor, "nope");
+    const response = await deleteComment(deleter, "nope");
     expect(response.status).toBe(400);
   });
 });

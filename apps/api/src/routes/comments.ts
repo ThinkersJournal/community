@@ -125,6 +125,14 @@ export async function handleUpdateComment(
   if (result instanceof Response) return result;
   const { userId } = result.session;
 
+  // Same limiter, same key shape as handleCreateComment: create/edit/delete
+  // collectively share the 10/60s window. Without this, PATCH could loop
+  // unbounded on ONE owned comment, each hit firing an awaited purgeTags()
+  // and burning the zone's 5-purges/min budget out from under every other
+  // author's legitimate edit (see the M2.2 adversarial-review finding).
+  const limited = await enforceRateLimit(env.COMMENT_LIMITER, `comment:${userId}`);
+  if (limited !== null) return limited;
+
   const id = params.id ?? "";
   if (!UUID_RE.test(id)) return errorResponse("INVALID_INPUT", 400, { fields: ["id"] });
 
@@ -166,6 +174,13 @@ export async function handleDeleteComment(
   const result = await runMutatingPipeline(request, env, ctx, { requireVerifiedEmail: true });
   if (result instanceof Response) return result;
   const { userId } = result.session;
+
+  // Same limiter/key as create+update — defense-in-depth for symmetry. A
+  // second delete of an already-tombstoned comment purges nothing, so this
+  // vector was already bounded by the create limiter, but sharing the window
+  // means delete can't be used to pad a user's remaining PATCH headroom.
+  const limited = await enforceRateLimit(env.COMMENT_LIMITER, `comment:${userId}`);
+  if (limited !== null) return limited;
 
   const id = params.id ?? "";
   if (!UUID_RE.test(id)) return errorResponse("INVALID_INPUT", 400, { fields: ["id"] });
