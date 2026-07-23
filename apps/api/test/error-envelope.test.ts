@@ -238,6 +238,11 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /public/authors",
     build: () => new Request("https://api.test/public/authors?cursor=not-a-uuid"),
   },
+  {
+    name: "404 public comments without a postId",
+    route: "GET /public/comments",
+    build: () => new Request("https://api.test/public/comments"),
+  },
   // GET /follows/status authenticates via readCurrentSession, same as GET
   // /profile/me above — its only error path (M2.1).
   {

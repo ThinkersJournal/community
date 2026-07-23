@@ -18,6 +18,7 @@
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
+import { handlePublicComments } from "./routes/comments-public";
 import { handleCsrf } from "./routes/csrf";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
@@ -122,6 +123,7 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/public/posts", handler: handlePublicPost },
   { method: "GET", pattern: "/public/profile", handler: handlePublicProfile },
   { method: "GET", pattern: "/public/recent", handler: handlePublicRecent },
+  { method: "GET", pattern: "/public/comments", handler: handlePublicComments },
 
   // ANONYMOUS social reads (M2.1) — see src/routes/social-public.ts's header:
   // viewer-independent like the routes above, but NOT edge-cached (they change
