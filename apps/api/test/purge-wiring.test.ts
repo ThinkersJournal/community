@@ -124,6 +124,37 @@ describe("PATCH /posts/:id purges on edit", () => {
   });
 });
 
+function createCommentRequest(actor: Actor, postId: string): Request {
+  return new Request("https://api.test/comments", {
+    method: "POST",
+    headers: {
+      Origin: "http://localhost:8787",
+      Cookie: actor.cookie,
+      "X-CSRF-Token": actor.csrfToken,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ postId, markdownSource: "purge probe" }),
+  });
+}
+
+describe("POST /comments purges the post page", () => {
+  it("a comment purges post:<id> in ONE call", async () => {
+    const postId = await createPublished(actor);
+    const { response, purges } = await fetchCapturingPurges(createCommentRequest(actor, postId));
+    expect(response.status).toBe(201);
+    expect(purges).toHaveLength(1);
+    expect(purges[0]).toEqual([`post:${postId}`]);
+  });
+
+  it("a rejected comment (draft post) purges NOTHING", async () => {
+    const { response: draft } = await fetchCapturingPurges(createPostRequest(actor, "draft"));
+    const draftId = ((await draft.json()) as { id: string }).id;
+    const { response, purges } = await fetchCapturingPurges(createCommentRequest(actor, draftId));
+    expect(response.status).toBe(404);
+    expect(purges).toHaveLength(0);
+  });
+});
+
 describe("a purge failure NEVER fails the write", () => {
   it("still 200s when the purge hop rejects", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});

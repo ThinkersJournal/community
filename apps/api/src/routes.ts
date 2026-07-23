@@ -17,6 +17,7 @@
  */
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
+import { handleCreateComment } from "./routes/comments";
 import { handleCsrf } from "./routes/csrf";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
@@ -101,6 +102,10 @@ export const ROUTES: readonly RouteDef[] = [
   // no dynamic-vs-literal shadowing risk with `DELETE /follows/:followeeId`
   // above (different methods) or `POST /follows` (different method).
   { method: "GET", pattern: "/follows/status", handler: handleFollowStatus },
+
+  // Engagement writes (M2.2). Comment writes purge `post:<id>` — see
+  // src/routes/comments.ts's header. PATCH/DELETE own their gates per-handler.
+  { method: "POST", pattern: "/comments", handler: handleCreateComment },
 
   // Per-viewer home feed (M2.1) — no-store, never edge-cached.
   { method: "GET", pattern: "/feed", handler: handleFeed },
