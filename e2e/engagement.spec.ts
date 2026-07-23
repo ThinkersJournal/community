@@ -1,0 +1,117 @@
+/**
+ * THE ENGAGEMENT SPINE — a real browser drives comment + reaction life-cycles
+ * across both Workers: author A publishes; reader B comments, replies, edits,
+ * reacts; an anonymous reader sees the comments; A moderates (deletes B's
+ * comment on A's post); the un-onboarded see the gate affordance, not a form.
+ *
+ * ⚠️ miniflare does not simulate Workers Cache (see publish.spec.ts's header):
+ * "the comment appears after reload" here observes the DB-backed re-render,
+ * which is exactly what the requirement asks; the purge-driven cache
+ * invalidation is deploy-gate-only and this file does NOT claim to test it.
+ */
+import { expect, test } from "@playwright/test";
+
+import { chooseUsername, publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
+
+test("comment → reply → edit → react → anonymous sees it → author moderates", async ({
+  page,
+  browser,
+}) => {
+  // ---- Author A publishes --------------------------------------------------
+  await signUpAndVerify(page, page.request);
+  const { url } = await publishPost(page, {
+    title: "Engagement Spine",
+    markdownSource: "A post worth **discussing**.",
+  });
+
+  // ---- Reader B comments ---------------------------------------------------
+  const readerCtx = await browser.newContext();
+  const readerPage = await readerCtx.newPage();
+  try {
+    await signUpAndVerify(readerPage, readerPage.request);
+    await chooseUsername(readerPage, uniqueHandle("reader"));
+
+    await readerPage.goto(url);
+    // The island replaced the SSR login-link with a real form.
+    const form = readerPage.locator("[data-comment-form-slot] form");
+    await form.locator("textarea").fill("A comment with `code` in it.");
+    await form.locator("button[type=submit]").click();
+    // reload happened; the SSR'd comment renders THROUGH the markdown pipeline.
+    await expect(readerPage.locator(".comment-body code")).toHaveText("code");
+
+    // ---- Reply (nested) ----------------------------------------------------
+    const commentLi = readerPage.locator("[data-comment-id]").first();
+    await commentLi.locator("button", { hasText: "Reply" }).click();
+    const replyForm = commentLi.locator("[data-comment-actions] form");
+    await replyForm.locator("textarea").fill("Replying to myself.");
+    await replyForm.locator("button[type=submit]").click();
+    await expect(readerPage.locator('[data-depth="1"]')).toContainText("Replying to myself.");
+
+    // ---- Edit own reply ----------------------------------------------------
+    const replyLi = readerPage.locator('[data-depth="1"]');
+    await replyLi.locator("button", { hasText: "Edit" }).click();
+    const editForm = replyLi.locator("[data-comment-actions] form");
+    await expect(editForm.locator("textarea")).toHaveValue("Replying to myself.");
+    await editForm.locator("textarea").fill("Edited reply.");
+    await editForm.locator("button[type=submit]").click();
+    await expect(readerPage.locator('[data-depth="1"]')).toContainText("Edited reply.");
+    await expect(readerPage.locator('[data-depth="1"] .edited')).toBeVisible();
+
+    // ---- React to the post -------------------------------------------------
+    const postChips = readerPage.locator('[data-reactions][data-target-post]');
+    const insightful = postChips.locator('button[data-kind="insightful"]');
+    await expect(insightful).toBeEnabled(); // island hydrated
+    await insightful.click();
+    await expect(insightful).toHaveAttribute("aria-pressed", "true");
+    await expect(insightful.locator("[data-count]")).toHaveText("1");
+    // Survives a reload (server state, not client optimism).
+    await readerPage.reload();
+    await expect(
+      readerPage
+        .locator('[data-reactions][data-target-post] button[data-kind="insightful"]')
+        .locator("[data-count]"),
+    ).toHaveText("1");
+
+    // ---- Anonymous reader sees the comments --------------------------------
+    const anonCtx = await browser.newContext();
+    try {
+      const anonPage = await anonCtx.newPage();
+      await anonPage.goto(url);
+      await expect(anonPage.locator(".comment-body").first()).toContainText("A comment with");
+      // Anonymous: form slot still shows the SSR login affordance.
+      await expect(anonPage.locator("[data-comment-form-slot]")).toContainText("Log in");
+    } finally {
+      await anonCtx.close();
+    }
+
+    // ---- Author A moderates: deletes B's top-level comment on A's post -----
+    await page.goto(url);
+    const target = page.locator("[data-comment-id]").first();
+    await target.locator("button", { hasText: "Delete" }).click();
+    await expect(page.locator(".tombstone").first()).toHaveText("[deleted]");
+    // The reply SURVIVES under the tombstone.
+    await expect(page.locator('[data-depth="1"]')).toContainText("Edited reply.");
+  } finally {
+    await readerCtx.close();
+  }
+});
+
+test("a verified but UN-ONBOARDED user gets the choose-handle affordance, not a form", async ({
+  page,
+  browser,
+}) => {
+  await signUpAndVerify(page, page.request);
+  const { url } = await publishPost(page, { title: "Gate Probe", markdownSource: "body" });
+
+  const ctx = await browser.newContext();
+  try {
+    const p = await ctx.newPage();
+    await signUpAndVerify(p, p.request); // verified, NO chooseUsername
+    await p.goto(url);
+    const slot = p.locator("[data-comment-form-slot]");
+    await expect(slot.locator("a", { hasText: "Choose your handle" })).toBeVisible();
+    await expect(slot.locator("form")).toHaveCount(0);
+  } finally {
+    await ctx.close();
+  }
+});
