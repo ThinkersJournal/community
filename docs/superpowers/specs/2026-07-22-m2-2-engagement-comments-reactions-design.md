@@ -117,7 +117,7 @@ Every new GET gets an explicit `CASES` entry in `error-envelope.test.ts` (standi
 
 - Every write: origin allowlist + CSRF + epoch + verified-email + `username_chosen` + per-family rate limiter. Ownership enforced **atomically in the write's WHERE clause** (M2.1 idiom), answering 404 for not-found and not-owned identically.
 - **Draft parity**: commenting on / reacting to / listing comments of an unpublished post 404s exactly like reading it — `status = 'published'` lives in each query.
-- **XSS**: `renderMarkdown` (sanitize-first) remains the only Markdown→HTML producer, running server-side in the cached render; islands build DOM exclusively via `textContent`. No new `set:html` sinks.
+- **XSS**: `renderMarkdown` (sanitize-first) remains the only Markdown→HTML producer, running server-side in the cached render; islands build DOM exclusively via `textContent`. Exactly ONE new `set:html` sink: the SSR comment body on the post page, bound exclusively to `renderMarkdown` output (the same safety class as `#post-body`) — `post-page.test.ts`'s two-sink tripwire is extended to pin exactly three named sinks, not weakened.
 - Depth and length are DB CHECKs (backstop) *and* app validations (friendly errors). `path`/`depth` are never client-supplied.
 - CSP, cookie, and cache-header regimes are unchanged; reaction reads are `no-store` end-to-end.
 
