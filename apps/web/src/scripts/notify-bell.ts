@@ -10,8 +10,11 @@
  *     2, see the task brief). Reveals the bell + badge only on 200.
  *  2. On click, loads `/api/notifications`, collapses it with
  *     `collapseNotifications` and renders each group's copy with
- *     `notificationLabel` — BOTH from `@thinkersjournal/shared` — so this
- *     dropdown and the `/notifications` page can never disagree on wording.
+ *     `notificationLabel`, linked to its target via `notificationHref` — ALL
+ *     THREE from `@thinkersjournal/shared` — so this dropdown and the
+ *     `/notifications` page can never disagree on wording OR on where a
+ *     notification links (the post for engagement kinds, the actor's profile
+ *     for `follow`, plain text when the post is gone).
  *  3. Marks everything read (`POST /api/notifications-read {all:true}`) right
  *     after a successful render, using a CSRF token fetched once from
  *     `/api/me` (same idiom as nav-auth.ts) and cached in a module var.
@@ -24,7 +27,7 @@
  * writes anywhere — because a rendered group carries a user-derived actor
  * name and (via notificationLabel's `rest`) an interpolated post title.
  */
-import { collapseNotifications, notificationLabel } from "@thinkersjournal/shared";
+import { collapseNotifications, notificationHref, notificationLabel } from "@thinkersjournal/shared";
 
 import type { NotificationsPage } from "@thinkersjournal/shared";
 
@@ -90,20 +93,30 @@ function renderPanel(panel: HTMLElement, page: NotificationsPage): void {
 
   for (const group of groups) {
     const label = notificationLabel(group);
+    const href = notificationHref(group);
     const row = document.createElement("p");
     row.className = group.read ? "notify-row" : "notify-row unread";
 
-    const actor = document.createElement("a");
-    actor.href = `/@${label.leadUsername}`;
-    actor.textContent = label.leadName;
+    // The whole row links to the notification's TARGET (the post for
+    // engagement kinds, the actor's profile for `follow`) as ONE anchor over
+    // the full label — never a nested anchor. `href === null` only when the
+    // post is gone (hard-deleted): render the label as plain text instead of
+    // a dead link.
+    const text = label.leadName + label.rest;
+    if (href !== null) {
+      const link = document.createElement("a");
+      link.href = href;
+      link.textContent = text;
+      row.appendChild(link);
+    } else {
+      row.appendChild(document.createTextNode(text));
+    }
 
     // NOT panel.append(...): worker-configuration.d.ts (wrangler's ambient
     // globals for the HTMLRewriter API) declares its own global `Element`
     // with an `append(content, options?)` overload that merges into DOM's
     // `Element`/`HTMLElement`, making `.append()` fail to typecheck here for
     // any arity. appendChild is unaffected (see nav-auth.ts:46-50).
-    row.appendChild(actor);
-    row.appendChild(document.createTextNode(label.rest));
     panel.appendChild(row);
   }
 }

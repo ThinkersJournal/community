@@ -31,6 +31,8 @@ export interface NotificationItem {
   postId: string | null;
   postTitle: string | null;
   postSlug: string | null;
+  /** The post's author's handle — null for `follow` (no post) or a hard-deleted post. */
+  postAuthorUsername: string | null;
   commentId: string | null;
   reactionKind: string | null;
   createdAt: string;
@@ -52,6 +54,8 @@ export interface CollapsedNotification {
   postId: string | null;
   postTitle: string | null;
   postSlug: string | null;
+  /** The post's author's handle — null for `follow` (no post) or a hard-deleted post. */
+  postAuthorUsername: string | null;
   commentId: string | null;
   /** The tone — present ONLY for a singleton group (one row). */
   reactionKind: string | null;
@@ -75,6 +79,7 @@ export function collapseNotifications(items: NotificationItem[]): CollapsedNotif
       g = {
         key, kind: it.kind, leadActor: it.actor, actorCount: 0,
         postId: it.postId, postTitle: it.postTitle, postSlug: it.postSlug,
+        postAuthorUsername: it.postAuthorUsername,
         commentId: it.commentId, reactionKind: it.reactionKind,
         createdAt: it.createdAt, ids: [], read: true, actors: new Set<string>(),
       };
@@ -91,6 +96,7 @@ export function collapseNotifications(items: NotificationItem[]): CollapsedNotif
     return {
       key: g.key, kind: g.kind, leadActor: g.leadActor, actorCount,
       postId: g.postId, postTitle: g.postTitle, postSlug: g.postSlug,
+      postAuthorUsername: g.postAuthorUsername,
       commentId: g.commentId,
       reactionKind: g.ids.length === 1 ? g.reactionKind : null,
       createdAt: g.createdAt, ids: g.ids, read: g.read,
@@ -160,4 +166,14 @@ export function notificationLabel(group: CollapsedNotification): NotificationLab
   }
 
   return { leadName, leadUsername, rest };
+}
+
+/** The primary target a notification links to: the post for engagement kinds,
+ *  the actor's profile for a follow. null when the post is gone (render plain). */
+export function notificationHref(group: CollapsedNotification): string | null {
+  if (group.kind === "follow") return `/@${group.leadActor.username}`;
+  if (group.postAuthorUsername !== null && group.postSlug !== null) {
+    return `/@${group.postAuthorUsername}/${group.postSlug}`;
+  }
+  return null;
 }

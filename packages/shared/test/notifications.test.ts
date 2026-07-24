@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { collapseNotifications, MarkReadInput, NOTIFICATION_KINDS, notificationLabel } from "../src";
+import { collapseNotifications, MarkReadInput, NOTIFICATION_KINDS, notificationHref, notificationLabel } from "../src";
 import type { CollapsedNotification, NotificationItem } from "../src";
 
 function item(over: Partial<NotificationItem>): NotificationItem {
   return {
     id: crypto.randomUUID(), kind: "post_reaction",
     actor: { username: "u", displayName: null },
-    postId: "p1", postTitle: "T", postSlug: "t", commentId: null,
+    postId: "p1", postTitle: "T", postSlug: "t", postAuthorUsername: "author", commentId: null,
     reactionKind: "insightful", createdAt: "2026-07-24T00:00:00Z", read: false,
     ...over,
   };
@@ -18,7 +18,7 @@ function group(over: Partial<CollapsedNotification>): CollapsedNotification {
     key: "k", kind: "post_reaction",
     leadActor: { username: "lead", displayName: "Lead Actor" },
     actorCount: 1,
-    postId: "p1", postTitle: "Title", postSlug: "t", commentId: null,
+    postId: "p1", postTitle: "Title", postSlug: "t", postAuthorUsername: "author", commentId: null,
     reactionKind: "insightful", createdAt: "2026-07-24T00:00:00Z",
     ids: ["1"], read: false,
     ...over,
@@ -85,6 +85,14 @@ describe("collapseNotifications", () => {
       item({ read: false, actor: { username: "b", displayName: null } }),
     ]);
     expect(g[0]!.read).toBe(false);
+  });
+
+  it("carries postAuthorUsername from the group's rows (same post -> same author)", () => {
+    const withAuthor = collapseNotifications([item({ postAuthorUsername: "alice" })]);
+    expect(withAuthor[0]!.postAuthorUsername).toBe("alice");
+
+    const noAuthor = collapseNotifications([item({ kind: "follow", postId: null, postAuthorUsername: null })]);
+    expect(noAuthor[0]!.postAuthorUsername).toBeNull();
   });
 });
 
@@ -178,5 +186,32 @@ describe("notificationLabel", () => {
     const l = notificationLabel(group({ kind: "post_comment", actorCount: 1, postTitle: null }));
     expect(l.rest).toBe(" commented on your post «(untitled)»");
     expect(l.rest).not.toContain("null");
+  });
+});
+
+describe("notificationHref", () => {
+  it("follow: links the actor's profile", () => {
+    const href = notificationHref(
+      group({ kind: "follow", leadActor: { username: "ada", displayName: "Ada" }, postAuthorUsername: null, postSlug: null }),
+    );
+    expect(href).toBe("/@ada");
+  });
+
+  it.each(["post_comment", "comment_reply", "post_reaction", "comment_reaction"] as const)(
+    "%s: links the post when a post author + slug are present",
+    (kind) => {
+      const href = notificationHref(group({ kind, postAuthorUsername: "alice", postSlug: "my-post" }));
+      expect(href).toBe("/@alice/my-post");
+    },
+  );
+
+  it("returns null when postAuthorUsername is null (e.g. hard-deleted post's author row is gone)", () => {
+    const href = notificationHref(group({ kind: "post_comment", postAuthorUsername: null, postSlug: "my-post" }));
+    expect(href).toBeNull();
+  });
+
+  it("returns null when postSlug is null (hard-deleted post)", () => {
+    const href = notificationHref(group({ kind: "post_comment", postAuthorUsername: "alice", postSlug: null }));
+    expect(href).toBeNull();
   });
 });

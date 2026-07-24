@@ -12,6 +12,10 @@ describe("notify bell island", () => {
     expect(code).not.toContain("innerHTML");
     expect(code).not.toContain("insertAdjacentHTML");
   });
+  it("links each row to its notification target via the shared notificationHref helper", () => {
+    expect(code).toContain("notificationHref");
+    expect(code).toContain("@thinkersjournal/shared");
+  });
   it("opens a dropdown, loads items, and marks all read with CSRF", () => {
     expect(code).toContain("/api/notifications");
     expect(code).toContain("/api/notifications-read");

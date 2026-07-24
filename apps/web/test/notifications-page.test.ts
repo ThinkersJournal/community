@@ -19,4 +19,7 @@ describe("/notifications page", () => {
   it("collapses rows for display", () => {
     expect(src).toContain("collapseNotifications(");
   });
+  it("links each item to its notification target via notificationHref", () => {
+    expect(src).toContain("notificationHref(");
+  });
 });

@@ -37,6 +37,34 @@ async function seedNotif(recipientId: string, actorId: string): Promise<string> 
   return id;
 }
 
+/** Insert a PUBLISHED post for `authorId` directly via SQL, returns its id. */
+async function seedPost(authorId: string): Promise<string> {
+  const ctx = createExecutionContext();
+  const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+       VALUES ($1, 't', $2, 'b', 'published', now()) RETURNING id`,
+      [authorId, `s-${crypto.randomUUID()}`],
+    );
+    return rows[0]!.id;
+  });
+  await waitOnExecutionContext(ctx);
+  return id;
+}
+
+/** Seed a `post_comment` notification (recipient's post, commented on by actorId), returns the row id. */
+async function seedPostNotif(recipientId: string, actorId: string, postId: string): Promise<string> {
+  const ctx = createExecutionContext();
+  const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `INSERT INTO notifications (recipient_id, actor_id, kind, post_id) VALUES ($1,$2,'post_comment',$3) RETURNING id`,
+      [recipientId, actorId, postId]);
+    return rows[0]!.id;
+  });
+  await waitOnExecutionContext(ctx);
+  return id;
+}
+
 // `users.password_hash` is NOT NULL — a valid PHC-encoded argon2id string.
 // Copied from test/actor.ts's own fixture constant: these bare actors need no
 // session, only a `users`+`profiles` row to be a notification's `actor_id`.
@@ -159,6 +187,20 @@ describe("GET /notifications", () => {
     const allIds = [...page1.notifications.map((n) => n.id), ...page2.notifications.map((n) => n.id)];
     expect(new Set(allIds).size).toBe(31);
     expect([...allIds].sort()).toEqual([...seededIds].sort());
+  });
+
+  it("enriches with postAuthorUsername for a post-targeted notification, null for a follow (no post)", async () => {
+    const author = await onboardedActor();
+    const commenter = await onboardedActor();
+    const postId = await seedPost(author.userId);
+    const postNotifId = await seedPostNotif(author.userId, commenter.userId, postId);
+    const followNotifId = await seedNotif(author.userId, commenter.userId);
+
+    const page = (await (await fetchWorker(listReq(author))).json()) as NotificationsPage;
+    const postNotif = page.notifications.find((n) => n.id === postNotifId);
+    const followNotif = page.notifications.find((n) => n.id === followNotifId);
+    expect(postNotif?.postAuthorUsername).toBe(author.username);
+    expect(followNotif?.postAuthorUsername).toBeNull();
   });
 
   it("401s LOGIN_REQUIRED with no session", async () => {

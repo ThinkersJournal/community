@@ -29,6 +29,7 @@ interface DbRow {
   postId: string | null;
   postTitle: string | null;
   postSlug: string | null;
+  postAuthorUsername: string | null;
   commentId: string | null;
   reactionKind: string | null;
   createdAt: string;
@@ -50,11 +51,13 @@ export async function handleListNotifications(
         `SELECT n.id, n.kind,
                 ap.username, ap.display_name AS "displayName",
                 n.post_id AS "postId", p.title AS "postTitle", p.slug AS "postSlug",
+                pp.username AS "postAuthorUsername",
                 n.comment_id AS "commentId", n.reaction_kind AS "reactionKind",
                 n.created_at AS "createdAt", (n.read_at IS NOT NULL) AS read
            FROM notifications n
            JOIN profiles ap ON ap.user_id = n.actor_id
            LEFT JOIN posts p ON p.id = n.post_id
+           LEFT JOIN profiles pp ON pp.user_id = p.author_id
           WHERE n.recipient_id = $1 AND n.id < $2
           ORDER BY n.id DESC
           LIMIT ${PAGE_SIZE + 1}`,
@@ -69,6 +72,7 @@ export async function handleListNotifications(
         postId: r.postId,
         postTitle: r.postTitle,
         postSlug: r.postSlug,
+        postAuthorUsername: r.postAuthorUsername,
         commentId: r.commentId,
         reactionKind: r.reactionKind,
         createdAt: r.createdAt,

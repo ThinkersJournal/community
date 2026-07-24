@@ -8,20 +8,22 @@
  * response is scoped to `recipient_id = session.userId`, so nothing here may
  * ever reach the Workers Cache.
  *
- * ⚠️ POST-LINKING NOTE (deliberate, see task report). `NotificationItem` /
- * `CollapsedNotification` carry `postSlug` + `postTitle` but NOT the post
- * AUTHOR's handle — this page's own viewer is the notification's RECIPIENT,
- * not necessarily the author (e.g. a comment-reply notification), so there is
- * no field here from which `/@handle/slug` could be built without fabricating
- * a URL. Every row therefore links only the ACTOR's name to their profile
- * (`/@actorUsername`, always known); the post title renders as plain text.
+ * ⚠️ POST-LINKING (M2.3a Copilot follow-up). `NotificationItem` /
+ * `CollapsedNotification` now carry `postAuthorUsername` alongside `postSlug`
+ * — enriched by the api's list query (a `LEFT JOIN profiles pp ON pp.user_id =
+ * p.author_id`) — so a real `/@authorHandle/slug` post URL can be built
+ * without fabricating one. `notificationHref` (packages/shared) is the single
+ * source of "what does this notification link to": the post for engagement
+ * kinds, the actor's profile for `follow`, and `null` when the post is gone
+ * (hard-deleted — render plain text, no dead link). Each row is ONE anchor
+ * over the whole label when `href` is non-null, never a nested anchor.
  */
 import BaseLayout from "../components/BaseLayout.astro";
 import { apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
 
-import { collapseNotifications, notificationLabel } from "@thinkersjournal/shared";
+import { collapseNotifications, notificationHref, notificationLabel } from "@thinkersjournal/shared";
 
 import type { NotificationsPage } from "@thinkersjournal/shared";
 
@@ -76,10 +78,15 @@ const groups = collapseNotifications(page.notifications);
       <ul class="cards">
         {groups.map((group) => {
           const l = notificationLabel(group);
+          const href = notificationHref(group);
           return (
             <li class={group.read ? "card" : "card unread"}>
               <p>
-                <a class="link" href={`/@${l.leadUsername}`}>{l.leadName}</a>{l.rest}
+                {href !== null ? (
+                  <a class="link" href={href}>{l.leadName}{l.rest}</a>
+                ) : (
+                  <span>{l.leadName}{l.rest}</span>
+                )}
               </p>
               <p class="meta"><time datetime={group.createdAt}>{group.createdAt.slice(0, 10)}</time></p>
             </li>
