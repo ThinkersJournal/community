@@ -21,9 +21,9 @@ import { apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
 
-import { collapseNotifications, REACTION_LABELS } from "@thinkersjournal/shared";
+import { collapseNotifications, notificationLabel } from "@thinkersjournal/shared";
 
-import type { CollapsedNotification, NotificationsPage, ReactionKind } from "@thinkersjournal/shared";
+import type { NotificationsPage } from "@thinkersjournal/shared";
 
 // Per-viewer, uncached.
 markPrivate(Astro);
@@ -65,41 +65,6 @@ applyCookies(Astro.response.headers, response.setCookies);
 
 const page: NotificationsPage = response.data ?? { notifications: [], nextCursor: null };
 const groups = collapseNotifications(page.notifications);
-
-/** `«lead» and N others` — only ever appended for `follow` and a non-singleton `post_reaction` (§7's literal copy list). */
-function others(group: CollapsedNotification): string {
-  if (group.actorCount <= 1) return "";
-  const n = group.actorCount - 1;
-  return ` and ${n} other${n === 1 ? "" : "s"}`;
-}
-
-/** The reaction tone's display label (§7's `{Tone}`), falling back to the raw value for a kind not in the map. */
-function toneLabel(kind: string): string {
-  return REACTION_LABELS[kind as ReactionKind] ?? kind;
-}
-
-/**
- * §7 copy, minus the lead actor's name (rendered separately as the profile
- * link — see the file header's post-linking note). Each branch starts with a
- * leading space so it reads naturally right after the linked name.
- */
-function tail(group: CollapsedNotification): string {
-  const title = group.postTitle ?? "your post";
-  switch (group.kind) {
-    case "follow":
-      return `${others(group)} followed you`;
-    case "post_comment":
-      return ` commented on your post «${title}»`;
-    case "comment_reply":
-      return ` replied to your comment on «${title}»`;
-    case "post_reaction":
-      return group.reactionKind !== null
-        ? ` found your post «${title}» ${toneLabel(group.reactionKind)}`
-        : `${others(group)} reacted to your post «${title}»`;
-    case "comment_reaction":
-      return ` reacted to your comment on «${title}»`;
-  }
-}
 ---
 
 <BaseLayout title="Notifications">
@@ -109,14 +74,17 @@ function tail(group: CollapsedNotification): string {
       <p>No notifications yet.</p>
     ) : (
       <ul class="cards">
-        {groups.map((group) => (
-          <li class={group.read ? "card" : "card unread"}>
-            <p>
-              <a class="link" href={`/@${group.leadActor.username}`}>{group.leadActor.displayName ?? group.leadActor.username}</a>{tail(group)}
-            </p>
-            <p class="meta"><time datetime={group.createdAt}>{group.createdAt.slice(0, 10)}</time></p>
-          </li>
-        ))}
+        {groups.map((group) => {
+          const l = notificationLabel(group);
+          return (
+            <li class={group.read ? "card" : "card unread"}>
+              <p>
+                <a class="link" href={`/@${l.leadUsername}`}>{l.leadName}</a>{l.rest}
+              </p>
+              <p class="meta"><time datetime={group.createdAt}>{group.createdAt.slice(0, 10)}</time></p>
+            </li>
+          );
+        })}
       </ul>
     )}
     {page.nextCursor !== null && (

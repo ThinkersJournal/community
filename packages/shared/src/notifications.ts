@@ -5,6 +5,9 @@
  */
 import { z } from "zod";
 
+import { REACTION_KINDS, REACTION_LABELS } from "./engagement";
+import type { ReactionKind } from "./engagement";
+
 export const NOTIFICATION_KINDS = [
   "post_comment", "comment_reply", "post_reaction", "comment_reaction", "follow",
 ] as const;
@@ -99,4 +102,63 @@ export function collapseNotifications(items: NotificationItem[]): CollapsedNotif
       createdAt: g.createdAt, ids: g.ids, read: g.read,
     };
   });
+}
+
+/** The lead actor's name, split from the §7 sentence tail so callers can render the name as a profile link. */
+export interface NotificationLabel {
+  leadName: string;
+  leadUsername: string;
+  /** Starts with a space — read naturally right after the linked lead-actor name. */
+  rest: string;
+}
+
+/**
+ * §7's per-kind display copy for a collapsed group, minus the lead actor's
+ * name (rendered separately — every caller links it to `/@{leadUsername}`).
+ * PURE — no DOM, no fetch. The single source of the notification sentence,
+ * shared by the SSR `/notifications` page and the bell dropdown island, so
+ * the two surfaces cannot disagree.
+ *
+ * `comment_reaction` collapses across actors exactly like `follow` and
+ * `post_reaction` (its unique key is `(kind, postId, commentId)`, identical
+ * for every reactor on the same comment) — the "and N others" suffix MUST
+ * apply there too, or a 5-actor group silently renders as if only 1 person
+ * reacted.
+ */
+export function notificationLabel(group: CollapsedNotification): NotificationLabel {
+  const leadUsername = group.leadActor.username;
+  const leadName = group.leadActor.displayName ?? group.leadActor.username;
+  const title = group.postTitle ?? "(untitled)";
+  const n = group.actorCount - 1;
+  const others = group.actorCount > 1 ? ` and ${n} other${n === 1 ? "" : "s"}` : "";
+
+  let rest: string;
+  switch (group.kind) {
+    case "follow":
+      rest = `${others} followed you`;
+      break;
+    case "post_comment":
+      rest = ` commented on your post «${title}»`;
+      break;
+    case "comment_reply":
+      rest = ` replied to your comment on «${title}»`;
+      break;
+    case "post_reaction": {
+      if (group.actorCount === 1) {
+        const isKnownTone =
+          group.reactionKind !== null &&
+          (REACTION_KINDS as readonly string[]).includes(group.reactionKind);
+        const toneSuffix = isKnownTone ? ` ${REACTION_LABELS[group.reactionKind as ReactionKind]}` : "";
+        rest = ` found your post «${title}»${toneSuffix}`;
+      } else {
+        rest = `${others} reacted to your post «${title}»`;
+      }
+      break;
+    }
+    case "comment_reaction":
+      rest = `${others} reacted to your comment on «${title}»`;
+      break;
+  }
+
+  return { leadName, leadUsername, rest };
 }
