@@ -368,3 +368,57 @@ describe("DELETE /comments/:id", () => {
     expect(response.status).toBe(400);
   });
 });
+
+async function notifsFor(
+  recipientId: string,
+): Promise<Array<{ kind: string; actorId: string; commentId: string | null }>> {
+  const ctx = createExecutionContext();
+  const rows = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ kind: string; actor_id: string; comment_id: string | null }>(
+      "SELECT kind, actor_id, comment_id FROM notifications WHERE recipient_id=$1 ORDER BY id",
+      [recipientId],
+    );
+    return rows;
+  });
+  await waitOnExecutionContext(ctx);
+  return rows.map((r) => ({ kind: r.kind, actorId: r.actor_id, commentId: r.comment_id }));
+}
+
+describe("comment notifications (M2.3a)", () => {
+  it("a top-level comment notifies the POST author with the new comment id", async () => {
+    const poster = await onboardedActor();
+    const commenter = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const r = await createComment(commenter, { postId: p, markdownSource: "hi" });
+    const newId = ((await r.json()) as { id: string }).id;
+    expect(await notifsFor(poster.userId)).toEqual([
+      { kind: "post_comment", actorId: commenter.userId, commentId: newId },
+    ]);
+  });
+
+  it("a self-comment on your own post notifies no one", async () => {
+    const poster = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    await createComment(poster, { postId: p, markdownSource: "mine" });
+    expect(await notifsFor(poster.userId)).toEqual([]);
+  });
+
+  it("a reply notifies the PARENT commenter (not the post author), with the reply id", async () => {
+    const poster = await onboardedActor();
+    const parentAuthor = await onboardedActor();
+    const replier = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const top = await createComment(parentAuthor, { postId: p, markdownSource: "top" });
+    const parentId = ((await top.json()) as { id: string }).id;
+    const reply = await createComment(replier, { postId: p, parentId, markdownSource: "re" });
+    const replyId = ((await reply.json()) as { id: string }).id;
+    // parentAuthor gets the reply notification…
+    expect(await notifsFor(parentAuthor.userId)).toEqual([
+      { kind: "comment_reply", actorId: replier.userId, commentId: replyId },
+    ]);
+    // …and the post author gets ONLY the top-level comment, not the deep reply.
+    expect(await notifsFor(poster.userId)).toEqual([
+      { kind: "post_comment", actorId: parentAuthor.userId, commentId: parentId },
+    ]);
+  });
+});
