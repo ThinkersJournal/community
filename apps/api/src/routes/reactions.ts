@@ -13,6 +13,7 @@ import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
 import { hasChosenUsername } from "../db/onboarding";
 import { errorResponse } from "../http/errors";
+import { notify } from "../notifications/create";
 
 import { REACTION_KINDS, ReactionInput } from "@thinkersjournal/shared";
 
@@ -63,16 +64,21 @@ export async function handleAddReaction(
   let error: Response | null = null;
   try {
     error = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      let recipientId: string | null = null;
+      let notifPostId: string | undefined;
+      let notifCommentId: string | undefined;
       if (postId !== undefined) {
-        const post = await c.query<{ status: string }>(
-          "SELECT status FROM posts WHERE id = $1",
+        const post = await c.query<{ status: string; authorId: string }>(
+          `SELECT status, author_id AS "authorId" FROM posts WHERE id = $1`,
           [postId],
         );
         if (post.rows[0]?.status !== "published") return errorResponse("NOT_FOUND", 404);
+        recipientId = post.rows[0].authorId;
+        notifPostId = postId;
       } else {
         // A comment target must be live AND sit on a published post (draft parity).
-        const comment = await c.query<{ deleted: boolean }>(
-          `SELECT (c.deleted_at IS NOT NULL) AS deleted
+        const comment = await c.query<{ deleted: boolean; authorId: string; postId: string }>(
+          `SELECT (c.deleted_at IS NOT NULL) AS deleted, c.author_id AS "authorId", c.post_id AS "postId"
              FROM comments c JOIN posts p ON p.id = c.post_id AND p.status = 'published'
             WHERE c.id = $1`,
           [commentId],
@@ -80,6 +86,9 @@ export async function handleAddReaction(
         const row = comment.rows[0];
         if (row === undefined) return errorResponse("COMMENT_NOT_FOUND", 404);
         if (row.deleted) return errorResponse("COMMENT_DELETED", 409);
+        recipientId = row.authorId;
+        notifPostId = row.postId;
+        notifCommentId = commentId;
       }
 
       await c.query(
@@ -88,6 +97,19 @@ export async function handleAddReaction(
          ON CONFLICT ON CONSTRAINT reactions_target_unique DO NOTHING`,
         [userId, postId ?? null, commentId ?? null, kind],
       );
+
+      // Notify the target's author. Dedup on the notification natural key means a
+      // repeat same-tone reaction adds nothing; a different tone is a new event.
+      if (recipientId !== null) {
+        await notify(c, {
+          recipientId,
+          actorId: userId,
+          kind: postId !== undefined ? "post_reaction" : "comment_reaction",
+          postId: notifPostId,
+          commentId: notifCommentId,
+          reactionKind: kind,
+        });
+      }
       return null;
     });
   } catch (err) {
