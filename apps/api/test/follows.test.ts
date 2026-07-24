@@ -145,3 +145,31 @@ describe("DELETE /follows/:followeeId", () => {
     expect(response.status).toBe(400);
   });
 });
+
+async function notifsFor(
+  recipientId: string,
+): Promise<Array<{ kind: string; actorId: string }>> {
+  const ctx = createExecutionContext();
+  const rows = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ kind: string; actor_id: string }>(
+      "SELECT kind, actor_id FROM notifications WHERE recipient_id=$1 ORDER BY id",
+      [recipientId],
+    );
+    return rows;
+  });
+  await waitOnExecutionContext(ctx);
+  return rows.map((r) => ({ kind: r.kind, actorId: r.actor_id }));
+}
+
+describe("follow notifications (M2.3a)", () => {
+  it("following notifies the followee once, and re-follow after unfollow does not duplicate", async () => {
+    const follower = await onboardedActor();
+    const followee = await onboardedActor();
+    await follow(follower, followee.userId);
+    await unfollow(follower, followee.userId);
+    await follow(follower, followee.userId); // re-follow
+    expect(await notifsFor(followee.userId)).toEqual([
+      { kind: "follow", actorId: follower.userId },
+    ]);
+  });
+});
