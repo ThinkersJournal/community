@@ -38,4 +38,9 @@ describe("Nav", () => {
     const s = src();
     expect(s).toMatch(/import\s+\{\s*initNavToggle\s*\}\s+from\s+["']\.\.\/scripts\/nav-toggle["']/);
   });
+  it("carries a hidden notify-bell placeholder and mounts the bell island", () => {
+    const nav = readFileSync(join(__dirname, "..", "src", "components", "Nav.astro"), "utf8");
+    expect(nav).toContain("data-notify-bell"); // placeholder present
+    expect(nav).toContain("initNotifyBell"); // island mounted
+  });
 });
