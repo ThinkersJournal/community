@@ -166,6 +166,14 @@ describe("GET /notifications", () => {
     expect(r.status).toBe(401);
     expect(((await r.json()) as { code: string }).code).toBe("LOGIN_REQUIRED");
   });
+
+  it("400s INVALID_INPUT for a malformed (non-uuid) cursor", async () => {
+    const r = await fetchWorker(
+      new Request("https://api.test/notifications?cursor=not-a-uuid", { headers: { Cookie: alice.cookie } }),
+    );
+    expect(r.status).toBe(400);
+    expect(((await r.json()) as { code: string }).code).toBe("INVALID_INPUT");
+  });
 });
 
 describe("GET /notifications/unread-count", () => {
