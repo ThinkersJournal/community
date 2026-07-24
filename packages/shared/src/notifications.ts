@@ -138,7 +138,12 @@ export function notificationLabel(group: CollapsedNotification): NotificationLab
       rest = ` replied to your comment on «${title}»`;
       break;
     case "post_reaction": {
-      if (group.actorCount === 1) {
+      // Singleton-vs-collapsed keys off ROW COUNT (ids.length), NOT actorCount:
+      // one actor reacting with multiple tones is a collapsed group (>1 row,
+      // tone already nulled by collapseNotifications) and must read "reacted to
+      // your post", never the single-event "found your post … {Tone}". (`others`
+      // below stays actorCount-based — it counts distinct OTHER actors.)
+      if (group.ids.length === 1) {
         const isKnownTone =
           group.reactionKind !== null &&
           (REACTION_KINDS as readonly string[]).includes(group.reactionKind);

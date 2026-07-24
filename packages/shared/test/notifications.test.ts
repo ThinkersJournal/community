@@ -124,11 +124,25 @@ describe("notificationLabel", () => {
     expect(single.rest).toBe(" found your post «My Post» Insightful");
     expect(single.rest).toContain("Insightful");
 
+    // 5 distinct actors → 5 rows (a real collapsed group has ids.length ≥ actorCount).
     const multi = notificationLabel(
-      group({ kind: "post_reaction", actorCount: 5, reactionKind: null, postTitle: "My Post" }),
+      group({ kind: "post_reaction", actorCount: 5, ids: ["1", "2", "3", "4", "5"], reactionKind: null, postTitle: "My Post" }),
     );
     expect(multi.rest).toContain("and 4 others");
     expect(multi.rest).toBe(" and 4 others reacted to your post «My Post»");
+  });
+
+  it("post_reaction: ONE actor with MULTIPLE tones is collapsed (ids>1) → 'reacted', not 'found … {tone}'", () => {
+    // The PR-review bug (Copilot): keying off actorCount instead of row count
+    // made a 1-actor / 2-tone group (actorCount 1, ids length 2, tone nulled by
+    // collapse) render the single-event copy "found your post …" instead of the
+    // collapsed "reacted to your post …". No "and N others" (only one actor).
+    const l = notificationLabel(
+      group({ kind: "post_reaction", actorCount: 1, ids: ["1", "2"], reactionKind: null, postTitle: "My Post" }),
+    );
+    expect(l.rest).toBe(" reacted to your post «My Post»");
+    expect(l.rest).not.toContain("found");
+    expect(l.rest).not.toContain("and 0 others");
   });
 
   it("post_reaction singleton with a null/unknown reactionKind omits the tone (never 'undefined')", () => {
