@@ -156,7 +156,24 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: 0,
+  // ⚠️ CI COLD-START RESILIENCE. These tests drive TWO wrangler-dev Workers + a
+  // browser + Postgres. Playwright's `webServer.url` probes guarantee both are
+  // *listening* before tests start, but the FIRST (heaviest) test still runs
+  // cold: its first Hyperdrive→pg connections and first cross-process
+  // Service-Binding dispatches are warming up, so its opening signup→verify
+  // sequence occasionally exceeds the default 30s test timeout — a pure timing
+  // flake, not a code bug (it passes on any warm rerun; observed once each on
+  // the M2.2 and M2.3a PRs, same signature). Two mitigations, CI-only:
+  //   • a 60s per-test timeout gives cold-start headroom (each test legitimately
+  //     does ~10 browser actions + DB round-trips); with it, the flake seldom
+  //     even fires, so it rarely reaches the retry below.
+  //   • one retry is the backstop for a genuine transient hang, so a single
+  //     cold-start blip no longer reds the whole run. Kept to ONE (not the usual
+  //     2) so a retried test — which re-runs signup — adds minimal pressure on
+  //     the api's SIGNUP_LIMITER (5/60s per IP; see the serial-execution note
+  //     above). Local stays retries:0 / default timeout to fail fast on real bugs.
+  timeout: process.env.CI ? 60_000 : 30_000,
+  retries: process.env.CI ? 1 : 0,
   reporter: [["list"]],
 
   use: {
