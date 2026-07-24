@@ -2,9 +2,14 @@
  * NOTIFICATION WIRE TYPES (M2.3a) + the read-time collapsing helper, shared by
  * both Workers. `NotificationItem`/`NotificationsPage` are viewer-scoped (the
  * recipient's own rows) and never edge-cached.
+ *
+ * ⚠️ PURE ON PURPOSE — NO ZOD HERE. This module is imported by the nav bell
+ * island (apps/web/src/scripts/notify-bell.ts), which ships to EVERY page for
+ * EVERY visitor. The `MarkReadInput` zod schema lives in the sibling
+ * ./notifications-read module instead, so that consumers of the pure
+ * `collapseNotifications`/`notificationLabel` helpers never drag zod into
+ * their bundle. Do not reintroduce a zod import here.
  */
-import { z } from "zod";
-
 import { REACTION_KINDS, REACTION_LABELS } from "./engagement";
 import type { ReactionKind } from "./engagement";
 
@@ -37,17 +42,6 @@ export interface NotificationsPage {
   notifications: NotificationItem[];
   nextCursor: string | null;
 }
-
-/** `POST /notifications/read` — mark a set read, or all. Exactly one branch. */
-export const MarkReadInput = z
-  .object({
-    ids: z.array(z.string().uuid()).min(1).optional(),
-    all: z.literal(true).optional(),
-  })
-  .refine((b) => (b.all === true) !== (b.ids !== undefined), {
-    message: "exactly one of ids / all",
-  });
-export type MarkReadValue = z.infer<typeof MarkReadInput>;
 
 /** A collapsed display group. `actorCount` counts DISTINCT actors. */
 export interface CollapsedNotification {
