@@ -1,0 +1,133 @@
+---
+/**
+ * `GET /notifications` — the signed-in viewer's notification history,
+ * keyset-paginated via `?cursor=`, collapsed for display via
+ * `collapseNotifications` (packages/shared, M2.3a Task 2).
+ *
+ * ⚠️ Per-viewer, uncached (markPrivate below): the api's `/notifications`
+ * response is scoped to `recipient_id = session.userId`, so nothing here may
+ * ever reach the Workers Cache.
+ *
+ * ⚠️ POST-LINKING NOTE (deliberate, see task report). `NotificationItem` /
+ * `CollapsedNotification` carry `postSlug` + `postTitle` but NOT the post
+ * AUTHOR's handle — this page's own viewer is the notification's RECIPIENT,
+ * not necessarily the author (e.g. a comment-reply notification), so there is
+ * no field here from which `/@handle/slug` could be built without fabricating
+ * a URL. Every row therefore links only the ACTOR's name to their profile
+ * (`/@actorUsername`, always known); the post title renders as plain text.
+ */
+import BaseLayout from "../components/BaseLayout.astro";
+import { apiFetch, applyCookies } from "../lib/api";
+import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+
+import { collapseNotifications, REACTION_LABELS } from "@thinkersjournal/shared";
+
+import type { CollapsedNotification, NotificationsPage, ReactionKind } from "@thinkersjournal/shared";
+
+// Per-viewer, uncached.
+markPrivate(Astro);
+
+// Now carries the shared nav island + fonts (BaseLayout, below). No inline
+// `<script>` on this page, so `script-src 'self'` (setPublicPageCsp's policy)
+// is safe.
+setPublicPageCsp(Astro);
+
+const cursor = Astro.url.searchParams.get("cursor");
+
+const response = await apiFetch<NotificationsPage>(
+  cursor === null ? "/notifications" : `/notifications?cursor=${encodeURIComponent(cursor)}`,
+  { request: Astro.request },
+);
+
+// No session (or a stale one) → the api answered 401.
+//
+// ⚠️ DO NOT REPLACE THIS WITH Astro's own built-in redirect helper (the
+// global's `redirect("/login")` method). That helper builds a Response it
+// owns ITSELF, which does not carry `Astro.response.headers` — so the api's
+// `Set-Cookie` on this very 401 (a stale/expired session can be CLEARED on
+// this reachable path) would be silently dropped, leaving a
+// cleared-but-still-present cookie on the browser. Same bug class login.astro,
+// choose-username.astro, and feed.astro's headers document at length; the fix
+// is identical — build the redirect by hand and apply cookies to IT.
+if (response.status === 401) {
+  const redirect = new Response(null, {
+    status: 302,
+    headers: { Location: "/login" },
+  });
+  applyCookies(redirect.headers, response.setCookies);
+  return redirect;
+}
+
+// Any other outcome renders THIS page, so `Astro.response` IS the outgoing
+// response — propagate whatever cookie the api sent (if any) onto it.
+applyCookies(Astro.response.headers, response.setCookies);
+
+const page: NotificationsPage = response.data ?? { notifications: [], nextCursor: null };
+const groups = collapseNotifications(page.notifications);
+
+/** `«lead» and N others` — only ever appended for `follow` and a non-singleton `post_reaction` (§7's literal copy list). */
+function others(group: CollapsedNotification): string {
+  if (group.actorCount <= 1) return "";
+  const n = group.actorCount - 1;
+  return ` and ${n} other${n === 1 ? "" : "s"}`;
+}
+
+/** The reaction tone's display label (§7's `{Tone}`), falling back to the raw value for a kind not in the map. */
+function toneLabel(kind: string): string {
+  return REACTION_LABELS[kind as ReactionKind] ?? kind;
+}
+
+/**
+ * §7 copy, minus the lead actor's name (rendered separately as the profile
+ * link — see the file header's post-linking note). Each branch starts with a
+ * leading space so it reads naturally right after the linked name.
+ */
+function tail(group: CollapsedNotification): string {
+  const title = group.postTitle ?? "your post";
+  switch (group.kind) {
+    case "follow":
+      return `${others(group)} followed you`;
+    case "post_comment":
+      return ` commented on your post «${title}»`;
+    case "comment_reply":
+      return ` replied to your comment on «${title}»`;
+    case "post_reaction":
+      return group.reactionKind !== null
+        ? ` found your post «${title}» ${toneLabel(group.reactionKind)}`
+        : `${others(group)} reacted to your post «${title}»`;
+    case "comment_reaction":
+      return ` reacted to your comment on «${title}»`;
+  }
+}
+---
+
+<BaseLayout title="Notifications">
+  <div class="wrap notifications">
+    <h1>Notifications</h1>
+    {groups.length === 0 ? (
+      <p>No notifications yet.</p>
+    ) : (
+      <ul class="cards">
+        {groups.map((group) => (
+          <li class={group.read ? "card" : "card unread"}>
+            <p>
+              <a class="link" href={`/@${group.leadActor.username}`}>{group.leadActor.displayName ?? group.leadActor.username}</a>{tail(group)}
+            </p>
+            <p class="meta"><time datetime={group.createdAt}>{group.createdAt.slice(0, 10)}</time></p>
+          </li>
+        ))}
+      </ul>
+    )}
+    {page.nextCursor !== null && (
+      <a class="link" rel="next" href={`/notifications?cursor=${encodeURIComponent(page.nextCursor)}`}>Older →</a>
+    )}
+  </div>
+</BaseLayout>
+<style>
+  .notifications{padding:clamp(40px,7vw,80px) 0}
+  .cards{list-style:none;display:flex;flex-direction:column;gap:16px;margin:28px 0}
+  .card{border:1px solid var(--line);border-radius:12px;padding:16px 22px;background:var(--ink2)}
+  .card.unread{border-color:var(--green)}
+  .card .meta{color:var(--dim);font-size:14px;margin-top:6px}
+</style>
