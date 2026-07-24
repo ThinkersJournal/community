@@ -271,6 +271,20 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /feed",
     build: () => new Request("https://api.test/feed"),
   },
+  // GET /notifications and GET /notifications/unread-count authenticate via
+  // readCurrentSession, same shape as GET /feed above — their only error path
+  // (M2.3a). POST /notifications/read is a mutating route and is already
+  // covered by the automatic origin-less-rejection layer.
+  {
+    name: "401 notifications list no session",
+    route: "GET /notifications",
+    build: () => new Request("https://api.test/notifications"),
+  },
+  {
+    name: "401 notifications unread-count no session",
+    route: "GET /notifications/unread-count",
+    build: () => new Request("https://api.test/notifications/unread-count"),
+  },
   // TEST_ROUTES is "1" in this suite (vitest.config.ts), so the gate is OPEN and
   // the route runs — with no token stashed in KV it takes its own not-found
   // path. That is the branch worth pinning here: it must be the SAME envelope as

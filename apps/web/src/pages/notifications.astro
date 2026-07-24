@@ -1,0 +1,108 @@
+---
+/**
+ * `GET /notifications` — the signed-in viewer's notification history,
+ * keyset-paginated via `?cursor=`, collapsed for display via
+ * `collapseNotifications` (packages/shared, M2.3a Task 2).
+ *
+ * ⚠️ Per-viewer, uncached (markPrivate below): the api's `/notifications`
+ * response is scoped to `recipient_id = session.userId`, so nothing here may
+ * ever reach the Workers Cache.
+ *
+ * ⚠️ POST-LINKING (M2.3a Copilot follow-up). `NotificationItem` /
+ * `CollapsedNotification` now carry `postAuthorUsername` alongside `postSlug`
+ * — enriched by the api's list query (a `LEFT JOIN profiles pp ON pp.user_id =
+ * p.author_id`) — so a real `/@authorHandle/slug` post URL can be built
+ * without fabricating one. `notificationHref` (packages/shared) is the single
+ * source of "what does this notification link to": the post for engagement
+ * kinds, the actor's profile for `follow`, and `null` when the post is gone
+ * (hard-deleted — render plain text, no dead link). Each row is ONE anchor
+ * over the whole label when `href` is non-null, never a nested anchor.
+ */
+import BaseLayout from "../components/BaseLayout.astro";
+import { apiFetch, applyCookies } from "../lib/api";
+import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+
+import { collapseNotifications, notificationHref, notificationLabel } from "@thinkersjournal/shared";
+
+import type { NotificationsPage } from "@thinkersjournal/shared";
+
+// Per-viewer, uncached.
+markPrivate(Astro);
+
+// Now carries the shared nav island + fonts (BaseLayout, below). No inline
+// `<script>` on this page, so `script-src 'self'` (setPublicPageCsp's policy)
+// is safe.
+setPublicPageCsp(Astro);
+
+const cursor = Astro.url.searchParams.get("cursor");
+
+const response = await apiFetch<NotificationsPage>(
+  cursor === null ? "/notifications" : `/notifications?cursor=${encodeURIComponent(cursor)}`,
+  { request: Astro.request },
+);
+
+// No session (or a stale one) → the api answered 401.
+//
+// ⚠️ DO NOT REPLACE THIS WITH Astro's own built-in redirect helper (the
+// global's `redirect("/login")` method). That helper builds a Response it
+// owns ITSELF, which does not carry `Astro.response.headers` — so the api's
+// `Set-Cookie` on this very 401 (a stale/expired session can be CLEARED on
+// this reachable path) would be silently dropped, leaving a
+// cleared-but-still-present cookie on the browser. Same bug class login.astro,
+// choose-username.astro, and feed.astro's headers document at length; the fix
+// is identical — build the redirect by hand and apply cookies to IT.
+if (response.status === 401) {
+  const redirect = new Response(null, {
+    status: 302,
+    headers: { Location: "/login" },
+  });
+  applyCookies(redirect.headers, response.setCookies);
+  return redirect;
+}
+
+// Any other outcome renders THIS page, so `Astro.response` IS the outgoing
+// response — propagate whatever cookie the api sent (if any) onto it.
+applyCookies(Astro.response.headers, response.setCookies);
+
+const page: NotificationsPage = response.data ?? { notifications: [], nextCursor: null };
+const groups = collapseNotifications(page.notifications);
+---
+
+<BaseLayout title="Notifications">
+  <div class="wrap notifications">
+    <h1>Notifications</h1>
+    {groups.length === 0 ? (
+      <p>No notifications yet.</p>
+    ) : (
+      <ul class="cards">
+        {groups.map((group) => {
+          const l = notificationLabel(group);
+          const href = notificationHref(group);
+          return (
+            <li class={group.read ? "card" : "card unread"}>
+              <p>
+                {href !== null ? (
+                  <a class="link" href={href}>{l.leadName}{l.rest}</a>
+                ) : (
+                  <span>{l.leadName}{l.rest}</span>
+                )}
+              </p>
+              <p class="meta"><time datetime={group.createdAt}>{group.createdAt.slice(0, 10)}</time></p>
+            </li>
+          );
+        })}
+      </ul>
+    )}
+    {page.nextCursor !== null && (
+      <a class="link" rel="next" href={`/notifications?cursor=${encodeURIComponent(page.nextCursor)}`}>Older →</a>
+    )}
+  </div>
+</BaseLayout>
+<style>
+  .notifications{padding:clamp(40px,7vw,80px) 0}
+  .cards{list-style:none;display:flex;flex-direction:column;gap:16px;margin:28px 0}
+  .card{border:1px solid var(--line);border-radius:12px;padding:16px 22px;background:var(--ink2)}
+  .card.unread{border-color:var(--green)}
+  .card .meta{color:var(--dim);font-size:14px;margin-top:6px}
+</style>

@@ -3,22 +3,18 @@
  * Same viewer-scoping discipline as posts.ts: `CommentRow`/`CommentsPage`/
  * `PublicReactions` are ANONYMOUS shapes (safe in cached HTML / public reads);
  * `MyReactions` is viewer-scoped and must never reach a shared cache.
+ *
+ * ⚠️ PURE ON PURPOSE — NO ZOD HERE. `REACTION_KINDS`/`REACTION_LABELS` are
+ * imported by notifications.ts, which the nav bell island (ships to every
+ * page) pulls in for its display helpers. The `CreateCommentInput` /
+ * `UpdateCommentInput` / `ReactionInput` zod schemas live in the sibling
+ * ./engagement-write module instead — co-locating them here would drag zod
+ * into that global bundle even though the bell never uses them. Do not
+ * reintroduce a zod import here.
  */
-import { z } from "zod";
 
 /** 10k chars — a comment is a comment, not a post (posts cap at ~100k). */
 export const COMMENT_MAX = 10_000;
-
-export const CreateCommentInput = z.object({
-  postId: z.string().uuid(),
-  /** Omitted = top-level. The api derives path/depth — the client never sends them. */
-  parentId: z.string().uuid().optional(),
-  markdownSource: z.string().min(1).max(COMMENT_MAX),
-});
-
-export const UpdateCommentInput = z.object({
-  markdownSource: z.string().min(1).max(COMMENT_MAX),
-});
 
 /** The four thinker tones — order is display order. DB CHECK mirrors this list. */
 export const REACTION_KINDS = ["insightful", "curious", "agree", "challenging"] as const;
@@ -31,21 +27,6 @@ export const REACTION_LABELS: Record<ReactionKind, string> = {
   agree: "Agree",
   challenging: "Challenging",
 };
-
-/**
- * `kind` is a plain string HERE so the route can answer the dedicated
- * INVALID_REACTION_KIND code (a z.enum reject would collapse it into
- * INVALID_INPUT). Exactly-one-target IS enforced here — that one is shape.
- */
-export const ReactionInput = z
-  .object({
-    postId: z.string().uuid().optional(),
-    commentId: z.string().uuid().optional(),
-    kind: z.string(),
-  })
-  .refine((t) => (t.postId === undefined) !== (t.commentId === undefined), {
-    message: "exactly one of postId/commentId",
-  });
 
 export type ReactionCounts = Record<ReactionKind, number>;
 

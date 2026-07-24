@@ -25,6 +25,11 @@ import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follo
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleUploadMedia } from "./routes/media";
+import {
+  handleListNotifications,
+  handleMarkRead,
+  handleUnreadCount,
+} from "./routes/notifications";
 import { handleCreatePost, handleGetPost, handleUpdatePost } from "./routes/posts";
 import {
   handlePublicPost,
@@ -128,6 +133,13 @@ export const ROUTES: readonly RouteDef[] = [
 
   // Per-viewer home feed (M2.1) — no-store, never edge-cached.
   { method: "GET", pattern: "/feed", handler: handleFeed },
+
+  // In-app notifications (M2.3a). List + count are session-read GETs; read is a
+  // mutating POST (no verified-email gate — clearing your own bell). All scope
+  // to recipient_id = session.userId in-query (IDOR boundary).
+  { method: "GET", pattern: "/notifications", handler: handleListNotifications },
+  { method: "GET", pattern: "/notifications/unread-count", handler: handleUnreadCount },
+  { method: "POST", pattern: "/notifications/read", handler: handleMarkRead },
 
   // ANONYMOUS reads — what the edge caches. See src/routes/public.ts's header:
   // no session is read here, by construction.

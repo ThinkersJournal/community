@@ -275,3 +275,48 @@ describe("GET /reactions/mine", () => {
     expect(((await response.json()) as { code: string }).code).toBe("LOGIN_REQUIRED");
   });
 });
+
+async function notifsFor(
+  recipientId: string,
+): Promise<Array<{ kind: string; actorId: string; reactionKind: string | null }>> {
+  const ctx = createExecutionContext();
+  const rows = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ kind: string; actor_id: string; reaction_kind: string | null }>(
+      "SELECT kind, actor_id, reaction_kind FROM notifications WHERE recipient_id=$1 ORDER BY id",
+      [recipientId],
+    );
+    return rows;
+  });
+  await waitOnExecutionContext(ctx);
+  return rows.map((r) => ({ kind: r.kind, actorId: r.actor_id, reactionKind: r.reaction_kind }));
+}
+
+describe("reaction notifications (M2.3a)", () => {
+  it("a post reaction notifies the post author with the tone; re-reacting same tone does not duplicate", async () => {
+    const posterActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    await react(reader, { postId: p, kind: "insightful" });
+    await react(reader, { postId: p, kind: "insightful" }); // idempotent
+    const n = await notifsFor(posterActor.userId);
+    expect(n).toEqual([{ kind: "post_reaction", actorId: reader.userId, reactionKind: "insightful" }]);
+    // a different tone from the same actor IS a new notification
+    await react(reader, { postId: p, kind: "agree" });
+    expect((await notifsFor(posterActor.userId)).length).toBe(2);
+  });
+
+  it("a comment reaction notifies the comment author", async () => {
+    const commentAuthor = await onboardedActor();
+    const p = await insertPost(commentAuthor.userId, "published");
+    const c = await insertComment(p, commentAuthor.userId);
+    await react(reader, { commentId: c.id, kind: "curious" });
+    expect(await notifsFor(commentAuthor.userId)).toEqual([
+      { kind: "comment_reaction", actorId: reader.userId, reactionKind: "curious" },
+    ]);
+  });
+
+  it("reacting to your OWN post/comment notifies no one", async () => {
+    const p = await insertPost(reader.userId, "published");
+    await react(reader, { postId: p, kind: "agree" });
+    expect(await notifsFor(reader.userId)).toEqual([]);
+  });
+});

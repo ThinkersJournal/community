@@ -13,6 +13,10 @@ import Wordmark from './Wordmark.astro';
     <nav class="links" id="nav-links" aria-label="Primary">
       <a href="/feed">Feed</a>
       <a href="/authors">Authors</a>
+      <span class="notify" data-notify-bell hidden>
+        <button type="button" class="bell" data-notify-toggle aria-label="Notifications">🔔<span class="badge" data-notify-badge hidden></span></button>
+        <div class="notify-panel" data-notify-panel hidden></div>
+      </span>
       <span class="auth" data-auth-slot>
         <a href="/login">Sign in</a>
         <a href="/signup" class="support">Sign up</a>
@@ -29,6 +33,24 @@ import Wordmark from './Wordmark.astro';
   .auth{display:flex;gap:26px;align-items:center}
   .auth .signout{font:inherit;color:var(--muted);background:none;border:0;padding:0;cursor:pointer}
   .auth .signout:hover{color:var(--text)}
+  .notify{position:relative;display:flex;align-items:center}
+  .bell{position:relative;font:inherit;font-size:17px;line-height:1;color:var(--muted);
+    background:none;border:0;padding:4px;cursor:pointer}
+  .bell:hover{color:var(--text)}
+  .badge{position:absolute;top:-4px;right:-6px;min-width:16px;height:16px;padding:0 3px;
+    border-radius:999px;background:var(--green);color:var(--on-green);font-size:10px;
+    font-weight:700;line-height:16px;text-align:center}
+  .notify-panel{position:absolute;top:calc(100% + 12px);right:0;width:min(340px,90vw);
+    max-height:70vh;overflow-y:auto;background:var(--ink2);border:1px solid var(--line);
+    border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:2px;
+    box-shadow:0 12px 32px rgba(0,0,0,.4)}
+  .notify-panel :global(.notify-row),.notify-panel :global(.notify-empty)
+    {margin:0;padding:9px 10px;border-radius:8px;font-size:13.5px;color:var(--muted)}
+  .notify-panel :global(.notify-row.unread){background:rgba(255,255,255,.04);color:var(--text)}
+  .notify-panel :global(.notify-row a){color:var(--text);font-weight:600}
+  @media(max-width:840px){
+    .notify-panel{position:static;width:auto;box-shadow:none;margin:8px clamp(20px,6vw,48px)}
+  }
   .support{font-size:13.5px;font-weight:600;color:var(--on-green) !important;background:var(--green);
     padding:9px 17px;border-radius:999px;box-shadow:0 0 20px var(--green-glow)}
   .nav-toggle{display:none}
@@ -61,6 +83,8 @@ import Wordmark from './Wordmark.astro';
 <script>
   import { initNavAuth } from "../scripts/nav-auth";
   import { initNavToggle } from "../scripts/nav-toggle";
+  import { initNotifyBell } from "../scripts/notify-bell";
   initNavAuth();
   initNavToggle();
+  initNotifyBell();
 </script>

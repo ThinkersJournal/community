@@ -18,6 +18,7 @@ import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
 import { hasChosenUsername } from "../db/onboarding";
 import { errorResponse } from "../http/errors";
+import { notify } from "../notifications/create";
 
 import { CreateCommentInput, UpdateCommentInput } from "@thinkersjournal/shared";
 
@@ -65,19 +66,22 @@ export async function handleCreateComment(
   try {
     outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       // Draft parity: an unpublished post 404s exactly like a nonexistent one.
-      const post = await c.query<{ status: string }>(
-        "SELECT status FROM posts WHERE id = $1",
+      // authorId is also the top-level notify recipient (post_comment).
+      const post = await c.query<{ status: string; authorId: string }>(
+        `SELECT status, author_id AS "authorId" FROM posts WHERE id = $1`,
         [postId],
       );
       if (post.rows[0]?.status !== "published") {
         return { error: errorResponse("NOT_FOUND", 404) };
       }
+      const postAuthorId = post.rows[0].authorId;
 
       let parentPath: string | null = null;
       let depth = 0;
+      let parentAuthorId: string | null = null;
       if (parentId !== undefined) {
-        const parent = await c.query<{ path: string; depth: number; deleted: boolean }>(
-          `SELECT path, depth, (deleted_at IS NOT NULL) AS deleted
+        const parent = await c.query<{ path: string; depth: number; deleted: boolean; authorId: string }>(
+          `SELECT path, depth, (deleted_at IS NOT NULL) AS deleted, author_id AS "authorId"
              FROM comments WHERE id = $1 AND post_id = $2`,
           [parentId, postId],
         );
@@ -88,6 +92,7 @@ export async function handleCreateComment(
         if (row.depth >= MAX_DEPTH) return { error: errorResponse("COMMENT_DEPTH_EXCEEDED", 409) };
         parentPath = row.path;
         depth = row.depth + 1;
+        parentAuthorId = row.authorId;
       }
 
       const { rows } = await c.query<{ id: string }>(
@@ -101,7 +106,29 @@ export async function handleCreateComment(
          RETURNING id`,
         [postId, userId, parentId ?? null, parentPath, depth, markdownSource],
       );
-      return { id: rows[0]!.id };
+      const newId = rows[0]!.id;
+
+      // Notify AFTER the comment is committed, on the same connection. Reply →
+      // parent commenter; top-level → post author. notify() self-suppresses and
+      // never throws, so this cannot affect the 201 the commenter gets.
+      if (parentId !== undefined && parentAuthorId !== null) {
+        await notify(c, {
+          recipientId: parentAuthorId,
+          actorId: userId,
+          kind: "comment_reply",
+          postId,
+          commentId: newId,
+        });
+      } else {
+        await notify(c, {
+          recipientId: postAuthorId,
+          actorId: userId,
+          kind: "post_comment",
+          postId,
+          commentId: newId,
+        });
+      }
+      return { id: newId };
     });
   } catch (err) {
     // Post deleted between the status check and the insert → FK 23503.

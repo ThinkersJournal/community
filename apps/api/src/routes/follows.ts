@@ -11,6 +11,7 @@ import { withClient } from "../db/client";
 import { isCheckViolation, isForeignKeyViolation } from "../db/errors";
 import { hasChosenUsername } from "../db/onboarding";
 import { errorResponse } from "../http/errors";
+import { notify } from "../notifications/create";
 
 import { FollowInput } from "@thinkersjournal/shared";
 
@@ -47,13 +48,16 @@ export async function handleFollow(
   if (followeeId === userId) return errorResponse("CANNOT_FOLLOW_SELF", 400);
 
   try {
-    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-      c.query(
+    await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      await c.query(
         `INSERT INTO follows (follower_id, followee_id) VALUES ($1, $2)
            ON CONFLICT (follower_id, followee_id) DO NOTHING`,
         [userId, followeeId],
-      ),
-    );
+      );
+      // Notify the followee. Dedup means a follow/unfollow/re-follow loop cannot
+      // spam their bell (anti-harassment). self-follow is already rejected above.
+      await notify(c, { recipientId: followeeId, actorId: userId, kind: "follow" });
+    });
   } catch (err) {
     // followee_id references a nonexistent user → FK violation (23503).
     if (isForeignKeyViolation(err)) return errorResponse("NOT_FOUND", 404);
