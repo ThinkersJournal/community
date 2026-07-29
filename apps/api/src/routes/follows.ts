@@ -56,7 +56,7 @@ export async function handleFollow(
       );
       // Notify the followee. Dedup means a follow/unfollow/re-follow loop cannot
       // spam their bell (anti-harassment). self-follow is already rejected above.
-      await notify(c, env, { recipientId: followeeId, actorId: userId, kind: "follow" });
+      await notify(c, env, ctx, { recipientId: followeeId, actorId: userId, kind: "follow" });
     });
   } catch (err) {
     // followee_id references a nonexistent user → FK violation (23503).

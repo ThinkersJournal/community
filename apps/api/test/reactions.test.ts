@@ -374,6 +374,47 @@ describe("reaction notify push (M2.3b)", () => {
     expect(pushed).toEqual([]);
   });
 
+  it("a repeat same-tone reaction pushes EXACTLY ONCE (live-channel anti-spam)", async () => {
+    // Finding 2 (M2.3b fix wave): mirrors M2.3a's "re-reacting same tone does
+    // not duplicate" for the DB row — the repeat reaction's insert conflicts
+    // (rowCount 0), so notify()'s rowCount gate means the SECOND identical
+    // reaction pushes nothing, even though the write itself still 201s.
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const posterActor = await onboardedActor();
+    const reactorActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    const notifyEnv = { ...env, NOTIFY: spyingNotify(pushed) } as never;
+    const body = JSON.stringify({ postId: p, kind: "agree" });
+
+    const ctx1 = createExecutionContext();
+    const r1 = await worker.fetch(
+      new Request("https://api.test/reactions", {
+        method: "POST",
+        headers: mutatingHeaders(reactorActor),
+        body,
+      }),
+      notifyEnv,
+      ctx1,
+    );
+    await waitOnExecutionContext(ctx1);
+    expect(r1.status).toBe(201);
+
+    const ctx2 = createExecutionContext();
+    const r2 = await worker.fetch(
+      new Request("https://api.test/reactions", {
+        method: "POST",
+        headers: mutatingHeaders(reactorActor),
+        body,
+      }),
+      notifyEnv,
+      ctx2,
+    );
+    await waitOnExecutionContext(ctx2);
+    expect(r2.status).toBe(201);
+
+    expect(pushed).toEqual([{ id: posterActor.userId, kind: "notification" }]);
+  });
+
   it("a push failure does not fail the reaction write", async () => {
     const notify = {
       getByName: () => ({

@@ -230,6 +230,44 @@ describe("follow notify push (M2.3b)", () => {
     expect(pushed).toEqual([]);
   });
 
+  it("follow → unfollow → re-follow pushes EXACTLY ONCE (live-channel anti-spam)", async () => {
+    // Finding 2 (M2.3b fix wave): M2.3a's dedup already proves the re-follow
+    // adds no second DB row ("re-follow after unfollow does not duplicate",
+    // above); this proves the LIVE push honors the same guarantee — a
+    // follow/unfollow/re-follow cycle cannot spam the followee's bell with
+    // realtime nudges, because the re-follow's insert conflicts (rowCount 0)
+    // and notify() gates the push on a genuinely NEW row.
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const follower = await onboardedActor();
+    const followee = await onboardedActor();
+    const notifyEnv = { ...env, NOTIFY: spyingNotify(pushed) } as never;
+
+    const ctx1 = createExecutionContext();
+    await worker.fetch(followRequest(follower, followee.userId), notifyEnv, ctx1);
+    await waitOnExecutionContext(ctx1);
+
+    const ctx2 = createExecutionContext();
+    await worker.fetch(
+      new Request(`https://api.test/follows/${followee.userId}`, {
+        method: "DELETE",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: follower.cookie,
+          "X-CSRF-Token": follower.csrfToken,
+        },
+      }),
+      notifyEnv,
+      ctx2,
+    );
+    await waitOnExecutionContext(ctx2);
+
+    const ctx3 = createExecutionContext();
+    await worker.fetch(followRequest(follower, followee.userId), notifyEnv, ctx3);
+    await waitOnExecutionContext(ctx3);
+
+    expect(pushed).toEqual([{ id: followee.userId, kind: "notification" }]);
+  });
+
   it("a push failure does not fail the follow write", async () => {
     const notify = {
       getByName: () => ({
