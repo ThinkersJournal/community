@@ -88,21 +88,39 @@ const PASSWORD_HASH = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$ZGlnZXN0";
  */
 const bareActorIds: string[] = [];
 
-async function insertBareActor(): Promise<string> {
+/**
+ * Batched seed: `n` distinct bare actors + one follow-notification each, in ONE
+ * connection (three multi-row inserts) rather than ~3n single-row inserts across
+ * ~2n `withClient` acquisitions. The per-call connection churn flaked under
+ * parallel-suite DB contention (a keyset-test timeout); the seeded rows and
+ * their natural-key distinctness are identical. Returns the notification ids;
+ * records the actor ids in `bareActorIds` for `afterAll` cleanup.
+ */
+async function seedKeysetNotifs(recipientId: string, n: number): Promise<string[]> {
   const ctx = createExecutionContext();
-  const unique = crypto.randomUUID().replace(/-/g, "");
-  const userId = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    const { rows } = await c.query<{ id: string }>(
+  const notifIds = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const users = await c.query<{ id: string }>(
       `INSERT INTO users (email, password_hash, email_verified_at)
-       VALUES ($1, $2, now()) RETURNING id`,
-      [`bare_${unique}@example.com`, PASSWORD_HASH]);
-    const id = rows[0]!.id;
-    await c.query("INSERT INTO profiles (user_id, username) VALUES ($1, $2)", [id, `b${unique.slice(0, 20)}`]);
-    return id;
+       SELECT 'bare_' || gen_random_uuid() || '@example.com', $2, now()
+         FROM generate_series(1, $1::int)
+       RETURNING id`,
+      [n, PASSWORD_HASH]);
+    const actorIds = users.rows.map((r) => r.id);
+    bareActorIds.push(...actorIds);
+    await c.query(
+      `INSERT INTO profiles (user_id, username)
+       SELECT id, 'b' || substr(replace(id::text, '-', ''), 1, 20)
+         FROM unnest($1::uuid[]) AS t(id)`,
+      [actorIds]);
+    const notifs = await c.query<{ id: string }>(
+      `INSERT INTO notifications (recipient_id, actor_id, kind)
+       SELECT $1, id, 'follow' FROM unnest($2::uuid[]) AS t(id)
+       RETURNING id`,
+      [recipientId, actorIds]);
+    return notifs.rows.map((r) => r.id);
   });
   await waitOnExecutionContext(ctx);
-  bareActorIds.push(userId);
-  return userId;
+  return notifIds;
 }
 
 function listReq(actor: Actor, cursor?: string): Request {
@@ -147,11 +165,7 @@ describe("GET /notifications", () => {
 
     // 31 DISTINCT actors -> 31 distinct natural keys (recipient, actor, 'follow',
     // NULL, NULL, NULL differs only by actor_id) -> no unique-key collapse.
-    const seededIds: string[] = [];
-    for (let i = 0; i < 31; i++) {
-      const actorId = await insertBareActor();
-      seededIds.push(await seedNotif(recipient.userId, actorId));
-    }
+    const seededIds = await seedKeysetNotifs(recipient.userId, 31);
     expect(new Set(seededIds).size).toBe(31); // sanity: the seed itself didn't collapse
 
     // uuidv7 ids sort lexically the same way Postgres orders them — sort the
