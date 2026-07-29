@@ -57,15 +57,22 @@
   // nudges; no durable state, but `new_sqlite_classes` is still mandatory for a
   // new namespace (KV-backed `new_classes` is blocked). Added in the Task-0
   // connectivity spike — see docs/superpowers/spikes/2026-07-25-ws-topology-spike.md.
+  //
+  // POST_LIVE (M2.3b-live) — a per-post WebSocket relay (`PostLiveDO`) that
+  // makes a post page update live when someone comments/reacts. UNAUTHED at
+  // the route (any viewer of a public post may subscribe); content-free
+  // relay, same shape as NOTIFY but keyed by postId instead of userId.
   "durable_objects": {
     "bindings": [
       { "name": "USER_SECURITY", "class_name": "UserSecurityDO" },
-      { "name": "NOTIFY", "class_name": "NotifyDO" }
+      { "name": "NOTIFY", "class_name": "NotifyDO" },
+      { "name": "POST_LIVE", "class_name": "PostLiveDO" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["UserSecurityDO"] },
-    { "tag": "v2", "new_sqlite_classes": ["NotifyDO"] }
+    { "tag": "v2", "new_sqlite_classes": ["NotifyDO"] },
+    { "tag": "v3", "new_sqlite_classes": ["PostLiveDO"] }
   ],
   // ⚠️ THE PURGE HOP — api CANNOT purge web's cache.
   // Workers Cache purge is scoped to the Worker+entrypoint that OWNS the cache:
