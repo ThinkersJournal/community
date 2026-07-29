@@ -35,6 +35,13 @@ describe("notifications-ws proxy", () => {
     expect(code).toMatch(/new Response\(\s*null[\s\S]{0,160}status:\s*101[\s\S]{0,160}webSocket/);
   });
 
+  it("never passes a bare 101 through the non-101 fallback (would RangeError without a webSocket)", () => {
+    // The fallback runs when the status isn't 101 OR it's a 101 with no
+    // webSocket (broken upstream). `new Response(body, {status:101})` without a
+    // webSocket throws — coerce that case to 502 so the proxy degrades cleanly.
+    expect(code).toMatch(/upstream\.status === 101 \? 502/);
+  });
+
   it("is prerender=false", () => {
     expect(code).toContain("export const prerender = false");
   });

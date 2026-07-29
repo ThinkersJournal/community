@@ -72,5 +72,14 @@ export const GET: APIRoute = async (context) => {
   // Non-101 fallback (e.g. api rejected the upgrade: unauthenticated, bad
   // Origin). Carry upstream's body and status, but OUR cache headers — not
   // upstream's — so this per-viewer response still declares itself private.
-  return new Response(upstream.body, { status: upstream.status, headers });
+  //
+  // ⚠️ NEVER pass a bare 101 through here. We only reach this branch when the
+  // status ISN'T 101, OR it is 101 but carried no `webSocket` (a broken
+  // upstream — the api always pairs them). Constructing `new Response(body,
+  // {status:101})` WITHOUT a webSocket throws a RangeError (101 is outside the
+  // constructor's valid 200–599 range; the reconstruction above is the one
+  // legal 101 form). Coerce that impossible-but-fatal case to a 502 so the
+  // proxy degrades cleanly instead of 500ing.
+  const status = upstream.status === 101 ? 502 : upstream.status;
+  return new Response(upstream.body, { status, headers });
 };
