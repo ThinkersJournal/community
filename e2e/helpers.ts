@@ -219,3 +219,54 @@ export async function publishPost(
   const slug = new URL(page.url()).pathname.split("/")[2]!;
   return { username, slug, postId: postId!, url: page.url() };
 }
+
+/**
+ * Drive the profile Follow/Unfollow toggle until the viewer is in the state
+ * `expected` names ("Unfollow" = now following, "Follow" = now not following),
+ * robust to TWO E2E-only hazards. Keys off the island's `data-following` marker,
+ * NOT the button text.
+ *
+ * ⚠️ HAZARD 1 — reading the button before it hydrates. The button ships `hidden`
+ * and the social island (src/scripts/social.ts) reveals it and stamps
+ * `data-following` ("true"/"false") once `/api/social` returns. But the theme
+ * CSS overrides the `hidden` attribute, so the UN-hydrated SSR button — text
+ * "Follow", NO `data-following` — is already visible; a plain `toBeVisible()` +
+ * text read races hydration and can misread that stale "Follow" (which is also
+ * ambiguous: the island renders "Follow" both when NOT following AND when
+ * logged-out). `data-following` is absent in SSR and unambiguous once set, so we
+ * wait for it and switch on it.
+ *
+ * ⚠️ HAZARD 2 — a dropped `/api/follow` RESPONSE. This whole suite runs against
+ * ONE long-lived `wrangler dev` process, and the M2.3b realtime bell opens a
+ * WebSocket on EVERY authenticated page; across a full run those sockets
+ * accumulate in the single miniflare process and it intermittently fails to
+ * deliver the `/api/follow` response back to the browser — the server still
+ * COMMITS (dev log shows `POST /api/follow 201`), but the island's
+ * `await fetch(...)` never resolves, so it never flips the button and leaves it
+ * `disabled`. This is a DEV-HARNESS artifact (production = isolated invocations
+ * + hibernating DOs, no accumulation), NOT a bug in the follow/bell/social code.
+ * A longer timeout does not help (the response is lost, not slow) — a reload
+ * resyncs the button from the already-committed server state, which is exactly
+ * what a real user whose click looked stuck would do.
+ */
+export async function toggleFollowTo(page: Page, expected: "Follow" | "Unfollow"): Promise<void> {
+  const btn = page.locator("[data-follow-btn]");
+  const want = expected === "Unfollow" ? "true" : "false"; // data-following after the toggle
+  await expect(async () => {
+    // 1) Ensure the island has hydrated the button (data-following present). If
+    //    it hasn't — not yet run, or the /api/social fetch was dropped — reload.
+    if ((await btn.getAttribute("data-following")) === null) {
+      await page.reload();
+    }
+    await expect(btn).toHaveAttribute("data-following", /^(true|false)$/, { timeout: 8000 });
+    // 2) Already in the wanted follow state?
+    if ((await btn.getAttribute("data-following")) === want) return;
+    // 3) Toggle. If a prior click's response was lost the button is stuck
+    //    `disabled` — reload to resync from committed server state instead of
+    //    clicking (a disabled button can't be clicked, and the follow may
+    //    already have committed).
+    if (await btn.isEnabled()) await btn.click();
+    else await page.reload();
+    await expect(btn).toHaveAttribute("data-following", want, { timeout: 6000 });
+  }).toPass({ timeout: 30_000 });
+}
