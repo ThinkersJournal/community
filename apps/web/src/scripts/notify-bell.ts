@@ -19,13 +19,15 @@
  *     after a successful render, using a CSRF token fetched once from
  *     `/api/me` (same idiom as nav-auth.ts) and cached in a module var.
  *  4. Re-polls the count on load, on tab-visible, and every 60s — this is the
- *     FALLBACK, kept even now that push exists, in case the socket is down.
- *  5. (M2.3b) Opens a WebSocket to `/api/notifications-ws` once signed in
- *     (the first count-200) and refetches on every pushed nudge. The nudge is
- *     CONTENT-FREE ({type:"notification"|"read"}, see NotifyDO) — this file
- *     never parses `event.data`; it only ever triggers a GET refetch, same as
- *     the poll. Reconnects with exponential backoff (~1s → 30s cap, reset on
- *     a successful open), single socket held across reconnects.
+ *     FALLBACK, kept even now that push exists, in case the socket is down, AND
+ *     it is the WebSocket's single (re)connect trigger (see below).
+ *  5. (M2.3b) Opens a WebSocket to `/api/notifications-ws` once signed in and
+ *     refetches on every pushed nudge. The nudge is CONTENT-FREE
+ *     ({type:"notification"|"read"}, see NotifyDO) — this file never parses
+ *     `event.data`; it only ever triggers a GET refetch, same as the poll. A
+ *     single live socket; on close/error the ref is dropped and the next
+ *     signed-in poll (4) re-arms it — there is NO bespoke backoff/cap/latch
+ *     (two reviews found that error-prone; the poll is the reconnect driver).
  *
  * Talks ONLY to same-origin /api/* (the api Worker has no public origin).
  * DOM is built with createElement/textContent only — no raw-markup DOM
