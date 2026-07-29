@@ -117,6 +117,88 @@ async function fetchSource(postId: string, commentId: string): Promise<string | 
   return page.comments.find((c) => c.id === commentId)?.bodyMarkdown ?? null;
 }
 
+/**
+ * Wires the Reply/Edit/Delete affordances onto ONE comment `<li>`. Shared by
+ * `initCommentsIsland`'s per-comment loop and by the live client (Task 7) for
+ * freshly-inserted `<li>`s — extracted so both share identical gating/handlers.
+ */
+export function wireCommentAffordances(
+  li: HTMLElement,
+  opts: { csrfToken: string; viewerId: string; postId: string; postAuthorId: string },
+): void {
+  const { csrfToken, viewerId, postId, postAuthorId } = opts;
+  const commentId = li.dataset.commentId ?? "";
+  const authorId = li.dataset.authorId ?? "";
+  const depth = Number(li.dataset.depth ?? "0");
+  const actions = li.querySelector<HTMLElement>("[data-comment-actions]");
+  if (actions === null) return;
+
+  if (depth < MAX_DEPTH) {
+    const reply = document.createElement("button");
+    reply.type = "button";
+    reply.className = "btn btn-ghost";
+    reply.textContent = "Reply";
+    reply.addEventListener("click", () => {
+      reply.disabled = true;
+      actions.appendChild(
+        buildForm({
+          csrfToken,
+          submitLabel: "Reply",
+          onSubmit: (markdownSource) =>
+            postJson("/api/comment", csrfToken, { postId, parentId: commentId, markdownSource }),
+        }),
+      );
+    });
+    actions.appendChild(reply);
+  }
+
+  if (authorId === viewerId) {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "btn btn-ghost";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", () => {
+      edit.disabled = true;
+      void fetchSource(postId, commentId).then((source) => {
+        if (source === null) {
+          edit.disabled = false;
+          return;
+        }
+        actions.appendChild(
+          buildForm({
+            csrfToken,
+            submitLabel: "Save",
+            initial: source,
+            onSubmit: (markdownSource) =>
+              postJson("/api/comment-update", csrfToken, { commentId, markdownSource }),
+          }),
+        );
+      });
+    });
+    actions.appendChild(edit);
+  }
+
+  // Delete: own comment, or ANY comment on the viewer's own post (decision 7).
+  if (authorId === viewerId || viewerId === postAuthorId) {
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn btn-ghost";
+    del.textContent = "Delete";
+    del.addEventListener("click", () => {
+      del.disabled = true;
+      void postJson("/api/comment-delete", csrfToken, { commentId })
+        .then((resp) => {
+          if (resp.ok) location.reload();
+          else del.disabled = false;
+        })
+        .catch(() => {
+          del.disabled = false;
+        });
+    });
+    actions.appendChild(del);
+  }
+}
+
 export function initCommentsIsland(): void {
   const section = document.querySelector<HTMLElement>("[data-comments]");
   if (section === null) return;
@@ -167,79 +249,7 @@ export function initCommentsIsland(): void {
     const csrfToken = me.csrfToken;
     const viewerId = me.userId;
 
-    for (const li of Array.from(
-      section.querySelectorAll<HTMLElement>("[data-comment-id]:not([data-deleted])"),
-    )) {
-      const commentId = li.dataset.commentId ?? "";
-      const authorId = li.dataset.authorId ?? "";
-      const depth = Number(li.dataset.depth ?? "0");
-      const actions = li.querySelector<HTMLElement>("[data-comment-actions]");
-      if (actions === null) continue;
-
-      if (depth < MAX_DEPTH) {
-        const reply = document.createElement("button");
-        reply.type = "button";
-        reply.className = "btn btn-ghost";
-        reply.textContent = "Reply";
-        reply.addEventListener("click", () => {
-          reply.disabled = true;
-          actions.appendChild(
-            buildForm({
-              csrfToken,
-              submitLabel: "Reply",
-              onSubmit: (markdownSource) =>
-                postJson("/api/comment", csrfToken, { postId, parentId: commentId, markdownSource }),
-            }),
-          );
-        });
-        actions.appendChild(reply);
-      }
-
-      if (authorId === viewerId) {
-        const edit = document.createElement("button");
-        edit.type = "button";
-        edit.className = "btn btn-ghost";
-        edit.textContent = "Edit";
-        edit.addEventListener("click", () => {
-          edit.disabled = true;
-          void fetchSource(postId, commentId).then((source) => {
-            if (source === null) {
-              edit.disabled = false;
-              return;
-            }
-            actions.appendChild(
-              buildForm({
-                csrfToken,
-                submitLabel: "Save",
-                initial: source,
-                onSubmit: (markdownSource) =>
-                  postJson("/api/comment-update", csrfToken, { commentId, markdownSource }),
-              }),
-            );
-          });
-        });
-        actions.appendChild(edit);
-      }
-
-      // Delete: own comment, or ANY comment on the viewer's own post (decision 7).
-      if (authorId === viewerId || viewerId === postAuthorId) {
-        const del = document.createElement("button");
-        del.type = "button";
-        del.className = "btn btn-ghost";
-        del.textContent = "Delete";
-        del.addEventListener("click", () => {
-          del.disabled = true;
-          void postJson("/api/comment-delete", csrfToken, { commentId })
-            .then((resp) => {
-              if (resp.ok) location.reload();
-              else del.disabled = false;
-            })
-            .catch(() => {
-              del.disabled = false;
-            });
-        });
-        actions.appendChild(del);
-      }
-    }
+    for (const li of section.querySelectorAll<HTMLElement>("[data-comment-id]:not([data-deleted])"))
+      wireCommentAffordances(li, { csrfToken, viewerId, postId, postAuthorId });
   });
 }
