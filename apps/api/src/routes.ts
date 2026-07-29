@@ -30,7 +30,7 @@ import {
   handleMarkRead,
   handleUnreadCount,
 } from "./routes/notifications";
-import { handleNotificationsWs, handleNotificationsWsPush } from "./routes/notifications-ws";
+import { handleNotificationsWs } from "./routes/notifications-ws";
 import { handleCreatePost, handleGetPost, handleUpdatePost } from "./routes/posts";
 import {
   handlePublicPost,
@@ -142,14 +142,14 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/notifications/unread-count", handler: handleUnreadCount },
   { method: "POST", pattern: "/notifications/read", handler: handleMarkRead },
 
-  // ⚠️ SPIKE SCAFFOLDING (M2.3b Task 0) — TEMPORARILY UNAUTHED. The WS upgrade
-  // endpoint + a spike-only server-push trigger. Task 2 adds session auth to
-  // `/notifications/ws` and deletes `/notifications/ws-push`. These are
-  // registered as literal `/notifications/*` paths; no shadowing risk with the
-  // dynamic routes above (all literal, different methods where they overlap).
-  // See docs/superpowers/spikes/2026-07-25-ws-topology-spike.md.
+  // Realtime bell upgrade (M2.3b) — a session-read GET, like
+  // /notifications/unread-count above, that authenticates inline (origin +
+  // session) and forwards the upgrade to the caller's OWN NotifyDO
+  // (getByName(session.userId), never a client-supplied id). See
+  // src/routes/notifications-ws.ts. The spike's unauthed `/notifications/ws`
+  // and its `/notifications/ws-push` trigger (M2.3b Task 0) are gone — replaced
+  // by this authed route and (in later tasks) real notify()/mark-read pushes.
   { method: "GET", pattern: "/notifications/ws", handler: handleNotificationsWs },
-  { method: "GET", pattern: "/notifications/ws-push", handler: handleNotificationsWsPush },
 
   // ANONYMOUS reads — what the edge caches. See src/routes/public.ts's header:
   // no session is read here, by construction.

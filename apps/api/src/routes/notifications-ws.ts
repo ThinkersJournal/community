@@ -1,32 +1,43 @@
 /**
- * `GET /notifications/ws` — the WebSocket upgrade endpoint (M2.3b).
+ * `GET /notifications/ws` — the authenticated WebSocket upgrade for the
+ * realtime bell (M2.3b).
  *
- * ⚠️ SPIKE SCAFFOLDING (Task 0): TEMPORARILY UNAUTHED and hard-wired to a fixed
- * `"spike-user"` DO. The real milestone (Task 2) resolves `userId` from the
- * session (`readCurrentSession`) + an Origin check, then routes to the caller's
- * OWN DO — a client-supplied id must never reach `getByName`. Until then this
- * proves only the transport. See
- * docs/superpowers/spikes/2026-07-25-ws-topology-spike.md.
+ * Order matters, and mirrors the mutating pipeline's own ordering even though
+ * this route does NOT run it (it is a GET that authenticates inline, like
+ * `/auth/csrf`):
  *
- * Forwards the incoming upgrade Request straight to the per-user `NotifyDO`,
- * which returns the `101` + `webSocket` that flows back out through the `web`
- * proxy to the browser.
+ *   1. `isAllowedOrigin` — the WS-hijack guard. NOT `checkOrigin`: that helper
+ *      exempts GET/HEAD unconditionally, which is correct for ordinary CSRF
+ *      (a normal GET is read-only) but wrong here — a WebSocket upgrade is a
+ *      GET that establishes a live, cookie-authenticated connection and is NOT
+ *      covered by CORS. Going through `checkOrigin` would make this check a
+ *      silent no-op. See src/auth/csrf.ts's doc comment on both functions.
+ *   2. `readCurrentSession` — the session read PLUS the epoch check, same as
+ *      every other session-bearing GET in this Worker (handleCsrf,
+ *      handleUnreadCount, ...).
+ *   3. The `Upgrade` header check — 426 if this was not actually a WS
+ *      handshake (e.g. curl/a browser navigation to the URL).
+ *
+ * Resolves `userId` from the SESSION ONLY, never a client-supplied param, so a
+ * caller can attach to none but their OWN `NotifyDO` — forwarding the upgrade
+ * Request straight to it, which returns the `101` + `webSocket` that flows back
+ * out through the `web` proxy to the browser.
  */
+import { isAllowedOrigin } from "../auth/csrf";
+import { readCurrentSession } from "../auth/pipeline";
+import { errorResponse } from "../http/errors";
+
 import type { RouteHandler } from "../routing";
 
-const SPIKE_USER = "spike-user";
-
 export const handleNotificationsWs: RouteHandler = async (request, env) => {
-  return env.NOTIFY.getByName(SPIKE_USER).fetch(request);
-};
+  if (!isAllowedOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
 
-/**
- * `GET /notifications/ws-push` — SPIKE-ONLY trigger. Fires a server-initiated
- * `push("notification")` on the spike DO so the round-trip's "server → browser"
- * leg can be exercised from a plain HTTP request. Deleted with the rest of the
- * spike auth-bypass when Task 2 wires `notify()` to the real push.
- */
-export const handleNotificationsWsPush: RouteHandler = async (_request, env) => {
-  await env.NOTIFY.getByName(SPIKE_USER).push("notification");
-  return new Response("pushed", { status: 200 });
+  const session = await readCurrentSession(env, request, () => errorResponse("LOGIN_REQUIRED", 401));
+  if (session instanceof Response) return session;
+
+  if (request.headers.get("Upgrade") !== "websocket") {
+    return new Response("expected websocket", { status: 426 });
+  }
+
+  return env.NOTIFY.getByName(session.userId).fetch(request);
 };
