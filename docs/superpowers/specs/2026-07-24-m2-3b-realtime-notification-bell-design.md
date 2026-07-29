@@ -70,23 +70,23 @@ A per-user relay addressed `env.NOTIFY.getByName(userId)`. It is **not** a secur
 | `notify(client, env, ev)` (seam extension) | — | After the row `INSERT`, fire-and-forget `env.NOTIFY.getByName(ev.recipientId).push("notification")`, wrapped so a DO failure is swallowed (the write already committed; the M2.3a never-throws rule extends to the push). Signature gains `env`; the three callers (`handleCreateComment`, `handleAddReaction`, `handleFollow`) already have it. |
 | `POST /notifications/read` (existing) | mutating pipeline (no verified-email) | After the mark-read `UPDATE`, `env.NOTIFY.getByName(userId).push("read")` so other tabs refresh. Same swallow-on-failure discipline. |
 
-Wrangler: add the `NOTIFY` DO binding + a migration entry (`new_sqlite_classes: ["NotifyDO"]`, a new `tag`) to `apps/api/wrangler.jsonc`, then regenerate + commit `worker-configuration.d.ts` (the standing bindings rule). No new error codes; `LOGIN_REQUIRED` covers the WS auth failure. `/notifications/ws` needs its route-protection/error-envelope treatment: it is a GET that 401s without a session, so it gets a `CASES` entry like the other session-read GETs. The origin check reuses the existing `checkOrigin`.
+Wrangler: add the `NOTIFY` DO binding + a migration entry (`new_sqlite_classes: ["NotifyDO"]`, a new `tag`) to `apps/api/wrangler.jsonc`, then regenerate + commit `worker-configuration.d.ts` (the standing bindings rule). No new error codes; `LOGIN_REQUIRED` covers the WS auth failure. `/notifications/ws` needs its route-protection/error-envelope treatment: it is a GET that 401s without a session, so it gets a `CASES` entry like the other session-read GETs. The origin check **must NOT reuse `checkOrigin`** — *(as built, Task 2)* `checkOrigin` returns `true` for GET/HEAD before the allowlist, and a WS upgrade is a GET, so it would make the hijack guard a silent no-op. Task 2 extracted `isAllowedOrigin` (no method bypass) and the WS route uses that.
 
 ## 7. web proxy + client
 
 - **`apps/web/src/pages/api/notifications-ws.ts`** (or the framework's WS-capable route): forwards the incoming WS upgrade to `api`'s `/notifications/ws` over the `API` Service Binding, carrying the `Cookie` (so `api` can resolve the session) and the `Origin`. Returns the `101` + `webSocket`. `markPrivate`/no-store is moot for a 101, but the file still declares `prerender = false`. ⚠️ **Whether an Astro API route on `@astrojs/cloudflare` can return a `101`+`webSocket` Response at all is itself part of the Task-0 spike** — if the adapter swallows/rejects a 101, the pivot is a hand-written passthrough in the web Worker (or the DO-in-`web` branch, where the WS never crosses the Astro boundary as a proxied 101). This route is the concrete exercise of the Task-0 capability, on the web side as well as the Service-Binding hop.
-- **`apps/web/src/scripts/notify-bell.ts`** gains a socket lifecycle:
-  - When signed in (the existing count-200 signal), open `new WebSocket` to the same-origin `/api/notifications/ws` (`ws(s)://` derived from `location`).
+- **`apps/web/src/scripts/notify-bell.ts`** gains a socket lifecycle *(as built)*:
+  - When signed in (the count-200 signal), open `new WebSocket` to the same-origin **`/api/notifications-ws`** (the web proxy route; `ws(s)://` derived from `location`). The `api`-side upgrade route is `/notifications/ws`; the browser only ever hits the web proxy.
   - `onmessage` → `refreshCount(...)` immediately; if the dropdown is open, reload the list.
-  - `onclose`/`onerror` → reconnect with **exponential backoff** (cap ~30s), and lean on the poll meanwhile.
-  - **Poll fallback retained**: keep the on-load / on-visibility / interval poll. When the WS is healthy the interval can lengthen (e.g. a slower safety-net), but it never stops — WS-drop or no-WS-support both fall back to today's behavior.
+  - `onclose`/`onerror` → **just drop the socket ref**; the signed-in poll re-arms it. *(Deviation from the original "exponential backoff" plan: the whole-branch review + Copilot both found a bespoke backoff/cap/latch error-prone — an expired session could reconnect forever, or a recovered one never re-arm. The poll is the single (re)connect trigger, gated on a FRESH signed-in count, so anonymous/dead sessions never open a socket and a recovered one re-arms within a poll interval.)*
+  - **Poll fallback retained**: keep the on-load / on-visibility / interval poll — it is now also the reconnect driver, so it never stops.
   - All DOM stays `textContent`/`createElement` (unchanged); the WS message is a content-free nudge, so nothing user-derived is rendered from it.
 
 ## 8. Security & integrity
 
 - **Per-user isolation is server-side**: the WS route derives `userId` from the session, so a caller can only ever attach to their *own* `NotifyDO`. No client-supplied id reaches `getByName`.
 - **Nothing sensitive on the wire**: pushes are `{type:"notification"|"read"}` — no actor, no content, no counts. Even a mis-routed socket would learn only "something changed."
-- **WS-hijack guard**: the upgrade validates `Origin` (cross-site WebSocket requests otherwise bypass CORS); reuse `checkOrigin`.
+- **WS-hijack guard**: the upgrade validates `Origin` (cross-site WebSocket requests otherwise bypass CORS); use `isAllowedOrigin` — NOT `checkOrigin`, which bypasses GET (see §6, as built Task 2).
 - **The push never affects the write**: `notify()`'s DO ping is swallowed on failure — a DO outage cannot fail or slow a comment/reaction/follow beyond the ping's own bounded latency.
 - No per-viewer state enters cached HTML (unchanged — the bell is an island; the socket is client-initiated).
 

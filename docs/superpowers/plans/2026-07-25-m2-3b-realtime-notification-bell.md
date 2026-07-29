@@ -10,6 +10,11 @@
 
 **Branch:** `m2-3b-realtime-bell` off `main`.
 
+> **⚠️ AS-BUILT DEVIATIONS (post-implementation, PR #8).** This plan is a point-in-time planning artifact; two items below shipped differently and this note governs where they conflict:
+> 1. **Origin guard — `isAllowedOrigin`, NOT `checkOrigin`.** Every step below that says `checkOrigin` (arch summary, §Cross-cutting, Task 2) is superseded. Task 2's implementer found `checkOrigin` returns `true` for GET/HEAD *before* the allowlist, and a WS upgrade is a GET — reusing it would make the WS-hijack 403 a silent no-op. Task 2 extracted `isAllowedOrigin` (no method bypass) and the route uses that.
+> 2. **Client reconnect — poll-driven, NOT exponential backoff.** "Reconnects with backoff" (arch summary + Task 6) was replaced after the whole-branch review AND Copilot both found a bespoke backoff/cap/latch error-prone (expired session reconnecting forever / recovered session never re-arming). The signed-in poll is the single (re)connect trigger; `onclose`/`onerror` just drop the socket ref and the next signed-in poll re-arms.
+> (Endpoint note: the `api` upgrade route is `/notifications/ws`; the browser hits the `web` proxy at `/api/notifications-ws`. Both are correct as written per their side.)
+
 ## ⚠️ TASK 0 IS A HARD GATE
 
 Task 0 is a **connectivity spike**, not a normal build task. It resolves the one unverified platform fact — whether a WebSocket upgrade forwards across the `web → api` Service Binding (and whether an Astro route can return a `101`+`webSocket`). **The controller reviews Task 0's outcome and confirms the topology BEFORE dispatching Task 1.** The rest of this plan is written for the **DO-in-`api`** outcome (the primary path). If Task 0 shows the Service Binding will not carry a WS, the controller re-scopes Tasks 1/2/5 for the **DO-in-`web` + cross-script-binding** pivot (the DO logic, push wiring, client, and tests in Tasks 3/4/6/7 are identical either way) before continuing.
