@@ -19,7 +19,11 @@ export class NotifyDO extends DurableObject<Env> {
    * client end as a `101` response the caller relays back to the browser.
    */
   async fetch(request: Request): Promise<Response> {
-    if (request.headers.get("Upgrade") !== "websocket") {
+    // The `Upgrade` token is case-insensitive (RFC 6455 / 7230) — normalize
+    // before comparing, matching the web proxy (apps/web/src/pages/api/
+    // notifications-ws.ts). Browsers send lowercase, but a non-browser client
+    // or a re-casing intermediary sending "WebSocket" must not be rejected.
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("expected a websocket upgrade", { status: 426 });
     }
 

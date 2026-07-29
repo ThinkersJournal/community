@@ -35,7 +35,9 @@ export const handleNotificationsWs: RouteHandler = async (request, env) => {
   const session = await readCurrentSession(env, request, () => errorResponse("LOGIN_REQUIRED", 401));
   if (session instanceof Response) return session;
 
-  if (request.headers.get("Upgrade") !== "websocket") {
+  // The `Upgrade` token is case-insensitive (RFC 6455 / 7230) — normalize
+  // before comparing, matching the web proxy and NotifyDO.
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
     return new Response("expected websocket", { status: 426 });
   }
 

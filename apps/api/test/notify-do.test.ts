@@ -74,6 +74,18 @@ describe("NotifyDO", () => {
     expect(resp.status).toBe(426);
   });
 
+  it("accepts a mixed-case Upgrade token (case-insensitive per RFC 6455)", async () => {
+    // A non-browser client / re-casing intermediary may send "WebSocket"; the
+    // token is case-insensitive and must not be rejected.
+    const resp = await env.NOTIFY.getByName("casing").fetch("https://do/ws", {
+      headers: { Upgrade: "WebSocket" },
+    });
+
+    expect(resp.status).toBe(101);
+    resp.webSocket?.accept(); // accept before close (workerd requires it)
+    resp.webSocket?.close();
+  });
+
   it("survives hibernation: a socket connected before eviction still receives a push after", async () => {
     const { ws, messages } = await connect("hiber");
 
