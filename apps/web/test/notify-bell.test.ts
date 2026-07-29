@@ -43,13 +43,16 @@ describe("notify bell island", () => {
     expect(code).toContain("new WebSocket(");
   });
 
-  it("opens the socket only after the bell is signed-in-revealed (never for anonymous viewers)", () => {
-    // ⚠️ ANTI-VACUITY: pin that the connect call is GATED on the bell's
-    // reveal (the count-200 signal) and fires only once — a regression that
-    // opens the socket unconditionally at init (which WOULD break anonymous
-    // viewers against the WS proxy) would fail this.
-    expect(code).toMatch(/if \(wsStarted \|\| bell\.hidden\) return;/);
-    expect(code).toMatch(/refreshCount\(bell, badge\)\.then\(/);
+  it("arms the socket only on a FRESH signed-in count (never for anonymous, never off historical state)", () => {
+    // ⚠️ ANTI-VACUITY: the poll gates connect() on refreshCount's FRESH boolean
+    // (200 = signed in) — NOT a latched flag or the historical bell.hidden. A
+    // regression that armed unconditionally (breaking anonymous viewers against
+    // the WS proxy) or off a stale flag (never re-arming a recovered session)
+    // fails this.
+    expect(code).toMatch(
+      /refreshCount\(bell, badge\)\.then\(\(signedIn\) => \{[\s\S]{0,200}if \(signedIn\) connect\(\)/,
+    );
+    expect(code).not.toContain("wsStarted"); // the historical/latched trigger is gone
   });
 
   it("refreshes on a pushed nudge (content-free — never parses event.data) and keeps the poll as fallback", () => {
@@ -63,24 +66,17 @@ describe("notify bell island", () => {
     expect(code).toContain("setInterval(poll, 60_000)"); // poll fallback retained, unchanged interval
   });
 
-  it("reconnects with exponential backoff (starts ~1s, doubles, caps at 30s) and resets after a successful open", () => {
-    // ⚠️ ANTI-VACUITY: pin the backoff SHAPE, not just the word "reconnect"
-    // appearing somewhere (a stray comment would satisfy a bare grep).
-    expect(code).toMatch(/reconnectDelay = 1000/);
-    expect(code).toMatch(/Math\.min\(reconnectDelay \* 2, 30_000\)/);
-    expect(code).toMatch(/onopen = \(\) => \{[\s\S]{0,80}reconnectDelay = 1000/); // reset on success
-    expect(code).toContain("onclose");
-    expect(code).toContain("onerror");
-  });
-
-  it("gives up reconnecting after a failure cap (a dead session must not reconnect forever)", () => {
-    // ⚠️ ANTI-VACUITY: pin that the cap actually STOPS the schedule (returns
-    // without setting a timer) and that a successful open clears the counter —
-    // a browser WS can't see the 401 handshake status, so an expired session
-    // would otherwise reconnect at the 30s cap indefinitely (whole-branch
-    // review finding). Co-locate the counter check with an early return.
-    expect(code).toMatch(/reconnectFailures > MAX_RECONNECT_FAILURES[\s\S]{0,40}return/);
-    expect(code).toMatch(/onopen = \(\) => \{[\s\S]{0,120}reconnectFailures = 0/); // cleared on a real connection
+  it("re-arms via the poll on close/error — no bespoke backoff/cap/latch (two reviews found bugs in it)", () => {
+    // ⚠️ The poll is the SINGLE (re)connect trigger; on close/error the socket
+    // ref is just dropped (identity-guarded) so the next signed-in poll re-arms.
+    // Pin that the error-prone reconnect machinery is GONE: a self-scheduled
+    // backoff could pin at its cap forever (whole-branch finding) OR a failure
+    // cap + latch could strand the WS on a recovered session (Copilot finding).
+    expect(code).toMatch(/if \(ws === socket\) ws = null/); // drop → allows re-arm
+    expect(code).toMatch(/onclose = drop/);
+    expect(code).toMatch(/onerror = drop/);
+    expect(code).not.toContain("reconnectDelay");
+    expect(code).not.toContain("MAX_RECONNECT_FAILURES");
   });
 
   it("degraded-mode fetch helpers swallow network errors (no unhandled rejection from a fire-and-forget refresh)", () => {
@@ -93,8 +89,8 @@ describe("notify bell island", () => {
   });
 
   it("guards a single live socket across reconnects and still builds DOM safely", () => {
-    expect(code).toMatch(/if \(ws !== null\) return/); // single-socket guard
-    expect(code).toMatch(/ws = null/); // cleared before the next attempt is scheduled
+    expect(code).toMatch(/if \(ws !== null\) return/); // single-socket guard in connect()
+    expect(code).toMatch(/ws = null/); // dropped on close/error so the poll can re-arm
     expect(code).not.toContain("innerHTML");
     expect(code).not.toContain("insertAdjacentHTML");
   });

@@ -83,13 +83,16 @@ function applyBadge(badge: HTMLElement, count: number): void {
 /**
  * Fires on load, on tab-visible, and every 60s. Only ever REVEALS the bell
  * (never hides it once shown) — a transient/degraded response mid-session
- * should not yank a control the viewer may be mid-interaction with.
+ * should not yank a control the viewer may be mid-interaction with. Returns
+ * whether the viewer is signed in (the count came back 200); the poll uses this
+ * fresh signal to (re)arm the WebSocket.
  */
-async function refreshCount(bell: HTMLElement, badge: HTMLElement): Promise<void> {
+async function refreshCount(bell: HTMLElement, badge: HTMLElement): Promise<boolean> {
   const count = await fetchUnreadCount();
-  if (count === null) return;
+  if (count === null) return false;
   bell.hidden = false;
   applyBadge(badge, count);
+  return true;
 }
 
 /** Renders collapsed groups into the panel via createElement/textContent only. */
@@ -191,83 +194,55 @@ export function initNotifyBell(): void {
   if (bell === null || toggle === null || badge === null || panel === null) return;
 
   // --- M2.3b realtime WS lifecycle ------------------------------------
-  // Opened only once signed in (the first count-200 — anonymous viewers
-  // never flip `bell.hidden`, so they never get a socket, which matters:
-  // the web proxy would fail the handshake for them → reconnect storm).
-  // A pushed nudge is content-free — it only ever triggers a refetch via
-  // `refreshCount` (+ a list reload if the panel is open), never a render
-  // from the message payload. Reconnects with exponential backoff, single
-  // socket held live across reconnects.
+  // The nav bell holds ONE WebSocket to /api/notifications-ws for live pushes,
+  // and the POLL (below) is its single (re)connect trigger AND the fallback
+  // while the socket is down: on each FRESH signed-in count (200) it arms the
+  // socket if one isn't already live. Three properties we want — two bespoke
+  // reconnect designs kept getting one or the other wrong:
+  //   • Anonymous / signed-out viewers never open a socket (refreshCount returns
+  //     false on a non-200), so the web proxy never sees a doomed handshake.
+  //   • A dead/expired session (count keeps 401ing) never re-arms — no endless
+  //     reconnect loop against a session that will never authenticate.
+  //   • A recovered session/network re-arms within one poll interval (≤60s, and
+  //     immediately on tab-focus via visibilitychange) — no permanent latch.
+  // A pushed nudge is content-free ({type} only) — it only triggers a refetch
+  // (refreshCount + a list reload if the panel is open), never a render from it.
+  //
+  // `connect`/`poll` are const arrows (NOT `function` declarations): TS's
+  // null-narrowing of `bell`/`badge`/`panel` from the guard above only survives
+  // into `const`-bound function expressions.
   let ws: WebSocket | null = null;
-  let wsStarted = false;
-  let reconnectDelay = 1000;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  // Consecutive failed reconnects (reset the moment a socket opens). After the
-  // cap we STOP retrying and let the poll (below) carry on — see the cap note in
-  // `scheduleReconnect`.
-  let reconnectFailures = 0;
-  const MAX_RECONNECT_FAILURES = 8; // ~2min of backoff (1+2+4+8+16+30+30+30s) before giving up
 
-  // Arrow-function consts (NOT `function` declarations): TS's null-narrowing
-  // of `bell`/`badge`/`panel` from the guard above only survives into nested
-  // closures for `const`-bound function expressions, not hoisted function
-  // declarations. `connect` and `scheduleReconnect` reference each other —
-  // safe as a mutual-const idiom because each reference is inside a callback
-  // body evaluated later, by which point both are already initialized.
   const wsUrl = (): string => {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     return `${scheme}://${location.host}/api/notifications-ws`;
   };
 
-  const scheduleReconnect = (): void => {
-    ws = null;
-    if (reconnectTimer !== null) return; // already scheduled — guards close+error double-firing
-    reconnectFailures += 1;
-    // ⚠️ GIVE UP AFTER A CAP — do NOT reconnect forever. A browser WebSocket
-    // cannot see the HTTP status of a failed upgrade, so a permanently-dead
-    // session (the cookie lapsed, or a logout-all bumped the security epoch —
-    // api then 401s the upgrade and the web proxy returns a non-101) is
-    // indistinguishable from a transient network drop: both just fail the
-    // handshake, and `onopen` (the only backoff reset) never fires, so the
-    // delay pins at the 30s cap. Without this cap a stale signed-out tab would
-    // re-attempt the full browser→web→api session-read every 30s indefinitely.
-    // After the cap we stop and lean on `poll()` (still running on its own
-    // interval, and it degrades gracefully on a 401). `wsStarted` stays true,
-    // so nothing re-opens the socket for this page; a navigation starts fresh.
-    if (reconnectFailures > MAX_RECONNECT_FAILURES) return;
-    const delay = reconnectDelay;
-    reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, delay);
-  };
-
   const connect = (): void => {
-    if (ws !== null) return; // single-socket guard, holds across reconnects
+    if (ws !== null) return; // single live socket
     const socket = new WebSocket(wsUrl());
     ws = socket;
-    socket.onopen = () => {
-      reconnectDelay = 1000; // reset backoff after a successful open
-      reconnectFailures = 0; // a real connection clears the give-up counter
-    };
     socket.onmessage = () => {
       // Content-free nudge ({type:"notification"|"read"}) — never parse
       // event.data; a nudge only ever triggers a refetch, same as poll().
       void refreshCount(bell, badge);
       if (!panel.hidden) void loadList(panel);
     };
-    socket.onclose = scheduleReconnect;
-    socket.onerror = scheduleReconnect;
+    // On close/error just drop the reference; the next signed-in poll re-arms.
+    // Guard on identity so a stale socket's late event can't clear a newer one.
+    const drop = (): void => {
+      if (ws === socket) ws = null;
+    };
+    socket.onclose = drop;
+    socket.onerror = drop;
   };
 
   const poll = (): void => {
-    void refreshCount(bell, badge).then(() => {
-      // The first successful count (the bell revealed) is the signed-in
-      // signal — open the socket exactly once from it.
-      if (wsStarted || bell.hidden) return;
-      wsStarted = true;
-      connect();
+    void refreshCount(bell, badge).then((signedIn) => {
+      // (Re)arm the socket ONLY on a fresh signed-in count — never off a latched
+      // flag or historical state — and only when one isn't already live
+      // (connect() double-guards on `ws`).
+      if (signedIn) connect();
     });
   };
 
