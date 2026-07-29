@@ -82,8 +82,9 @@ describe("PostLiveDO", () => {
     await env.POST_LIVE.getByName("post-2").push("reaction");
     await new Promise((r) => setTimeout(r, 50));
     const frame = a.messages[0] ?? "";
-    expect(frame).toBe(JSON.stringify({ type: "reaction" }));
-    expect(frame).not.toMatch(/post-2|comment|body|count|user/i.exec(frame.replace("reaction", "")) ? /./ : /$^/);
+    // content-free: exactly {type}, nothing user-derived (no post id, body, or count)
+    expect(JSON.parse(frame)).toEqual({ type: "reaction" });
+    expect(frame).not.toContain("post-2");
     a.ws.close();
   });
 
