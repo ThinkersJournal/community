@@ -53,12 +53,21 @@ function getCsrfToken(): Promise<string | null> {
   return csrfTokenPromise;
 }
 
-/** `null` on any non-200 (401/anonymous, or a degraded api) — never throws. */
+/**
+ * `null` on any non-200 (401/anonymous, a degraded api) OR a network failure —
+ * NEVER throws. Callers invoke this fire-and-forget (`void refreshCount(...)`
+ * from the WS nudge and the poll), so a `fetch()` rejection on a transient
+ * network blip must be swallowed here or it surfaces as an unhandled rejection.
+ */
 async function fetchUnreadCount(): Promise<number | null> {
-  const resp = await fetch("/api/notifications-count");
-  if (resp.status !== 200) return null;
-  const data = (await resp.json()) as { count: number };
-  return data.count;
+  try {
+    const resp = await fetch("/api/notifications-count");
+    if (resp.status !== 200) return null;
+    const data = (await resp.json()) as { count: number };
+    return data.count;
+  } catch {
+    return null; // network error / abort — degraded, not a throw
+  }
 }
 
 function applyBadge(badge: HTMLElement, count: number): void {
@@ -134,11 +143,15 @@ function renderPanel(panel: HTMLElement, page: NotificationsPage): void {
  * a no-op, matching `fetchUnreadCount`'s degraded-mode contract).
  */
 async function loadList(panel: HTMLElement): Promise<boolean> {
-  const resp = await fetch("/api/notifications");
-  if (!resp.ok) return false;
-  const page = (await resp.json()) as NotificationsPage;
-  renderPanel(panel, page);
-  return true;
+  try {
+    const resp = await fetch("/api/notifications");
+    if (!resp.ok) return false;
+    const page = (await resp.json()) as NotificationsPage;
+    renderPanel(panel, page);
+    return true;
+  } catch {
+    return false; // network error — degraded, never throw (called fire-and-forget on a nudge)
+  }
 }
 
 /**
@@ -154,14 +167,19 @@ async function openPanel(panel: HTMLElement, badge: HTMLElement): Promise<void> 
   const token = await getCsrfToken();
   if (token === null) return; // degraded/logged-out: panel stays read-optimistic, no write
 
-  const markResp = await fetch("/api/notifications-read", {
-    method: "POST",
-    headers: { "content-type": "application/json", "X-CSRF-Token": token },
-    body: JSON.stringify({ all: true }),
-  });
-  if (markResp.ok) {
-    badge.hidden = true;
-    badge.textContent = "";
+  try {
+    const markResp = await fetch("/api/notifications-read", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-CSRF-Token": token },
+      body: JSON.stringify({ all: true }),
+    });
+    if (markResp.ok) {
+      badge.hidden = true;
+      badge.textContent = "";
+    }
+  } catch {
+    // Network error marking read — leave the badge; the poll reconciles it.
+    // openPanel is invoked fire-and-forget, so this must not reject.
   }
 }
 

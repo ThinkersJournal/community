@@ -83,6 +83,15 @@ describe("notify bell island", () => {
     expect(code).toMatch(/onopen = \(\) => \{[\s\S]{0,120}reconnectFailures = 0/); // cleared on a real connection
   });
 
+  it("degraded-mode fetch helpers swallow network errors (no unhandled rejection from a fire-and-forget refresh)", () => {
+    // ⚠️ ANTI-VACUITY: the refresh/list helpers are called `void ...(...)` from
+    // the WS nudge and the poll, so a fetch() REJECTION on a transient network
+    // blip would surface as an unhandled rejection unless caught. Pin a `catch`
+    // co-located inside each helper's body.
+    expect(code).toMatch(/async function fetchUnreadCount\(\)[\s\S]{0,400}catch/);
+    expect(code).toMatch(/async function loadList\([\s\S]{0,400}catch/);
+  });
+
   it("guards a single live socket across reconnects and still builds DOM safely", () => {
     expect(code).toMatch(/if \(ws !== null\) return/); // single-socket guard
     expect(code).toMatch(/ws = null/); // cleared before the next attempt is scheduled
