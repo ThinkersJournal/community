@@ -284,3 +284,46 @@ describe("POST /notifications/read", () => {
     expect(c.count).toBe(1);
   });
 });
+
+describe("POST /notifications/read push (M2.3b)", () => {
+  function spyingNotify(pushed: Array<{ id: string; kind: string }>): {
+    getByName: (id: string) => { push: (kind: string) => void; fetch: () => Promise<Response> };
+  } {
+    return {
+      getByName: (id: string) => ({
+        push: (kind: string) => {
+          pushed.push({ id, kind });
+        },
+        fetch: async () => new Response(),
+      }),
+    };
+  }
+
+  it("pushes a content-free read nudge to the caller's OWN NotifyDO after a real mark-read", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const erin = await onboardedActor();
+    const id1 = await seedNotif(erin.userId, alice.userId);
+    const notifyEnv = { ...env, NOTIFY: spyingNotify(pushed) } as never;
+
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(markReq(erin, { ids: [id1] }), notifyEnv, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(200);
+    expect(pushed).toEqual([{ id: erin.userId, kind: "read" }]);
+  });
+
+  it("pushes nothing when the mark-read is a no-op (nothing was actually marked)", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const frank = await onboardedActor();
+    const notifyEnv = { ...env, NOTIFY: spyingNotify(pushed) } as never;
+
+    // Nothing unread exists for frank at all — {all: true} matches zero rows.
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(markReq(frank, { all: true }), notifyEnv, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(200);
+    expect(pushed).toEqual([]);
+  });
+});
