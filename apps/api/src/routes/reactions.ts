@@ -14,6 +14,7 @@ import { isForeignKeyViolation } from "../db/errors";
 import { hasChosenUsername } from "../db/onboarding";
 import { errorResponse } from "../http/errors";
 import { notify } from "../notifications/create";
+import { notifyPostLive } from "../notifications/post-live";
 
 import { REACTION_KINDS, ReactionInput } from "@thinkersjournal/shared";
 
@@ -91,7 +92,7 @@ export async function handleAddReaction(
         notifCommentId = commentId;
       }
 
-      await c.query(
+      const { rowCount } = await c.query(
         `INSERT INTO reactions (user_id, post_id, comment_id, kind)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT ON CONSTRAINT reactions_target_unique DO NOTHING`,
@@ -110,6 +111,12 @@ export async function handleAddReaction(
           reactionKind: kind,
         });
       }
+      // Live-channel push mirrors notify()'s discipline: only a genuinely NEW
+      // row (rowCount > 0) pushes — a duplicate same-tone reaction is a no-op
+      // insert and must not nudge open tabs to refetch for nothing. Always the
+      // POST's channel: notifPostId already resolves post-target → postId,
+      // comment-target → the comment's post_id.
+      if (rowCount) notifyPostLive(env, ctx, notifPostId!, "reaction");
       return null;
     });
   } catch (err) {
@@ -144,11 +151,24 @@ export async function handleRemoveReaction(
     return errorResponse("INVALID_INPUT", 400, { fields: ["postId", "commentId"] });
   }
 
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+  // RETURNING post_id resolves the live channel for both target shapes: the
+  // post-target branch returns the post itself; the comment-target branch
+  // returns the comment's post_id (never the comment id). No row → nothing
+  // was actually removed (already-absent no-op) → no push.
+  const { rows } = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
     postId !== null
-      ? c.query("DELETE FROM reactions WHERE user_id=$1 AND kind=$2 AND post_id=$3", [userId, kind, postId])
-      : c.query("DELETE FROM reactions WHERE user_id=$1 AND kind=$2 AND comment_id=$3", [userId, kind, commentId]),
+      ? c.query<{ postId: string }>(
+          `DELETE FROM reactions WHERE user_id=$1 AND kind=$2 AND post_id=$3 RETURNING post_id AS "postId"`,
+          [userId, kind, postId],
+        )
+      : c.query<{ postId: string }>(
+          `DELETE FROM reactions r USING comments c
+            WHERE r.user_id=$1 AND r.kind=$2 AND r.comment_id=$3 AND c.id = r.comment_id
+          RETURNING c.post_id AS "postId"`,
+          [userId, kind, commentId],
+        ),
   );
+  if (rows[0] !== undefined) notifyPostLive(env, ctx, rows[0].postId, "reaction");
   return json({});
 }
 

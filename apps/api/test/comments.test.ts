@@ -509,3 +509,55 @@ describe("comment notify push (M2.3b)", () => {
     vi.restoreAllMocks();
   });
 });
+
+describe("comment post-live push (M2.3b-live)", () => {
+  function spyingPostLive(pushed: Array<{ id: string; kind: string }>): {
+    getByName: (id: string) => { push: (kind: string) => void };
+  } {
+    return {
+      getByName: (id: string) => ({
+        push: (kind: string) => {
+          pushed.push({ id, kind });
+        },
+      }),
+    };
+  }
+
+  it("pushes a content-free post-live nudge to the post's channel after a comment create", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const poster = await onboardedActor();
+    const commenter = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/comments", {
+        method: "POST",
+        headers: mutatingHeaders(commenter),
+        body: JSON.stringify({ postId: p, markdownSource: "hi" }),
+      }),
+      { ...env, POST_LIVE: spyingPostLive(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(pushed).toEqual([{ id: p, kind: "comment" }]);
+  });
+
+  it("a guarded-out create (post not found) pushes nothing", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const commenter = await onboardedActor();
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/comments", {
+        method: "POST",
+        headers: mutatingHeaders(commenter),
+        body: JSON.stringify({ postId: crypto.randomUUID(), markdownSource: "hi" }),
+      }),
+      { ...env, POST_LIVE: spyingPostLive(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(404);
+    expect(pushed).toEqual([]);
+  });
+});

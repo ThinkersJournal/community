@@ -19,6 +19,7 @@ import { isForeignKeyViolation } from "../db/errors";
 import { hasChosenUsername } from "../db/onboarding";
 import { errorResponse } from "../http/errors";
 import { notify } from "../notifications/create";
+import { notifyPostLive } from "../notifications/post-live";
 
 import { CreateCommentInput, UpdateCommentInput } from "@thinkersjournal/shared";
 
@@ -139,6 +140,7 @@ export async function handleCreateComment(
 
   // The write is committed; the cached post page is now stale. One call, one tag.
   await purgeTags(env, [`post:${postId}`]);
+  notifyPostLive(env, ctx, postId, "comment");
   return json({ id: outcome.id }, 201);
 }
 
@@ -189,6 +191,7 @@ export async function handleUpdateComment(
   if (postId === null) return errorResponse("COMMENT_NOT_FOUND", 404);
 
   await purgeTags(env, [`post:${postId}`]);
+  notifyPostLive(env, ctx, postId, "comment");
   return json({});
 }
 
@@ -212,7 +215,14 @@ export async function handleDeleteComment(
   const id = params.id ?? "";
   if (!UUID_RE.test(id)) return errorResponse("INVALID_INPUT", 400, { fields: ["id"] });
 
-  const outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+  // Explicit return-type annotation (not just inference): without it, TS's
+  // generic inference for withClient<T> across these three differently-shaped
+  // return statements widens `outcome.purged` to `string | undefined` instead
+  // of a proper discriminated union — invisible before now only because
+  // purgeTags' template literal silently coerces `undefined` to a string.
+  const outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, async (
+    c,
+  ): Promise<{ purged: string } | { alreadyGone: true } | { notFound: true }> => {
     // TOMBSTONE, never DELETE: children keep their parent row; the body is
     // genuinely emptied (privacy). Ownership predicate = comment author OR
     // post author (spec decision 7), atomic in the WHERE.
@@ -240,6 +250,9 @@ export async function handleDeleteComment(
   });
 
   if ("notFound" in outcome) return errorResponse("COMMENT_NOT_FOUND", 404);
-  if ("purged" in outcome) await purgeTags(env, [`post:${outcome.purged}`]);
+  if ("purged" in outcome) {
+    await purgeTags(env, [`post:${outcome.purged}`]);
+    notifyPostLive(env, ctx, outcome.purged, "comment");
+  }
   return json({}); // both fresh-tombstone and already-tombstoned answer 200
 }
