@@ -103,12 +103,31 @@ function allowedOrigins(env: Env): ReadonlySet<string> {
  *     going to do anyway.
  * A future state-changing GET would NOT automatically inherit that reasoning.
  * Do not add one without redoing it.
+ *
+ * ⚠️ M2.3b's `GET /notifications/ws` (src/routes/notifications-ws.ts) IS such a
+ * case, and it is why `isAllowedOrigin` below exists: a WebSocket upgrade is a
+ * GET that establishes a live, cookie-authenticated connection, and — unlike an
+ * ordinary GET — is NOT covered by CORS (the classic "cross-site WebSocket
+ * hijacking" vector). That route calls `isAllowedOrigin` directly, never
+ * `checkOrigin`; going through `checkOrigin` would make its origin check a
+ * silent no-op, since GET always passes here.
  */
 export function checkOrigin(env: Env, request: Request): boolean {
   if (request.method === "GET" || request.method === "HEAD") {
     return true;
   }
 
+  return isAllowedOrigin(env, request);
+}
+
+/**
+ * The Origin/Referer allowlist check ON ITS OWN, with NO exemption for "safe"
+ * HTTP methods — `checkOrigin` above is this PLUS the GET/HEAD bypass that is
+ * correct for ordinary CSRF defense but wrong for a route where GET is not
+ * actually safe (see the doc comment on `checkOrigin` for why, and the one
+ * caller that needs this today).
+ */
+export function isAllowedOrigin(env: Env, request: Request): boolean {
   const allowed = allowedOrigins(env);
 
   const origin = request.headers.get("Origin");

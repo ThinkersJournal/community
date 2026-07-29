@@ -132,13 +132,35 @@ export async function handleMarkRead(
   const parsed = MarkReadInput.safeParse(body);
   if (!parsed.success) return errorResponse("INVALID_INPUT", 400, { fields: ["ids", "all"] });
 
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    parsed.data.all === true
-      ? c.query("UPDATE notifications SET read_at=now() WHERE recipient_id=$1 AND read_at IS NULL", [userId])
-      : c.query(
-          "UPDATE notifications SET read_at=now() WHERE recipient_id=$1 AND read_at IS NULL AND id = ANY($2::uuid[])",
-          [userId, parsed.data.ids],
-        ),
-  );
+  const marked = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const res =
+      parsed.data.all === true
+        ? await c.query("UPDATE notifications SET read_at=now() WHERE recipient_id=$1 AND read_at IS NULL", [userId])
+        : await c.query(
+            "UPDATE notifications SET read_at=now() WHERE recipient_id=$1 AND read_at IS NULL AND id = ANY($2::uuid[])",
+            [userId, parsed.data.ids],
+          );
+    return res.rowCount ?? 0;
+  });
+
+  // Only a genuinely new read (rowCount > 0) has state for the caller's OTHER
+  // open tabs to sync — a no-op mark-read (double-click, or {all:true} when
+  // already all-read) must not wake them. Mirrors notify()'s rowCount gate
+  // (create.ts) and MUST go through ctx.waitUntil for the same reason: the
+  // NOTIFY push is a Durable Object RPC that resolves across a real network
+  // round trip, and Cloudflare cancels untracked async work once the Response
+  // is sent. Any push failure is swallowed INSIDE the waited promise so it can
+  // never affect this endpoint's Response.
+  if (marked > 0) {
+    ctx.waitUntil(
+      (async () => {
+        try {
+          await env.NOTIFY.getByName(userId).push("read");
+        } catch (err) {
+          console.error("read push failed", err);
+        }
+      })(),
+    );
+  }
   return json({});
 }

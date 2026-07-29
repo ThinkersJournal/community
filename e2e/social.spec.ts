@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { chooseUsername, publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
+import { chooseUsername, publishPost, signUpAndVerify, toggleFollowTo, uniqueHandle } from "./helpers";
 
 test("follow → the feed shows the followee's post → unfollow removes it", async ({ page, browser }) => {
   // Author A publishes a post (publishPost onboards A with a chosen handle).
@@ -18,12 +18,10 @@ test("follow → the feed shows the followee's post → unfollow removes it", as
     await chooseUsername(b, uniqueHandle("reader"));
 
     // B follows A from A's profile — the island reveals the button, then flips it.
+    // (toggleFollowTo tolerates the E2E dev-harness's lost-follow-response stall;
+    // see its doc in helpers.ts.)
     await b.goto(`/@${authorHandle}`);
-    const followBtn = b.locator("[data-follow-btn]");
-    await expect(followBtn).toBeVisible();
-    await expect(followBtn).toHaveText("Follow");
-    await followBtn.click();
-    await expect(followBtn).toHaveText("Unfollow");
+    await toggleFollowTo(b, "Unfollow");
 
     // B's feed now shows A's post.
     await b.goto("/feed");
@@ -31,8 +29,7 @@ test("follow → the feed shows the followee's post → unfollow removes it", as
 
     // B unfollows → the feed no longer shows it.
     await b.goto(`/@${authorHandle}`);
-    await b.locator("[data-follow-btn]").click();
-    await expect(b.locator("[data-follow-btn]")).toHaveText("Follow");
+    await toggleFollowTo(b, "Follow");
     await b.goto("/feed");
     await expect(b.locator("a", { hasText: "Alice On Systems" })).toHaveCount(0);
   } finally {

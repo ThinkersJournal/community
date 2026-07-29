@@ -18,9 +18,16 @@
  *  3. Marks everything read (`POST /api/notifications-read {all:true}`) right
  *     after a successful render, using a CSRF token fetched once from
  *     `/api/me` (same idiom as nav-auth.ts) and cached in a module var.
- *  4. Re-polls the count on load, on tab-visible, and every 60s — so a viewer
- *     who signs in in another tab (or receives a new notification) sees the
- *     bell/badge update without a full page reload.
+ *  4. Re-polls the count on load, on tab-visible, and every 60s — this is the
+ *     FALLBACK, kept even now that push exists, in case the socket is down, AND
+ *     it is the WebSocket's single (re)connect trigger (see below).
+ *  5. (M2.3b) Opens a WebSocket to `/api/notifications-ws` once signed in and
+ *     refetches on every pushed nudge. The nudge is CONTENT-FREE
+ *     ({type:"notification"|"read"}, see NotifyDO) — this file never parses
+ *     `event.data`; it only ever triggers a GET refetch, same as the poll. A
+ *     single live socket; on close/error the ref is dropped and the next
+ *     signed-in poll (4) re-arms it — there is NO bespoke backoff/cap/latch
+ *     (two reviews found that error-prone; the poll is the reconnect driver).
  *
  * Talks ONLY to same-origin /api/* (the api Worker has no public origin).
  * DOM is built with createElement/textContent only — no raw-markup DOM
@@ -48,12 +55,21 @@ function getCsrfToken(): Promise<string | null> {
   return csrfTokenPromise;
 }
 
-/** `null` on any non-200 (401/anonymous, or a degraded api) — never throws. */
+/**
+ * `null` on any non-200 (401/anonymous, a degraded api) OR a network failure —
+ * NEVER throws. Callers invoke this fire-and-forget (`void refreshCount(...)`
+ * from the WS nudge and the poll), so a `fetch()` rejection on a transient
+ * network blip must be swallowed here or it surfaces as an unhandled rejection.
+ */
 async function fetchUnreadCount(): Promise<number | null> {
-  const resp = await fetch("/api/notifications-count");
-  if (resp.status !== 200) return null;
-  const data = (await resp.json()) as { count: number };
-  return data.count;
+  try {
+    const resp = await fetch("/api/notifications-count");
+    if (resp.status !== 200) return null;
+    const data = (await resp.json()) as { count: number };
+    return data.count;
+  } catch {
+    return null; // network error / abort — degraded, not a throw
+  }
 }
 
 function applyBadge(badge: HTMLElement, count: number): void {
@@ -69,13 +85,16 @@ function applyBadge(badge: HTMLElement, count: number): void {
 /**
  * Fires on load, on tab-visible, and every 60s. Only ever REVEALS the bell
  * (never hides it once shown) — a transient/degraded response mid-session
- * should not yank a control the viewer may be mid-interaction with.
+ * should not yank a control the viewer may be mid-interaction with. Returns
+ * whether the viewer is signed in (the count came back 200); the poll uses this
+ * fresh signal to (re)arm the WebSocket.
  */
-async function refreshCount(bell: HTMLElement, badge: HTMLElement): Promise<void> {
+async function refreshCount(bell: HTMLElement, badge: HTMLElement): Promise<boolean> {
   const count = await fetchUnreadCount();
-  if (count === null) return;
+  if (count === null) return false;
   bell.hidden = false;
   applyBadge(badge, count);
+  return true;
 }
 
 /** Renders collapsed groups into the panel via createElement/textContent only. */
@@ -122,28 +141,50 @@ function renderPanel(panel: HTMLElement, page: NotificationsPage): void {
 }
 
 /**
+ * Fetches `/api/notifications` and renders it into the panel — no mark-read,
+ * no visibility change. Used both by `openPanel` (below) and by a pushed
+ * nudge arriving while the panel is already open (so a live refresh doesn't
+ * re-POST mark-read on every nudge). Returns whether it loaded (a non-200 is
+ * a no-op, matching `fetchUnreadCount`'s degraded-mode contract).
+ */
+async function loadList(panel: HTMLElement): Promise<boolean> {
+  try {
+    const resp = await fetch("/api/notifications");
+    if (!resp.ok) return false;
+    const page = (await resp.json()) as NotificationsPage;
+    renderPanel(panel, page);
+    return true;
+  } catch {
+    return false; // network error — degraded, never throw (called fire-and-forget on a nudge)
+  }
+}
+
+/**
  * Loads the list, renders it, shows the panel, then marks everything read
  * (skipping the POST — panel still renders read-optimistically — if no CSRF
  * token is available, per the brief's degraded-mode note).
  */
 async function openPanel(panel: HTMLElement, badge: HTMLElement): Promise<void> {
-  const resp = await fetch("/api/notifications");
-  if (!resp.ok) return;
-  const page = (await resp.json()) as NotificationsPage;
-  renderPanel(panel, page);
+  const loaded = await loadList(panel);
+  if (!loaded) return;
   panel.hidden = false;
 
   const token = await getCsrfToken();
   if (token === null) return; // degraded/logged-out: panel stays read-optimistic, no write
 
-  const markResp = await fetch("/api/notifications-read", {
-    method: "POST",
-    headers: { "content-type": "application/json", "X-CSRF-Token": token },
-    body: JSON.stringify({ all: true }),
-  });
-  if (markResp.ok) {
-    badge.hidden = true;
-    badge.textContent = "";
+  try {
+    const markResp = await fetch("/api/notifications-read", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-CSRF-Token": token },
+      body: JSON.stringify({ all: true }),
+    });
+    if (markResp.ok) {
+      badge.hidden = true;
+      badge.textContent = "";
+    }
+  } catch {
+    // Network error marking read — leave the badge; the poll reconciles it.
+    // openPanel is invoked fire-and-forget, so this must not reject.
   }
 }
 
@@ -154,8 +195,57 @@ export function initNotifyBell(): void {
   const panel = document.querySelector<HTMLElement>("[data-notify-panel]");
   if (bell === null || toggle === null || badge === null || panel === null) return;
 
+  // --- M2.3b realtime WS lifecycle ------------------------------------
+  // The nav bell holds ONE WebSocket to /api/notifications-ws for live pushes,
+  // and the POLL (below) is its single (re)connect trigger AND the fallback
+  // while the socket is down: on each FRESH signed-in count (200) it arms the
+  // socket if one isn't already live. Three properties we want — two bespoke
+  // reconnect designs kept getting one or the other wrong:
+  //   • Anonymous / signed-out viewers never open a socket (refreshCount returns
+  //     false on a non-200), so the web proxy never sees a doomed handshake.
+  //   • A dead/expired session (count keeps 401ing) never re-arms — no endless
+  //     reconnect loop against a session that will never authenticate.
+  //   • A recovered session/network re-arms within one poll interval (≤60s, and
+  //     immediately on tab-focus via visibilitychange) — no permanent latch.
+  // A pushed nudge is content-free ({type} only) — it only triggers a refetch
+  // (refreshCount + a list reload if the panel is open), never a render from it.
+  //
+  // `connect`/`poll` are const arrows (NOT `function` declarations): TS's
+  // null-narrowing of `bell`/`badge`/`panel` from the guard above only survives
+  // into `const`-bound function expressions.
+  let ws: WebSocket | null = null;
+
+  const wsUrl = (): string => {
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    return `${scheme}://${location.host}/api/notifications-ws`;
+  };
+
+  const connect = (): void => {
+    if (ws !== null) return; // single live socket
+    const socket = new WebSocket(wsUrl());
+    ws = socket;
+    socket.onmessage = () => {
+      // Content-free nudge ({type:"notification"|"read"}) — never parse
+      // event.data; a nudge only ever triggers a refetch, same as poll().
+      void refreshCount(bell, badge);
+      if (!panel.hidden) void loadList(panel);
+    };
+    // On close/error just drop the reference; the next signed-in poll re-arms.
+    // Guard on identity so a stale socket's late event can't clear a newer one.
+    const drop = (): void => {
+      if (ws === socket) ws = null;
+    };
+    socket.onclose = drop;
+    socket.onerror = drop;
+  };
+
   const poll = (): void => {
-    void refreshCount(bell, badge);
+    void refreshCount(bell, badge).then((signedIn) => {
+      // (Re)arm the socket ONLY on a fresh signed-in count — never off a latched
+      // flag or historical state — and only when one isn't already live
+      // (connect() double-guards on `ws`).
+      if (signedIn) connect();
+    });
   };
 
   poll(); // on load — reveals the bell only once /api/notifications-count answers 200

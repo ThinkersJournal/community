@@ -7,7 +7,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { chooseUsername, publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
+import { chooseUsername, publishPost, signUpAndVerify, toggleFollowTo, uniqueHandle } from "./helpers";
 
 test("comment → author's bell shows 1 → open → read → clears; follow bumps it again", async ({
   page,
@@ -55,12 +55,10 @@ test("comment → author's bell shows 1 → open → read → clears; follow bum
     // A's handle comes straight from publishPost's return value — more robust
     // than clicking a byline link (the brief's fallback), and it is the
     // brief's own preferred approach.
+    // (toggleFollowTo tolerates the E2E dev-harness's lost-follow-response
+    // stall; see its doc in helpers.ts.)
     await b.goto(`/@${authorHandle}`);
-    const followBtn = b.locator("[data-follow-btn]");
-    await expect(followBtn).toBeVisible();
-    await expect(followBtn).toHaveText("Follow");
-    await followBtn.click();
-    await expect(followBtn).toHaveText("Unfollow"); // island only renders this after the POST resolves ok
+    await toggleFollowTo(b, "Unfollow");
 
     await page.reload();
     await expect(page.locator("[data-notify-badge]")).toHaveText("1");

@@ -285,6 +285,19 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /notifications/unread-count",
     build: () => new Request("https://api.test/notifications/unread-count"),
   },
+  // GET /notifications/ws authenticates inline (origin, then session) rather
+  // than via readCurrentSession-only, like the two above — see
+  // src/routes/notifications-ws.ts (M2.3b). This probe carries an ALLOWED
+  // Origin (so the origin-check layer passes first, pinning that the 401 comes
+  // from readCurrentSession, not the WS-hijack guard) but no session cookie.
+  {
+    name: "401 notifications ws no session",
+    route: "GET /notifications/ws",
+    build: () =>
+      new Request("https://api.test/notifications/ws", {
+        headers: { Upgrade: "websocket", Origin: ALLOWED_ORIGIN },
+      }),
+  },
   // TEST_ROUTES is "1" in this suite (vitest.config.ts), so the gate is OPEN and
   // the route runs — with no token stashed in KV it takes its own not-found
   // path. That is the branch worth pinning here: it must be the SAME envelope as

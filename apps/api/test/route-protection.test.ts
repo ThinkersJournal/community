@@ -161,6 +161,7 @@ const EXPECTED_DISPATCHER_BODY =
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
   'export { UserSecurityDO } from "./durable-objects/UserSecurityDO"; ' +
+  'export { NotifyDO } from "./durable-objects/NotifyDO"; ' +
   "export default { async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> { " +
   "const { pathname } = new URL(request.url); " +
   "const match = findRoute(ROUTES, request.method, pathname); " +

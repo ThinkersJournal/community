@@ -30,6 +30,7 @@ import {
   handleMarkRead,
   handleUnreadCount,
 } from "./routes/notifications";
+import { handleNotificationsWs } from "./routes/notifications-ws";
 import { handleCreatePost, handleGetPost, handleUpdatePost } from "./routes/posts";
 import {
   handlePublicPost,
@@ -140,6 +141,15 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/notifications", handler: handleListNotifications },
   { method: "GET", pattern: "/notifications/unread-count", handler: handleUnreadCount },
   { method: "POST", pattern: "/notifications/read", handler: handleMarkRead },
+
+  // Realtime bell upgrade (M2.3b) — a session-read GET, like
+  // /notifications/unread-count above, that authenticates inline (origin +
+  // session) and forwards the upgrade to the caller's OWN NotifyDO
+  // (getByName(session.userId), never a client-supplied id). See
+  // src/routes/notifications-ws.ts. The spike's unauthed `/notifications/ws`
+  // and its `/notifications/ws-push` trigger (M2.3b Task 0) are gone — replaced
+  // by this authed route and (in later tasks) real notify()/mark-read pushes.
+  { method: "GET", pattern: "/notifications/ws", handler: handleNotificationsWs },
 
   // ANONYMOUS reads — what the edge caches. See src/routes/public.ts's header:
   // no session is read here, by construction.

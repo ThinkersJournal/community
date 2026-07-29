@@ -112,7 +112,7 @@ export async function handleCreateComment(
       // parent commenter; top-level → post author. notify() self-suppresses and
       // never throws, so this cannot affect the 201 the commenter gets.
       if (parentId !== undefined && parentAuthorId !== null) {
-        await notify(c, {
+        await notify(c, env, ctx, {
           recipientId: parentAuthorId,
           actorId: userId,
           kind: "comment_reply",
@@ -120,7 +120,7 @@ export async function handleCreateComment(
           commentId: newId,
         });
       } else {
-        await notify(c, {
+        await notify(c, env, ctx, {
           recipientId: postAuthorId,
           actorId: userId,
           kind: "post_comment",

@@ -177,6 +177,17 @@ export default defineConfig({
         test: {
           name: "pool",
           include: ["test/**/*.test.ts"],
+          // ⚠️ NOT A LATENCY ASSERTION — a headroom for REAL I/O. Every test in
+          // this project drives the handlers through workerd against the live
+          // Docker Postgres, and the seed-heavy ones do many SEQUENTIAL DB
+          // round trips (e.g. public-reads' keyset test posts 25 rows one at a
+          // time to get two pages, ordered). Vitest runs the "pool" and "node"
+          // projects in PARALLEL, so those seeds contend for Postgres and, as
+          // more DB-integration files are added, honest work crept past the 5s
+          // default and flaked RED (observed at 5.0s — a timeout, not a wrong
+          // answer). This ceiling is generous enough that legitimate seeding
+          // never trips it while a genuine hang still fails the run.
+          testTimeout: 20_000,
           // ⚠️ `*.node.test.ts` is excluded for a REASON THAT IS NOT STYLE: workerd
           // has a VIRTUAL filesystem rooted at `/bundle`, so a test in this project
           // cannot read the repo's own files at all — `readFileSync("wrangler.jsonc")`

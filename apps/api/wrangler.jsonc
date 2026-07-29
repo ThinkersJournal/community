@@ -51,10 +51,22 @@
   // revocation, Tasks 16-17). New DO namespaces must use `new_sqlite_classes`
   // (KV-backed `new_classes` is blocked for new namespaces as of July 2026);
   // the migration `tag` is mandatory or the first dev/test run fails.
+  //
+  // NOTIFY (M2.3b) — a per-user WebSocket relay (`NotifyDO`) for the realtime
+  // notification bell. Holds hibernating sockets and pushes content-free
+  // nudges; no durable state, but `new_sqlite_classes` is still mandatory for a
+  // new namespace (KV-backed `new_classes` is blocked). Added in the Task-0
+  // connectivity spike — see docs/superpowers/spikes/2026-07-25-ws-topology-spike.md.
   "durable_objects": {
-    "bindings": [{ "name": "USER_SECURITY", "class_name": "UserSecurityDO" }]
+    "bindings": [
+      { "name": "USER_SECURITY", "class_name": "UserSecurityDO" },
+      { "name": "NOTIFY", "class_name": "NotifyDO" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserSecurityDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["UserSecurityDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["NotifyDO"] }
+  ],
   // ⚠️ THE PURGE HOP — api CANNOT purge web's cache.
   // Workers Cache purge is scoped to the Worker+entrypoint that OWNS the cache:
   // "a Worker cannot reach into another Worker's cache." Edits land HERE; the
