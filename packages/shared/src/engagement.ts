@@ -58,6 +58,12 @@ export interface CommentRow {
   editedAt: string | null;
   deleted: boolean;
   bodyMarkdown: string;
+  /**
+   * The materialized path (keyset-cursor value, `ORDER BY path` = thread
+   * order). Exposed so a client can place a live-reconciled comment at the
+   * right position without re-fetching the whole tree (M2.3b-live).
+   */
+  path: string;
   author: CommentAuthor | null;
 }
 
