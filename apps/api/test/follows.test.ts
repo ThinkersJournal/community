@@ -1,5 +1,5 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
@@ -171,5 +171,86 @@ describe("follow notifications (M2.3a)", () => {
     expect(await notifsFor(followee.userId)).toEqual([
       { kind: "follow", actorId: follower.userId },
     ]);
+  });
+});
+
+function followRequest(actor: Actor, followeeId: string): Request {
+  return new Request("https://api.test/follows", {
+    method: "POST",
+    headers: {
+      Origin: ALLOWED_ORIGIN,
+      Cookie: actor.cookie,
+      "X-CSRF-Token": actor.csrfToken,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ followeeId }),
+  });
+}
+
+describe("follow notify push (M2.3b)", () => {
+  function spyingNotify(pushed: Array<{ id: string; kind: string }>): {
+    getByName: (id: string) => { push: (kind: string) => void; fetch: () => Promise<Response> };
+  } {
+    return {
+      getByName: (id: string) => ({
+        push: (kind: string) => {
+          pushed.push({ id, kind });
+        },
+        fetch: async () => new Response(),
+      }),
+    };
+  }
+
+  it("pushes a realtime nudge to the followee's NotifyDO after a follow", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const follower = await onboardedActor();
+    const followee = await onboardedActor();
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      followRequest(follower, followee.userId),
+      { ...env, NOTIFY: spyingNotify(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(pushed).toEqual([{ id: followee.userId, kind: "notification" }]);
+  });
+
+  it("a rejected self-follow pushes nothing (self-suppression)", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const solo = await onboardedActor();
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      followRequest(solo, solo.userId),
+      { ...env, NOTIFY: spyingNotify(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(400);
+    expect(pushed).toEqual([]);
+  });
+
+  it("a push failure does not fail the follow write", async () => {
+    const notify = {
+      getByName: () => ({
+        push: () => {
+          throw new Error("DO unavailable");
+        },
+        fetch: async () => new Response(),
+      }),
+    };
+    const follower = await onboardedActor();
+    const followee = await onboardedActor();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      followRequest(follower, followee.userId),
+      { ...env, NOTIFY: notify } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(error).toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 });

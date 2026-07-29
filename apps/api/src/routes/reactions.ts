@@ -101,7 +101,7 @@ export async function handleAddReaction(
       // Notify the target's author. Dedup on the notification natural key means a
       // repeat same-tone reaction adds nothing; a different tone is a new event.
       if (recipientId !== null) {
-        await notify(c, {
+        await notify(c, env, {
           recipientId,
           actorId: userId,
           kind: postId !== undefined ? "post_reaction" : "comment_reaction",

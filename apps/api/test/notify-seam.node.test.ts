@@ -7,6 +7,13 @@ const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://postgres:postgres@localhost:5432/thinkersjournal_test";
 
+// M2.3b: notify() gained an `env` param (the realtime push seam). This file
+// drives notify() directly against a real pg Client (not the Worker/DO
+// runtime), so `env` is a minimal stub — the push itself is proven at the
+// Worker level in test/{comments,reactions,follows}.test.ts's "notify push"
+// suites; here it only needs to satisfy the call shape without throwing.
+const fakeEnv = { NOTIFY: { getByName: () => ({ push: () => {} }) } };
+
 let client: Client;
 let alice: string;
 let bob: string;
@@ -37,20 +44,20 @@ afterAll(async () => {
 
 describe("notify()", () => {
   it("inserts a row for a real event", async () => {
-    await notify(client, { recipientId: alice, actorId: bob, kind: "follow" });
+    await notify(client, fakeEnv, { recipientId: alice, actorId: bob, kind: "follow" });
     expect(await count(alice)).toBe(1);
     await client.query("DELETE FROM notifications WHERE recipient_id=$1", [alice]);
   });
 
   it("self-suppresses (recipient === actor) with no insert", async () => {
-    await notify(client, { recipientId: alice, actorId: alice, kind: "follow" });
+    await notify(client, fakeEnv, { recipientId: alice, actorId: alice, kind: "follow" });
     expect(await count(alice)).toBe(0);
   });
 
   it("is idempotent — a duplicate event does not add a second row", async () => {
     const ev = { recipientId: alice, actorId: bob, kind: "follow" as const };
-    await notify(client, ev);
-    await notify(client, ev);
+    await notify(client, fakeEnv, ev);
+    await notify(client, fakeEnv, ev);
     expect(await count(alice)).toBe(1);
     await client.query("DELETE FROM notifications WHERE recipient_id=$1", [alice]);
   });
@@ -58,7 +65,7 @@ describe("notify()", () => {
   it("NEVER throws — a failing client is swallowed", async () => {
     const boom = { query: async () => { throw new Error("db down"); } };
     await expect(
-      notify(boom as never, { recipientId: alice, actorId: bob, kind: "follow" }),
+      notify(boom as never, fakeEnv, { recipientId: alice, actorId: bob, kind: "follow" }),
     ).resolves.toBeUndefined();
   });
 });

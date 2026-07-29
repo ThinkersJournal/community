@@ -1,5 +1,5 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
@@ -318,5 +318,88 @@ describe("reaction notifications (M2.3a)", () => {
     const p = await insertPost(reader.userId, "published");
     await react(reader, { postId: p, kind: "agree" });
     expect(await notifsFor(reader.userId)).toEqual([]);
+  });
+});
+
+describe("reaction notify push (M2.3b)", () => {
+  function spyingNotify(pushed: Array<{ id: string; kind: string }>): {
+    getByName: (id: string) => { push: (kind: string) => void; fetch: () => Promise<Response> };
+  } {
+    return {
+      getByName: (id: string) => ({
+        push: (kind: string) => {
+          pushed.push({ id, kind });
+        },
+        fetch: async () => new Response(),
+      }),
+    };
+  }
+
+  it("pushes a realtime nudge to the recipient's NotifyDO after a reaction", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const posterActor = await onboardedActor();
+    const reactorActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/reactions", {
+        method: "POST",
+        headers: mutatingHeaders(reactorActor),
+        body: JSON.stringify({ postId: p, kind: "agree" }),
+      }),
+      { ...env, NOTIFY: spyingNotify(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(pushed).toEqual([{ id: posterActor.userId, kind: "notification" }]);
+  });
+
+  it("reacting to your own post/comment pushes nothing (self-suppression)", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const posterActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/reactions", {
+        method: "POST",
+        headers: mutatingHeaders(posterActor),
+        body: JSON.stringify({ postId: p, kind: "agree" }),
+      }),
+      { ...env, NOTIFY: spyingNotify(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(pushed).toEqual([]);
+  });
+
+  it("a push failure does not fail the reaction write", async () => {
+    const notify = {
+      getByName: () => ({
+        push: () => {
+          throw new Error("DO unavailable");
+        },
+        fetch: async () => new Response(),
+      }),
+    };
+    const posterActor = await onboardedActor();
+    const reactorActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/reactions", {
+        method: "POST",
+        headers: mutatingHeaders(reactorActor),
+        body: JSON.stringify({ postId: p, kind: "agree" }),
+      }),
+      { ...env, NOTIFY: notify } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(error).toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 });

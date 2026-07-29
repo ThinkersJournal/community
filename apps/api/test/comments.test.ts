@@ -1,5 +1,5 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
@@ -420,5 +420,92 @@ describe("comment notifications (M2.3a)", () => {
     expect(await notifsFor(poster.userId)).toEqual([
       { kind: "post_comment", actorId: parentAuthor.userId, commentId: parentId },
     ]);
+  });
+});
+
+// ⚠️ BUDGET: every case below mints its OWN fresh onboardedActor()s (never
+// `reader`/`author`/`editor`/`modAuthor`/`deleter`) — each does exactly ONE
+// `createComment` call, so none of these can push a shared actor's
+// COMMENT_LIMITER window (10/60s) over budget.
+describe("comment notify push (M2.3b)", () => {
+  function spyingNotify(pushed: Array<{ id: string; kind: string }>): {
+    getByName: (id: string) => { push: (kind: string) => void; fetch: () => Promise<Response> };
+  } {
+    return {
+      getByName: (id: string) => ({
+        push: (kind: string) => {
+          pushed.push({ id, kind });
+        },
+        fetch: async () => new Response(),
+      }),
+    };
+  }
+
+  it("pushes a realtime nudge to the recipient's NotifyDO after a comment", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const poster = await onboardedActor();
+    const commenter = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/comments", {
+        method: "POST",
+        headers: mutatingHeaders(commenter),
+        body: JSON.stringify({ postId: p, markdownSource: "hi" }),
+      }),
+      { ...env, NOTIFY: spyingNotify(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(pushed).toEqual([{ id: poster.userId, kind: "notification" }]);
+  });
+
+  it("a self-comment on your own post pushes nothing (self-suppression)", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const poster = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/comments", {
+        method: "POST",
+        headers: mutatingHeaders(poster),
+        body: JSON.stringify({ postId: p, markdownSource: "mine" }),
+      }),
+      { ...env, NOTIFY: spyingNotify(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(pushed).toEqual([]);
+  });
+
+  it("a push failure does not fail the comment write", async () => {
+    const notify = {
+      getByName: () => ({
+        push: () => {
+          throw new Error("DO unavailable");
+        },
+        fetch: async () => new Response(),
+      }),
+    };
+    const poster = await onboardedActor();
+    const commenter = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/comments", {
+        method: "POST",
+        headers: mutatingHeaders(commenter),
+        body: JSON.stringify({ postId: p, markdownSource: "hi" }),
+      }),
+      { ...env, NOTIFY: notify } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(error).toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 });
