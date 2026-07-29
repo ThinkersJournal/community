@@ -32,6 +32,7 @@ import {
 } from "./routes/notifications";
 import { handleNotificationsWs } from "./routes/notifications-ws";
 import { handleCreatePost, handleGetPost, handleUpdatePost } from "./routes/posts";
+import { handlerPostsLive } from "./routes/posts-live";
 import {
   handlePublicPost,
   handlePublicProfile,
@@ -99,6 +100,17 @@ export const ROUTES: readonly RouteDef[] = [
   // lies is worse than one that does not exist.
   { method: "POST", pattern: "/posts", handler: handleCreatePost },
   { method: "PATCH", pattern: "/posts/:id", handler: handleUpdatePost },
+
+  // ⚠️ MUST come before `GET /posts/:id` below — `/live` is a literal segment
+  // under the SAME first path component, and `findRoute` is first-match-wins
+  // (see routing.ts's header). Registering it after would let `:id` capture
+  // "live" and shadow this route with the session-gated author-post handler.
+  //
+  // The unauthenticated per-post live-update channel (M2.3b-live) — Origin-
+  // checked (WS carries cookies, bypasses CORS) but deliberately NOT session-
+  // gated: the post is public, its frames are content-free ({type} only), and
+  // any viewer of a public post may subscribe. See src/routes/posts-live.ts.
+  { method: "GET", pattern: "/posts/live", handler: handlerPostsLive },
   { method: "GET", pattern: "/posts/:id", handler: handleGetPost },
 
   // Durable-handle onboarding + the viewer's own profile state (M2.1).

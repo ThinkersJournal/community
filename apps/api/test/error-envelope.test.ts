@@ -298,6 +298,29 @@ const CASES: readonly ErrorCase[] = [
         headers: { Upgrade: "websocket", Origin: ALLOWED_ORIGIN },
       }),
   },
+  // GET /posts/live authenticates inline (origin only — NO session), same
+  // shape as GET /notifications/ws above except it never reads a session — see
+  // src/routes/posts-live.ts (M2.3b-live). This probe carries a cross-site
+  // Origin, so the 403 comes from the WS-hijack guard, not a session check
+  // (there is none to run).
+  {
+    name: "403 posts/live rejected origin",
+    route: "GET /posts/live",
+    build: () =>
+      new Request(`https://api.test/posts/live?postId=${PARAM_SAMPLES.id}`, {
+        headers: { Upgrade: "websocket", Origin: "https://evil.example" },
+      }),
+  },
+  // A malformed postId, with an ALLOWED Origin so the origin check passes
+  // first and the 400 pins the validation step, not the hijack guard.
+  {
+    name: "400 posts/live bad postId",
+    route: "GET /posts/live",
+    build: () =>
+      new Request("https://api.test/posts/live?postId=not-a-uuid", {
+        headers: { Upgrade: "websocket", Origin: ALLOWED_ORIGIN },
+      }),
+  },
   // TEST_ROUTES is "1" in this suite (vitest.config.ts), so the gate is OPEN and
   // the route runs — with no token stashed in KV it takes its own not-found
   // path. That is the branch worth pinning here: it must be the SAME envelope as
