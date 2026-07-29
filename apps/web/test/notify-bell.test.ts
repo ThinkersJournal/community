@@ -73,6 +73,16 @@ describe("notify bell island", () => {
     expect(code).toContain("onerror");
   });
 
+  it("gives up reconnecting after a failure cap (a dead session must not reconnect forever)", () => {
+    // ⚠️ ANTI-VACUITY: pin that the cap actually STOPS the schedule (returns
+    // without setting a timer) and that a successful open clears the counter —
+    // a browser WS can't see the 401 handshake status, so an expired session
+    // would otherwise reconnect at the 30s cap indefinitely (whole-branch
+    // review finding). Co-locate the counter check with an early return.
+    expect(code).toMatch(/reconnectFailures > MAX_RECONNECT_FAILURES[\s\S]{0,40}return/);
+    expect(code).toMatch(/onopen = \(\) => \{[\s\S]{0,120}reconnectFailures = 0/); // cleared on a real connection
+  });
+
   it("guards a single live socket across reconnects and still builds DOM safely", () => {
     expect(code).toMatch(/if \(ws !== null\) return/); // single-socket guard
     expect(code).toMatch(/ws = null/); // cleared before the next attempt is scheduled

@@ -184,6 +184,11 @@ export function initNotifyBell(): void {
   let wsStarted = false;
   let reconnectDelay = 1000;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Consecutive failed reconnects (reset the moment a socket opens). After the
+  // cap we STOP retrying and let the poll (below) carry on — see the cap note in
+  // `scheduleReconnect`.
+  let reconnectFailures = 0;
+  const MAX_RECONNECT_FAILURES = 8; // ~2min of backoff (1+2+4+8+16+30+30+30s) before giving up
 
   // Arrow-function consts (NOT `function` declarations): TS's null-narrowing
   // of `bell`/`badge`/`panel` from the guard above only survives into nested
@@ -199,6 +204,19 @@ export function initNotifyBell(): void {
   const scheduleReconnect = (): void => {
     ws = null;
     if (reconnectTimer !== null) return; // already scheduled — guards close+error double-firing
+    reconnectFailures += 1;
+    // ⚠️ GIVE UP AFTER A CAP — do NOT reconnect forever. A browser WebSocket
+    // cannot see the HTTP status of a failed upgrade, so a permanently-dead
+    // session (the cookie lapsed, or a logout-all bumped the security epoch —
+    // api then 401s the upgrade and the web proxy returns a non-101) is
+    // indistinguishable from a transient network drop: both just fail the
+    // handshake, and `onopen` (the only backoff reset) never fires, so the
+    // delay pins at the 30s cap. Without this cap a stale signed-out tab would
+    // re-attempt the full browser→web→api session-read every 30s indefinitely.
+    // After the cap we stop and lean on `poll()` (still running on its own
+    // interval, and it degrades gracefully on a 401). `wsStarted` stays true,
+    // so nothing re-opens the socket for this page; a navigation starts fresh.
+    if (reconnectFailures > MAX_RECONNECT_FAILURES) return;
     const delay = reconnectDelay;
     reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
     reconnectTimer = setTimeout(() => {
@@ -213,6 +231,7 @@ export function initNotifyBell(): void {
     ws = socket;
     socket.onopen = () => {
       reconnectDelay = 1000; // reset backoff after a successful open
+      reconnectFailures = 0; // a real connection clears the give-up counter
     };
     socket.onmessage = () => {
       // Content-free nudge ({type:"notification"|"read"}) — never parse
