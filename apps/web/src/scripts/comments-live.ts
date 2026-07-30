@@ -177,19 +177,19 @@ export function initCommentsLive(): void {
   const postAuthorId = section.dataset.postAuthorId ?? "";
 
   // Viewer identity, fetched ONCE (same shape + gating as initCommentsIsland) so
-  // a freshly-inserted comment can be affordance-wired for the viewer. Logged
-  // out / degraded → stays null and inserted comments simply aren't wired.
-  let viewer: { csrfToken: string; viewerId: string } | null = null;
-  void fetch("/api/me")
+  // a freshly-inserted comment can be affordance-wired for the viewer. Held as a
+  // PROMISE the reconcile AWAITS — a nudge that fires before /api/me resolves
+  // must not permanently leave an inserted comment un-wired; it awaits the same
+  // in-flight fetch instead. Logged out / degraded → resolves null and inserted
+  // comments simply aren't wired.
+  const viewerPromise: Promise<{ csrfToken: string; viewerId: string } | null> = fetch("/api/me")
     .then((r) => (r.ok ? (r.json() as Promise<MeResponse>) : null))
-    .then((me) => {
-      if (me !== null && me.loggedIn && me.usernameChosen && me.csrfToken !== null && me.userId !== null) {
-        viewer = { csrfToken: me.csrfToken, viewerId: me.userId };
-      }
-    })
-    .catch(() => {
-      /* logged out / degraded — inserted comments aren't affordance-wired */
-    });
+    .then((me) =>
+      me !== null && me.loggedIn && me.usernameChosen && me.csrfToken !== null && me.userId !== null
+        ? { csrfToken: me.csrfToken, viewerId: me.userId }
+        : null,
+    )
+    .catch(() => null);
 
   // --- socket lifecycle: single socket + bounded reconnect (no poll here) ----
   let ws: WebSocket | null = null;
@@ -258,6 +258,11 @@ export function initCommentsLive(): void {
 
     const list = section.querySelector<HTMLElement>(".comment-list");
     if (list === null) return;
+
+    // Await the one-shot viewer fetch so an early nudge still wires inserts once
+    // it resolves (no permanent miss). Resolved after the first reconcile, so
+    // this is a no-op await thereafter.
+    const viewer = await viewerPromise;
 
     let changed = false;
     let inserted = false;

@@ -58,7 +58,13 @@ test("comment/reaction/edit/delete on an open post page appear live in a second 
     // arms its socket-open listener BEFORE navigating — see the header's race
     // note. Only after `vWsOpened` resolves is it safe to let B act.
     const v = await vCtx.newPage();
-    const vWsOpened = v.waitForEvent("websocket");
+    // Scope the waiter to the post-live socket specifically: the post page can
+    // open more than one WebSocket (the nav bell also opens one for a signed-in
+    // viewer), so an unscoped waiter could resolve on the wrong socket. V is
+    // anonymous here (no bell socket), but scoping keeps this robust to that.
+    const vWsOpened = v.waitForEvent("websocket", {
+      predicate: (ws) => ws.url().includes("/api/posts-live"),
+    });
     await v.goto(url);
     await expect(v.locator("[data-comments]")).toBeVisible();
     await vWsOpened;
