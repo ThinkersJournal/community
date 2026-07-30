@@ -560,4 +560,57 @@ describe("comment post-live push (M2.3b-live)", () => {
     expect(response.status).toBe(404);
     expect(pushed).toEqual([]);
   });
+
+  it("a REAL edit pushes a post-live nudge to the post's channel", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const poster = await onboardedActor();
+    const commenter = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const created = await createComment(commenter, { postId: p, markdownSource: "v1" });
+    const { id } = (await created.json()) as { id: string };
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`https://api.test/comments/${id}`, {
+        method: "PATCH",
+        headers: mutatingHeaders(commenter),
+        body: JSON.stringify({ markdownSource: "v2" }),
+      }),
+      { ...env, POST_LIVE: spyingPostLive(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+    expect(pushed).toEqual([{ id: p, kind: "comment" }]);
+  });
+
+  it("a no-op edit (identical body) still 200s but pushes nothing and stays NOT edited", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const poster = await onboardedActor();
+    const commenter = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const created = await createComment(commenter, { postId: p, markdownSource: "same text" });
+    const { id } = (await created.json()) as { id: string };
+    // Resubmit IDENTICAL text — a no-op save must not nudge, purge, or mark edited.
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`https://api.test/comments/${id}`, {
+        method: "PATCH",
+        headers: mutatingHeaders(commenter),
+        body: JSON.stringify({ markdownSource: "same text" }),
+      }),
+      { ...env, POST_LIVE: spyingPostLive(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200); // a no-op save still succeeds...
+    expect(pushed).toEqual([]); // ...but nudges nobody
+    const edited = await withClient(env.HYPERDRIVE_FRESH, createExecutionContext(), async (c) => {
+      const { rows } = await c.query<{ edited: boolean }>(
+        `SELECT (edited_at IS NOT NULL) AS edited FROM comments WHERE id = $1`,
+        [id],
+      );
+      return rows[0]?.edited;
+    });
+    expect(edited).toBe(false); // and it is NOT marked "(edited)"
+  });
 });

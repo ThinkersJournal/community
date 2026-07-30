@@ -179,19 +179,37 @@ export async function handleUpdateComment(
   // Ownership + liveness in the WHERE (atomic; no existence leak): a not-mine
   // and a not-there answer identically. No username re-check — the author
   // necessarily passed it to create this row (documented deviation 1).
-  const postId = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+  //
+  // ⚠️ NO-OP SAVES ARE NOT EDITS. `body_markdown IS DISTINCT FROM $3` skips a
+  // resubmit of identical text: it must not stamp `edited_at` (a false
+  // "(edited)"), purge the cached page, or fire a post-live nudge for a change
+  // that didn't happen. A 0-row result is then ambiguous — unchanged, or
+  // not-the-caller's-live-comment — so a follow-up existence check (only on the
+  // rare 0-row path) distinguishes a 200 no-op from a 404.
+  type UpdateOutcome =
+    | { kind: "changed"; postId: string }
+    | { kind: "unchanged" }
+    | { kind: "notFound" };
+  const outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c): Promise<UpdateOutcome> => {
     const { rows } = await c.query<{ postId: string }>(
       `UPDATE comments SET body_markdown = $3, edited_at = now()
         WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL
+          AND body_markdown IS DISTINCT FROM $3
        RETURNING post_id AS "postId"`,
       [id, userId, parsed.data.markdownSource],
     );
-    return rows[0]?.postId ?? null;
+    if (rows[0]) return { kind: "changed", postId: rows[0].postId };
+    const { rows: live } = await c.query(
+      `SELECT 1 FROM comments WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL`,
+      [id, userId],
+    );
+    return live[0] ? { kind: "unchanged" } : { kind: "notFound" };
   });
-  if (postId === null) return errorResponse("COMMENT_NOT_FOUND", 404);
-
-  await purgeTags(env, [`post:${postId}`]);
-  notifyPostLive(env, ctx, postId, "comment");
+  if (outcome.kind === "notFound") return errorResponse("COMMENT_NOT_FOUND", 404);
+  if (outcome.kind === "changed") {
+    await purgeTags(env, [`post:${outcome.postId}`]);
+    notifyPostLive(env, ctx, outcome.postId, "comment");
+  }
   return json({});
 }
 
