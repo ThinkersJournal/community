@@ -99,6 +99,28 @@ export function refreshReactionCounts(): void {
     });
 }
 
+/**
+ * Wires click-to-toggle onto ONE `[data-reactions]` chip row. Shared by
+ * `initReactionsIsland` (the SSR set, once at load) and by the live client
+ * (comments-live.ts, M2.3b-live) for a freshly-inserted comment's chip row —
+ * extracted so a live-inserted row becomes fully INTERACTIVE, not merely
+ * count-populated. Without this, `refreshReactionCounts` would enable an
+ * inserted comment's chips (`btn.disabled = false`) while leaving them unwired —
+ * a dead, enabled-but-unclickable affordance. Post rows carry `data-target-post`;
+ * comment rows carry `data-target-comment`. A logged-out click routes to /login
+ * (see `toggle`), matching the SSR chips exactly, so this is wired for EVERY
+ * viewer, not only the signed-in ones.
+ */
+export function wireReactionSection(section: HTMLElement, postId: string): void {
+  const commentId = section.dataset.targetComment;
+  const isPost = section.dataset.targetPost !== undefined;
+  for (const btn of Array.from(section.querySelectorAll<HTMLButtonElement>("button[data-kind]"))) {
+    btn.addEventListener("click", () => {
+      toggle(btn, isPost ? { postId } : { commentId: commentId ?? "" });
+    });
+  }
+}
+
 export function initReactionsIsland(): void {
   const root = document.querySelector<HTMLElement>("[data-comments]");
   const sections = Array.from(document.querySelectorAll<HTMLElement>("[data-reactions]"));
@@ -108,14 +130,6 @@ export function initReactionsIsland(): void {
   // Populate counts + pressed-state from one round trip…
   refreshReactionCounts();
 
-  // …then wire click-to-toggle ONCE per chip that exists at load (the SSR set).
-  for (const section of sections) {
-    const commentId = section.dataset.targetComment;
-    const isPost = section.dataset.targetPost !== undefined;
-    for (const btn of Array.from(section.querySelectorAll<HTMLButtonElement>("button[data-kind]"))) {
-      btn.addEventListener("click", () => {
-        toggle(btn, isPost ? { postId } : { commentId: commentId ?? "" });
-      });
-    }
-  }
+  // …then wire click-to-toggle ONCE per chip row that exists at load (the SSR set).
+  for (const section of sections) wireReactionSection(section, postId);
 }

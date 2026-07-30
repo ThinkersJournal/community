@@ -140,3 +140,68 @@ test("comment/reaction/edit/delete on an open post page appear live in a second 
     await vCtx.close();
   }
 });
+
+/**
+ * REGRESSION (Copilot PR #9 round 4): a comment that arrives LIVE must have its
+ * reaction chips WIRED, not merely enabled. `refreshReactionCounts()` enables
+ * every chip row (`btn.disabled = false`), but click-to-toggle is wired only in
+ * `initReactionsIsland`, which runs once at load — so a live-inserted comment's
+ * chips were becoming enabled-but-dead (clicking did nothing until a navigation).
+ * The fix wires the inserted row via the extracted `wireReactionSection`. This
+ * proves it end to end: a SIGNED-IN observer (A) receives B's comment live, then
+ * successfully reacts on THAT inserted comment — the toggle fires and the count
+ * ticks, which is impossible unless the chip carries a live click handler.
+ */
+test("a live-inserted comment's reaction chip is clickable (wired), not enabled-but-dead", async ({
+  page: a,
+  browser,
+}) => {
+  // A publishes (publishPost onboards A) and stays on the post SIGNED IN so it
+  // can react — unlike the anonymous viewer in the spine above.
+  await signUpAndVerify(a, a.request);
+  const { url } = await publishPost(a, {
+    title: "Live Chip Wiring Probe",
+    markdownSource: "A post whose live-inserted comment gets a reaction.",
+  });
+
+  const bCtx = await browser.newContext();
+  try {
+    // Arm the post-live socket waiter BEFORE navigating (see the spine header's
+    // race note). Scope it: a signed-in viewer also opens the nav-bell socket.
+    const aWsOpened = a.waitForEvent("websocket", {
+      predicate: (ws) => ws.url().includes("/api/posts-live"),
+    });
+    await a.goto(url);
+    await expect(a.locator("[data-comments]")).toBeVisible();
+    await aWsOpened;
+
+    // B signs up, onboards, and comments.
+    const b = await bCtx.newPage();
+    await signUpAndVerify(b, b.request);
+    await chooseUsername(b, uniqueHandle("commenter"));
+    await b.goto(url);
+    const commentText = "Comment whose live chip A will click";
+    const form = b.locator("[data-comment-form-slot] form");
+    await form.locator("textarea").fill(commentText);
+    await form.locator("button[type=submit]").click();
+    await expect(b.locator(".comment-body").first()).toContainText(commentText);
+
+    // A sees B's comment arrive LIVE (no reload — see the spine's isolation note).
+    const aInserted = a
+      .locator("[data-comments] [data-comment-id]", { hasText: commentText })
+      .first();
+    await expect(aInserted).toBeVisible({ timeout: 8000 });
+
+    // THE PROOF: the inserted comment's OWN chip toggles when clicked. An
+    // enabled-but-unwired chip (the round-4 bug) would flip nothing.
+    const insertedChip = aInserted
+      .locator('[data-reactions][data-target-comment] button[data-kind="insightful"]')
+      .first();
+    await expect(insertedChip).toBeEnabled({ timeout: 8000 }); // refreshReactionCounts ran
+    await insertedChip.click();
+    await expect(insertedChip).toHaveAttribute("aria-pressed", "true");
+    await expect(insertedChip.locator("[data-count]")).toHaveText("1");
+  } finally {
+    await bCtx.close();
+  }
+});

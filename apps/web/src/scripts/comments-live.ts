@@ -36,7 +36,7 @@
 import { REACTION_KINDS, REACTION_LABELS } from "@thinkersjournal/shared";
 
 import { wireCommentAffordances } from "./comments";
-import { refreshReactionCounts } from "./reactions";
+import { refreshReactionCounts, wireReactionSection } from "./reactions";
 
 /** One row of `/api/comments-fragment` (Task 5) — field-for-field its output. */
 interface FragmentComment {
@@ -294,6 +294,14 @@ export function initCommentsLive(): void {
       insertOrdered(list, li, c.path);
       changed = true;
       inserted = true;
+      // Reaction chips are interactive for EVERYONE (a logged-out click routes to
+      // /login, exactly like the SSR island), so wire them UNCONDITIONALLY — the
+      // `refreshReactionCounts()` below enables the chips, and an enabled chip
+      // MUST be clickable, not a dead affordance. Tombstone inserts carry no chip
+      // row, so the query is null and this is skipped for them.
+      const chips = li.querySelector<HTMLElement>("[data-reactions]");
+      if (chips !== null) wireReactionSection(chips, postId);
+      // Reply/Edit/Delete need the viewer's identity, so those stay gated.
       if (viewer !== null && !c.deleted) {
         wireCommentAffordances(li, {
           csrfToken: viewer.csrfToken,
