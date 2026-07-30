@@ -116,7 +116,7 @@ export async function handleAddReaction(
       // insert and must not nudge open tabs to refetch for nothing. Always the
       // POST's channel: notifPostId already resolves post-target → postId,
       // comment-target → the comment's post_id.
-      if (rowCount) notifyPostLive(env, ctx, notifPostId!, "reaction");
+      if (rowCount) notifyPostLive(env, ctx, notifPostId, "reaction");
       return null;
     });
   } catch (err) {

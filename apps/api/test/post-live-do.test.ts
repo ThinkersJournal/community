@@ -1,6 +1,5 @@
-import { env, runInDurableObject } from "cloudflare:test";
-import { evictDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { env, evictDurableObject } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
 
 /** Open a hibernatable client socket to a post's PostLiveDO and collect frames. */
 async function connect(postId: string): Promise<{ ws: WebSocket; messages: string[] }> {

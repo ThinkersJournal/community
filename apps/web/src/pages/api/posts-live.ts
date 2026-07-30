@@ -3,8 +3,9 @@
  *
  * Forwards an incoming WS upgrade to the `api` Worker's `/posts/live`
  * over the `API` Service Binding, carrying the `postId` query param, and
- * hands the resulting `101` + `webSocket` back to the browser, so `api` can
- * auth the session (Cookie) and origin-check (Origin) the socket itself.
+ * hands the resulting `101` + `webSocket` back to the browser. This channel is
+ * UNAUTHED — `api` only origin-checks the upgrade (any viewer of a public post
+ * may subscribe); there is NO session auth here (unlike the notify bell).
  *
  * ⚠️ HAND-RECONSTRUCT THE 101 — a Task-0 spike finding, do NOT "simplify"
  * this away. Returning the upstream Response verbatim yields a 500 handshake
@@ -34,8 +35,9 @@ import type { APIRoute } from "astro";
 export const prerender = false;
 
 export const GET: APIRoute = async (context) => {
-  // This route is per-viewer authed, so it must declare its cacheability like
-  // every other page (test/page-cache-inventory.test.ts SWEEP A). A 101
+  // This route is per-viewer / never-cacheable (a live WS hop, unauthed), so it
+  // must declare its cacheability like every other page
+  // (test/page-cache-inventory.test.ts SWEEP A). A 101
   // protocol switch is never cached and carries no header of its own, but
   // every OTHER response this handler can return (426 rejection, non-101
   // fallback) gets `headers` marked private up front.
