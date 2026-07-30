@@ -66,11 +66,12 @@ function toggle(btn: HTMLButtonElement, target: { postId?: string; commentId?: s
  * Refetches `/api/reactions` and re-applies counts + the viewer's pressed-state
  * onto EVERY `[data-reactions]` chip row currently in the DOM (the post's and
  * each comment's). Idempotent and callable on demand: `initReactionsIsland`
- * runs it once on load, and the live client (comments-live.ts, M2.3b-live) calls it
- * after a reconcile so a freshly-inserted comment's chips populate. This does
- * NOT wire click handlers — that one-time wiring stays in `initReactionsIsland`
- * (a live-inserted chip's counts populate here; clicking it toggles only after
- * a navigation re-runs the island).
+ * runs it once on load, and the live client (comments-live.ts, M2.3b-live) calls
+ * it after a reconcile so a freshly-inserted comment's chips get their counts.
+ * This refreshes COUNTS ONLY — it does not wire click handlers. Click-to-toggle
+ * is wired separately by `wireReactionSection`: `initReactionsIsland` wires the
+ * SSR chip rows at load, and the live client wires each inserted comment's row as
+ * it arrives — so a live-inserted chip is clickable IMMEDIATELY, no navigation.
  */
 export function refreshReactionCounts(): void {
   const root = document.querySelector<HTMLElement>("[data-comments]");
