@@ -34,6 +34,12 @@ describe("comments-live client", () => {
     expect(stripped).toContain("wireReactionSection");
     expect(stripped).toMatch(/querySelector[\s\S]{0,60}data-reactions[\s\S]{0,140}wireReactionSection/);
   });
+  it("single-flights reconcile: one in-flight + one coalesced trailing re-run", () => {
+    // a burst of nudges must not fan out into N concurrent fragment fetches, and
+    // a nudge that lands mid-flight must not be dropped — it re-runs once after
+    expect(stripped).toMatch(/if \(reconciling\)[\s\S]{0,60}pending = true/);
+    expect(stripped).toMatch(/finally[\s\S]{0,120}reconciling = false[\s\S]{0,80}pending[\s\S]{0,60}reconcile\(\)/);
+  });
   it("the ONLY html sink is the fragment's rendered html, and there is a single live socket", () => {
     // innerHTML is used solely for the comment body from the fragment endpoint
     expect(stripped).toMatch(/comment-body[\s\S]{0,120}innerHTML/);

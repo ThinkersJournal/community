@@ -196,6 +196,11 @@ export function initCommentsLive(): void {
   let retries = 0;
   const MAX_RETRIES = 5;
 
+  // Single-flight reconcile: at most one in-flight, with a trailing coalesced
+  // re-run for any nudge that arrives mid-flight (see the `reconcile` wrapper).
+  let reconciling = false;
+  let pending = false;
+
   const wsUrl = (): string => {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     return `${scheme}://${location.host}/api/posts-live?postId=${encodeURIComponent(postId)}`;
@@ -241,7 +246,7 @@ export function initCommentsLive(): void {
     socket.onerror = drop;
   };
 
-  const reconcile = async (): Promise<void> => {
+  const runReconcile = async (): Promise<void> => {
     const cursor = new URLSearchParams(location.search).get("comments");
     const url = `/api/comments-fragment?postId=${encodeURIComponent(postId)}${
       cursor !== null ? `&cursor=${encodeURIComponent(cursor)}` : ""
@@ -321,6 +326,34 @@ export function initCommentsLive(): void {
     // Repopulate chip counts so inserted comments' chips (and any that changed)
     // come alive on the next round trip.
     if (changed) refreshReactionCounts();
+  };
+
+  // Single-flight wrapper around runReconcile. `runReconcile`'s insert loop is
+  // synchronous — it check-then-inserts by `data-comment-id` with NO await in
+  // between — so JS run-to-completion already prevents duplicate inserts across
+  // overlapping reconciles (the second call sees the first's inserts committed
+  // and skips them). This wrapper adds two things on top: it collapses a BURST of
+  // nudges (a lively thread) into at most one in-flight fetch plus one trailing
+  // re-run — instead of one redundant /api/comments-fragment fetch per nudge —
+  // and it keeps the no-duplicate guarantee explicit if the loop ever grows an
+  // await. It COALESCES, never drops: runReconcile always refetches the full
+  // current window, so a single trailing run captures every change that landed
+  // while the previous one was in flight.
+  const reconcile = async (): Promise<void> => {
+    if (reconciling) {
+      pending = true;
+      return;
+    }
+    reconciling = true;
+    try {
+      await runReconcile();
+    } finally {
+      reconciling = false;
+      if (pending) {
+        pending = false;
+        void reconcile();
+      }
+    }
   };
 
   connect();
