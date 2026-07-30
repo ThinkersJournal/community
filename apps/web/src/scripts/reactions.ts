@@ -62,7 +62,17 @@ function toggle(btn: HTMLButtonElement, target: { postId?: string; commentId?: s
     });
 }
 
-export function initReactionsIsland(): void {
+/**
+ * Refetches `/api/reactions` and re-applies counts + the viewer's pressed-state
+ * onto EVERY `[data-reactions]` chip row currently in the DOM (the post's and
+ * each comment's). Idempotent and callable on demand: `initReactionsIsland`
+ * runs it once on load, and the live client (comments-live.ts, M2.3b) calls it
+ * after a reconcile so a freshly-inserted comment's chips populate. This does
+ * NOT wire click handlers — that one-time wiring stays in `initReactionsIsland`
+ * (a live-inserted chip's counts populate here; clicking it toggles only after
+ * a navigation re-runs the island).
+ */
+export function refreshReactionCounts(): void {
   const root = document.querySelector<HTMLElement>("[data-comments]");
   const sections = Array.from(document.querySelectorAll<HTMLElement>("[data-reactions]"));
   if (root === null || sections.length === 0) return;
@@ -82,14 +92,30 @@ export function initReactionsIsland(): void {
              { insightful: 0, curious: 0, agree: 0, challenging: 0 });
         const mine = isPost ? (data.mine?.post ?? []) : (data.mine?.comments[commentId ?? ""] ?? []);
         applyState(section, counts, mine);
-        for (const btn of Array.from(section.querySelectorAll<HTMLButtonElement>("button[data-kind]"))) {
-          btn.addEventListener("click", () => {
-            toggle(btn, isPost ? { postId } : { commentId: commentId ?? "" });
-          });
-        }
       }
     })
     .catch(() => {
       /* degraded state: chips stay disabled */
     });
+}
+
+export function initReactionsIsland(): void {
+  const root = document.querySelector<HTMLElement>("[data-comments]");
+  const sections = Array.from(document.querySelectorAll<HTMLElement>("[data-reactions]"));
+  if (root === null || sections.length === 0) return;
+  const postId = root.dataset.postId ?? "";
+
+  // Populate counts + pressed-state from one round trip…
+  refreshReactionCounts();
+
+  // …then wire click-to-toggle ONCE per chip that exists at load (the SSR set).
+  for (const section of sections) {
+    const commentId = section.dataset.targetComment;
+    const isPost = section.dataset.targetPost !== undefined;
+    for (const btn of Array.from(section.querySelectorAll<HTMLButtonElement>("button[data-kind]"))) {
+      btn.addEventListener("click", () => {
+        toggle(btn, isPost ? { postId } : { commentId: commentId ?? "" });
+      });
+    }
+  }
 }

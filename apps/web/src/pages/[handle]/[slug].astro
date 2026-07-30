@@ -102,6 +102,10 @@ const renderedComments = await Promise.all(
   commentsPage.comments.map(async (c) => ({
     id: c.id,
     depth: c.depth,
+    // ⚠️ Surfaced as `data-path` on each <li> so the live client (comments-live.ts,
+    // M2.3b) can insert a reconciled comment at its path-ordered position without
+    // re-fetching the whole tree. Server orders by materialized `path`.
+    path: c.path,
     deleted: c.deleted,
     createdAt: c.createdAt,
     edited: c.editedAt !== null,
@@ -227,6 +231,7 @@ const jsonLd = {
           class={`comment depth-${Math.min(c.depth, 6)}`}
           data-comment-id={c.id}
           data-depth={c.depth}
+          data-path={c.path}
           data-author-id={c.authorId}
           data-deleted={c.deleted ? "true" : undefined}
         >
@@ -257,8 +262,10 @@ const jsonLd = {
   <script>
     import { initCommentsIsland } from "../../scripts/comments";
     import { initReactionsIsland } from "../../scripts/reactions";
+    import { initCommentsLive } from "../../scripts/comments-live";
     initCommentsIsland();
     initReactionsIsland();
+    initCommentsLive();
   </script>
 </BaseLayout>
 <style>
