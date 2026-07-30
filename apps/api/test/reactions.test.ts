@@ -444,3 +444,151 @@ describe("reaction notify push (M2.3b)", () => {
     vi.restoreAllMocks();
   });
 });
+
+describe("reaction post-live push (M2.3b-live)", () => {
+  function spyingPostLive(pushed: Array<{ id: string; kind: string }>): {
+    getByName: (id: string) => { push: (kind: string) => void };
+  } {
+    return {
+      getByName: (id: string) => ({
+        push: (kind: string) => {
+          pushed.push({ id, kind });
+        },
+      }),
+    };
+  }
+
+  it("an add-reaction on a POST pushes a reaction nudge to that post's channel", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const posterActor = await onboardedActor();
+    const reactorActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/reactions", {
+        method: "POST",
+        headers: mutatingHeaders(reactorActor),
+        body: JSON.stringify({ postId: p, kind: "agree" }),
+      }),
+      { ...env, POST_LIVE: spyingPostLive(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(pushed).toEqual([{ id: p, kind: "reaction" }]);
+  });
+
+  it("an add-reaction on a COMMENT pushes to the comment's POST, not the comment id", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const posterActor = await onboardedActor();
+    const reactorActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    const c = await insertComment(p, posterActor.userId);
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/reactions", {
+        method: "POST",
+        headers: mutatingHeaders(reactorActor),
+        body: JSON.stringify({ commentId: c.id, kind: "curious" }),
+      }),
+      { ...env, POST_LIVE: spyingPostLive(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(pushed).toEqual([{ id: p, kind: "reaction" }]);
+  });
+
+  it("a duplicate add (ON CONFLICT no-op) pushes nothing", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const posterActor = await onboardedActor();
+    const reactorActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    await react(reactorActor, { postId: p, kind: "agree" });
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/reactions", {
+        method: "POST",
+        headers: mutatingHeaders(reactorActor),
+        body: JSON.stringify({ postId: p, kind: "agree" }),
+      }),
+      { ...env, POST_LIVE: spyingPostLive(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(201);
+    expect(pushed).toEqual([]);
+  });
+
+  it("removing a POST reaction pushes a reaction nudge to that post's channel", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const posterActor = await onboardedActor();
+    const reactorActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    await react(reactorActor, { postId: p, kind: "agree" });
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`https://api.test/reactions?${new URLSearchParams({ kind: "agree", postId: p }).toString()}`, {
+        method: "DELETE",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: reactorActor.cookie,
+          "X-CSRF-Token": reactorActor.csrfToken,
+        },
+      }),
+      { ...env, POST_LIVE: spyingPostLive(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+    expect(pushed).toEqual([{ id: p, kind: "reaction" }]);
+  });
+
+  it("removing a COMMENT reaction pushes to the comment's POST, not the comment id", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const posterActor = await onboardedActor();
+    const reactorActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    const c = await insertComment(p, posterActor.userId);
+    await react(reactorActor, { commentId: c.id, kind: "curious" });
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`https://api.test/reactions?${new URLSearchParams({ kind: "curious", commentId: c.id }).toString()}`, {
+        method: "DELETE",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: reactorActor.cookie,
+          "X-CSRF-Token": reactorActor.csrfToken,
+        },
+      }),
+      { ...env, POST_LIVE: spyingPostLive(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+    expect(pushed).toEqual([{ id: p, kind: "reaction" }]);
+  });
+
+  it("removing an absent reaction (no-op) pushes nothing", async () => {
+    const pushed: Array<{ id: string; kind: string }> = [];
+    const posterActor = await onboardedActor();
+    const reactorActor = await onboardedActor();
+    const p = await insertPost(posterActor.userId, "published");
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`https://api.test/reactions?${new URLSearchParams({ kind: "agree", postId: p }).toString()}`, {
+        method: "DELETE",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: reactorActor.cookie,
+          "X-CSRF-Token": reactorActor.csrfToken,
+        },
+      }),
+      { ...env, POST_LIVE: spyingPostLive(pushed) } as never,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+    expect(pushed).toEqual([]);
+  });
+});

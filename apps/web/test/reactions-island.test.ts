@@ -22,4 +22,9 @@ describe("reactions island", () => {
     expect(code).toContain("textContent"); // positive anchor
     expect(code).not.toContain("innerHTML");
   });
+  it("exposes wireReactionSection so live-inserted chip rows are wired, not just enabled", () => {
+    expect(code).toContain("export function wireReactionSection");
+    // the SSR set wires through the SAME helper the live client reuses
+    expect(code).toMatch(/for \(const section of sections\) wireReactionSection\(/);
+  });
 });

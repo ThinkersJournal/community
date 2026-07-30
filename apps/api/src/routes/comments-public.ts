@@ -69,12 +69,12 @@ export async function handlePublicComments(
       r.deleted
         ? {
             id: r.id, parentId: r.parentId, depth: r.depth,
-            createdAt: r.createdAt, editedAt: null,
+            createdAt: r.createdAt, editedAt: null, path: r.path,
             deleted: true, bodyMarkdown: "", author: null,
           }
         : {
             id: r.id, parentId: r.parentId, depth: r.depth,
-            createdAt: r.createdAt, editedAt: r.editedAt,
+            createdAt: r.createdAt, editedAt: r.editedAt, path: r.path,
             deleted: false, bodyMarkdown: r.bodyMarkdown,
             author: { userId: r.authorUserId, username: r.username, displayName: r.displayName },
           },

@@ -35,4 +35,10 @@ describe("comments island", () => {
     expect(code).toContain("MAX_DEPTH");
     expect(code).toContain("/api/comments?");
   });
+  it("exposes per-comment affordance wiring as a reusable export", () => {
+    // Task 7's live client wires freshly-inserted <li>s with this same helper —
+    // it must be exported and initCommentsIsland must call it, not inline it.
+    expect(code).toContain("export function wireCommentAffordances");
+    expect(code).toContain("wireCommentAffordances(li, { csrfToken, viewerId, postId, postAuthorId })");
+  });
 });
