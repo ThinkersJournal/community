@@ -48,9 +48,9 @@ export const GET: APIRoute = async (context) => {
     return new Response("expected a websocket upgrade", { status: 426, headers });
   }
 
-  // Forward the upgrade over the Service Binding, carrying every header —
-  // Cookie + Origin (api auths the session and origin-checks) plus the
-  // Sec-WebSocket-* handshake headers the upgrade itself needs. The api
+  // Forward the upgrade over the Service Binding, carrying every header — the
+  // Origin (api origin-checks; this channel is UNAUTHED — no session read) plus
+  // the Sec-WebSocket-* handshake headers the upgrade itself needs. The api
   // resolves the target DO and returns the 101.
   const postId = new URL(context.request.url).searchParams.get("postId") ?? "";
   const upstream = await (
