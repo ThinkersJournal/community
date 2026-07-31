@@ -123,6 +123,27 @@ async function seedKeysetNotifs(recipientId: string, n: number): Promise<string[
   return notifIds;
 }
 
+/**
+ * DB-direct count of the viewer's rows whose `read_at IS NULL` — the
+ * EMAIL-SUPPRESSION "unread" state (M2.3c). This is deliberately NOT the badge:
+ * since M2.3c the `/notifications/unread-count` endpoint returns the UNSEEN
+ * count (rows created after the last bell-open), which marking read no longer
+ * changes. So a test that means to assert READ state must query read_at here,
+ * not infer it from the count endpoint.
+ */
+async function unreadByReadAt(userId: string): Promise<number> {
+  const ctx = createExecutionContext();
+  const n = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ n: string }>(
+      "SELECT count(*) n FROM notifications WHERE recipient_id=$1 AND read_at IS NULL",
+      [userId],
+    );
+    return Number(rows[0]!.n);
+  });
+  await waitOnExecutionContext(ctx);
+  return n;
+}
+
 function listReq(actor: Actor, cursor?: string): Request {
   const q = cursor ? `?cursor=${cursor}` : "";
   return new Request(`https://api.test/notifications${q}`, { headers: { Cookie: actor.cookie } });
@@ -233,7 +254,11 @@ describe("GET /notifications", () => {
 });
 
 describe("GET /notifications/unread-count", () => {
-  it("counts only the viewer's unread rows", async () => {
+  it("counts only the viewer's own UNSEEN rows (all of them when the bell was never opened)", async () => {
+    // M2.3c: the badge counts UNSEEN rows (created after the last bell-open).
+    // carol has never opened the bell (no notification_prefs row → seen_at is
+    // COALESCEd to epoch), so every one of her rows is unseen — and the count is
+    // still scoped to her alone (the IDOR boundary).
     const carol = await onboardedActor();
     await seedNotif(carol.userId, alice.userId);
     await seedNotif(carol.userId, bob.userId);
@@ -249,16 +274,22 @@ describe("GET /notifications/unread-count", () => {
 });
 
 describe("POST /notifications/read", () => {
-  it("marks specific ids read, then all", async () => {
+  it("marks specific ids read, then all — verified via read_at (decoupled from the unseen badge)", async () => {
+    // ⚠️ M2.3c: read_at is now DECOUPLED from the badge. `/notifications/read`
+    // still marks rows read (both {ids} and {all}), but the unread-count
+    // endpoint returns the UNSEEN count, which marking read does NOT move. So
+    // this asserts read state DIRECTLY (read_at IS NULL) rather than inferring it
+    // from the count endpoint — the count would stay 2 here and prove nothing.
     const dave = await onboardedActor();
     const id1 = await seedNotif(dave.userId, alice.userId);
     await seedNotif(dave.userId, bob.userId);
+    expect(await unreadByReadAt(dave.userId)).toBe(2); // both start unread
 
     expect((await fetchWorker(markReq(dave, { ids: [id1] }))).status).toBe(200);
-    expect(((await (await fetchWorker(countReq(dave))).json()) as { count: number }).count).toBe(1);
+    expect(await unreadByReadAt(dave.userId)).toBe(1); // {ids}: only id1 now read
 
     expect((await fetchWorker(markReq(dave, { all: true }))).status).toBe(200);
-    expect(((await (await fetchWorker(countReq(dave))).json()) as { count: number }).count).toBe(0);
+    expect(await unreadByReadAt(dave.userId)).toBe(0); // {all}: the rest now read
   });
 
   it("400s when neither/both of ids/all are given", async () => {
@@ -276,12 +307,13 @@ describe("POST /notifications/read", () => {
     const list = (await (await fetchWorker(listReq(attacker))).json()) as NotificationsPage;
     expect(list.notifications.find((n) => n.id === victimNotif)).toBeUndefined();
 
-    // mark-read: attacker marking the victim's id is a no-op — the victim
-    // still has it unread afterward.
+    // mark-read: attacker marking the victim's id is a no-op — the victim's row
+    // is still UNREAD (read_at IS NULL) afterward. ⚠️ Assert read_at DIRECTLY:
+    // since M2.3c the badge is the UNSEEN count, which reads 1 for the victim
+    // regardless of read state, so it can no longer stand in for "still unread".
     const markStatus = (await fetchWorker(markReq(attacker, { ids: [victimNotif] }))).status;
     expect(markStatus).toBe(200); // idempotent 200 even though the UPDATE matched 0 rows
-    const c = (await (await fetchWorker(countReq(victim))).json()) as { count: number };
-    expect(c.count).toBe(1);
+    expect(await unreadByReadAt(victim.userId)).toBe(1);
   });
 });
 

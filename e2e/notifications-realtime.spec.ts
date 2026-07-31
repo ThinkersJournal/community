@@ -41,7 +41,7 @@ import { expect, test } from "@playwright/test";
 
 import { chooseUsername, publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
 
-test("comment → recipient's bell updates live via WebSocket (no navigation); mark-read syncs live to a second tab", async ({
+test("comment → recipient's bell updates live via WebSocket (no navigation); mark-seen syncs live to a second tab", async ({
   page: a,
   browser,
 }) => {
@@ -88,15 +88,19 @@ test("comment → recipient's bell updates live via WebSocket (no navigation); m
     // so this is the ordinary poll-on-load path — no timing claim here.
     await expect(a2.locator("[data-notify-badge]")).toHaveText("1");
 
-    // A (the FIRST tab) opens its dropdown → marks everything read server-side.
+    // A (the FIRST tab) opens its dropdown → advances the SEEN watermark
+    // server-side (M2.3c): the badge clears because the rows are now SEEN, not
+    // because they were marked read (read_at is set only on a click-through).
     await a.locator("[data-notify-toggle]").click();
     await expect(a.locator("[data-notify-panel]")).toContainText("commented");
     await expect(a.locator("[data-notify-badge]")).toBeHidden();
 
     // ---- REALTIME ASSERT #2: a2 has done NOTHING since it loaded ---------
     // No goto, no reload, no visibility change, no click on a2 — only the
-    // "read" push (NotifyDO's `push("read")`, wired in mark-read) can clear
-    // its badge this fast.
+    // content-free "read" push (NotifyDO's `push("read")`, now fired by
+    // mark-SEEN) can clear its badge this fast: a2 shares A's session, so once
+    // A's seen_at advances a2's UNSEEN count drops to 0 on the nudge-driven
+    // refetch.
     await expect(a2.locator("[data-notify-badge]")).toBeHidden({ timeout: 8000 });
   } finally {
     await bCtx.close();

@@ -25,6 +25,7 @@ import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follo
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleUploadMedia } from "./routes/media";
+import { handleMarkSeen } from "./notifications/seen";
 import {
   handleListNotifications,
   handleMarkRead,
@@ -154,6 +155,12 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/notifications", handler: handleListNotifications },
   { method: "GET", pattern: "/notifications/unread-count", handler: handleUnreadCount },
   { method: "POST", pattern: "/notifications/read", handler: handleMarkRead },
+
+  // Bell BADGE watermark (M2.3c). Opening the bell advances seen_at (clears the
+  // badge) via this mutating POST WITHOUT requireVerifiedEmail — same "clear
+  // your own bell" reasoning as /notifications/read. A literal segment under
+  // /notifications/*, no dynamic-shadow risk. See src/notifications/seen.ts.
+  { method: "POST", pattern: "/notifications/seen", handler: handleMarkSeen },
 
   // Realtime bell upgrade (M2.3b) — a session-read GET, like
   // /notifications/unread-count above, that authenticates inline (origin +

@@ -21,9 +21,16 @@ describe("notify bell island", () => {
     expect(code).toContain("notificationHref");
     expect(code).toContain("@thinkersjournal/shared");
   });
-  it("opens a dropdown, loads items, and marks all read with CSRF", () => {
+  it("opens a dropdown, loads items, advances SEEN on open and marks a group read on click-through (M2.3c)", () => {
     expect(code).toContain("/api/notifications");
-    expect(code).toContain("/api/notifications-read");
+    // Opening the bell advances the SEEN watermark (clears the badge) — it no
+    // longer marks everything read.
+    expect(code).toContain("/api/notifications-seen");
+    expect(code).not.toContain("{ all: true }"); // the old mark-all-read-on-open is gone
+    // Click-through on a rendered group is the ONLY thing that marks read, and it
+    // posts that group's ids.
+    expect(code).toMatch(/addEventListener\("click"[\s\S]{0,300}\/api\/notifications-read/);
+    expect(code).toMatch(/\/api\/notifications-read[\s\S]{0,200}ids: group\.ids/);
     expect(code).toContain('"X-CSRF-Token"');
   });
   it("polls on visibility + interval", () => {
@@ -61,7 +68,9 @@ describe("notify bell island", () => {
     // near onmessage — a regression that rendered straight from the pushed
     // message (breaking the content-free wire contract) would fail this.
     expect(code).toMatch(/onmessage = \(\) => \{[\s\S]{0,200}refreshCount\(bell, badge\)/);
-    expect(code).toMatch(/onmessage[\s\S]{0,300}!panel\.hidden[\s\S]{0,100}loadList\(panel\)/);
+    // ⚠️ The live-nudge reload passes a `null` CSRF token (M2.3c): a live refresh
+    // re-renders anyway, so it must NOT rewire click handlers or advance seen.
+    expect(code).toMatch(/onmessage[\s\S]{0,300}!panel\.hidden[\s\S]{0,100}loadList\(panel, null\)/);
     expect(code).not.toMatch(/onmessage[\s\S]{0,300}event\.data/);
     expect(code).toContain("setInterval(poll, 60_000)"); // poll fallback retained, unchanged interval
   });

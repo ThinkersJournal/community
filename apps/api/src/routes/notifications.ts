@@ -95,6 +95,15 @@ export async function handleListNotifications(
   }
 }
 
+/**
+ * The bell BADGE count (M2.3c). Counts UNSEEN rows — those created AFTER the
+ * caller's last bell-open (`notification_prefs.seen_at`, advanced by
+ * `POST /notifications/seen`), with an absent prefs row meaning "never opened"
+ * (COALESCE to epoch → everything counts). Deliberately DECOUPLED from
+ * `read_at`: opening the bell advances `seen_at` (clears the badge) but does not
+ * mark rows read; only a click-through sets `read_at`, which drives email
+ * suppression, not this badge.
+ */
 export async function handleUnreadCount(
   request: Request,
   env: Env,
@@ -104,7 +113,11 @@ export async function handleUnreadCount(
   if (session instanceof Response) return session;
   const count = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<{ n: string }>(
-      "SELECT count(*) n FROM notifications WHERE recipient_id=$1 AND read_at IS NULL",
+      `SELECT count(*) n
+         FROM notifications n
+         LEFT JOIN notification_prefs np ON np.user_id = n.recipient_id
+        WHERE n.recipient_id = $1
+          AND n.created_at > COALESCE(np.seen_at, 'epoch'::timestamptz)`,
       [session.userId],
     );
     return Number(rows[0]!.n);
