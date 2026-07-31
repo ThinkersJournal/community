@@ -3,6 +3,8 @@ export * from './engagement';
 export * from './engagement-write';
 export * from './errors';
 export * from './notifications';
+export * from './notifications-categories';
+export * from './notifications-prefs';
 export * from './notifications-read';
 export * from './posts';
 export * from './schemas';

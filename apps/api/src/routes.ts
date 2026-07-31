@@ -25,12 +25,14 @@ import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follo
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleUploadMedia } from "./routes/media";
+import { handleMarkSeen } from "./notifications/seen";
 import {
   handleListNotifications,
   handleMarkRead,
   handleUnreadCount,
 } from "./routes/notifications";
 import { handleNotificationsWs } from "./routes/notifications-ws";
+import { handleGetNotificationPrefs, handlePutNotificationPrefs } from "./routes/notification-prefs";
 import { handleCreatePost, handleGetPost, handleUpdatePost } from "./routes/posts";
 import { handlerPostsLive } from "./routes/posts-live";
 import {
@@ -52,6 +54,7 @@ import {
   handlePublicFollowing,
   handlePublicSocial,
 } from "./routes/social-public";
+import { handleUnsub } from "./routes/unsub";
 import { handleChooseUsername, handleGetMe } from "./routes/username";
 import { handleVerifyEmail } from "./routes/verify-email";
 
@@ -88,6 +91,10 @@ export const ROUTES: readonly RouteDef[] = [
   // This route authenticates INLINE (session + token ownership + epoch) for its
   // own reasons — see its header; do not weaken it.
   { method: "GET", pattern: "/verify-email", handler: handleVerifyEmail },
+
+  // One-click unsubscribe (M2.3c). Token-authed, NOT the mutating pipeline — no
+  // session/CSRF (a mail provider's cross-origin one-click). PIPELINE_EXEMPT.
+  { method: "POST", pattern: "/unsub", handler: handleUnsub },
 
   // AUTHOR-facing content routes (src/routes/posts.ts). Each runs the mutating
   // pipeline inside its own handler, so the route owns its opt-ins — all three
@@ -154,6 +161,12 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/notifications/unread-count", handler: handleUnreadCount },
   { method: "POST", pattern: "/notifications/read", handler: handleMarkRead },
 
+  // Bell BADGE watermark (M2.3c). Opening the bell advances seen_at (clears the
+  // badge) via this mutating POST WITHOUT requireVerifiedEmail — same "clear
+  // your own bell" reasoning as /notifications/read. A literal segment under
+  // /notifications/*, no dynamic-shadow risk. See src/notifications/seen.ts.
+  { method: "POST", pattern: "/notifications/seen", handler: handleMarkSeen },
+
   // Realtime bell upgrade (M2.3b) — a session-read GET, like
   // /notifications/unread-count above, that authenticates inline (origin +
   // session) and forwards the upgrade to the caller's OWN NotifyDO
@@ -162,6 +175,12 @@ export const ROUTES: readonly RouteDef[] = [
   // and its `/notifications/ws-push` trigger (M2.3b Task 0) are gone — replaced
   // by this authed route and (in later tasks) real notify()/mark-read pushes.
   { method: "GET", pattern: "/notifications/ws", handler: handleNotificationsWs },
+
+  // Notification email preferences (M2.3c). GET is a session read; PUT runs the
+  // mutating pipeline (verified-email NOT required — opting out must stay open to
+  // the unverified). Both scope to session.userId in-query.
+  { method: "GET", pattern: "/notification-prefs", handler: handleGetNotificationPrefs },
+  { method: "PUT", pattern: "/notification-prefs", handler: handlePutNotificationPrefs },
 
   // ANONYMOUS reads — what the edge caches. See src/routes/public.ts's header:
   // no session is read here, by construction.

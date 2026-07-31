@@ -21,10 +21,25 @@ describe("notify bell island", () => {
     expect(code).toContain("notificationHref");
     expect(code).toContain("@thinkersjournal/shared");
   });
-  it("opens a dropdown, loads items, and marks all read with CSRF", () => {
+  it("opens a dropdown, loads items, advances SEEN on open and marks a group read on click-through (M2.3c)", () => {
     expect(code).toContain("/api/notifications");
-    expect(code).toContain("/api/notifications-read");
+    // Opening the bell advances the SEEN watermark (clears the badge) — it no
+    // longer marks everything read.
+    expect(code).toContain("/api/notifications-seen");
+    expect(code).not.toContain("{ all: true }"); // the old mark-all-read-on-open is gone
+    // Click-through on a rendered group is the ONLY thing that marks read, and it
+    // posts that group's ids.
+    expect(code).toMatch(/addEventListener\("click"[\s\S]{0,300}\/api\/notifications-read/);
+    expect(code).toMatch(/\/api\/notifications-read[\s\S]{0,200}ids: group\.ids/);
     expect(code).toContain('"X-CSRF-Token"');
+    // ⚠️ The click-through mark-read must survive the anchor's navigation tearing
+    // down the document (Task 8's email suppression depends on read_at getting
+    // written), so its fetch carries keepalive: true.
+    expect(code).toMatch(/addEventListener\("click"[\s\S]{0,300}\/api\/notifications-read[\s\S]{0,120}keepalive: true/);
+    // Degraded/logged-out (no CSRF token): skip the guaranteed-403 mark-read
+    // rather than POST an empty token (mirrors openPanel's null-token skip).
+    expect(code).toMatch(/addEventListener\("click"[\s\S]{0,120}if \(csrfForClick === null\) return/);
+    expect(code).not.toContain('"X-CSRF-Token": csrfForClick ?? ""');
   });
   it("polls on visibility + interval", () => {
     expect(code).toContain("visibilitychange");
@@ -61,7 +76,15 @@ describe("notify bell island", () => {
     // near onmessage — a regression that rendered straight from the pushed
     // message (breaking the content-free wire contract) would fail this.
     expect(code).toMatch(/onmessage = \(\) => \{[\s\S]{0,200}refreshCount\(bell, badge\)/);
-    expect(code).toMatch(/onmessage[\s\S]{0,300}!panel\.hidden[\s\S]{0,100}loadList\(panel\)/);
+    // ⚠️ The live-nudge reload threads the REAL memoized CSRF token (M2.3c fix):
+    // a nudge re-renders an OPEN panel, RE-WIRING each row's click-through
+    // mark-read, so it must carry an authenticatable token — passing null would
+    // 403 every re-rendered row's mark-read and drop read_at (Task 8 depends on
+    // it). getCsrfToken() is memoized, so no extra /api/me hop.
+    expect(code).toMatch(
+      /onmessage[\s\S]{0,300}!panel\.hidden[\s\S]{0,200}getCsrfToken\(\)[\s\S]{0,160}loadList\(panel, t\)/,
+    );
+    expect(code).not.toMatch(/loadList\(panel, null\)/); // the un-authenticatable null path is gone
     expect(code).not.toMatch(/onmessage[\s\S]{0,300}event\.data/);
     expect(code).toContain("setInterval(poll, 60_000)"); // poll fallback retained, unchanged interval
   });

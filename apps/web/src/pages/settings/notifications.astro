@@ -1,0 +1,94 @@
+---
+/**
+ * Notification email preferences (M2.3c), authed + never cached. GET renders the
+ * user's current prefs (api defaults when no row); POST (the form) forwards to the
+ * api's PUT /notification-prefs with Origin + CSRF, then re-renders with a saved
+ * notice. A one-click-unsubscribed user re-enables here (master toggle).
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { apiErrorCode, apiFetch, applyCookies } from "../../lib/api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+import { DEFAULT_NOTIFICATION_PREFS, NOTIFICATION_CHANNELS } from "@thinkersjournal/shared";
+import type { NotificationPrefs } from "@thinkersjournal/shared";
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
+const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
+if (csrfToken === null) return Astro.redirect("/login");
+
+let saved = false;
+let error: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const body = {
+    masterEnabled: form.get("masterEnabled") === "on",
+    direct: String(form.get("direct") ?? "instant"),
+    reactions: String(form.get("reactions") ?? "digest"),
+    follows: String(form.get("follows") ?? "digest"),
+  };
+  const res = await apiFetch<NotificationPrefs>("/notification-prefs", {
+    method: "PUT", body, request: Astro.request,
+    origin: Astro.request.headers.get("Origin") ?? "",
+    csrfToken: String(form.get("csrfToken") ?? ""),
+  });
+  applyCookies(Astro.response.headers, res.setCookies);
+  if (res.status === 200) saved = true;
+  else error = apiErrorCode(res) ?? "SAVE_FAILED";
+}
+
+const current = await apiFetch<NotificationPrefs>("/notification-prefs", { request: Astro.request });
+const prefs: NotificationPrefs = current.status === 200 && current.data ? current.data : DEFAULT_NOTIFICATION_PREFS;
+---
+<BaseLayout title="Notification settings">
+  <div class="wrap form-page">
+    <h1>Notification emails</h1>
+    {saved && <p class="ok">Saved.</p>}
+    {error && <p class="err">Could not save. Try again.</p>}
+    <form method="POST" class="form">
+      <input type="hidden" name="csrfToken" value={csrfToken} />
+      <label class="row">
+        <input type="checkbox" name="masterEnabled" checked={prefs.masterEnabled} />
+        Send me notification emails
+      </label>
+      <label class="row">
+        <span>Comments &amp; replies to me</span>
+        <select name="direct">
+          {NOTIFICATION_CHANNELS.map((ch) => (
+            <option value={ch} selected={prefs.direct === ch}>{ch}</option>
+          ))}
+        </select>
+      </label>
+      <label class="row">
+        <span>Reactions to my posts &amp; comments</span>
+        <select name="reactions">
+          {NOTIFICATION_CHANNELS.map((ch) => (
+            <option value={ch} selected={prefs.reactions === ch}>{ch}</option>
+          ))}
+        </select>
+      </label>
+      <label class="row">
+        <span>New followers</span>
+        <select name="follows">
+          {NOTIFICATION_CHANNELS.map((ch) => (
+            <option value={ch} selected={prefs.follows === ch}>{ch}</option>
+          ))}
+        </select>
+      </label>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .form .row{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .form select{background:var(--ink2);border:1px solid var(--line);border-radius:8px;
+    padding:11px 13px;color:var(--text);font:inherit}
+  .ok{color:var(--green)}
+  .err{color:var(--red, #e5484d)}
+</style>

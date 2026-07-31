@@ -22,6 +22,7 @@
  */
 
 import { base64urlEncode, sha256Hex } from "./encoding";
+import { postmarkSend } from "./postmark";
 
 const VERIFY_TTL_SECONDS = 86_400; // 24h
 
@@ -34,7 +35,7 @@ const VERIFY_TTL_SECONDS = 86_400; // 24h
  * sent from OUR confirmed sender at a host they control — a phishing/token-theft
  * vector (see the escaping note on `escapeHtml` below).
  */
-const CANONICAL_ORIGIN = "https://community.thinkersjournal.com";
+export const CANONICAL_ORIGIN = "https://community.thinkersjournal.com";
 
 /**
  * The ONLY origins an emailed verification link may point at.
@@ -179,12 +180,6 @@ export async function deleteVerificationToken(
   await env.SESSIONS.delete(await verifyKey(token));
 }
 
-/** The subset of Postmark's send response this module inspects. */
-interface PostmarkResponse {
-  ErrorCode?: number;
-  Message?: string;
-}
-
 /**
  * Escape text for interpolation into HTML (both element text and a
  * double-quoted attribute value). `&` MUST be replaced first or the other
@@ -196,7 +191,7 @@ interface PostmarkResponse {
  * controlled host break out of the `href` attribute and inject markup into an
  * email we send from our own confirmed sender.
  */
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -205,61 +200,62 @@ function escapeHtml(value: string): string {
 }
 
 /**
- * Send the verification email through Postmark's transactional API.
+ * Send the verification email through Postmark's transactional API, on the
+ * "outbound" stream.
  *
  * `From` MUST stay `noreply@thinkersjournal.com`: Postmark silently drops mail
  * from a sender signature that is not confirmed on the account, so changing
  * this without confirming the new sender first breaks signup in production with
  * no visible error.
  *
- * NEVER THROWS. A failed send must not fail the signup that triggered it: the
- * account exists, and the user can request another verification email. Every
- * failure mode — a network error, a non-2xx, or a 200 carrying a non-zero
- * `ErrorCode` (which is how the unconfirmed-sender misconfiguration above
- * surfaces) — is detected and logged to Workers Logs (`observability.enabled`
- * is set in wrangler.jsonc) instead of propagating.
- *
- * ⚠️ The logs deliberately carry only status/ErrorCode/Message — NEVER `email`
- * or `url`. The url embeds the raw verification token, so logging it would
- * write an account-takeover credential into the log stream.
+ * NEVER THROWS — a thin wrapper over `postmarkSend` (src/auth/postmark.ts),
+ * which carries the never-throws / status-only-logging discipline. A failed
+ * send must not fail the signup that triggered it: the account exists, and the
+ * user can request another verification email. This wrapper deliberately
+ * discards `postmarkSend`'s boolean (unlike `sendNotificationEmail` below,
+ * nothing here needs to know whether the send was confirmed).
  */
 export async function sendVerificationEmail(
   env: Env,
   email: string,
   url: string,
 ): Promise<void> {
-  try {
-    const res = await fetch("https://api.postmarkapp.com/email", {
-      method: "POST",
-      headers: {
-        "X-Postmark-Server-Token": env.POSTMARK_SERVER_TOKEN,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        From: "noreply@thinkersjournal.com",
-        To: email,
-        Subject: "Verify your Thinkers Journal email address",
-        TextBody: `Welcome to Thinkers Journal.\n\nConfirm your email address by opening this link:\n\n${url}\n\nThe link expires in 24 hours and can only be used once. If you did not create an account, you can ignore this email.`,
-        HtmlBody: `<p>Welcome to Thinkers Journal.</p><p>Confirm your email address by opening this link:</p><p><a href="${escapeHtml(url)}">${escapeHtml(url)}</a></p><p>The link expires in 24 hours and can only be used once. If you did not create an account, you can ignore this email.</p>`,
-        MessageStream: "outbound",
-      }),
-    });
+  await postmarkSend(env, {
+    from: "noreply@thinkersjournal.com",
+    to: email,
+    subject: "Verify your Thinkers Journal email address",
+    textBody: `Welcome to Thinkers Journal.\n\nConfirm your email address by opening this link:\n\n${url}\n\nThe link expires in 24 hours and can only be used once. If you did not create an account, you can ignore this email.`,
+    htmlBody: `<p>Welcome to Thinkers Journal.</p><p>Confirm your email address by opening this link:</p><p><a href="${escapeHtml(url)}">${escapeHtml(url)}</a></p><p>The link expires in 24 hours and can only be used once. If you did not create an account, you can ignore this email.</p>`,
+    stream: "outbound",
+  });
+}
 
-    if (!res.ok) {
-      console.error("postmark send failed", {
-        status: res.status,
-        body: await res.text(),
-      });
-      return;
-    }
-
-    const { ErrorCode, Message } = (await res.json()) as PostmarkResponse;
-    if (ErrorCode !== 0) {
-      console.error("postmark rejected send", { ErrorCode, Message });
-    }
-  } catch (err) {
-    // A network blip (or a non-JSON body) must NOT propagate: it would 500 the
-    // signup this send is a side effect of.
-    console.error("postmark request threw", err);
-  }
+/**
+ * Send a notification email on the Postmark BROADCAST stream (M2.3c). Adds the
+ * RFC 8058 one-click unsubscribe headers (https URL only — no mailto). Body is
+ * pre-escaped by the caller (email-content.ts). Returns postmarkSend's boolean so
+ * the drain stamps emailed_at only on a confirmed send.
+ */
+export async function sendNotificationEmail(
+  env: Env,
+  args: {
+    to: string;
+    subject: string;
+    textBody: string;
+    htmlBody: string;
+    unsubUrl: string;
+  },
+): Promise<boolean> {
+  return postmarkSend(env, {
+    from: "noreply@thinkersjournal.com",
+    to: args.to,
+    subject: args.subject,
+    textBody: args.textBody,
+    htmlBody: args.htmlBody,
+    stream: "broadcast",
+    headers: [
+      { Name: "List-Unsubscribe", Value: `<${args.unsubUrl}>` },
+      { Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
+    ],
+  });
 }

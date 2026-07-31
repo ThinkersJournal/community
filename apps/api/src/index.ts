@@ -1,4 +1,5 @@
 import { notFoundResponse } from "./http/errors";
+import { runEmailDrain } from "./notifications/email-drain";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
 
@@ -18,5 +19,15 @@ export default {
     const match = findRoute(ROUTES, request.method, pathname);
     if (match === null) return notFoundResponse();
     return await match.route.handler(request, env, ctx, match.params);
+  },
+  /*
+   * The email outbox drains (M2.3c). Two cron patterns, one dispatcher: the daily
+   * pattern drains DIGEST-disposition rows, every other pattern drains INSTANT.
+   * A THIN dispatcher, like `fetch` above — the drain itself lives in
+   * src/notifications/email-drain.ts.
+   */
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant";
+    ctx.waitUntil(runEmailDrain(env, ctx, disposition));
   },
 } satisfies ExportedHandler<Env>;

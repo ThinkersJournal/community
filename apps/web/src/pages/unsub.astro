@@ -1,0 +1,33 @@
+---
+/**
+ * Public one-click unsubscribe landing (M2.3c). The email's List-Unsubscribe URL
+ * points here (community origin). GET = a human clicked the link; POST = the mail
+ * client's RFC 8058 one-click. Both read ?token= and call the api's POST /unsub
+ * (token-authed, no session). Always renders/returns success — unsubscribe is
+ * idempotent and we never reveal token validity.
+ */
+import BaseLayout from "../components/BaseLayout.astro";
+import { apiFetch } from "../lib/api";
+import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+const token = Astro.url.searchParams.get("token") ?? "";
+// Fire the api call for BOTH GET and POST. Origin omitted — the api's /unsub does
+// not check it (token is the auth).
+await apiFetch<unknown>(`/unsub?token=${encodeURIComponent(token)}`, { method: "POST" });
+
+if (Astro.request.method === "POST") {
+  // RFC 8058 one-click: no body needed back, just 200.
+  return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } });
+}
+---
+<BaseLayout title="Unsubscribed">
+  <div class="wrap">
+    <h1>You're unsubscribed</h1>
+    <p>You will no longer receive notification emails from Thinkers Journal.</p>
+    <p>Changed your mind? <a class="link" href="/settings/notifications">Manage notification preferences</a>.</p>
+  </div>
+</BaseLayout>

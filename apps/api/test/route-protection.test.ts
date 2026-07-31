@@ -79,7 +79,35 @@ import type { RouteDef } from "../src/routing";
 const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   "POST /auth/signup",
   "POST /auth/login",
+  // Token-authed one-click unsubscribe (M2.3c, RFC 8058): cross-origin, no
+  // session/CSRF by design — a mail provider's one-click POST carries no cookie,
+  // so the HMAC token IS the auth (see src/routes/unsub.ts). Unlike signup/login
+  // it deliberately runs NO checkOrigin either (a mail client cannot forge one,
+  // and its only effect is master_enabled=false for the token's own user), so it
+  // is NOT asserted by the `exempt routes enforce checkOrigin inline` block
+  // below — it is excluded there explicitly with the same justification.
+  "POST /unsub",
 ]);
+
+/**
+ * The subset of PIPELINE_EXEMPT that ALSO performs NO inline `checkOrigin` — the
+ * one route whose HMAC token is a self-authenticating bearer credential a
+ * cross-origin caller is SUPPOSED to present.
+ *
+ * ⚠️ THIS IS A NARROWER, STRICTER CLAIM THAN PIPELINE_EXEMPT, not a looser one.
+ * signup/login are pipeline-exempt but still 403 a bad origin — `checkOrigin` is
+ * their entire CSRF defense (they have ambient authority: they MINT a session).
+ * `POST /unsub` (src/routes/unsub.ts) is different in kind: it carries no cookie
+ * and mints nothing, so it has no ambient authority for an origin check to
+ * protect. Its token IS the auth, a mail provider's RFC 8058 one-click is
+ * cross-origin BY DESIGN, and its only possible effect is master_enabled=false
+ * for the token's own user. It is therefore excluded from the `enforce
+ * checkOrigin inline` block below and pinned by its OWN assertion instead
+ * (origin-less request -> neutral 200, never a 401/403) — an exemption still buys
+ * a real assertion, never a silent pass. Its full behaviour lives in
+ * test/unsub-route.test.ts.
+ */
+const ORIGIN_EXEMPT: ReadonlySet<string> = new Set(["POST /unsub"]);
 
 /** `"POST /posts"` — the key used by `PIPELINE_EXEMPT` and the test names. */
 function label(route: RouteDef): string {
@@ -158,6 +186,7 @@ const DISPATCHER_BODY = indexSource
  */
 const EXPECTED_DISPATCHER_BODY =
   'import { notFoundResponse } from "./http/errors"; ' +
+  'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
   'export { UserSecurityDO } from "./durable-objects/UserSecurityDO"; ' +
@@ -168,6 +197,13 @@ const EXPECTED_DISPATCHER_BODY =
   "const match = findRoute(ROUTES, request.method, pathname); " +
   "if (match === null) return notFoundResponse(); " +
   "return await match.route.handler(request, env, ctx, match.params); " +
+  "}, " +
+  // The scheduled() cron dispatcher (M2.3c) — a THIN dispatcher alongside fetch,
+  // not a route (route-protection enumerates ROUTES; a cron has no path). Pinned
+  // here for the same reason as fetch: this file's whole body is the allowlist.
+  "async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> { " +
+  'const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant"; ' +
+  "ctx.waitUntil(runEmailDrain(env, ctx, disposition)); " +
   "}, } satisfies ExportedHandler<Env>;";
 
 describe("route inventory", () => {
@@ -192,8 +228,8 @@ describe("route inventory", () => {
     // one a dynamic route reaches for first. An allowlist of exactly one body
     // inverts the burden: every unimagined idiom fails by default.
     //
-    // This file is 20 lines and should essentially never change, so the cost of
-    // pinning it is ~zero and any edit becomes a deliberate, reviewed act.
+    // This file is a couple dozen lines and should essentially never change, so
+    // the cost of pinning it is ~zero and any edit becomes a deliberate, reviewed act.
     expect(
       DISPATCHER_BODY,
       "src/index.ts changed. It is pinned because every assertion in this file enumerates ROUTES: a route reachable any other way is NOT covered by the default-deny checks below. If this change adds dispatch, move the route to src/routes.ts. If it is genuinely benign, update this snapshot deliberately.",
@@ -293,7 +329,13 @@ describe("every mutating route runs the mutating pipeline", () => {
  * header of src/routes/login.ts). So an exemption still owes this assertion.
  */
 describe("pipeline-exempt routes enforce checkOrigin inline", () => {
-  const exemptRoutes = MUTATING.filter((r) => PIPELINE_EXEMPT.has(label(r)));
+  // ⚠️ Minus ORIGIN_EXEMPT — see its definition. A bearer-token one-click has no
+  // ambient authority for an origin check to protect, so requiring one here would
+  // assert the OPPOSITE of what RFC 8058 needs. That route is pinned separately,
+  // in the block below, so its exemption still owes an assertion.
+  const exemptRoutes = MUTATING.filter(
+    (r) => PIPELINE_EXEMPT.has(label(r)) && !ORIGIN_EXEMPT.has(label(r)),
+  );
 
   it.each(exemptRoutes.map((r) => [label(r), r] as const))(
     "%s — no Origin -> 403",
@@ -318,6 +360,57 @@ describe("pipeline-exempt routes enforce checkOrigin inline", () => {
         response.status,
         `${name} accepted a cross-site Origin — checkOrigin is its whole CSRF defense.`,
       ).toBe(403);
+    },
+  );
+});
+
+/**
+ * THE ORIGIN-EXEMPT ROUTES — pipeline-exempt AND origin-exempt. Their exemption
+ * from `checkOrigin` above is not a hole to leave unpinned: it is a positive
+ * design property that must be asserted, so a future edit that quietly bolts an
+ * origin/session check onto one (breaking RFC 8058 one-click) fails HERE.
+ *
+ * The property: a bearer-token one-click has no ambient authority, so an
+ * origin-less, cookie-less request must NOT be rejected — it must get the same
+ * neutral answer any request gets. (The token→effect behaviour is
+ * test/unsub-route.test.ts's; here we pin only that the ORIGIN check is
+ * deliberately absent.)
+ */
+describe("origin-exempt routes accept a bare cross-origin request (RFC 8058 one-click)", () => {
+  const originExemptRoutes = MUTATING.filter((r) => ORIGIN_EXEMPT.has(label(r)));
+
+  it("ORIGIN_EXEMPT is a subset of PIPELINE_EXEMPT (can't skip checkOrigin while still in the pipeline)", () => {
+    for (const r of ORIGIN_EXEMPT) {
+      expect(
+        PIPELINE_EXEMPT,
+        `ORIGIN_EXEMPT lists "${r}" but PIPELINE_EXEMPT does not. A route cannot be exempt from checkOrigin while the pipeline (which runs it) still applies.`,
+      ).toContain(r);
+    }
+  });
+
+  it("every origin-exempt route is a real mutating route", () => {
+    const discovered = new Set(MUTATING.map(label));
+    for (const r of ORIGIN_EXEMPT) {
+      expect(
+        discovered,
+        `ORIGIN_EXEMPT lists "${r}", which is not a mutating route in src/routes.ts. Remove the stale entry.`,
+      ).toContain(r);
+    }
+  });
+
+  it.each(originExemptRoutes.map((r) => [label(r), r] as const))(
+    "%s — an origin-less, cookie-less request is NOT rejected (the token is the auth)",
+    async (name, route) => {
+      // No Origin, no Cookie, no CSRF, no token — exactly a hostile-looking bare
+      // POST. It must NOT 401/403: rejecting it would break the mail provider's
+      // one-click. The route answers a neutral 200 to everything by design.
+      const response = await fetchWorker(probe(route, {}));
+
+      expect(
+        [401, 403],
+        `${name} REJECTED a bare cross-origin request with ${response.status}. It is ORIGIN_EXEMPT because a mail provider's RFC 8058 one-click carries no origin/cookie — the HMAC token is the auth. If a check was added here on purpose, remove it from ORIGIN_EXEMPT and justify the new gate.`,
+      ).not.toContain(response.status);
+      expect(response.status).toBe(200);
     },
   );
 });
