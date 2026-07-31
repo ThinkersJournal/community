@@ -418,13 +418,15 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
     "POST /unsub",
     {
       reason:
-        "Token-authed one-click unsubscribe (RFC 8058): it always answers a neutral 200 (empty JSON) — an absent/invalid token is a silent 200, a valid one upserts master_enabled=false and 200s. Revealing token validity would leak subscription state, so there is deliberately no 400/401/403/404 path to carry an envelope. See src/routes/unsub.ts.",
+        "Token-authed one-click unsubscribe (RFC 8058): it always answers a neutral 200 (empty JSON) — an absent/invalid token is a silent 200, a valid one upserts master_enabled=false and 200s, and a DB failure on that upsert (e.g. a valid never-expiring token for a since-deleted user → FK violation) is CAUGHT and swallowed, still 200. Revealing token validity would leak subscription state, so there is deliberately no 400/401/403/404/500 path to carry an envelope. See src/routes/unsub.ts.",
       // ⚠️ The `__vite_ssr_import_N__` refs are the pool's vite-SSR transform of
       // unsub.ts's two imports (withClient=0, verifyUnsubToken=1, in source
       // order); they are deterministic for this code and, like every pin here,
       // break loudly if the handler is edited so someone must re-read the claim.
+      // The try/catch below is the "always 200 even on a DB error" guarantee the
+      // reason describes — losing it is exactly the change this pin must catch.
       handlerSource:
-        'async function handleUnsub(request, env, ctx) { const token = new URL(request.url).searchParams.get("token"); const ok = () => new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } }); const userId = token === null ? null : await (0,__vite_ssr_import_1__.verifyUnsubToken)(env, token); if (userId === null) return ok(); await (0,__vite_ssr_import_0__.withClient)(env.HYPERDRIVE_FRESH, ctx, (c) => c.query(`INSERT INTO notification_prefs (user_id, master_enabled, updated_at) VALUES ($1, false, now()) ON CONFLICT (user_id) DO UPDATE SET master_enabled = false, updated_at = now()`, [userId])); return ok(); }',
+        'async function handleUnsub(request, env, ctx) { const token = new URL(request.url).searchParams.get("token"); const ok = () => new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } }); const userId = token === null ? null : await (0,__vite_ssr_import_1__.verifyUnsubToken)(env, token); if (userId === null) return ok(); try { await (0,__vite_ssr_import_0__.withClient)(env.HYPERDRIVE_FRESH, ctx, (c) => c.query(`INSERT INTO notification_prefs (user_id, master_enabled, updated_at) VALUES ($1, false, now()) ON CONFLICT (user_id) DO UPDATE SET master_enabled = false, updated_at = now()`, [userId])); } catch (err) { // Never logs the token. A valid token for a since-deleted user (FK // violation) or any transient DB failure must still answer neutrally. console.error("unsub write failed", err); }; return ok(); }',
     },
   ],
 ]);

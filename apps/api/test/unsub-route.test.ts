@@ -41,4 +41,17 @@ describe("POST /unsub", () => {
     const r = await fetchWorker(unsubReq(await mintUnsubToken(env, a.userId))); // no Cookie/Origin/CSRF
     expect(r.status).toBe(200);
   });
+  it("a valid token for a SINCE-DELETED user still returns a neutral 200 (no 500)", async () => {
+    // Tokens never expire, and notification_prefs.user_id REFERENCES users(id):
+    // minting for a user who is later deleted makes the INSERT hit a foreign-key
+    // violation. The handler MUST swallow it and stay neutral, never leak a 500.
+    const a = await createVerifiedActor();
+    const token = await mintUnsubToken(env, a.userId);
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query(`DELETE FROM users WHERE id = $1`, [a.userId]));
+    await waitOnExecutionContext(ctx);
+    expect((await fetchWorker(unsubReq(token))).status).toBe(200);
+    expect(await masterEnabled(a.userId)).toBeNull(); // user gone, no prefs row written
+  });
 });
