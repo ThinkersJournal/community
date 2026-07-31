@@ -64,20 +64,27 @@ function toItem(r: DrainRow): NotificationItem {
 export async function runEmailDrain(
   env: Env, ctx: ExecutionContext, disposition: "instant" | "digest",
 ): Promise<void> {
-  // Phase A: acquire the lease and read the work in one connection, then release it.
-  const claim = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c: Client) => {
-    const lock = await c.query(
-      `UPDATE email_drain_lock SET leased_until = now() + interval '90 seconds'
-        WHERE pass = $1 AND (leased_until IS NULL OR leased_until < now()) RETURNING pass`,
-      [disposition],
-    );
-    if ((lock.rowCount ?? 0) === 0) return null; // another pass holds the lease
-    const { rows } = await c.query<DrainRow>(SELECT_ELIGIBLE, [disposition]);
-    return rows;
-  });
-  if (claim === null) return;
-
+  // ⚠️ MUST NOT THROW — this runs inside scheduled()/ctx.waitUntil, where a
+  // rejection surfaces as an unhandled rejection and silently skips the pass.
+  // So the WHOLE body (including Phase A's lease-acquire + SELECT) is wrapped:
+  // if the SELECT threw AFTER the lease UPDATE committed, an unguarded Phase A
+  // would leave the lease held-and-unreleased AND reject out of waitUntil.
+  let acquired = false;
   try {
+    // Phase A: acquire the lease and read the work in one connection.
+    const claim = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c: Client) => {
+      const lock = await c.query(
+        `UPDATE email_drain_lock SET leased_until = now() + interval '90 seconds'
+          WHERE pass = $1 AND (leased_until IS NULL OR leased_until < now()) RETURNING pass`,
+        [disposition],
+      );
+      if ((lock.rowCount ?? 0) === 0) return null; // another pass holds the lease
+      acquired = true; // set right after a confirmed acquire — NO await between
+      const { rows } = await c.query<DrainRow>(SELECT_ELIGIBLE, [disposition]);
+      return rows;
+    });
+    if (claim === null) return; // lease held elsewhere (acquired stayed false)
+
     // Phase B: group by recipient, send one email each, collect stamped ids.
     const byRecipient = new Map<string, DrainRow[]>();
     for (const r of claim) {
@@ -86,8 +93,8 @@ export async function runEmailDrain(
       else list.push(r);
     }
     const sentIds: string[] = [];
-    for (const [recipientId, rows] of byRecipient) {
-      const token = await mintUnsubToken(env, recipientId);
+    for (const rows of byRecipient.values()) {
+      const token = await mintUnsubToken(env, rows[0]!.recipientId);
       // ONE unsub URL per recipient: the body's unsubscribe link (via
       // buildNotificationEmail) and the RFC 8058 List-Unsubscribe header (via
       // sendNotificationEmail) MUST be the same URL, so build it once here.
@@ -102,10 +109,21 @@ export async function runEmailDrain(
         c.query(`UPDATE notifications SET emailed_at = now() WHERE id = ANY($1::uuid[]) AND emailed_at IS NULL`, [sentIds]),
       );
     }
+  } catch (err) {
+    console.error("email drain failed", { disposition, err });
   } finally {
-    // Release the lease (a crash instead auto-expires it after 90s).
-    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-      c.query(`UPDATE email_drain_lock SET leased_until = NULL WHERE pass = $1`, [disposition]),
-    );
+    // Release the lease ONLY if THIS call acquired it — never clear another
+    // pass's lease. A crash before release instead auto-expires it after 90s.
+    // The release is itself try/caught so a release failure can't throw out of
+    // finally and replace the root cause.
+    if (acquired) {
+      try {
+        await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+          c.query(`UPDATE email_drain_lock SET leased_until = NULL WHERE pass = $1`, [disposition]),
+        );
+      } catch (err) {
+        console.error("email drain lease release failed", { disposition, err });
+      }
+    }
   }
 }

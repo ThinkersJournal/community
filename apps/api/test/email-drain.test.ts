@@ -8,7 +8,11 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withClient } from "../src/db/client";
 import { runEmailDrain } from "../src/notifications/email-drain";
 
-import { createVerifiedActor, deleteCreatedUsers } from "./actor";
+import {
+  createUnverifiedActor,
+  createVerifiedActor,
+  deleteCreatedUsers,
+} from "./actor";
 
 afterAll(deleteCreatedUsers);
 afterEach(() => {
@@ -86,6 +90,27 @@ async function emailOf(userId: string): Promise<string> {
     );
     return rows[0]!.email;
   });
+}
+
+/**
+ * Upsert a `notification_prefs` row for `userId`. Used by the suppression cases
+ * to force `master_enabled=false` / a channel to `'off'`; the columns not passed
+ * keep their table defaults (master=true, direct=instant, reactions/follows=digest).
+ */
+async function setPrefs(
+  userId: string,
+  prefs: {
+    masterEnabled?: boolean;
+    direct?: "instant" | "digest" | "off";
+  },
+): Promise<void> {
+  await ctxRun((c) =>
+    c.query(
+      `INSERT INTO notification_prefs (user_id, master_enabled, direct)
+         VALUES ($1, COALESCE($2, true), COALESCE($3, 'instant')::notification_channel)`,
+      [userId, prefs.masterEnabled ?? null, prefs.direct ?? null],
+    ),
+  );
 }
 
 async function drain(disposition: "instant" | "digest"): Promise<void> {
@@ -167,6 +192,52 @@ describe("runEmailDrain", () => {
     const myEmail = await emailOf(me.userId);
     const sends = stubPostmark();
     await drain("instant");
+    expect(sends.filter((s) => s.to === myEmail)).toHaveLength(0);
+    expect(await emailedAt(id)).toBeNull();
+  });
+
+  it("NEVER emails an unverified recipient (email_verified_at IS NULL)", async () => {
+    await resetLock();
+    // Unverified recipient: same fixture as a verified one but with
+    // email_verified_at NULL, which the SELECT's `u.email_verified_at IS NOT
+    // NULL` gate must exclude even for a direct/instant kind.
+    const me = await createUnverifiedActor();
+    const actor = await createVerifiedActor();
+    const id = await seedNotif(me.userId, actor.userId, "post_comment"); // direct → instant
+    const myEmail = await emailOf(me.userId);
+    const sends = stubPostmark();
+    await drain("instant");
+    expect(sends.filter((s) => s.to === myEmail)).toHaveLength(0);
+    expect(await emailedAt(id)).toBeNull();
+  });
+
+  it("suppresses when master_enabled is false (whole-account off switch)", async () => {
+    await resetLock();
+    const me = await createVerifiedActor();
+    const actor = await createVerifiedActor();
+    await setPrefs(me.userId, { masterEnabled: false });
+    const id = await seedNotif(me.userId, actor.userId, "post_comment"); // direct → instant
+    const myEmail = await emailOf(me.userId);
+    const sends = stubPostmark();
+    await drain("instant");
+    expect(sends.filter((s) => s.to === myEmail)).toHaveLength(0);
+    expect(await emailedAt(id)).toBeNull();
+  });
+
+  it("suppresses when the category channel is 'off' (direct='off')", async () => {
+    await resetLock();
+    const me = await createVerifiedActor();
+    const actor = await createVerifiedActor();
+    await setPrefs(me.userId, { direct: "off" });
+    const id = await seedNotif(me.userId, actor.userId, "post_comment"); // direct kind, channel off
+    const myEmail = await emailOf(me.userId);
+    const sends = stubPostmark();
+    // 'off' is neither 'instant' nor 'digest', so NEITHER pass may email it.
+    await drain("instant");
+    expect(sends.filter((s) => s.to === myEmail)).toHaveLength(0);
+    expect(await emailedAt(id)).toBeNull();
+    await resetLock();
+    await drain("digest");
     expect(sends.filter((s) => s.to === myEmail)).toHaveLength(0);
     expect(await emailedAt(id)).toBeNull();
   });
