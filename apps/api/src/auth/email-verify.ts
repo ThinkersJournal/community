@@ -191,7 +191,7 @@ export async function deleteVerificationToken(
  * controlled host break out of the `href` attribute and inject markup into an
  * email we send from our own confirmed sender.
  */
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
