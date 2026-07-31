@@ -170,6 +170,8 @@ export default defineConfig({
                 // CI-safe without .dev.vars. Must match apps/web/.dev.vars for
                 // the E2E's cross-process purge hop to authenticate.
                 PURGE_SECRET: "dev-purge-secret-not-for-production",
+                // A SECRET (src/notifications/unsub-token.ts). Dummy HMAC key for tests.
+                UNSUBSCRIBE_SIGNING_KEY: "test-unsub-signing-key",
               },
             },
           }),

@@ -402,6 +402,31 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
       handlerSource: 'async () => new Response("ok", { status: 200 })',
     },
   ],
+  // ⚠️ THE FIRST *MUTATING* ERROR_FREE ENTRY, and it is error-free BY SECURITY
+  // DESIGN, not by lacking I/O. One-click unsubscribe (M2.3c, RFC 8058;
+  // src/routes/unsub.ts) ALWAYS returns a neutral 200 (empty JSON) — for an
+  // absent token, an invalid token, and a valid token alike — because revealing
+  // which token was valid would leak whether an address is subscribed to anyone
+  // who can guess a userId. It has no request-validation 400 (a bad token is a
+  // silent 200), no lookup 404, and no auth 401/403 (the token IS the auth, and a
+  // missing one is still a neutral 200). Its only branch is token-valid → DB
+  // upsert → 200. It is therefore excluded from LAYER 1's automatic origin-less
+  // probe (which asserts a >=400 envelope) via `MUTATING_WITH_ERROR_PATH` below —
+  // an origin-less probe of THIS route is a 200, not a rejection to carry an
+  // envelope. handlerSource pins that this remains true.
+  [
+    "POST /unsub",
+    {
+      reason:
+        "Token-authed one-click unsubscribe (RFC 8058): it always answers a neutral 200 (empty JSON) — an absent/invalid token is a silent 200, a valid one upserts master_enabled=false and 200s. Revealing token validity would leak subscription state, so there is deliberately no 400/401/403/404 path to carry an envelope. See src/routes/unsub.ts.",
+      // ⚠️ The `__vite_ssr_import_N__` refs are the pool's vite-SSR transform of
+      // unsub.ts's two imports (withClient=0, verifyUnsubToken=1, in source
+      // order); they are deterministic for this code and, like every pin here,
+      // break loudly if the handler is edited so someone must re-read the claim.
+      handlerSource:
+        'async function handleUnsub(request, env, ctx) { const token = new URL(request.url).searchParams.get("token"); const ok = () => new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } }); const userId = token === null ? null : await (0,__vite_ssr_import_1__.verifyUnsubToken)(env, token); if (userId === null) return ok(); await (0,__vite_ssr_import_0__.withClient)(env.HYPERDRIVE_FRESH, ctx, (c) => c.query(`INSERT INTO notification_prefs (user_id, master_enabled, updated_at) VALUES ($1, false, now()) ON CONFLICT (user_id) DO UPDATE SET master_enabled = false, updated_at = now()`, [userId])); return ok(); }',
+    },
+  ],
 ]);
 
 /**
@@ -418,14 +443,25 @@ function handlerSourceOf(route: RouteDef): string {
 }
 
 /**
+ * Mutating routes MINUS those allowlisted as error-free. LAYER 1 probes an
+ * origin-less request against each and asserts it carries a >=400 envelope — but
+ * a route in ERROR_FREE has no such rejection to carry one (POST /unsub answers a
+ * neutral 200 to every request by design; see its entry). Excluding it here is
+ * the SAME decision ERROR_FREE already records, applied to the automatic layer;
+ * `coverage` below then re-includes it through ERROR_FREE so nothing goes
+ * un-ledgered.
+ */
+const MUTATING_WITH_ERROR_PATH = MUTATING.filter((r) => !ERROR_FREE.has(label(r)));
+
+/**
  * LAYER 1 — automatic. No per-route knowledge, so it cannot fall behind ROUTES.
  */
 describe("every mutating route's rejection carries the {code, message?} envelope", () => {
   it("there is at least one mutating route to check", () => {
-    expect(MUTATING.length).toBeGreaterThan(0);
+    expect(MUTATING_WITH_ERROR_PATH.length).toBeGreaterThan(0);
   });
 
-  it.each(MUTATING.map((r) => [label(r), r] as const))(
+  it.each(MUTATING_WITH_ERROR_PATH.map((r) => [label(r), r] as const))(
     "%s — origin-less rejection",
     async (_name, route) => {
       const response = await fetchWorker(
@@ -453,8 +489,11 @@ describe("every ledgered error path carries the {code, message?} envelope", () =
  */
 describe("error-envelope coverage", () => {
   const registered = new Set(ROUTES.map(label));
+  // ⚠️ `MUTATING_WITH_ERROR_PATH`, not `MUTATING` — a route allowlisted as
+  // ERROR_FREE is NOT probed by LAYER 1, so counting it as "exercised" here would
+  // be a lie. It is instead covered by the `!ERROR_FREE.has(r)` clause below.
   const exercised = new Set<string>([
-    ...MUTATING.map(label),
+    ...MUTATING_WITH_ERROR_PATH.map(label),
     ...CASES.map((c) => c.route).filter((r): r is string => r !== null),
   ]);
 

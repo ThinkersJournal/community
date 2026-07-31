@@ -54,6 +54,7 @@ import {
   handlePublicFollowing,
   handlePublicSocial,
 } from "./routes/social-public";
+import { handleUnsub } from "./routes/unsub";
 import { handleChooseUsername, handleGetMe } from "./routes/username";
 import { handleVerifyEmail } from "./routes/verify-email";
 
@@ -90,6 +91,10 @@ export const ROUTES: readonly RouteDef[] = [
   // This route authenticates INLINE (session + token ownership + epoch) for its
   // own reasons — see its header; do not weaken it.
   { method: "GET", pattern: "/verify-email", handler: handleVerifyEmail },
+
+  // One-click unsubscribe (M2.3c). Token-authed, NOT the mutating pipeline — no
+  // session/CSRF (a mail provider's cross-origin one-click). PIPELINE_EXEMPT.
+  { method: "POST", pattern: "/unsub", handler: handleUnsub },
 
   // AUTHOR-facing content routes (src/routes/posts.ts). Each runs the mutating
   // pipeline inside its own handler, so the route owns its opt-ins — all three
