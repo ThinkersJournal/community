@@ -230,17 +230,30 @@ export default {
 `apps/api/src/notifications/email-drain.ts`. Uses **`HYPERDRIVE_FRESH`**
 (consistent, uncached — this reads current prefs and writes `emailed_at`).
 
-### Single-flight guard
+### Single-flight guard — a DB lease row (NOT a session advisory lock)
 
-A long pass must not overlap the next tick and double-send. At pass start:
+A long pass must not overlap the next tick and double-send. Guard with a lease
+row in `email_drain_lock (pass text PK, leased_until timestamptz)`, one row per
+disposition. At pass start, acquire atomically:
 
 ```sql
-SELECT pg_try_advisory_lock($lockKey);   -- distinct key per disposition
+UPDATE email_drain_lock SET leased_until = now() + interval '90 seconds'
+ WHERE pass = $1 AND (leased_until IS NULL OR leased_until < now())
+ RETURNING pass;   -- rowCount 1 = acquired; 0 = another pass holds it → return
 ```
 
-If not acquired, log and return (another pass of this disposition is in flight).
-Release with `pg_advisory_unlock` in a `finally`. This mirrors the single-flight
-discipline used in the live-reconcile client.
+Release in a `finally` with `UPDATE email_drain_lock SET leased_until = NULL WHERE
+pass = $1`; a crashed pass instead auto-recovers when the 90-second lease expires.
+
+⚠️ **NOT `pg_try_advisory_lock`.** A *session*-scoped advisory lock is unreliable
+here: `db/client.ts` documents that Hyperdrive pools in **transaction mode** and
+may hand different backend connections to consecutive autocommit queries within
+one invocation (the same reason the codebase uses `SET LOCAL` inside `BEGIN`, never
+session `SET`s) — so a lock acquired by one query is not reliably held for the
+next. A *transaction*-scoped `pg_advisory_xact_lock` would force one transaction to
+stay open across all the external Postmark sends, which `BEGIN_BOUNDED_TX`'s
+`idle_in_transaction_session_timeout = 10s` would kill. The lease row is committed
+state, correct regardless of connection routing.
 
 ### Selection, coalescing, send, stamp
 
@@ -398,7 +411,9 @@ error). Unsubscribe is fully idempotent.
    its only possible effect is `master_enabled=false` for the token's user. No IDOR:
    the userId comes from the *verified* HMAC payload, never a query field.
 4. **`emailed_at` stamped only on confirmed send** — no silent drops; failures retry.
-5. **Advisory-lock single-flight** prevents overlapping passes double-sending.
+5. **Lease-row single-flight** (`email_drain_lock`) prevents overlapping passes
+   double-sending — a committed-state guard correct through Hyperdrive's
+   transaction-mode pooling, unlike a session advisory lock (see §4).
 6. **HTML injection**: all user-derived text (`escapeHtml`) — actor names, post
    titles — same vector the verification email already guards.
 7. **Read-suppression is best-effort by design**: a race where a user clicks through
@@ -438,7 +453,7 @@ function` (miniflare) lines remain expected artifacts.
 | `triggers.crons` | `wrangler.jsonc` | api's first Cron trigger; `["*/2 * * * *", "0 14 * * *"]` |
 | `UNSUBSCRIBE_SIGNING_KEY` | Workers secret | `.dev.vars` for local; `wrangler secret put` at deploy; regenerate `worker-configuration.d.ts` |
 | Postmark **Broadcast** stream | Postmark dashboard | create at deploy; broadcast sends return ErrorCode until it exists → rows retry, no crash |
-| `notification_channel` enum + `notification_prefs` + `emailed_at` | migrations 0006, 0007 | run in CI/deploy migration step |
+| `notification_channel` enum + `notification_prefs` + `emailed_at` + `email_drain_lock` | migrations 0006, 0007 | run in CI/deploy migration step |
 
 No new DO namespace, no new KV, no new binding — the outbox reuses Postgres.
 
