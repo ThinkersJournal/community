@@ -285,6 +285,15 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /notifications/unread-count",
     build: () => new Request("https://api.test/notifications/unread-count"),
   },
+  // GET /notification-prefs authenticates via readCurrentSession, same shape as
+  // GET /notifications above — its only error path (M2.3c). PUT
+  // /notification-prefs is a mutating route and is already covered by the
+  // automatic origin-less-rejection layer.
+  {
+    name: "401 notification-prefs no session",
+    route: "GET /notification-prefs",
+    build: () => new Request("https://api.test/notification-prefs"),
+  },
   // GET /notifications/ws authenticates inline (origin, then session) rather
   // than via readCurrentSession-only, like the two above — see
   // src/routes/notifications-ws.ts (M2.3b). This probe carries an ALLOWED

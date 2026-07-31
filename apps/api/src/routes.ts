@@ -31,6 +31,7 @@ import {
   handleUnreadCount,
 } from "./routes/notifications";
 import { handleNotificationsWs } from "./routes/notifications-ws";
+import { handleGetNotificationPrefs, handlePutNotificationPrefs } from "./routes/notification-prefs";
 import { handleCreatePost, handleGetPost, handleUpdatePost } from "./routes/posts";
 import { handlerPostsLive } from "./routes/posts-live";
 import {
@@ -162,6 +163,12 @@ export const ROUTES: readonly RouteDef[] = [
   // and its `/notifications/ws-push` trigger (M2.3b Task 0) are gone — replaced
   // by this authed route and (in later tasks) real notify()/mark-read pushes.
   { method: "GET", pattern: "/notifications/ws", handler: handleNotificationsWs },
+
+  // Notification email preferences (M2.3c). GET is a session read; PUT runs the
+  // mutating pipeline (verified-email NOT required — opting out must stay open to
+  // the unverified). Both scope to session.userId in-query.
+  { method: "GET", pattern: "/notification-prefs", handler: handleGetNotificationPrefs },
+  { method: "PUT", pattern: "/notification-prefs", handler: handlePutNotificationPrefs },
 
   // ANONYMOUS reads — what the edge caches. See src/routes/public.ts's header:
   // no session is read here, by construction.
