@@ -36,6 +36,10 @@ describe("notify bell island", () => {
     // down the document (Task 8's email suppression depends on read_at getting
     // written), so its fetch carries keepalive: true.
     expect(code).toMatch(/addEventListener\("click"[\s\S]{0,300}\/api\/notifications-read[\s\S]{0,120}keepalive: true/);
+    // Degraded/logged-out (no CSRF token): skip the guaranteed-403 mark-read
+    // rather than POST an empty token (mirrors openPanel's null-token skip).
+    expect(code).toMatch(/addEventListener\("click"[\s\S]{0,120}if \(csrfForClick === null\) return/);
+    expect(code).not.toContain('"X-CSRF-Token": csrfForClick ?? ""');
   });
   it("polls on visibility + interval", () => {
     expect(code).toContain("visibilitychange");

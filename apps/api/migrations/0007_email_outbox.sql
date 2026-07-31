@@ -11,9 +11,11 @@ CREATE INDEX notifications_outbox_idx
   WHERE emailed_at IS NULL AND read_at IS NULL;
 
 -- Single-flight lease for the cron drain (one row per pass). A pass claims its row
--- with an atomic conditional UPDATE (90s auto-expiring lease); a concurrent pass of
--- the same disposition sees a live lease and backs off. Committed row state — correct
--- through Hyperdrive's transaction-mode pooling, unlike a session advisory lock.
+-- with an atomic conditional UPDATE (a time-limited, auto-expiring lease — the TTL
+-- and the leased_by owner-fence live in src/notifications/email-drain.ts and
+-- migration 0008); a concurrent pass of the same disposition sees a live lease and
+-- backs off. Committed row state — correct through Hyperdrive's transaction-mode
+-- pooling, unlike a session advisory lock.
 CREATE TABLE email_drain_lock (
   pass         text PRIMARY KEY,
   leased_until timestamptz

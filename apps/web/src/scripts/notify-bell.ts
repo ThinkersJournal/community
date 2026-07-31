@@ -142,14 +142,17 @@ function renderPanel(panel: HTMLElement, page: NotificationsPage, csrfForClick: 
       // which drives email suppression). `keepalive: true` so the write is not
       // aborted when this anchor's navigation tears the document down mid-flight
       // (the {ids} body is far under the 64 KB keepalive cap; same-origin).
-      // Every caller (open AND live-nudge) threads a real CSRF token so this
-      // POST authenticates — a null token only occurs in the degraded/logged-out
-      // path, where a mark-read could not authenticate anyway.
+      // Every caller (open AND live-nudge) threads a real CSRF token so this POST
+      // authenticates; a null token only occurs in the degraded/logged-out path,
+      // where the mark-read would fail `checkCsrf` closed (403) anyway — so skip
+      // the POST entirely there rather than fire a guaranteed-failing request
+      // (mirrors openPanel's null-token skip for the seen write).
       link.addEventListener("click", () => {
+        if (csrfForClick === null) return;
         void fetch("/api/notifications-read", {
           method: "POST",
           keepalive: true,
-          headers: { "content-type": "application/json", "X-CSRF-Token": csrfForClick ?? "" },
+          headers: { "content-type": "application/json", "X-CSRF-Token": csrfForClick },
           body: JSON.stringify({ ids: group.ids }),
         }).catch(() => {}); // fire-and-forget; navigation proceeds regardless
       });
