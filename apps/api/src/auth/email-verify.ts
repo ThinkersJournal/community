@@ -35,7 +35,7 @@ const VERIFY_TTL_SECONDS = 86_400; // 24h
  * sent from OUR confirmed sender at a host they control — a phishing/token-theft
  * vector (see the escaping note on `escapeHtml` below).
  */
-const CANONICAL_ORIGIN = "https://community.thinkersjournal.com";
+export const CANONICAL_ORIGIN = "https://community.thinkersjournal.com";
 
 /**
  * The ONLY origins an emailed verification link may point at.

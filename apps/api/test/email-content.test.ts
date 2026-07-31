@@ -36,4 +36,25 @@ describe("buildNotificationEmail", () => {
     expect(e.htmlBody).not.toContain("<script>x</script>");
     expect(e.htmlBody).toContain("&lt;script&gt;");
   });
+  it("escapes a malicious slug so it cannot break out of the href attribute", () => {
+    const e = buildNotificationEmail(
+      [item({ postSlug: 'x"><script>evil</script>' })],
+      { unsubUrl: U, disposition: "instant" },
+    );
+    // The raw breakout sequence must not survive into the attribute value.
+    expect(e.htmlBody).not.toContain('x"><script>');
+    // Both the quote and the tag delimiters must be escaped.
+    expect(e.htmlBody).toContain("&quot;");
+    expect(e.htmlBody).toContain("&lt;script&gt;");
+  });
+  it("renders a null href (deleted post) as plain text, not a link", () => {
+    const e = buildNotificationEmail(
+      [item({ postAuthorUsername: null, postSlug: null, postTitle: "Gone" })],
+      { unsubUrl: U, disposition: "instant" },
+    );
+    const listMarkup = e.htmlBody.slice(0, e.htmlBody.indexOf("</ul>") + "</ul>".length);
+    expect(listMarkup).not.toContain("<a");
+    expect(listMarkup).toContain("<li>");
+    expect(listMarkup).toContain("Gone");
+  });
 });

@@ -5,11 +5,9 @@
  * escapeHtml'd. Links are absolutized against the canonical origin; a null href
  * (deleted post) renders as plain text.
  */
-import { escapeHtml } from "../auth/email-verify";
+import { CANONICAL_ORIGIN, escapeHtml } from "../auth/email-verify";
 import { collapseNotifications, notificationHref, notificationLabel } from "@thinkersjournal/shared";
 import type { CollapsedNotification, NotificationItem } from "@thinkersjournal/shared";
-
-const ORIGIN = "https://community.thinkersjournal.com";
 
 function lineText(g: CollapsedNotification): string {
   const l = notificationLabel(g);
@@ -17,7 +15,7 @@ function lineText(g: CollapsedNotification): string {
 }
 function absHref(g: CollapsedNotification): string | null {
   const href = notificationHref(g);
-  return href === null ? null : `${ORIGIN}${href}`;
+  return href === null ? null : `${CANONICAL_ORIGIN}${href}`;
 }
 
 export function buildNotificationEmail(
@@ -38,7 +36,7 @@ export function buildNotificationEmail(
     return href === null ? lineText(g) : `${lineText(g)}\n  ${href}`;
   });
   const textBody =
-    `${textLines.join("\n\n")}\n\n—\nManage preferences: ${ORIGIN}/settings/notifications\nUnsubscribe: ${opts.unsubUrl}\n`;
+    `${textLines.join("\n\n")}\n\n—\nManage preferences: ${CANONICAL_ORIGIN}/settings/notifications\nUnsubscribe: ${opts.unsubUrl}\n`;
 
   const htmlItems = groups
     .map((g) => {
@@ -50,7 +48,7 @@ export function buildNotificationEmail(
   const htmlBody =
     `<ul>${htmlItems}</ul>` +
     `<p style="color:#888;font-size:13px">` +
-    `<a href="${escapeHtml(`${ORIGIN}/settings/notifications`)}">Manage preferences</a> · ` +
+    `<a href="${escapeHtml(`${CANONICAL_ORIGIN}/settings/notifications`)}">Manage preferences</a> · ` +
     `<a href="${escapeHtml(opts.unsubUrl)}">Unsubscribe</a></p>`;
 
   return { subject, textBody, htmlBody };
