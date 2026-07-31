@@ -186,6 +186,7 @@ const DISPATCHER_BODY = indexSource
  */
 const EXPECTED_DISPATCHER_BODY =
   'import { notFoundResponse } from "./http/errors"; ' +
+  'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
   'export { UserSecurityDO } from "./durable-objects/UserSecurityDO"; ' +
@@ -196,6 +197,13 @@ const EXPECTED_DISPATCHER_BODY =
   "const match = findRoute(ROUTES, request.method, pathname); " +
   "if (match === null) return notFoundResponse(); " +
   "return await match.route.handler(request, env, ctx, match.params); " +
+  "}, " +
+  // The scheduled() cron dispatcher (M2.3c) — a THIN dispatcher alongside fetch,
+  // not a route (route-protection enumerates ROUTES; a cron has no path). Pinned
+  // here for the same reason as fetch: this file's whole body is the allowlist.
+  "async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> { " +
+  'const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant"; ' +
+  "ctx.waitUntil(runEmailDrain(env, ctx, disposition)); " +
   "}, } satisfies ExportedHandler<Env>;";
 
 describe("route inventory", () => {
@@ -220,8 +228,8 @@ describe("route inventory", () => {
     // one a dynamic route reaches for first. An allowlist of exactly one body
     // inverts the burden: every unimagined idiom fails by default.
     //
-    // This file is 20 lines and should essentially never change, so the cost of
-    // pinning it is ~zero and any edit becomes a deliberate, reviewed act.
+    // This file is a couple dozen lines and should essentially never change, so
+    // the cost of pinning it is ~zero and any edit becomes a deliberate, reviewed act.
     expect(
       DISPATCHER_BODY,
       "src/index.ts changed. It is pinned because every assertion in this file enumerates ROUTES: a route reachable any other way is NOT covered by the default-deny checks below. If this change adds dispatch, move the route to src/routes.ts. If it is genuinely benign, update this snapshot deliberately.",

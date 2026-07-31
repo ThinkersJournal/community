@@ -152,6 +152,9 @@
       "simple": { "limit": 60, "period": 60 }
     }
   ],
+  // Email outbox drains (M2.3c) — api's FIRST cron. */2 = instant pass; the daily
+  // 14:00 UTC = digest pass. src/index.ts's scheduled() branches on controller.cron.
+  "triggers": { "crons": ["*/2 * * * *", "0 14 * * *"] },
   "observability": {
     "enabled": true
   }
