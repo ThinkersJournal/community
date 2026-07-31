@@ -21,8 +21,9 @@
  *     group read (`POST /api/notifications-read {ids}`), the sole thing that
  *     sets read_at (it drives email suppression, not the badge). Both use a
  *     CSRF token fetched once from `/api/me` (same idiom as nav-auth.ts) and
- *     cached in a module var. A live-nudge re-render passes a `null` token so
- *     it never rewires clicks or re-POSTs seen.
+ *     cached in a module var. A live-nudge re-render threads that SAME memoized
+ *     token (so the re-wired click-throughs stay authenticatable) but never
+ *     re-POSTs seen.
  *  4. Re-polls the count on load, on tab-visible, and every 60s — this is the
  *     FALLBACK, kept even now that push exists, in case the socket is down, AND
  *     it is the WebSocket's single (re)connect trigger (see below).
@@ -105,7 +106,9 @@ async function refreshCount(bell: HTMLElement, badge: HTMLElement): Promise<bool
 /**
  * Renders collapsed groups into the panel via createElement/textContent only.
  * `csrfForClick` is the token attached to each linked group's click-through
- * mark-read POST; `null` (the live-nudge path) renders without wiring clicks.
+ * mark-read POST. Linked rows are ALWAYS wired; a `null` token only occurs in
+ * the degraded/logged-out path (the mark-read cannot authenticate there anyway).
+ * Both real callers — open and live-nudge — pass the real memoized token.
  */
 function renderPanel(panel: HTMLElement, page: NotificationsPage, csrfForClick: string | null): void {
   const groups = collapseNotifications(page.notifications);
@@ -136,12 +139,16 @@ function renderPanel(panel: HTMLElement, page: NotificationsPage, csrfForClick: 
       link.href = href;
       link.textContent = text;
       // Click-through is the ONLY thing that marks a group read (sets read_at,
-      // which drives email suppression). Fire-and-forget so navigation to the
-      // target proceeds regardless; the live-nudge path passes csrfForClick=null
-      // (it re-renders anyway) so it never rewires this.
+      // which drives email suppression). `keepalive: true` so the write is not
+      // aborted when this anchor's navigation tears the document down mid-flight
+      // (the {ids} body is far under the 64 KB keepalive cap; same-origin).
+      // Every caller (open AND live-nudge) threads a real CSRF token so this
+      // POST authenticates — a null token only occurs in the degraded/logged-out
+      // path, where a mark-read could not authenticate anyway.
       link.addEventListener("click", () => {
         void fetch("/api/notifications-read", {
           method: "POST",
+          keepalive: true,
           headers: { "content-type": "application/json", "X-CSRF-Token": csrfForClick ?? "" },
           body: JSON.stringify({ ids: group.ids }),
         }).catch(() => {}); // fire-and-forget; navigation proceeds regardless
@@ -162,10 +169,10 @@ function renderPanel(panel: HTMLElement, page: NotificationsPage, csrfForClick: 
 
 /**
  * Fetches `/api/notifications` and renders it into the panel — no seen-advance,
- * no visibility change. Used both by `openPanel` (below, which passes the CSRF
- * token so rendered groups wire click-through mark-read) and by a pushed nudge
- * arriving while the panel is already open, which passes `null` so a live
- * refresh neither rewires clicks nor advances seen. Returns whether it loaded (a
+ * no visibility change. Used both by `openPanel` (below) and by a pushed nudge
+ * arriving while the panel is already open. BOTH thread the memoized CSRF token
+ * so the re-wired click-through mark-reads can authenticate; the nudge path
+ * differs only in that it never advances seen. Returns whether it loaded (a
  * non-200 is a no-op, matching `fetchUnreadCount`'s degraded-mode contract).
  */
 async function loadList(panel: HTMLElement, csrfForClick: string | null): Promise<boolean> {
@@ -252,7 +259,18 @@ export function initNotifyBell(): void {
       // Content-free nudge ({type:"notification"|"read"}) — never parse
       // event.data; a nudge only ever triggers a refetch, same as poll().
       void refreshCount(bell, badge);
-      if (!panel.hidden) void loadList(panel, null);
+      // A nudge re-renders an OPEN panel, which RE-WIRES each row's
+      // click-through mark-read — so it must thread the REAL CSRF token, never
+      // null: an empty token would make every re-rendered row's mark-read 403
+      // (runMutatingPipeline) and read_at would never be set. getCsrfToken() is
+      // memoized (already resolved once the panel was opened), so this adds no
+      // extra /api/me hop; re-check panel.hidden after the await since the panel
+      // may have closed in the meantime.
+      if (!panel.hidden) {
+        void getCsrfToken().then((t) => {
+          if (!panel.hidden) void loadList(panel, t);
+        });
+      }
     };
     // On close/error just drop the reference; the next signed-in poll re-arms.
     // Guard on identity so a stale socket's late event can't clear a newer one.

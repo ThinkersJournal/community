@@ -32,6 +32,10 @@ describe("notify bell island", () => {
     expect(code).toMatch(/addEventListener\("click"[\s\S]{0,300}\/api\/notifications-read/);
     expect(code).toMatch(/\/api\/notifications-read[\s\S]{0,200}ids: group\.ids/);
     expect(code).toContain('"X-CSRF-Token"');
+    // ⚠️ The click-through mark-read must survive the anchor's navigation tearing
+    // down the document (Task 8's email suppression depends on read_at getting
+    // written), so its fetch carries keepalive: true.
+    expect(code).toMatch(/addEventListener\("click"[\s\S]{0,300}\/api\/notifications-read[\s\S]{0,120}keepalive: true/);
   });
   it("polls on visibility + interval", () => {
     expect(code).toContain("visibilitychange");
@@ -68,9 +72,15 @@ describe("notify bell island", () => {
     // near onmessage — a regression that rendered straight from the pushed
     // message (breaking the content-free wire contract) would fail this.
     expect(code).toMatch(/onmessage = \(\) => \{[\s\S]{0,200}refreshCount\(bell, badge\)/);
-    // ⚠️ The live-nudge reload passes a `null` CSRF token (M2.3c): a live refresh
-    // re-renders anyway, so it must NOT rewire click handlers or advance seen.
-    expect(code).toMatch(/onmessage[\s\S]{0,300}!panel\.hidden[\s\S]{0,100}loadList\(panel, null\)/);
+    // ⚠️ The live-nudge reload threads the REAL memoized CSRF token (M2.3c fix):
+    // a nudge re-renders an OPEN panel, RE-WIRING each row's click-through
+    // mark-read, so it must carry an authenticatable token — passing null would
+    // 403 every re-rendered row's mark-read and drop read_at (Task 8 depends on
+    // it). getCsrfToken() is memoized, so no extra /api/me hop.
+    expect(code).toMatch(
+      /onmessage[\s\S]{0,300}!panel\.hidden[\s\S]{0,200}getCsrfToken\(\)[\s\S]{0,160}loadList\(panel, t\)/,
+    );
+    expect(code).not.toMatch(/loadList\(panel, null\)/); // the un-authenticatable null path is gone
     expect(code).not.toMatch(/onmessage[\s\S]{0,300}event\.data/);
     expect(code).toContain("setInterval(poll, 60_000)"); // poll fallback retained, unchanged interval
   });
