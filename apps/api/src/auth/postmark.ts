@@ -7,6 +7,11 @@
  * confirmed accept (2xx AND ErrorCode 0); false on every failure, so the outbox
  * drain can leave emailed_at NULL and retry.
  *
+ * A 10s request timeout (`AbortSignal.timeout`) bounds a hung Postmark request
+ * so it cannot keep an outbox-drain pass alive past its single-flight lease (see
+ * notifications/email-drain.ts) — the resulting AbortError is just another throw
+ * the outer try/catch turns into `false`, so the row stays unsent and retries.
+ *
  * ⚠️ NEVER logs `to`, subject, body, or any header value — those can carry the
  * recipient address and (for notifications) an unsubscribe token. Logs only
  * status / ErrorCode / Message, exactly as the verification send always has.
@@ -33,6 +38,8 @@ export async function postmarkSend(
   try {
     const res = await fetch("https://api.postmarkapp.com/email", {
       method: "POST",
+      // Bounds a hung send so it can't outlive the drain's lease (see the doc).
+      signal: AbortSignal.timeout(10_000),
       headers: {
         "X-Postmark-Server-Token": env.POSTMARK_SERVER_TOKEN,
         "content-type": "application/json",

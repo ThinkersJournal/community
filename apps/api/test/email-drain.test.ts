@@ -119,9 +119,24 @@ async function drain(disposition: "instant" | "digest"): Promise<void> {
   await waitOnExecutionContext(ctx);
 }
 
-/** The lease is the single-flight gate; reset it between drain invocations. */
+/** The lease is the single-flight gate; reset it (both columns) between drains. */
 async function resetLock(): Promise<void> {
-  await ctxRun((c) => c.query(`UPDATE email_drain_lock SET leased_until = NULL`));
+  await ctxRun((c) =>
+    c.query(`UPDATE email_drain_lock SET leased_until = NULL, leased_by = NULL`),
+  );
+}
+
+/** The lease row for a pass — to assert a drain released its OWN lease. */
+async function leaseState(
+  pass: "instant" | "digest",
+): Promise<{ leased_until: string | null; leased_by: string | null }> {
+  return ctxRun(async (c) => {
+    const { rows } = await c.query<{ leased_until: string | null; leased_by: string | null }>(
+      `SELECT leased_until, leased_by FROM email_drain_lock WHERE pass=$1`,
+      [pass],
+    );
+    return rows[0]!;
+  });
 }
 
 describe("runEmailDrain", () => {
@@ -136,6 +151,8 @@ describe("runEmailDrain", () => {
     // Robust to other suites' pending eligible rows: count only sends to ME.
     expect(sends.filter((s) => s.to === myEmail)).toHaveLength(1);
     expect(await emailedAt(id)).not.toBeNull();
+    // The pass released its OWN lease on the way out (fenced clear of both cols).
+    expect(await leaseState("instant")).toEqual({ leased_until: null, leased_by: null });
   });
 
   it("digest-default kinds are NOT sent on the instant pass", async () => {

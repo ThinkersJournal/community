@@ -14,7 +14,7 @@ afterAll(async () => {
   await client.end();
 });
 
-describe("0006/0007 migrations", () => {
+describe("0006/0007/0008 migrations", () => {
   it("notification_channel enum has exactly instant|digest|off", async () => {
     const { rows } = await client.query<{ label: string }>(
       `SELECT e.enumlabel AS label
@@ -71,5 +71,36 @@ describe("0006/0007 migrations", () => {
     await client.query(`UPDATE email_drain_lock SET leased_until = NULL WHERE pass = 'instant'`);
     expect(first.rowCount).toBe(1);
     expect(second.rowCount).toBe(0);
+  });
+
+  it("email_drain_lock has a leased_by owner column (0008)", async () => {
+    const { rows } = await client.query(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'email_drain_lock' AND column_name = 'leased_by'`,
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  it("the fenced release cannot clear a successor's lease (leased_by fence)", async () => {
+    // 'A' holds the lease...
+    await client.query(
+      `UPDATE email_drain_lock SET leased_until = now() + interval '300 seconds', leased_by = 'A' WHERE pass = 'instant'`,
+    );
+    // ...A's lease lapses and successor 'B' re-acquires it (still-future lease).
+    await client.query(
+      `UPDATE email_drain_lock SET leased_until = now() + interval '300 seconds', leased_by = 'B' WHERE pass = 'instant'`,
+    );
+    // A's fenced release (leased_by = 'A') must NOT clear B's live lease.
+    const released = await client.query(
+      `UPDATE email_drain_lock SET leased_until = NULL, leased_by = NULL WHERE pass = 'instant' AND leased_by = 'A'`,
+    );
+    expect(released.rowCount).toBe(0);
+    const { rows } = await client.query<{ leased_by: string | null }>(
+      `SELECT leased_by FROM email_drain_lock WHERE pass = 'instant'`,
+    );
+    expect(rows[0]!.leased_by).toBe("B"); // successor's lease intact
+    await client.query(
+      `UPDATE email_drain_lock SET leased_until = NULL, leased_by = NULL WHERE pass = 'instant'`,
+    );
   });
 });

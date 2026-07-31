@@ -69,14 +69,30 @@ export async function runEmailDrain(
   // So the WHOLE body (including Phase A's lease-acquire + SELECT) is wrapped:
   // if the SELECT threw AFTER the lease UPDATE committed, an unguarded Phase A
   // would leave the lease held-and-unreleased AND reject out of waitUntil.
+  //
+  // An OPAQUE per-pass owner token fences the release: only the pass that still
+  // owns the lease may clear it (see the finally). An opaque token — NOT the
+  // leased_until timestamp — because a timestamp fence has JS Date ms-truncation
+  // and cross-connection timezone-rendering footguns.
   let acquired = false;
+  const leaseToken = crypto.randomUUID();
   try {
     // Phase A: acquire the lease and read the work in one connection.
+    //
+    // ⚠️ LEASE TTL (300s) MUST EXCEED THE 120s INSTANT CRON INTERVAL
+    // (wrangler.jsonc `*/2 * * * *`). With the old 90s TTL, a normal-duration
+    // pass that is still sending (a slow/hung Postmark request, or many
+    // recipients sent sequentially) could lose its lease BEFORE the next tick;
+    // the next cron pass would then acquire, re-run SELECT_ELIGIBLE, see the
+    // SAME still-unstamped rows (Phase C hasn't stamped yet), and send DUPLICATE
+    // emails. 300s clears the interval with headroom while bounding
+    // crash-recovery to a couple of ticks. (The digest lock shares this TTL but
+    // fires daily, so overlap can't arise there.)
     const claim = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c: Client) => {
       const lock = await c.query(
-        `UPDATE email_drain_lock SET leased_until = now() + interval '90 seconds'
+        `UPDATE email_drain_lock SET leased_until = now() + interval '300 seconds', leased_by = $2
           WHERE pass = $1 AND (leased_until IS NULL OR leased_until < now()) RETURNING pass`,
-        [disposition],
+        [disposition, leaseToken],
       );
       if ((lock.rowCount ?? 0) === 0) return null; // another pass holds the lease
       acquired = true; // set right after a confirmed acquire — NO await between
@@ -112,14 +128,20 @@ export async function runEmailDrain(
   } catch (err) {
     console.error("email drain failed", { disposition, err });
   } finally {
-    // Release the lease ONLY if THIS call acquired it — never clear another
-    // pass's lease. A crash before release instead auto-expires it after 90s.
-    // The release is itself try/caught so a release failure can't throw out of
-    // finally and replace the root cause.
+    // Release the lease ONLY if THIS call acquired it AND still owns it. The
+    // `leased_by = $2` fence is the fix for the release footgun: a pass whose
+    // lease already expired and was re-acquired by a successor (a DIFFERENT
+    // leased_by) clears 0 rows here instead of wiping the successor's LIVE
+    // lease. A crash before release instead auto-expires the lease after its
+    // TTL. The release is itself try/caught so a release failure can't throw out
+    // of finally and replace the root cause.
     if (acquired) {
       try {
         await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-          c.query(`UPDATE email_drain_lock SET leased_until = NULL WHERE pass = $1`, [disposition]),
+          c.query(
+            `UPDATE email_drain_lock SET leased_until = NULL, leased_by = NULL WHERE pass = $1 AND leased_by = $2`,
+            [disposition, leaseToken],
+          ),
         );
       } catch (err) {
         console.error("email drain lease release failed", { disposition, err });
