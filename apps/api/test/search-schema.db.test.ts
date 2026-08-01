@@ -72,13 +72,31 @@ describe("0009 search trigram", () => {
     expect(hits).not.toContain(draft[0]!.id);
   });
 
-  it("uses the GIN index for the filter (not a seq scan)", async () => {
-    const { rows } = await client.query<{ "QUERY PLAN": unknown[] }>(
-      `EXPLAIN (FORMAT JSON) SELECT p.id FROM posts p
-        WHERE p.status = 'published'
-          AND lower('analytical engine') <% lower(p.title || ' ' || coalesce(p.markdown_source, ''))`,
-    );
-    expect(JSON.stringify(rows[0])).toContain("posts_search_trgm_idx");
+  it("both trigram indexes are GIN trgm over the right expressions + partial predicates", async () => {
+    // NOTE: we deliberately do NOT assert the planner CHOOSES this index. At any
+    // realistic test volume Postgres correctly prefers the cheaper posts_published_key
+    // btree-partial (migration 0002) + an in-memory <% filter; the GIN trigram index is
+    // a large-corpus optimization the planner adopts only past its cost crossover. We
+    // pin the index DEFINITION instead — that (plus the behavioral tests above) is what
+    // guards the expression/opclass/partial-predicate, deterministically.
+    const def = async (name: string): Promise<string> => {
+      const { rows } = await client.query<{ d: string }>(
+        `SELECT pg_get_indexdef(c.oid) AS d FROM pg_class c WHERE c.relname = $1`, [name]);
+      return rows[0]?.d ?? "";
+    };
+    const posts = await def("posts_search_trgm_idx");
+    expect(posts).toContain("gin_trgm_ops");
+    expect(posts).toContain("lower(");
+    expect(posts).toContain("title");
+    expect(posts).toContain("markdown_source");
+    expect(posts.toLowerCase()).toContain("where (status = 'published'");
+    const people = await def("profiles_search_trgm_idx");
+    expect(people).toContain("gin_trgm_ops");
+    expect(people).toContain("lower(");
+    expect(people).toContain("username");
+    expect(people).toContain("display_name");
+    expect(people).toContain("bio");
+    expect(people.toLowerCase()).toContain("where (username_chosen");
   });
 
   it("finds an onboarded person by partial name, excludes un-onboarded", async () => {
