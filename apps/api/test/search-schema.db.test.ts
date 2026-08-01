@@ -72,6 +72,34 @@ describe("0009 search trigram", () => {
     expect(hits).not.toContain(draft[0]!.id);
   });
 
+  it("ranks a closer match ahead of a weaker one for the same query", async () => {
+    // Scores checked directly against word_similarity() beforehand: close ~1.0,
+    // far ~0.61 — both clear the 0.3 SET LOCAL threshold used by searchPosts(), so
+    // both rows are returned, and the ordering between them is unambiguous.
+    const { rows: close } = await client.query<{ id: string }>(
+      `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+       VALUES ($1, 'Distributed Systems Architecture Patterns', $2,
+               'a deep look at distributed systems architecture patterns for scale',
+               'published', now()) RETURNING id`,
+      [author, `s-${crypto.randomUUID()}`],
+    );
+    const { rows: far } = await client.query<{ id: string }>(
+      `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+       VALUES ($1, 'Random Thoughts on Software', $2,
+               'some notes touching on distributed systems in passing among other software topics',
+               'published', now()) RETURNING id`,
+      [author, `s-${crypto.randomUUID()}`],
+    );
+    try {
+      const hits = await searchPosts("distributed systems architecture");
+      expect(hits).toContain(close[0]!.id);
+      expect(hits).toContain(far[0]!.id);
+      expect(hits.indexOf(close[0]!.id)).toBeLessThan(hits.indexOf(far[0]!.id));
+    } finally {
+      await client.query(`DELETE FROM posts WHERE id = ANY($1)`, [[close[0]!.id, far[0]!.id]]);
+    }
+  });
+
   it("both trigram indexes are GIN trgm over the right expressions + partial predicates", async () => {
     // NOTE: we deliberately do NOT assert the planner CHOOSES this index. At any
     // realistic test volume Postgres correctly prefers the cheaper posts_published_key
@@ -81,21 +109,25 @@ describe("0009 search trigram", () => {
     // guards the expression/opclass/partial-predicate, deterministically.
     const def = async (name: string): Promise<string> => {
       const { rows } = await client.query<{ d: string }>(
-        `SELECT pg_get_indexdef(c.oid) AS d FROM pg_class c WHERE c.relname = $1`, [name]);
+        `SELECT pg_get_indexdef(c.oid) AS d FROM pg_class c WHERE c.relname = $1 AND c.relkind = 'i'`, [name]);
       return rows[0]?.d ?? "";
     };
     const posts = await def("posts_search_trgm_idx");
     expect(posts).toContain("gin_trgm_ops");
     expect(posts).toContain("lower(");
     expect(posts).toContain("title");
-    expect(posts).toContain("markdown_source");
+    // COALESCE, not a bare column ref — otherwise a NULL markdown_source makes the
+    // whole concatenation NULL and that post silently drops out of the index.
+    expect(posts).toContain("COALESCE(markdown_source");
     expect(posts.toLowerCase()).toContain("where (status = 'published'");
     const people = await def("profiles_search_trgm_idx");
     expect(people).toContain("gin_trgm_ops");
     expect(people).toContain("lower(");
-    expect(people).toContain("username");
-    expect(people).toContain("display_name");
-    expect(people).toContain("bio");
+    // citext -> text cast, required for the concatenation to typecheck.
+    expect(people).toContain("(username)::text");
+    // Same NULL-propagation guard as above, for the two nullable profile columns.
+    expect(people).toContain("COALESCE(display_name");
+    expect(people).toContain("COALESCE(bio");
     expect(people.toLowerCase()).toContain("where (username_chosen");
   });
 
