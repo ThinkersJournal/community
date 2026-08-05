@@ -248,6 +248,14 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /public/reactions",
     build: () => new Request("https://api.test/public/reactions"),
   },
+  // GET /public/search (M2.4a) validates q/type/offset BEFORE touching the DB —
+  // same "no lookup gating it" shape as /public/authors' malformed-cursor case
+  // above. A too-short q is the simplest reachable 400. See src/routes/search.ts.
+  {
+    name: "400 public search with a too-short q",
+    route: "GET /public/search",
+    build: () => new Request("https://api.test/public/search?q=a"),
+  },
   // GET /follows/status authenticates via readCurrentSession, same as GET
   // /profile/me above — its only error path (M2.1).
   {

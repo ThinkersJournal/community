@@ -47,6 +47,7 @@ import {
   handleRemoveReaction,
 } from "./routes/reactions";
 import { handleResendVerification } from "./routes/resend-verification";
+import { handlePublicSearch } from "./routes/search";
 import { handleSignup } from "./routes/signup";
 import {
   handlePublicAuthors,
@@ -205,6 +206,10 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/public/following", handler: handlePublicFollowing },
   { method: "GET", pattern: "/public/authors", handler: handlePublicAuthors },
   { method: "GET", pattern: "/public/comments", handler: handlePublicComments },
+
+  // Anonymous trigram search (M2.4a) — same not-edge-cached shelf as the social
+  // reads: HYPERDRIVE_FRESH, no cache-tag, no session. See src/routes/search.ts.
+  { method: "GET", pattern: "/public/search", handler: handlePublicSearch },
 
   // Public reaction counts (M2.2) — anonymous, zero-filled per kind for the
   // post and every comment on it. Same NOT-edge-cached shelf as the social
