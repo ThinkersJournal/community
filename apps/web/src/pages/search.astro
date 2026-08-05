@@ -11,7 +11,7 @@ import { markFeedCacheable } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
 import { markdownExcerpt } from "@thinkersjournal/markdown";
 
-import { SEARCH_Q_MIN } from "@thinkersjournal/shared";
+import { SEARCH_PAGE_SIZE, SEARCH_Q_MAX, SEARCH_Q_MIN } from "@thinkersjournal/shared";
 import type { SearchPage, SearchPersonResult, SearchPostResult } from "@thinkersjournal/shared";
 
 const q = (Astro.url.searchParams.get("q") ?? "").trim();
@@ -19,7 +19,7 @@ const type = Astro.url.searchParams.get("type") === "people" ? "people" : "posts
 const offsetParam = Number(Astro.url.searchParams.get("offset"));
 const offset = Number.isInteger(offsetParam) && offsetParam > 0 ? offsetParam : 0;
 
-const active = q.length >= SEARCH_Q_MIN;
+const active = q.length >= SEARCH_Q_MIN && q.length <= SEARCH_Q_MAX;
 
 let posts: SearchPage<SearchPostResult> = { results: [], nextOffset: null };
 let people: SearchPage<SearchPersonResult> = { results: [], nextOffset: null };
@@ -42,19 +42,19 @@ setPublicPageCsp(Astro);
 <PageLayout title="Search — Thinker's Journal" eyebrow="Discover" heading="Search" intro="Find posts and people across Thinker's Journal.">
   <form method="GET" action="/search" class="search-form" role="search">
     <input type="hidden" name="type" value={type} />
-    <input type="search" name="q" value={q} placeholder="Search posts and people…" aria-label="Search" minlength={SEARCH_Q_MIN} required />
+    <input type="search" name="q" value={q} placeholder="Search posts and people…" aria-label="Search" minlength={SEARCH_Q_MIN} maxlength={SEARCH_Q_MAX} required />
     <button type="submit" class="btn btn-primary">Search</button>
   </form>
 
   {active && (
     <nav class="tabs" aria-label="Search scope">
-      <a class={type === "posts" ? "tab on" : "tab"} href={`/search?q=${encodeURIComponent(q)}&type=posts&offset=0`}>Posts</a>
-      <a class={type === "people" ? "tab on" : "tab"} href={`/search?q=${encodeURIComponent(q)}&type=people&offset=0`}>People</a>
+      <a class={type === "posts" ? "tab on" : "tab"} aria-current={type === "posts" ? "page" : undefined} href={href("posts", 0)}>Posts</a>
+      <a class={type === "people" ? "tab on" : "tab"} aria-current={type === "people" ? "page" : undefined} href={href("people", 0)}>People</a>
     </nav>
   )}
 
   {!active ? (
-    <p class="hint">Type at least {SEARCH_Q_MIN} characters to search.</p>
+    <p class="hint">Enter between {SEARCH_Q_MIN} and {SEARCH_Q_MAX} characters to search.</p>
   ) : type === "posts" ? (
     posts.results.length === 0 ? (
       <p>No posts match «{q}».</p>
@@ -87,7 +87,7 @@ setPublicPageCsp(Astro);
     const cur = type === "posts" ? posts : people;
     return (
       <nav class="pager" aria-label="Pagination">
-        {offset > 0 && <a class="link" rel="prev" href={href(type, Math.max(0, offset - 20))}>← Newer</a>}
+        {offset > 0 && <a class="link" rel="prev" href={href(type, Math.max(0, offset - SEARCH_PAGE_SIZE))}>← Newer</a>}
         {cur.nextOffset !== null && <a class="link" rel="next" href={href(type, cur.nextOffset)}>Older →</a>}
       </nav>
     );

@@ -14,7 +14,7 @@ import Wordmark from './Wordmark.astro';
       <a href="/feed">Feed</a>
       <a href="/authors">Authors</a>
       <form method="GET" action="/search" class="nav-search" role="search">
-        <input type="search" name="q" placeholder="Search" aria-label="Search" minlength="2" required />
+        <input type="search" name="q" placeholder="Search" aria-label="Search" minlength="2" maxlength="100" required />
       </form>
       <span class="notify" data-notify-bell hidden>
         <button type="button" class="bell" data-notify-toggle aria-label="Notifications">🔔<span class="badge" data-notify-badge hidden></span></button>
