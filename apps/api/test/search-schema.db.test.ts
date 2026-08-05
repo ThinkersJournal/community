@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -160,113 +163,83 @@ describe("0009 search trigram", () => {
     }
   });
 
-  it("couples the handler SQL to the trgm GIN indexes (planner-forced EXPLAIN)", async () => {
-    // The index-def pin above guards the INDEX side. This guards the HANDLER side:
-    // it EXPLAINs the REAL POSTS_SQL / PEOPLE_SQL (imported from src/routes/search-sql,
-    // the same strings the Worker runs) and proves the trigram GIN is actually usable
-    // for them. The mechanism: force the planner off every non-GIN access path so the
-    // GIN bitmap scan is the ONLY cheap plan — which the planner can choose ONLY IF the
-    // handler expression parses byte-for-byte identically to the index expression. If a
-    // future refactor makes them diverge (e.g. `||` -> `concat_ws`), the GIN stops being
-    // usable, the plan falls back, and this test goes red instead of silently shipping a
-    // seq scan over every published post.
+  it("couples the handler search expression to the migration 0009 index expression", () => {
+    // The index-def pin above guards the INDEX side. This guards the HANDLER side —
+    // and does it WITHOUT a planner. An earlier version of this test EXPLAINed the
+    // real handler SQL with `SET LOCAL enable_seqscan/indexscan/indexonlyscan = off`
+    // and asserted the trgm GIN got chosen. That was fragile in a way this project's
+    // migration-0002 partial btree `posts_published_key` (`ON posts (id DESC) WHERE
+    // status='published'`) exposed at CI's higher published-row count: those flags do
+    // NOT disable a BITMAP scan of that btree, so the planner happily picked `Bitmap
+    // Index Scan on posts_published_key` + an in-memory `<%` Filter instead of the
+    // GIN — passing locally (lower row count, GIN cheaper) and failing in CI (more
+    // rows, btree-bitmap cheaper). Forcing the GIN would require either DROPping
+    // posts_published_key (an ACCESS EXCLUSIVE lock hazard on the shared test DB) or
+    // disabling bitmap scans too, which kills the GIN path as well. Dead end — the
+    // planner's choice of ACCESS PATH is not the invariant we actually care about.
     //
-    // Everything runs in ONE rolled-back transaction: SET LOCAL + seeded rows + ANALYZE
-    // are all reverted, and there is NO DDL (no DROP/CREATE INDEX), so it never takes an
-    // ACCESS EXCLUSIVE lock on the shared test DB (only ROW EXCLUSIVE inserts + ANALYZE's
-    // SHARE UPDATE EXCLUSIVE, both compatible with the concurrent pool project's DML).
-    const sfx = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    await client.query("BEGIN");
-    try {
-      // Posts: one author + 40 matching + 400 non-matching published posts, so the
-      // `<%` predicate is selective enough that the GIN bitmap is the cheap plan.
-      const { rows: au } = await client.query<{ id: string }>(
-        `INSERT INTO users (email, password_hash) VALUES ($1,'x') RETURNING id`,
-        [`explain-author-${sfx}@t.test`],
-      );
-      const authorId = au[0]!.id;
-      await client.query(
-        `INSERT INTO profiles (user_id, username, display_name, bio, username_chosen)
-         VALUES ($1, $2, 'Explain Author', 'author bio', true)`,
-        [authorId, `expauth_${sfx}`],
-      );
-      await client.query(
-        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
-         SELECT $1, 'Distributed Systems Architecture Patterns ' || g, 'ex-' || $2 || '-m-' || g,
-                'a deep look at distributed systems architecture patterns for scale ' || g,
-                'published', now()
-         FROM generate_series(1, 40) g`,
-        [authorId, sfx],
-      );
-      await client.query(
-        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
-         SELECT $1, 'Cooking with vegetables number ' || g, 'ex-' || $2 || '-o-' || g,
-                'recipes about soups and breads and pastry techniques ' || g,
-                'published', now()
-         FROM generate_series(1, 400) g`,
-        [authorId, sfx],
-      );
+    // What we actually need to guard: the handler's `<%`/word_similarity expression
+    // (POSTS_SQL / PEOPLE_SQL — the literal strings the Worker runs) must parse
+    // byte-for-byte identically to migration 0009's GIN index expression, or Postgres
+    // silently stops being ABLE to use the index at all (falls back to a seq scan
+    // over every published post, no matter what the planner would otherwise prefer).
+    // That's a source-text property, not a runtime one — so test it directly: no DB
+    // planner, no seeded rows, no locks, no environment sensitivity.
+    const migrationSql = readFileSync(
+      join(import.meta.dirname, "..", "migrations", "0009_search_trgm.sql"),
+      "utf8",
+    );
 
-      // People: 30 matching + 400 non-matching onboarded profiles (each needs a user).
-      await client.query(
-        `WITH nu AS (
-           INSERT INTO users (email, password_hash)
-           SELECT 'ex-pm-' || $1 || '-' || g || '@t.test', 'x' FROM generate_series(1, 30) g
-           RETURNING id
-         )
-         INSERT INTO profiles (user_id, username, display_name, bio, username_chosen)
-         SELECT id, 'expm_' || $1 || '_' || row_number() over (), 'Grace Hopper Fan',
-                'writes about compilers', true
-         FROM nu`,
-        [sfx],
-      );
-      await client.query(
-        `WITH nu AS (
-           INSERT INTO users (email, password_hash)
-           SELECT 'ex-po-' || $1 || '-' || g || '@t.test', 'x' FROM generate_series(1, 400) g
-           RETURNING id
-         )
-         INSERT INTO profiles (user_id, username, display_name, bio, username_chosen)
-         SELECT id, 'expo_' || $1 || '_' || row_number() over (), 'Zebra Quilting Enthusiast',
-                'talks about textiles and yarn', true
-         FROM nu`,
-        [sfx],
-      );
+    /** The `lower(...)` expression to the right of `<%` in a handler SQL string. */
+    const extractHandlerExpr = (sql: string): string => {
+      const marker = "<%";
+      const markerIdx = sql.indexOf(marker);
+      if (markerIdx === -1) throw new Error(`no "<%" found in handler SQL: ${sql}`);
+      const rest = sql.slice(markerIdx + marker.length);
+      const newlineIdx = rest.indexOf("\n");
+      return (newlineIdx === -1 ? rest : rest.slice(0, newlineIdx)).trim();
+    };
 
-      await client.query("ANALYZE posts");
-      await client.query("ANALYZE profiles");
+    /** The `lower(...)` expression inside `USING gin (<expr> gin_trgm_ops)` for one index. */
+    const extractIndexExpr = (createIndexNeedle: string): string => {
+      const lines = migrationSql.split("\n");
+      const startIdx = lines.findIndex((l) => l.includes(createIndexNeedle));
+      if (startIdx === -1) {
+        throw new Error(`"${createIndexNeedle}" not found in migration 0009 — has it been renamed?`);
+      }
+      const ginLine = lines.slice(startIdx).find((l) => l.includes("gin_trgm_ops"));
+      if (ginLine === undefined) {
+        throw new Error(`no "gin_trgm_ops" line found after "${createIndexNeedle}" in migration 0009`);
+      }
+      const openMarker = "gin (";
+      const openIdx = ginLine.indexOf(openMarker);
+      const closeMarker = ") gin_trgm_ops)";
+      const closeIdx = ginLine.indexOf(closeMarker, openIdx);
+      if (openIdx === -1 || closeIdx === -1) {
+        throw new Error(`could not parse an index expression out of: ${ginLine}`);
+      }
+      // +1 so the slice includes the ")" that closes the expression's own lower(...).
+      return ginLine.slice(openIdx + openMarker.length, closeIdx + 1);
+    };
 
-      // Disable seq scan + plain/index-only index scans so the ONLY remaining cheap path
-      // for the `<%` predicate is a bitmap scan over the trigram GIN.
-      await client.query(
-        `SET LOCAL pg_trgm.word_similarity_threshold = 0.3;
-         SET LOCAL enable_seqscan = off;
-         SET LOCAL enable_indexscan = off;
-         SET LOCAL enable_indexonlyscan = off`,
-      );
+    // The two sides differ ONLY by (a) table-alias prefixes (`p.` / `pr.` in the
+    // handler, none in the index expression), and (b) cosmetic spacing (e.g. the
+    // handler's `coalesce(x::text,'')` vs the migration's `coalesce(x::text, '')`).
+    // The literal concatenation space `' '` MUST be preserved as distinct from an
+    // empty-string default, so protect it before stripping whitespace.
+    const norm = (s: string) =>
+      s
+        .replace(/'\s'/g, "§S§") // protect the literal ' ' concat-space
+        .replace(/\b(?:p|pr)\./g, "") // strip table-alias prefixes
+        .replace(/\s+/g, "") // drop all remaining whitespace (kills the comma-space diff)
+        .toLowerCase();
 
-      const planFor = async (sql: string, q: string): Promise<string> => {
-        const { rows } = await client.query<Record<string, string>>(`EXPLAIN ${sql}`, [q, 21, 0]);
-        return rows.map((r) => r["QUERY PLAN"]).join("\n");
-      };
+    const handlerPostsExpr = extractHandlerExpr(POSTS_SQL);
+    const migrationPostsExpr = extractIndexExpr("posts_search_trgm_idx");
+    expect(norm(handlerPostsExpr)).toBe(norm(migrationPostsExpr));
 
-      const postsPlan = await planFor(POSTS_SQL, "distributed systems architecture");
-      const peoplePlan = await planFor(PEOPLE_SQL, "grace hopper");
-
-      // The load-bearing assertion is the `%>` INDEX CONDITION, not the bare index name.
-      // A diverged expression can still touch the partial GIN for its predicate
-      // (`Recheck Cond: username_chosen`) with the `<%` demoted to a Filter — so the name
-      // alone would false-pass. `%>` (the trigram commutator) appears in the plan ONLY
-      // when the GIN actually serves the search expression, i.e. only when the handler
-      // expression matches the index expression. Manually verified during authoring:
-      // perturbing either expression (`||` -> `concat_ws`) drops `%>` from the plan and
-      // makes this test fail.
-      expect(postsPlan).toContain("posts_search_trgm_idx");
-      expect(postsPlan).toContain("%>");
-      expect(peoplePlan).toContain("profiles_search_trgm_idx");
-      expect(peoplePlan).toContain("%>");
-    } finally {
-      await client.query("ROLLBACK");
-    }
+    const handlerPeopleExpr = extractHandlerExpr(PEOPLE_SQL);
+    const migrationPeopleExpr = extractIndexExpr("profiles_search_trgm_idx");
+    expect(norm(handlerPeopleExpr)).toBe(norm(migrationPeopleExpr));
   });
 });

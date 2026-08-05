@@ -9,8 +9,9 @@
  * ⚠️ The `<%` filter / `word_similarity(...)` expressions here MUST stay a
  * byte-for-byte parse-tree match for the partial GIN indexes in migration 0009,
  * or Postgres silently falls back to a seq scan over every published post. That
- * coupling is pinned by a planner-forced EXPLAIN test in search-schema.db.test.ts
- * (it fails if this expression and the index expression ever diverge).
+ * coupling is pinned by a deterministic source-text comparison in
+ * search-schema.db.test.ts (handler expression vs migration 0009's index
+ * expression, alias/whitespace-normalized) — it fails if the two ever diverge.
  */
 
 export const POSTS_SQL = `
