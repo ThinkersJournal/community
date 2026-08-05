@@ -13,6 +13,9 @@ import Wordmark from './Wordmark.astro';
     <nav class="links" id="nav-links" aria-label="Primary">
       <a href="/feed">Feed</a>
       <a href="/authors">Authors</a>
+      <form method="GET" action="/search" class="nav-search" role="search">
+        <input type="search" name="q" placeholder="Search" aria-label="Search" minlength="2" required />
+      </form>
       <span class="notify" data-notify-bell hidden>
         <button type="button" class="bell" data-notify-toggle aria-label="Notifications">🔔<span class="badge" data-notify-badge hidden></span></button>
         <div class="notify-panel" data-notify-panel hidden></div>
@@ -53,6 +56,7 @@ import Wordmark from './Wordmark.astro';
   }
   .support{font-size:13.5px;font-weight:600;color:var(--on-green) !important;background:var(--green);
     padding:9px 17px;border-radius:999px;box-shadow:0 0 20px var(--green-glow)}
+  .nav-search input{width:150px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--ink2);color:var(--head);font-size:14px}
   .nav-toggle{display:none}
   .burger{display:none}
   @media(max-width:840px){
@@ -78,6 +82,8 @@ import Wordmark from './Wordmark.astro';
     .auth{flex-direction:column;align-items:stretch;gap:0}
     .auth .signout{padding:13px clamp(20px,6vw,48px);text-align:left;width:100%;font-size:16px}
     .support{margin:12px clamp(20px,6vw,48px) 4px;text-align:center}
+    .nav-search{width:100%}
+    .nav-search input{width:100%}
   }
 </style>
 <script>

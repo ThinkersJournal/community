@@ -43,4 +43,12 @@ describe("Nav", () => {
     expect(nav).toContain("data-notify-bell"); // placeholder present
     expect(nav).toContain("initNotifyBell"); // island mounted
   });
+  it("has a static GET search form to /search (no per-viewer state)", () => {
+    const s = src();
+    expect(s).toMatch(/<form[^>]*method="GET"[^>]*action="\/search"/);
+    expect(s).toContain('name="q"');
+    // still no data fetching — the anti-per-viewer assertion must keep holding
+    expect(s).not.toContain("apiFetch");
+    expect(s).not.toMatch(/Astro\.request/);
+  });
 });
