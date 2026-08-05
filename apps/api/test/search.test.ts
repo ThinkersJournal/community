@@ -1,5 +1,8 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterAll, describe, expect, it } from "vitest";
+
+import { SEARCH_MAX_OFFSET, SEARCH_PAGE_SIZE, SEARCH_Q_MAX, SEARCH_Q_MIN } from "@thinkersjournal/shared";
+
 import worker from "../src";
 import { withClient } from "../src/db/client";
 
@@ -39,6 +42,34 @@ async function seedAuthorWithPost(title: string): Promise<{ username: string }> 
   return { username };
 }
 
+// Seeds ONE author with `n` published posts whose titles all share `term` (so the
+// trigram matches every one of them). A single author keeps this from polluting
+// the people-search tests with `n` extra matching profiles. Returns the post
+// titles for cross-page coverage assertions.
+async function seedAuthorWithNPosts(term: string, n: number): Promise<string[]> {
+  const ctx = createExecutionContext();
+  const titles = Array.from({ length: n }, (_, i) => `${term} number ${i}`);
+  await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `INSERT INTO users (email, password_hash) VALUES ($1,'x') RETURNING id`,
+      [`s-${crypto.randomUUID()}@t.test`]);
+    const id = rows[0]!.id;
+    created.push(id);
+    await c.query(
+      `INSERT INTO profiles (user_id, username, display_name, bio, username_chosen)
+       VALUES ($1,$2,'Pager Author','pager bio', true)`,
+      [id, `pgr_${crypto.randomUUID().slice(0, 8)}`]);
+    for (const title of titles) {
+      await c.query(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+         VALUES ($1,$2,$3,'body', 'published', now())`,
+        [id, title, `sl-${crypto.randomUUID()}`]);
+    }
+  });
+  await waitOnExecutionContext(ctx);
+  return titles;
+}
+
 const U = "https://api.test";
 
 describe("GET /public/search", () => {
@@ -69,9 +100,55 @@ describe("GET /public/search", () => {
   });
 
   it("defaults type to posts and returns nextOffset null on a small result set", async () => {
+    // No `type` param — the default MUST be posts. Assert on a POST-shaped field:
+    // people results carry no `title`, so this fails if the default became people.
     const r = await fetchWorker(`${U}/public/search?q=${encodeURIComponent("Quantum")}`);
     expect(r.status).toBe(200);
-    const body = (await r.json()) as { nextOffset: number | null };
+    const body = (await r.json()) as { results: { title?: string }[]; nextOffset: number | null };
+    expect(body.results.some((p) => p.title === "Quantum Chromodynamics Primer")).toBe(true);
     expect(body.nextOffset).toBeNull();
+  });
+
+  it("accepts the valid-side length/offset boundaries (q=MIN, q=MAX, offset=MAX)", async () => {
+    // Guards against an off-by-one flip (`>` -> `>=`) rejecting legitimate input:
+    // the shortest/longest allowed q, and the deepest offset the pager emits.
+    expect((await fetchWorker(`${U}/public/search?q=${"a".repeat(SEARCH_Q_MIN)}`)).status).toBe(200);
+    expect((await fetchWorker(`${U}/public/search?q=${"a".repeat(SEARCH_Q_MAX)}`)).status).toBe(200);
+    expect(
+      (await fetchWorker(`${U}/public/search?q=abc&offset=${SEARCH_MAX_OFFSET}`)).status,
+    ).toBe(200);
+  });
+
+  it("paginates a >PAGE_SIZE result set: full first page + capped nextOffset, then the tail", async () => {
+    const term = "zqpagerterm"; // distinctive: matches all seeded titles, nothing else in the DB
+    const n = SEARCH_PAGE_SIZE + 1; // 21 — exactly one over a full page
+    await seedAuthorWithNPosts(term, n);
+
+    const first = await fetchWorker(`${U}/public/search?q=${term}&type=posts`);
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      results: { title: string }[];
+      nextOffset: number | null;
+    };
+    // Full page, and the +1 sentinel drives a nextOffset one page forward.
+    expect(firstBody.results.length).toBe(SEARCH_PAGE_SIZE);
+    expect(firstBody.nextOffset).toBe(SEARCH_PAGE_SIZE);
+
+    const second = await fetchWorker(`${U}/public/search?q=${term}&type=posts&offset=${SEARCH_PAGE_SIZE}`);
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as {
+      results: { title: string }[];
+      nextOffset: number | null;
+    };
+    // The 21st row lands alone on the tail page; no sentinel beyond it.
+    expect(secondBody.results.length).toBe(1);
+    expect(secondBody.nextOffset).toBeNull();
+
+    // The two pages together cover all 21 distinct rows (proves LIMIT/OFFSET +
+    // the slice of the +1 sentinel actually walked the whole set, no overlap).
+    const page1 = new Set(firstBody.results.map((r) => r.title));
+    const tailTitle = secondBody.results[0]!.title;
+    expect(page1.has(tailTitle)).toBe(false);
+    expect(new Set([...page1, tailTitle]).size).toBe(n);
   });
 });

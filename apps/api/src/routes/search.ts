@@ -13,6 +13,7 @@
  */
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
+import { PEOPLE_SQL, POSTS_SQL } from "./search-sql";
 
 import {
   SEARCH_MAX_OFFSET, SEARCH_PAGE_SIZE, SEARCH_Q_MAX, SEARCH_Q_MIN,
@@ -26,28 +27,17 @@ function json(body: unknown): Response {
   });
 }
 
-const POSTS_SQL = `
-  SELECT p.id, p.title, p.slug,
-         left(p.markdown_source, 400) AS "excerptSource",
-         p.published_at AS "publishedAt",
-         pr.username AS "authorUsername",
-         pr.display_name AS "authorDisplayName"
-    FROM posts p
-    JOIN profiles pr ON pr.user_id = p.author_id
-   WHERE p.status = 'published'
-     AND lower($1) <% lower(p.title || ' ' || coalesce(p.markdown_source, ''))
-   ORDER BY word_similarity(lower($1), lower(p.title || ' ' || coalesce(p.markdown_source, ''))) DESC,
-            p.id DESC
-   LIMIT $2 OFFSET $3`;
-
-const PEOPLE_SQL = `
-  SELECT pr.username, pr.display_name AS "displayName", pr.bio
-    FROM profiles pr
-   WHERE pr.username_chosen = true
-     AND lower($1) <% lower(coalesce(pr.username::text,'') || ' ' || coalesce(pr.display_name,'') || ' ' || coalesce(pr.bio,''))
-   ORDER BY word_similarity(lower($1), lower(coalesce(pr.username::text,'') || ' ' || coalesce(pr.display_name,'') || ' ' || coalesce(pr.bio,''))) DESC,
-            pr.user_id DESC
-   LIMIT $2 OFFSET $3`;
+/**
+ * Pagination decision, extracted pure so every branch is unit-testable without a
+ * DB: a `+1` sentinel row (rowCount > PAGE_SIZE) means there is another page, but
+ * we never page past SEARCH_MAX_OFFSET (the deepest offset the pager itself emits).
+ */
+export function nextOffsetFor(rowCount: number, offset: number): number | null {
+  const hasMore = rowCount > SEARCH_PAGE_SIZE;
+  return hasMore && offset + SEARCH_PAGE_SIZE <= SEARCH_MAX_OFFSET
+    ? offset + SEARCH_PAGE_SIZE
+    : null;
+}
 
 export async function handlePublicSearch(
   request: Request, env: Env, ctx: ExecutionContext,
@@ -78,10 +68,8 @@ export async function handlePublicSearch(
           ? await c.query<SearchPostResult>(POSTS_SQL, [q, limit, offset])
           : await c.query<SearchPersonResult>(PEOPLE_SQL, [q, limit, offset]);
       await c.query("COMMIT");
-      const hasMore = rows.length > SEARCH_PAGE_SIZE;
       const results = rows.slice(0, SEARCH_PAGE_SIZE);
-      const nextOffset =
-        hasMore && offset + SEARCH_PAGE_SIZE <= SEARCH_MAX_OFFSET ? offset + SEARCH_PAGE_SIZE : null;
+      const nextOffset = nextOffsetFor(rows.length, offset);
       return { results, nextOffset };
     } catch (err) {
       await c.query("ROLLBACK").catch(() => {});
