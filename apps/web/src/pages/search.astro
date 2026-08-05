@@ -1,0 +1,110 @@
+---
+/**
+ * `GET /search?q=&type=&offset=` — anonymous trigram search (M2.4a).
+ * ⚠️ ANONYMOUS + short-TTL EDGE-CACHEABLE (markFeedCacheable: untagged, 60s/600s;
+ * the querystring is part of the cache key). No client JS — forms + links only.
+ * A missing/too-short q renders the empty search box and makes NO api call.
+ */
+import PageLayout from "../components/PageLayout.astro";
+import { apiFetch } from "../lib/api";
+import { markFeedCacheable } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+import { markdownExcerpt } from "@thinkersjournal/markdown";
+
+import { SEARCH_Q_MIN } from "@thinkersjournal/shared";
+import type { SearchPage, SearchPersonResult, SearchPostResult } from "@thinkersjournal/shared";
+
+const q = (Astro.url.searchParams.get("q") ?? "").trim();
+const type = Astro.url.searchParams.get("type") === "people" ? "people" : "posts";
+const offsetParam = Number(Astro.url.searchParams.get("offset"));
+const offset = Number.isInteger(offsetParam) && offsetParam > 0 ? offsetParam : 0;
+
+const active = q.length >= SEARCH_Q_MIN;
+
+let posts: SearchPage<SearchPostResult> = { results: [], nextOffset: null };
+let people: SearchPage<SearchPersonResult> = { results: [], nextOffset: null };
+
+if (active) {
+  const qs = new URLSearchParams({ q, type, offset: String(offset) });
+  const res = await apiFetch<SearchPage<SearchPostResult | SearchPersonResult>>(`/public/search?${qs.toString()}`);
+  const data = res.status === 200 && res.data !== null ? res.data : { results: [], nextOffset: null };
+  if (type === "people") people = data as SearchPage<SearchPersonResult>;
+  else posts = data as SearchPage<SearchPostResult>;
+}
+
+// Build a tab/pager href preserving q, swapping type / offset.
+const href = (t: "posts" | "people", o: number) =>
+  `/search?${new URLSearchParams({ q, type: t, offset: String(o) }).toString()}`;
+
+markFeedCacheable(Astro);
+setPublicPageCsp(Astro);
+---
+<PageLayout title="Search — Thinker's Journal" eyebrow="Discover" heading="Search" intro="Find posts and people across Thinker's Journal.">
+  <form method="GET" action="/search" class="search-form" role="search">
+    <input type="hidden" name="type" value={type} />
+    <input type="search" name="q" value={q} placeholder="Search posts and people…" aria-label="Search" minlength={SEARCH_Q_MIN} required />
+    <button type="submit" class="btn btn-primary">Search</button>
+  </form>
+
+  {active && (
+    <nav class="tabs" aria-label="Search scope">
+      <a class={type === "posts" ? "tab on" : "tab"} href={`/search?q=${encodeURIComponent(q)}&type=posts&offset=0`}>Posts</a>
+      <a class={type === "people" ? "tab on" : "tab"} href={`/search?q=${encodeURIComponent(q)}&type=people&offset=0`}>People</a>
+    </nav>
+  )}
+
+  {!active ? (
+    <p class="hint">Type at least {SEARCH_Q_MIN} characters to search.</p>
+  ) : type === "posts" ? (
+    posts.results.length === 0 ? (
+      <p>No posts match «{q}».</p>
+    ) : (
+      <ul class="results">
+        {posts.results.map((p) => (
+          <li class="result">
+            <h2><a href={`/@${encodeURIComponent(p.authorUsername)}/${encodeURIComponent(p.slug)}`}>{p.title}</a></h2>
+            <p class="meta">by <a class="link" href={`/@${encodeURIComponent(p.authorUsername)}`}>@{p.authorUsername}</a> · <time datetime={p.publishedAt}>{p.publishedAt.slice(0, 10)}</time></p>
+            <p>{markdownExcerpt(p.excerptSource)}</p>
+          </li>
+        ))}
+      </ul>
+    )
+  ) : people.results.length === 0 ? (
+    <p>No people match «{q}».</p>
+  ) : (
+    <ul class="results">
+      {people.results.map((u) => (
+        <li class="result person">
+          <a class="name" href={`/@${encodeURIComponent(u.username)}`}>{u.displayName ?? `@${u.username}`}</a>
+          <span class="handle">@{u.username}</span>
+          {u.bio && <p class="bio">{u.bio}</p>}
+        </li>
+      ))}
+    </ul>
+  )}
+
+  {active && (() => {
+    const cur = type === "posts" ? posts : people;
+    return (
+      <nav class="pager" aria-label="Pagination">
+        {offset > 0 && <a class="link" rel="prev" href={href(type, Math.max(0, offset - 20))}>← Newer</a>}
+        {cur.nextOffset !== null && <a class="link" rel="next" href={href(type, cur.nextOffset)}>Older →</a>}
+      </nav>
+    );
+  })()}
+</PageLayout>
+<style>
+  .search-form{display:flex;gap:10px;margin:0 0 22px}
+  .search-form input[type="search"]{flex:1;padding:11px 14px;border:1px solid var(--line);border-radius:10px;background:var(--ink2);color:var(--head)}
+  .tabs{display:flex;gap:8px;margin:0 0 20px}
+  .tabs .tab{padding:7px 16px;border:1px solid var(--line);border-radius:999px;color:var(--dim);text-decoration:none}
+  .tabs .tab.on{color:var(--head);border-color:var(--green)}
+  .results{list-style:none;display:flex;flex-direction:column;gap:22px;margin:0 0 24px}
+  .result .meta{color:var(--dim);font-size:14px;margin:4px 0}
+  .result.person{border:1px solid var(--line);border-radius:10px;padding:14px 18px;background:var(--ink2)}
+  .result .name{font-family:var(--serif);color:var(--head)}
+  .result .handle{color:var(--dim);font-size:14px;margin-left:8px}
+  .result .bio{color:var(--dim);font-size:14px;margin-top:6px}
+  .pager{display:flex;justify-content:space-between;gap:12px}
+  .hint{color:var(--dim)}
+</style>
