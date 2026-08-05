@@ -8,5 +8,6 @@ export * from './notifications-prefs';
 export * from './notifications-read';
 export * from './posts';
 export * from './schemas';
+export * from './search';
 export * from './social';
 export * from './timing-safe';
