@@ -100,12 +100,16 @@ describe("GET /public/search", () => {
   });
 
   it("defaults type to posts and returns nextOffset null on a small result set", async () => {
-    // No `type` param — the default MUST be posts. Assert on a POST-shaped field:
-    // people results carry no `title`, so this fails if the default became people.
-    const r = await fetchWorker(`${U}/public/search?q=${encodeURIComponent("Quantum")}`);
+    // Seed our OWN distinctively-titled post so this test is self-contained (no
+    // dependence on another test's seed or on run order). No `type` param — the
+    // default MUST be posts. Assert on a POST-shaped field: people results carry no
+    // `title`, so this fails if the default became people.
+    const title = "Xylophone Sentinel Defaulting Post";
+    await seedAuthorWithPost(title);
+    const r = await fetchWorker(`${U}/public/search?q=${encodeURIComponent("Xylophone Sentinel")}`);
     expect(r.status).toBe(200);
     const body = (await r.json()) as { results: { title?: string }[]; nextOffset: number | null };
-    expect(body.results.some((p) => p.title === "Quantum Chromodynamics Primer")).toBe(true);
+    expect(body.results.some((p) => p.title === title)).toBe(true);
     expect(body.nextOffset).toBeNull();
   });
 

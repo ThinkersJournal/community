@@ -11,7 +11,7 @@
  * effect (SET LOCAL is the only threshold mechanism that survives Hyperdrive
  * transaction-mode pooling — see src/db/client.ts).
  */
-import { withClient } from "../db/client";
+import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
 import { PEOPLE_SQL, POSTS_SQL } from "./search-sql";
 
@@ -60,8 +60,12 @@ export async function handlePublicSearch(
 
   const limit = SEARCH_PAGE_SIZE + 1;
   const page = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    // One simple-query BEGIN sets the threshold for this transaction only.
-    await c.query("BEGIN; SET LOCAL pg_trgm.word_similarity_threshold = 0.3");
+    // BEGIN_BOUNDED_TX (lock_timeout + idle_in_transaction_session_timeout) is the
+    // codebase rule for EVERY tx — it bounds a stalled request's resource holds under
+    // Hyperdrive transaction-mode pooling (see src/db/client.ts). The trigram threshold
+    // rides the same one-round-trip simple-query and reverts at COMMIT/ROLLBACK.
+    await c.query(`${BEGIN_BOUNDED_TX};
+      SET LOCAL pg_trgm.word_similarity_threshold = 0.3`);
     try {
       const { rows } =
         type === "posts"
