@@ -37,10 +37,20 @@ if (cursor !== null) query.set("cursor", cursor);
 const response = await apiFetch<DiscoverPage>(
   query.toString() === "" ? "/public/discover" : `/public/discover?${query.toString()}`,
 );
-const page: DiscoverPage =
-  response.status === 200 && response.data !== null
-    ? response.data
-    : { posts: [], nextCursor: null };
+// ⚠️ FAIL CLOSED on a non-200/null-data upstream result. Falling through to the
+// empty-feed render + markPublicCacheable (1h fresh / 24h swr) would pin an empty
+// "be the first to publish" homepage for up to ~25h on a single transient upstream
+// blip (evicted early only by an unrelated publish). This early return happens
+// BEFORE the cache helper, so the adapter stamps no-store and the next request
+// retries. A GENUINE empty feed is a 200 with {posts:[]} — that DOES cache below and
+// is evicted on the first publish. Same fail-closed idiom as [handle]/index.astro.
+if (response.status !== 200 || response.data === null) {
+  return new Response("Discover is temporarily unavailable. Please try again shortly.", {
+    status: 503,
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });
+}
+const page = response.data;
 
 // ⚠️ THIS `"listing"` LITERAL MUST MATCH apps/api/src/routes/posts.ts's purge call
 // sites EXACTLY — a typo is invisible (miniflare doesn't simulate Workers Cache)

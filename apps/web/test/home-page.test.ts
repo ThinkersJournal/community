@@ -31,4 +31,13 @@ describe("home page (the Discover feed)", () => {
     expect(s).not.toContain("set:html");
     expect(s).toMatch(/\/\?cursor=/);
   });
+  it("fails closed (uncached 503) on a non-200 upstream response instead of caching an empty homepage", () => {
+    const s = src();
+    // a non-200/null-data guard returns a 503 BEFORE the cache helper...
+    expect(s).toMatch(/response\.status !== 200/);
+    expect(s).toContain("status: 503");
+    // ...and the old swallow-to-empty ternary fallback is gone (a transient error
+    // must not be rendered as an empty feed and cached).
+    expect(s).not.toMatch(/:\s*\{\s*posts:\s*\[\s*\]/);
+  });
 });
