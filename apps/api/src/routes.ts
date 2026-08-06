@@ -36,6 +36,7 @@ import { handleGetNotificationPrefs, handlePutNotificationPrefs } from "./routes
 import { handleCreatePost, handleGetPost, handleUpdatePost } from "./routes/posts";
 import { handlerPostsLive } from "./routes/posts-live";
 import {
+  handlePublicDiscover,
   handlePublicPost,
   handlePublicProfile,
   handlePublicRecent,
@@ -193,6 +194,7 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/public/posts", handler: handlePublicPost },
   { method: "GET", pattern: "/public/profile", handler: handlePublicProfile },
   { method: "GET", pattern: "/public/recent", handler: handlePublicRecent },
+  { method: "GET", pattern: "/public/discover", handler: handlePublicDiscover },
 
   // ANONYMOUS social reads (M2.1) — see src/routes/social-public.ts's header:
   // viewer-independent like the routes above, but NOT edge-cached (they change
