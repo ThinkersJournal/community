@@ -56,18 +56,32 @@ async function insertPost(
 
 const U = "https://api.test";
 
+// The smallest uuid strictly greater than `id` (its 128-bit successor). Querying
+// `/public/discover?cursor=<successor(pubId)>` restricts the keyset to `id <= pubId`,
+// so a just-inserted published row is result #1 regardless of how many OTHER
+// (larger-id) posts parallel pool-project test files commit concurrently — this
+// test's newest-first assertion is then deterministic, not top-20-site-wide.
+function uuidSuccessor(id: string): string {
+  const next = (BigInt("0x" + id.replace(/-/g, "")) + 1n).toString(16).padStart(32, "0");
+  return `${next.slice(0, 8)}-${next.slice(8, 12)}-${next.slice(12, 16)}-${next.slice(16, 20)}-${next.slice(20)}`;
+}
+
 describe("GET /public/discover", () => {
   it("returns published posts newest-first and excludes drafts", async () => {
     const author = await seedAuthor();
-    const pubId = await insertPost(author, "Discover Published One", "published");
+    // Draft first (older id) so it sits INSIDE the cursor window below and its
+    // absence proves the status='published' filter, not the cursor bound.
     const draftId = await insertPost(author, "Discover Draft One", "draft");
-    const r = await fetchWorker(`${U}/public/discover`);
+    const pubId = await insertPost(author, "Discover Published One", "published");
+    const r = await fetchWorker(
+      `${U}/public/discover?cursor=${encodeURIComponent(uuidSuccessor(pubId))}`,
+    );
     expect(r.status).toBe(200);
     const body = (await r.json()) as { posts: { id: string }[]; nextCursor: string | null };
     const ids = body.posts.map((p) => p.id);
-    expect(ids).toContain(pubId);        // the just-published post is on page 1 (newest)
-    expect(ids).not.toContain(draftId);  // drafts never surface
-    // newest-first: the page the api returned is sorted by id DESC (v7 = time order).
+    expect(ids[0]).toBe(pubId);          // the just-published post is result #1 (newest <= pubId)
+    expect(ids).not.toContain(draftId);  // drafts never surface (excluded by status, not cursor)
+    // whatever came back is sorted newest-first (id DESC, v7 = time order)
     const desc = [...ids].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
     expect(ids).toEqual(desc);
   });
