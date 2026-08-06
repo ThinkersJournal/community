@@ -54,6 +54,12 @@ describe("feed.astro", () => {
     expect(code).toContain("/authors");
   });
 
+  it("also offers the public Discover feed from its empty state", () => {
+    // One assertion tying href + text to the SAME anchor (not two independent
+    // substrings that could match unrelated markup).
+    expect(code).toMatch(/<a[^>]*\bhref="\/"[^>]*>\s*browse Discover/);
+  });
+
   it("pages older posts via a ?cursor= link", () => {
     expect(code).toMatch(/\/feed\?cursor=/);
   });

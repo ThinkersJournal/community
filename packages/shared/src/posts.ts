@@ -87,3 +87,10 @@ export interface AuthoredPost {
 export interface RecentPost extends PublicPostSummary {
   username: string;
 }
+
+/** What `GET /public/discover` returns — the site-wide Discover feed, one keyset page. */
+export interface DiscoverPage {
+  posts: RecentPost[];
+  /** The last id on this page, or null when there are no more. */
+  nextCursor: string | null;
+}

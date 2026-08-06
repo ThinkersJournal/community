@@ -51,6 +51,7 @@ import { isInvalidTextRepresentation } from "../db/errors";
 import { errorResponse } from "../http/errors";
 
 import type {
+  DiscoverPage,
   PublicPost,
   PublicPostSummary,
   PublicProfile,
@@ -67,6 +68,18 @@ function json(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
     headers: { "content-type": "application/json" },
+  });
+}
+
+// Like `json()` but `cache-control: no-store`. Used ONLY by /public/discover,
+// which backs a purge-tagged LONG-TTL edge page (the `/` Discover feed); the M2.4b
+// spec pins its FRESH api response as no-store (defense-in-depth — the api is
+// binding-only, so there is no intermediary cache today). Kept separate so the
+// other reads in this file (recent/profile/post) keep their existing headers.
+function jsonNoStore(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 }
 
@@ -221,4 +234,46 @@ export async function handlePublicRecent(
     return rows as RecentPost[];
   });
   return json({ posts });
+}
+
+export async function handlePublicDiscover(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  // First page uses the all-f sentinel so ONE query serves page 1 and page N.
+  const cursor = new URL(request.url).searchParams.get("cursor") ?? MAX_CURSOR;
+  try {
+    // ⚠️ HYPERDRIVE_FRESH, never CACHED: this route backs a PURGE-TAGGED edge entry
+    // (the `/` Discover page subscribes to `listing`), so the first render after a
+    // publish/edit is a read-after-write. A cached read there could re-cache a
+    // pre-edit row for up to 25h. See this file's header, bullet 4.
+    const page = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query(
+        `SELECT p.id, p.title, p.slug, pr.username,
+                left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
+                p.published_at AS "publishedAt", p.updated_at AS "updatedAt"
+           FROM posts p
+           JOIN profiles pr ON pr.user_id = p.author_id
+          WHERE p.status = 'published' AND p.id < $1
+          ORDER BY p.id DESC
+          LIMIT ${PAGE_SIZE + 1}`,
+        [cursor],
+      );
+      const list = rows as RecentPost[];
+      const hasMore = list.length > PAGE_SIZE;
+      const posts = list.slice(0, PAGE_SIZE);
+      return {
+        posts,
+        nextCursor: hasMore ? posts[posts.length - 1]!.id : null,
+      } satisfies DiscoverPage;
+    });
+    return jsonNoStore(page);
+  } catch (err) {
+    // `id < 'not-a-uuid'` throws 22P02 — the client's error, not a 500.
+    if (isInvalidTextRepresentation(err)) {
+      return errorResponse("INVALID_INPUT", 400, { fields: ["cursor"] });
+    }
+    throw err;
+  }
 }

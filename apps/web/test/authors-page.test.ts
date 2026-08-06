@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const PAGE = join(import.meta.dirname, "../src/pages/authors.astro");
-const HOME = join(import.meta.dirname, "../src/pages/index.astro");
 const SERVER_ENTRY = join(import.meta.dirname, "../dist/server/entry.mjs");
 
 function stripComments(source: string): string {
@@ -44,14 +43,6 @@ describe("authors.astro", () => {
     expect(code).toContain("markFeedCacheable(");
     expect(code).toContain("setPublicPageCsp(");
     expect(code).toMatch(/initSocialIsland/);
-  });
-});
-
-describe("home page nav (index.astro)", () => {
-  const home = stripComments(readFileSync(HOME, "utf8"));
-  it("links to /authors and /feed", () => {
-    expect(home).toContain('href="/authors"');
-    expect(home).toContain('href="/feed"');
   });
 });
 

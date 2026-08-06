@@ -208,6 +208,13 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /public/recent",
     build: () => new Request("https://api.test/public/recent?limit=abc"),
   },
+  // GET /public/discover (M2.4b) — a malformed cursor is its reachable 400, same
+  // shape as /public/profile's malformed-cursor case. See src/routes/public.ts.
+  {
+    name: "400 public discover with a malformed cursor",
+    route: "GET /public/discover",
+    build: () => new Request("https://api.test/public/discover?cursor=not-a-uuid"),
+  },
   // GET /public/social's owner lookup runs first, same shape as GET
   // /public/profile above — an unknown username 404s (M2.1).
   {

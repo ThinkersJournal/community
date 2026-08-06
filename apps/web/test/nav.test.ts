@@ -14,6 +14,13 @@ describe("Nav", () => {
     expect(s).toContain('href="/feed"');
     expect(s).toContain('href="/authors"');
   });
+  it("has a static Discover browse link to / (the community feed home)", () => {
+    const s = src();
+    expect(s).toMatch(/<a\s+href="\/"\s*>Discover<\/a>/);
+    // still no data fetching — the nav stays viewer-independent
+    expect(s).not.toContain("apiFetch");
+    expect(s).not.toMatch(/Astro\.request/);
+  });
   it("has the client-hydrated auth slot with an anonymous-default SSR view", () => {
     const s = src();
     expect(s).toMatch(/data-auth-slot/);
