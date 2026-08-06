@@ -65,13 +65,18 @@ const RECENT_MAX = 1000;
 const EXCERPT_SOURCE_CHARS = 400;
 
 function json(body: unknown): Response {
-  // `no-store`: these anonymous public reads are consumed by `web` pages over the
-  // Service Binding and are never HTTP-cached at THIS api hop — the web layer owns
-  // edge caching (markPublicCacheable / markFeedCacheable on the page response). It
-  // is defensive here (a binding call has no intermediary cache), but explicit per
-  // the codebase convention (feed/search/posts/notifications all set it) and the
-  // M2.4b spec for /public/discover. `HYPERDRIVE_CACHED` (recent) is a separate,
-  // binding-level query cache and is unaffected by this HTTP header.
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+// Like `json()` but `cache-control: no-store`. Used ONLY by /public/discover,
+// which backs a purge-tagged LONG-TTL edge page (the `/` Discover feed); the M2.4b
+// spec pins its FRESH api response as no-store (defense-in-depth — the api is
+// binding-only, so there is no intermediary cache today). Kept separate so the
+// other reads in this file (recent/profile/post) keep their existing headers.
+function jsonNoStore(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
     headers: { "content-type": "application/json", "cache-control": "no-store" },
@@ -263,7 +268,7 @@ export async function handlePublicDiscover(
         nextCursor: hasMore ? posts[posts.length - 1]!.id : null,
       } satisfies DiscoverPage;
     });
-    return json(page);
+    return jsonNoStore(page);
   } catch (err) {
     // `id < 'not-a-uuid'` throws 22P02 — the client's error, not a 500.
     if (isInvalidTextRepresentation(err)) {

@@ -77,6 +77,7 @@ describe("GET /public/discover", () => {
       `${U}/public/discover?cursor=${encodeURIComponent(uuidSuccessor(pubId))}`,
     );
     expect(r.status).toBe(200);
+    expect(r.headers.get("cache-control")).toBe("no-store"); // FRESH api hop, never cached here
     const body = (await r.json()) as { posts: { id: string }[]; nextCursor: string | null };
     const ids = body.posts.map((p) => p.id);
     expect(ids[0]).toBe(pubId);          // the just-published post is result #1 (newest <= pubId)

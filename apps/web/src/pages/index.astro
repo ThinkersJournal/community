@@ -95,8 +95,15 @@ const displayDate = (value: string): string => {
       ))}
     </ul>
   )}
-  {page.nextCursor !== null && (
-    <a class="link" rel="next" href={`/?cursor=${encodeURIComponent(page.nextCursor)}`}>Older posts →</a>
+  {(cursor !== null || page.nextCursor !== null) && (
+    <nav class="pager" aria-label="Pagination">
+      {/* Keyset is forward-only, so "back" jumps straight to the newest page (`/`),
+          giving cursor pages an explicit path home. */}
+      {cursor !== null && <a class="link" rel="prev" href="/">← Newest</a>}
+      {page.nextCursor !== null && (
+        <a class="link" rel="next" href={`/?cursor=${encodeURIComponent(page.nextCursor)}`}>Older posts →</a>
+      )}
+    </nav>
   )}
 </PageLayout>
 <style>
@@ -104,4 +111,5 @@ const displayDate = (value: string): string => {
   .card{border:1px solid var(--line);border-radius:12px;padding:22px;background:var(--ink2)}
   .card h2{font-size:22px;margin-bottom:6px}
   .card .meta{color:var(--dim);font-size:14px;margin-bottom:10px}
+  .pager{display:flex;justify-content:space-between;gap:12px}
 </style>
