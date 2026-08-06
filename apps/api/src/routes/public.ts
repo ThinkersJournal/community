@@ -65,9 +65,16 @@ const RECENT_MAX = 1000;
 const EXCERPT_SOURCE_CHARS = 400;
 
 function json(body: unknown): Response {
+  // `no-store`: these anonymous public reads are consumed by `web` pages over the
+  // Service Binding and are never HTTP-cached at THIS api hop — the web layer owns
+  // edge caching (markPublicCacheable / markFeedCacheable on the page response). It
+  // is defensive here (a binding call has no intermediary cache), but explicit per
+  // the codebase convention (feed/search/posts/notifications all set it) and the
+  // M2.4b spec for /public/discover. `HYPERDRIVE_CACHED` (recent) is a separate,
+  // binding-level query cache and is unaffected by this HTTP header.
   return new Response(JSON.stringify(body), {
     status: 200,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 }
 

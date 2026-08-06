@@ -14,8 +14,9 @@
  *
  * ⚠️ KEYSET, NOT OFFSET. `?cursor=<last-seen-id>` with `ORDER BY id DESC` (v7 ids
  * are time-ordered). The cursor is forwarded OPAQUELY via URLSearchParams; a
- * malformed one 400s at the api and this page treats any non-200 as an empty feed.
- * Cursor pages canonical to `/` and are `noindex` (pagination, not distinct pages).
+ * malformed one 400s at the api. This page FAILS CLOSED on any non-200/null result —
+ * an uncached 503, never a cached empty feed (see the guard below). Cursor pages
+ * canonical to `/` and are `noindex` (pagination, not distinct pages).
  *
  * The marketing hero + signup CTA live on ThinkersJournal.com (the apex landing);
  * this page is the entry INTO the community. Signup stays reachable via the nav.
