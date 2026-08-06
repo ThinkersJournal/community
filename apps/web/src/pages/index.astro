@@ -1,33 +1,96 @@
 ---
-import Button from '../components/Button.astro';
-import PageLayout from '../components/PageLayout.astro';
-import { markPublicCacheable } from '../lib/cache';
-import { setPublicPageCsp } from '../lib/csp';
+/**
+ * `/` — the community front page IS the public Discover feed (M2.4b): the newest
+ * published posts site-wide, keyset-paginated via `?cursor=`.
+ *
+ * ⚠️ ANONYMOUS BY CONSTRUCTION. The `/public/discover` fetch omits `request`, so
+ * src/lib/api.ts never forwards the browser Cookie — the render is
+ * viewer-independent and safe to edge-cache. The nav's auth state hydrates
+ * client-side. Do NOT add `request: Astro.request` to "personalize" this page.
+ *
+ * ⚠️ EDGE-CACHED under the `listing` tag. Every publish/edit already purges
+ * `listing` (apps/api/src/routes/posts.ts), so a new/edited post evicts this feed
+ * at once. This is the subscriber the tag was reserved for.
+ *
+ * ⚠️ KEYSET, NOT OFFSET. `?cursor=<last-seen-id>` with `ORDER BY id DESC` (v7 ids
+ * are time-ordered). The cursor is forwarded OPAQUELY via URLSearchParams; a
+ * malformed one 400s at the api and this page treats any non-200 as an empty feed.
+ * Cursor pages canonical to `/` and are `noindex` (pagination, not distinct pages).
+ *
+ * The marketing hero + signup CTA live on ThinkersJournal.com (the apex landing);
+ * this page is the entry INTO the community. Signup stays reachable via the nav.
+ */
+import { markdownExcerpt } from "@thinkersjournal/markdown";
 
-// Anonymous themed landing — the nav's auth state hydrates client-side, so this
-// SSR is viewer-independent and can be edge-cached. (Was markPrivate in M0 when
-// it doubled as a Service-Binding debug probe; that proof now lives in the E2E.)
-markPublicCacheable(Astro, []);
+import PageLayout from "../components/PageLayout.astro";
+import { apiFetch } from "../lib/api";
+import { markPublicCacheable } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+
+import type { DiscoverPage } from "@thinkersjournal/shared";
+
+const cursor = Astro.url.searchParams.get("cursor");
+const query = new URLSearchParams();
+if (cursor !== null) query.set("cursor", cursor);
+
+// ⚠️ ANONYMOUS — no `request`. See the header.
+const response = await apiFetch<DiscoverPage>(
+  query.toString() === "" ? "/public/discover" : `/public/discover?${query.toString()}`,
+);
+const page: DiscoverPage =
+  response.status === 200 && response.data !== null
+    ? response.data
+    : { posts: [], nextCursor: null };
+
+// ⚠️ THIS `"listing"` LITERAL MUST MATCH apps/api/src/routes/posts.ts's purge call
+// sites EXACTLY — a typo is invisible (miniflare doesn't simulate Workers Cache)
+// and its only symptom is a feed that never reflects a new post for up to 25h.
+markPublicCacheable(Astro, ["listing"]);
 setPublicPageCsp(Astro);
+
+// Defensive date formatting (same rationale as [handle]/index.astro): a malformed
+// timestamp would make `.toISOString()` THROW and 500 this cached page.
+const displayDate = (value: string): string => {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toISOString().slice(0, 10);
+};
 ---
 <PageLayout
-  title="Thinker's Journal — Community"
-  eyebrow="The Community"
-  heading="No thinker should have to build alone."
-  intro="Publish your work, follow other builders, and reference the exact thing you're building — down to the file, line, or commit."
+  title="Discover — Thinker's Journal Community"
+  eyebrow="Community"
+  heading="Discover"
+  intro="The latest from the community."
   canonical="https://community.thinkersjournal.com/"
 >
-  <p class="cta">
-    <Button href="/signup">Get started</Button>
-    <Button href="/authors" variant="ghost">Discover authors</Button>
-  </p>
-  <ul class="links">
-    <li><a class="link" href="/feed">Your feed</a></li>
-    <li><a class="link" href="/authors">Discover authors</a></li>
-    <li><a class="link" href="/new-post">Write a post</a></li>
-  </ul>
+  <Fragment slot="head">
+    {/* Cursor pages are pagination, not distinct content — keep them out of the
+        index while still letting a crawler follow through to the posts. */}
+    {cursor !== null && <meta name="robots" content="noindex, follow" />}
+  </Fragment>
+
+  {page.posts.length === 0 ? (
+    <p>No posts yet — be the first to <a class="link" href="/new-post">publish</a>.</p>
+  ) : (
+    <ul class="cards">
+      {page.posts.map((post) => (
+        <li class="card">
+          {/* encodeURIComponent on both segments (URL needs percent-encoding;
+              Astro `{}` only HTML-escapes). markdownExcerpt returns TEXT — Astro
+              escapes it into the element; never set:html (untrusted source). */}
+          <h2><a href={`/@${encodeURIComponent(post.username)}/${encodeURIComponent(post.slug)}`}>{post.title}</a></h2>
+          <p class="meta">by <a class="link" href={`/@${encodeURIComponent(post.username)}`}>@{post.username}</a> · <time datetime={post.publishedAt}>{displayDate(post.publishedAt)}</time></p>
+          <p>{markdownExcerpt(post.excerptSource)}</p>
+        </li>
+      ))}
+    </ul>
+  )}
+  {page.nextCursor !== null && (
+    <a class="link" rel="next" href={`/?cursor=${encodeURIComponent(page.nextCursor)}`}>Older posts →</a>
+  )}
 </PageLayout>
 <style>
-  .cta{display:flex;gap:14px;flex-wrap:wrap}
-  .links{list-style:none;margin-top:32px;display:flex;gap:22px;flex-wrap:wrap}
+  .cards{list-style:none;display:flex;flex-direction:column;gap:28px;margin:0 0 28px}
+  .card{border:1px solid var(--line);border-radius:12px;padding:22px;background:var(--ink2)}
+  .card h2{font-size:22px;margin-bottom:6px}
+  .card .meta{color:var(--dim);font-size:14px;margin-bottom:10px}
 </style>

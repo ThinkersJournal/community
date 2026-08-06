@@ -7,21 +7,28 @@ const src = () =>
   readFileSync(join(import.meta.dirname, "../src/pages/index.astro"), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
 
-describe("home page (themed landing)", () => {
-  it("is now anonymous + cacheable (markPublicCacheable), one cache helper", () => {
+describe("home page (the Discover feed)", () => {
+  it("is anonymous + edge-cacheable via the reserved `listing` tag (one cache helper)", () => {
     const s = src();
-    expect(s).toContain("markPublicCacheable(Astro,");
+    expect(s).toMatch(/markPublicCacheable\(Astro,\s*\[\s*["']listing["']/);
     expect(s).not.toContain("markPrivate(");
+    expect(s).not.toContain("markFeedCacheable(");
   });
-  it("sets the public CSP and uses the shared chrome", () => {
+  it("sets the public CSP and uses the shared page chrome", () => {
     const s = src();
     expect(s).toContain("setPublicPageCsp(Astro)");
     expect(s).toMatch(/<PageLayout\s/);
   });
-  it("keeps the /authors and /feed links and is anonymous (no apiFetch)", () => {
+  it("reads the site-wide Discover feed ANONYMOUSLY (apiFetch without request)", () => {
     const s = src();
-    expect(s).toContain('href="/authors"');
-    expect(s).toContain('href="/feed"');
-    expect(s).not.toContain("apiFetch");
+    expect(s).toContain("/public/discover");
+    expect(s).toContain("apiFetch");
+    expect(s).not.toMatch(/apiFetch<[^>]*>\([^)]*request:/); // no cookie forwarded
+  });
+  it("renders escaped excerpts (markdownExcerpt, never set:html) and a keyset pager", () => {
+    const s = src();
+    expect(s).toContain("markdownExcerpt");
+    expect(s).not.toContain("set:html");
+    expect(s).toMatch(/\/\?cursor=/);
   });
 });
