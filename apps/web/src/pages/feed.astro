@@ -58,7 +58,7 @@ const feed: Feed = response.data ?? { posts: [], nextCursor: null };
   <div class="wrap feed">
     <h1>Your feed</h1>
     {feed.posts.length === 0 ? (
-      <p>Your feed is empty. <a class="link" href="/authors">Discover authors to follow →</a></p>
+      <p>Your feed is empty. <a class="link" href="/authors">Discover authors to follow →</a> or <a class="link" href="/">browse Discover →</a></p>
     ) : (
       <ul class="cards">
         {feed.posts.map((post) => (
