@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
+import { createPostRequest, createVerifiedActor, deleteCreatedUsers } from "./actor";
 
 const created: string[] = [];
 afterAll(async () => {
@@ -10,11 +11,21 @@ afterAll(async () => {
   await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
     c.query(`DELETE FROM users WHERE id = ANY($1)`, [created]));
   await waitOnExecutionContext(ctx);
+  // Fix-B's test creates its author through the actor fixture (HTTP create path),
+  // which tracks its own user ids — clean those up too.
+  await deleteCreatedUsers();
 });
 
 async function fetchWorker(url: string): Promise<Response> {
   const ctx = createExecutionContext();
   const r = await worker.fetch(new Request(url), env, ctx);
+  await waitOnExecutionContext(ctx);
+  return r;
+}
+
+async function dispatch(request: Request): Promise<Response> {
+  const ctx = createExecutionContext();
+  const r = await worker.fetch(request, env, ctx);
   await waitOnExecutionContext(ctx);
   return r;
 }
@@ -152,6 +163,63 @@ describe("GET /public/tag", () => {
     const body = (await r.json()) as { tag: { slug: string; label: string }; posts: unknown[] };
     expect(body.posts).toEqual([]);
     expect(body.tag).toEqual({ slug, label: slug });
+  });
+
+  it("canonicalizes a mixed-case slug to the lowercase form the web cache tag keys off (Fix A)", async () => {
+    // The web page (apps/web/src/pages/tag/[slug].astro) keys its edge-cache tag
+    // off `page.tag.slug`, and the api purge (posts.ts) always emits the lowercase
+    // `tag:<slug>`. `tag.slug` must therefore ALWAYS be the canonical lowercase
+    // value, so /tag/AI and /tag/ai are one cache entry (migration 0010's promise).
+
+    // KNOWN tag, queried in MIXED case → the slug echoed back is canonical.
+    const author = await seedAuthor();
+    const slug = `rustlang-${crypto.randomUUID().slice(0, 8)}`; // already canonical (lowercase)
+    const t = await tagId(slug);
+    const pubId = await insertPost(author, "Rust Canon", "published");
+    await attachTag(pubId, t);
+    const known = await fetchWorker(
+      `${U}/public/tag?slug=${encodeURIComponent(slug.toUpperCase())}` +
+        `&cursor=${encodeURIComponent(uuidSuccessor(pubId))}`,
+    );
+    expect(known.status).toBe(200);
+    const kbody = (await known.json()) as {
+      tag: { slug: string; label: string }; posts: { id: string }[];
+    };
+    expect(kbody.tag.slug).toBe(slug);                     // lowercase/canonical, not the RAW upper param
+    expect(kbody.posts.map((p) => p.id)[0]).toBe(pubId);   // the published post still resolves
+
+    // UNKNOWN tag, queried in MIXED case → the FALLBACK label/slug is the LOWERCASED
+    // param (this is the path Fix A actually repairs — the fallback used to echo raw case).
+    const unknown = await fetchWorker(`${U}/public/tag?slug=ZZUnknownMixedCase${crypto.randomUUID().slice(0, 8)}`);
+    expect(unknown.status).toBe(200);
+    const ubody = (await unknown.json()) as { tag: { slug: string; label: string }; posts: unknown[] };
+    expect(ubody.tag.slug).toBe(ubody.tag.slug.toLowerCase());   // no uppercase survived
+    expect(ubody.tag.slug.startsWith("zzunknownmixedcase")).toBe(true);
+    expect(ubody.tag.label).toBe(ubody.tag.slug);                // fallback label == canonical slug
+    expect(ubody.posts).toEqual([]);
+  });
+
+  it("does NOT disclose the label of a tag carried only by an unpublished draft (Fix B)", async () => {
+    // A DRAFT create still runs writeTags, upserting the tag into the GLOBAL `tags`
+    // table (posts.ts insertPost → writeTags, regardless of status). A draft is
+    // exempt from the publish-username gate, so a plain verified actor can create it.
+    const actor = await createVerifiedActor();
+    const rand = crypto.randomUUID().slice(0, 8);
+    const displayLabel = `DraftOnlyTag${rand}`;         // mixed case → slug is its lowercase
+    const canonicalSlug = displayLabel.toLowerCase();   // draftonlytag<rand>
+    const create = await dispatch(createPostRequest(actor, "draft", { tags: [displayLabel] }));
+    expect(create.status).toBe(201);
+
+    const r = await fetchWorker(`${U}/public/tag?slug=${encodeURIComponent(canonicalSlug)}`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { tag: { slug: string; label: string }; posts: unknown[] };
+    // The tag EXISTS in `tags`, but NO published post carries it → it must be
+    // indistinguishable from a never-existed tag: the label falls back to the slug
+    // and does NOT leak the draft's display label or its existence.
+    expect(body.tag.slug).toBe(canonicalSlug);
+    expect(body.tag.label).toBe(canonicalSlug);         // NOT the draft's display label
+    expect(body.tag.label).not.toBe(displayLabel);
+    expect(body.posts).toEqual([]);                     // published-only keyset → empty
   });
 
   it("400s a malformed cursor rather than 500ing", async () => {

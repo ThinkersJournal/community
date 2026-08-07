@@ -298,9 +298,23 @@ export async function handlePublicDiscover(
  * handlePublicDiscover: HYPERDRIVE_FRESH (same purge-tagged/read-after-write
  * reasoning — see this file's header), jsonNoStore, id-DESC keyset.
  *
- * An unknown slug is NOT a 404: it 200s with an empty page and the slug
- * echoed back as its own label, so a client can render "0 posts tagged
+ * An unknown slug is NOT a 404: it 200s with an empty page and the (lowercased)
+ * slug echoed back as its own label, so a client can render "0 posts tagged
  * <slug>" instead of branching on a lookup miss.
+ *
+ * ⚠️ TWO INVARIANTS, both about what `tag.slug`/`tag.label` may be:
+ *   • `tag.slug` is ALWAYS the canonical (lowercase) slug — the raw `slug` param
+ *     is lowercased ONCE, up front. The web page keys its edge-cache tag off
+ *     `tag.slug` (apps/web/src/pages/tag/[slug].astro) and the purge always emits
+ *     the lowercase `tag:<slug>` (posts.ts via slugifyBase's toLowerCase), so an
+ *     un-lowercased fallback would cache `/tag/AI` under `tag:AI` — a tag the
+ *     `ai` purge never touches, leaving it stale a full maxAge+swr (~25h) window.
+ *     Migration 0010's header promises "/tag/AI and /tag/ai are one cache entry".
+ *   • `tag.label` comes from the `tags` row ONLY when a PUBLISHED post carries the
+ *     tag. `writeTags` upserts into the GLOBAL `tags` table for drafts too, so a
+ *     bare `WHERE slug = $1` would disclose the existence and display label of a
+ *     tag used only on unpublished drafts. The EXISTS guard makes a draft-only tag
+ *     indistinguishable from a never-existed one (both fall back to slug-as-label).
  */
 export async function handlePublicTag(
   request: Request,
@@ -308,16 +322,26 @@ export async function handlePublicTag(
   ctx: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const slug = (url.searchParams.get("slug") ?? "").trim();
+  // Lowercase up front: canonical slugs are `[a-z0-9-]`, so case is the only
+  // realistic non-canonical URL variation, and `tag.slug` MUST be canonical (see
+  // this function's header). A lowercase param still matches the stored lowercase
+  // slug on every citext comparison below. `"".toLowerCase()` is `""`, so the
+  // blank-slug 400 is unaffected.
+  const slug = (url.searchParams.get("slug") ?? "").trim().toLowerCase();
   if (slug === "") return errorResponse("INVALID_INPUT", 400, { fields: ["slug"] });
   // First page uses the all-f sentinel so ONE query serves page 1 and page N.
   const cursor = url.searchParams.get("cursor") ?? MAX_CURSOR;
   try {
     const page = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-      // Resolve the tag's canonical label (or fall back to the slug itself for
-      // an unknown tag — see this function's header).
+      // Resolve the tag's canonical label — but ONLY when a PUBLISHED post carries
+      // it. A tag used only on drafts (writeTags upserts for drafts too) must not
+      // leak its label/existence, so it falls through to the slug-as-label fallback
+      // exactly like an unknown tag. See this function's header.
       const { rows: tagRows } = await c.query<{ slug: string; label: string }>(
-        `SELECT slug, label FROM tags WHERE slug = $1`,
+        `SELECT t.slug, t.label FROM tags t
+          WHERE t.slug = $1
+            AND EXISTS (SELECT 1 FROM post_tags pt JOIN posts p ON p.id = pt.post_id
+                         WHERE pt.tag_id = t.id AND p.status = 'published')`,
         [slug],
       );
       const tag = tagRows[0] ?? { slug, label: slug };
