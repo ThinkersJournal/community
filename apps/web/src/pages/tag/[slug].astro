@@ -1,0 +1,76 @@
+---
+/**
+ * `/tag/<slug>` — anonymous, edge-cached, keyset-paginated listing of published
+ * posts carrying a tag. Clones the Discover page (index.astro): anonymous apiFetch
+ * without `request`, fail-closed 503, keyset pager. Subscribes to `tag:<slug>` ONLY
+ * (never `listing`) — a post with a DIFFERENT tag changing must not evict this page.
+ */
+import { markdownExcerpt } from "@thinkersjournal/markdown";
+import PageLayout from "../../components/PageLayout.astro";
+import { apiFetch } from "../../lib/api";
+import { markPublicCacheable } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+import type { TagPage } from "@thinkersjournal/shared";
+
+const { slug } = Astro.params;
+if (slug === undefined || slug === "") return new Response(null, { status: 404 });
+const cursor = Astro.url.searchParams.get("cursor");
+const query = new URLSearchParams({ slug });
+if (cursor !== null) query.set("cursor", cursor);
+
+const response = await apiFetch<TagPage>(`/public/tag?${query.toString()}`);
+if (response.status !== 200 || response.data === null) {
+  // Fail closed — never cache an upstream error (see index.astro).
+  return new Response("Tag is temporarily unavailable. Please try again shortly.", {
+    status: 503, headers: { "content-type": "text/plain; charset=utf-8" },
+  });
+}
+const page = response.data;
+
+// ⚠️ MUST byte-match apps/api/src/routes/posts.ts's `tag:${slug}` purge literal.
+markPublicCacheable(Astro, [`tag:${page.tag.slug}`]);
+setPublicPageCsp(Astro);
+
+const displayDate = (value: string): string => {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toISOString().slice(0, 10);
+};
+---
+<PageLayout
+  title={`#${page.tag.label} — Thinker's Journal`}
+  eyebrow="Tag"
+  heading={`#${page.tag.label}`}
+  intro="Posts tagged across the community."
+  canonical={`https://community.thinkersjournal.com/tag/${encodeURIComponent(page.tag.slug)}`}
+>
+  <Fragment slot="head">{cursor !== null && <meta name="robots" content="noindex, follow" />}</Fragment>
+
+  {page.posts.length === 0 ? (
+    <p>No posts tagged «{page.tag.label}» yet.</p>
+  ) : (
+    <ul class="cards">
+      {page.posts.map((post) => (
+        <li class="card">
+          <h2><a href={`/@${encodeURIComponent(post.username)}/${encodeURIComponent(post.slug)}`}>{post.title}</a></h2>
+          <p class="meta">by <a class="link" href={`/@${encodeURIComponent(post.username)}`}>@{post.username}</a> · <time datetime={post.publishedAt}>{displayDate(post.publishedAt)}</time></p>
+          <p>{markdownExcerpt(post.excerptSource)}</p>
+        </li>
+      ))}
+    </ul>
+  )}
+  {(cursor !== null || page.nextCursor !== null) && (
+    <nav class="pager" aria-label="Pagination">
+      {cursor !== null && <a class="link" rel="prev" href={`/tag/${encodeURIComponent(page.tag.slug)}`}>← Newest</a>}
+      {page.nextCursor !== null && (
+        <a class="link" rel="next" href={`/tag/${encodeURIComponent(page.tag.slug)}?cursor=${encodeURIComponent(page.nextCursor)}`}>Older posts →</a>
+      )}
+    </nav>
+  )}
+</PageLayout>
+<style>
+  .cards{list-style:none;display:flex;flex-direction:column;gap:28px;margin:0 0 28px}
+  .card{border:1px solid var(--line);border-radius:12px;padding:22px;background:var(--ink2)}
+  .card h2{font-size:22px;margin-bottom:6px}
+  .card .meta{color:var(--dim);font-size:14px;margin-bottom:10px}
+  .pager{display:flex;justify-content:space-between;gap:12px}
+</style>

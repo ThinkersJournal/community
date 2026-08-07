@@ -1,0 +1,40 @@
+---
+/**
+ * `/tags` — the tag index: all tags with published-post counts, popularity-ordered.
+ * Anonymous + edge-cached under `listing` (counts shift on any publish/edit, which
+ * already purges `listing`). No cursor — bounded to the top 100.
+ */
+import PageLayout from "../components/PageLayout.astro";
+import { apiFetch } from "../lib/api";
+import { markPublicCacheable } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+import type { TagCount } from "@thinkersjournal/shared";
+
+const response = await apiFetch<{ tags: TagCount[] }>("/public/tags");
+if (response.status !== 200 || response.data === null) {
+  return new Response("Tags are temporarily unavailable. Please try again shortly.", {
+    status: 503, headers: { "content-type": "text/plain; charset=utf-8" },
+  });
+}
+const tags = response.data.tags;
+
+markPublicCacheable(Astro, ["listing"]);
+setPublicPageCsp(Astro);
+---
+<PageLayout title="Tags — Thinker's Journal" eyebrow="Discover" heading="Tags" intro="Browse the community by topic." canonical="https://community.thinkersjournal.com/tags">
+  {tags.length === 0 ? (
+    <p>No tags yet.</p>
+  ) : (
+    <ul class="taglist">
+      {tags.map((t) => (
+        <li><a class="tag" href={`/tag/${encodeURIComponent(t.slug)}`}>{t.label} <span class="count">{t.count}</span></a></li>
+      ))}
+    </ul>
+  )}
+</PageLayout>
+<style>
+  .taglist{list-style:none;display:flex;flex-wrap:wrap;gap:10px;margin:0}
+  .tag{display:inline-flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:999px;
+    padding:7px 14px;background:var(--ink2);color:var(--head);text-decoration:none}
+  .tag .count{color:var(--dim);font-size:13px}
+</style>
