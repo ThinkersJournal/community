@@ -157,7 +157,7 @@ describe("⚠️ draft vs publish", () => {
   it("sends an explicit status, never omitting it (which would silently default to draft)", () => {
     expect(code).toMatch(/const status\s*=\s*intent === ["']publish["']\s*\?\s*["']published["']\s*:\s*["']draft["']/);
     // And that computed status actually reaches the api call's body.
-    expect(code).toMatch(/body:\s*\{\s*title,\s*markdownSource,\s*status\s*\}/);
+    expect(code).toMatch(/body:\s*\{\s*title,\s*markdownSource,\s*status,\s*tags\s*\}/);
   });
 
   it("has three distinct submit intents: preview, draft, publish", () => {
@@ -286,5 +286,42 @@ describe("editing an existing post", () => {
   it("loads the existing title/markdownSource to prefill the form", () => {
     expect(code).toContain("existing.data.title");
     expect(code).toContain("existing.data.markdownSource");
+  });
+});
+
+describe("⚠️ tags — no-JS, comma-separated (Task 6)", () => {
+  it("has a no-JS comma-separated tags input", () => {
+    expect(rawSource).toMatch(/<input\s+type="text"\s+id="tags"\s+name="tags"/);
+  });
+
+  it("threads tags into BOTH the create and edit apiFetch bodies", () => {
+    const bodiesWithTags = code.match(/body:\s*\{[^}]*tags[^}]*\}/g) ?? [];
+    expect(bodiesWithTags.length).toBe(2);
+  });
+
+  it("⚠️ adds NO island and NO new <script> — a plain form field, nothing more", () => {
+    // Positive above proves the real input exists in markup. This negative
+    // proves it did not arrive bundled with client JS: the only <script> on
+    // this page must remain the pre-existing media-upload mount.
+    expect(code).not.toContain("initTagsIsland");
+    // `code` (comment-stripped), not `rawSource` — the header comment prose
+    // mentions an inline `<script type="module">` in passing, which would
+    // otherwise inflate a raw-source count without there being a second tag.
+    const scriptTags = code.match(/<script/g) ?? [];
+    expect(scriptTags.length).toBe(1);
+  });
+
+  it("pre-fills tagsValue from the existing post's tag labels on edit load", () => {
+    expect(code).toMatch(/tagsValue\s*=\s*existing\.data\.tags\.map\(\s*\(?t\)?\s*=>\s*t\.label\s*\)\.join\(\s*["'],\s*["']\s*\)/);
+  });
+
+  it("re-renders the raw submitted tags string on a failed POST, not a re-derived one", () => {
+    expect(code).toMatch(/tagsValue\s*=\s*tagsRaw/);
+  });
+
+  it("derives `tags` client-side by splitting on commas, trimming, dropping empties, capping at 5 — no slugification", () => {
+    expect(code).toContain('const tagsRaw = String(form.get("tags") ?? "")');
+    expect(code).toMatch(/tagsRaw\s*\.split\(\s*","\s*\)/);
+    expect(code).toMatch(/\.slice\(\s*0,\s*5\s*\)/);
   });
 });

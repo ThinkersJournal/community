@@ -99,6 +99,7 @@ const notOnboarded = me !== null && me.status === 200 && me.data?.usernameChosen
 let postId = Astro.url.searchParams.get("post");
 let title = "";
 let markdownSource = "";
+let tagsValue = "";
 
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
@@ -106,6 +107,22 @@ if (Astro.request.method === "POST") {
   title = String(form.get("title") ?? "");
   markdownSource = String(form.get("markdownSource") ?? "");
   postId = String(form.get("postId") ?? "") || null;
+  // ⚠️ The server (apps/api/src/routes/posts.ts) is the authority on tag
+  // validation — slugify, dedupe, per-label max length, the 400 for a label
+  // that is too long. THIS split/trim/cap is not a second validator; it is
+  // just what a plain comma-separated `<input>` needs to become an array
+  // before it reaches `apiFetch`'s JSON body. A too-long label is still the
+  // api's 400 to return.
+  const tagsRaw = String(form.get("tags") ?? "");
+  const tags = tagsRaw
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+    .slice(0, 5);
+  // Re-render the user's raw input verbatim on a failed submit — never the
+  // re-derived `tags` array, which would silently drop whitespace/dupes the
+  // author typed before they've even seen the error.
+  tagsValue = tagsRaw;
   const submittedToken = String(form.get("csrfToken") ?? "");
 
   if (intent === "preview") {
@@ -142,7 +159,7 @@ if (Astro.request.method === "POST") {
             // ⚠️ `markdownSource`, matching the api's `CreatePostInput`
             // (packages/shared/src/posts.ts) — clean Markdown, the single
             // source of truth, rendered at READ time.
-            body: { title, markdownSource, status },
+            body: { title, markdownSource, status, tags },
             // Forwards the session cookie — the api resolves the session from
             // it and recomputes the expected token to compare against the
             // header below.
@@ -153,7 +170,7 @@ if (Astro.request.method === "POST") {
           })
         : await apiFetch<SavedPost>(`/posts/${encodeURIComponent(postId)}`, {
             method: "PATCH",
-            body: { title, markdownSource, status },
+            body: { title, markdownSource, status, tags },
             request: Astro.request,
             origin,
             csrfToken: submittedToken,
@@ -257,6 +274,7 @@ if (postId !== null && Astro.request.method === "GET") {
   if (existing.status === 200 && existing.data !== null) {
     title = existing.data.title;
     markdownSource = existing.data.markdownSource;
+    tagsValue = existing.data.tags.map((t) => t.label).join(", ");
     // The one-shot flag the draft-save redirect above appends. Read here
     // rather than persisted anywhere: reloading this exact URL keeps showing
     // it (harmless — it is still true that the draft was saved), but
@@ -310,6 +328,10 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
           <label>
             Body (Markdown)
             <textarea id="markdownSource" name="markdownSource" rows="24" required>{markdownSource}</textarea>
+          </label>
+          <label>
+            Tags (comma-separated, up to 5)
+            <input type="text" id="tags" name="tags" value={tagsValue} placeholder="rust, web-dev" />
           </label>
 
           <fieldset>
