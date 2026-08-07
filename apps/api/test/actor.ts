@@ -143,7 +143,11 @@ function mutatingHeaders(actor: Actor): Record<string, string> {
  * fixed title would make a second create for the same actor depend on the
  * handler's random-suffix retry rather than on the thing under test.
  */
-export function createPostRequest(actor: Actor, status: string): Request {
+export function createPostRequest(
+  actor: Actor,
+  status: string,
+  opts?: { tags?: string[] },
+): Request {
   return new Request("https://api.test/posts", {
     method: "POST",
     headers: mutatingHeaders(actor),
@@ -151,12 +155,21 @@ export function createPostRequest(actor: Actor, status: string): Request {
       title: `Purge fixture ${crypto.randomUUID()}`,
       markdownSource: "# body",
       status,
+      // `tags` is folded in ONLY when provided — the many no-opts call sites
+      // (purge-wiring's no-tags cases) must keep sending a body with no `tags`
+      // key, so the schema's default `[]` is what exercises the "no tags" path.
+      ...(opts?.tags !== undefined ? { tags: opts.tags } : {}),
     }),
   });
 }
 
 /** A `PATCH /posts/:id` REQUEST for `actor` — see `createPostRequest`. */
-export function patchPostRequest(actor: Actor, id: string, status: string): Request {
+export function patchPostRequest(
+  actor: Actor,
+  id: string,
+  status: string,
+  opts?: { tags?: string[] },
+): Request {
   return new Request(`https://api.test/posts/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: mutatingHeaders(actor),
@@ -164,7 +177,15 @@ export function patchPostRequest(actor: Actor, id: string, status: string): Requ
       title: `Purge fixture edited ${crypto.randomUUID()}`,
       markdownSource: "# edited",
       status,
+      ...(opts?.tags !== undefined ? { tags: opts.tags } : {}),
     }),
+  });
+}
+
+/** A `GET /posts/:id` REQUEST for `actor` — cookie only; GET needs no CSRF. */
+export function getPostRequest(actor: Actor, id: string): Request {
+  return new Request(`https://api.test/posts/${encodeURIComponent(id)}`, {
+    headers: { Cookie: actor.cookie },
   });
 }
 
@@ -176,9 +197,9 @@ export function patchPostRequest(actor: Actor, id: string, status: string): Requ
  * Driven with the REAL `env`, whose `WEB` binding is vitest.config.ts's 200 stub:
  * this create genuinely dispatches a purge, and nothing here looks at it.
  */
-export async function createPublished(actor: Actor): Promise<string> {
+export async function createPublished(actor: Actor, opts?: { tags?: string[] }): Promise<string> {
   const ctx = createExecutionContext();
-  const response = await worker.fetch(createPostRequest(actor, "published"), env, ctx);
+  const response = await worker.fetch(createPostRequest(actor, "published", opts), env, ctx);
   await waitOnExecutionContext(ctx);
   if (response.status !== 201) {
     throw new Error(`fixture create failed: ${response.status} ${await response.text()}`);

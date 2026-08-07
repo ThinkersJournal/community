@@ -93,6 +93,17 @@ describe("POST /posts purges on publish", () => {
     expect(response.status).toBe(201);
     expect(purges).toHaveLength(0);
   });
+
+  it("publishing with tags purges author + listing + tag:<slug> in ONE call", async () => {
+    const { response, purges } = await fetchCapturingPurges(
+      createPostRequest(actor, "published", { tags: ["Rust"] }),
+    );
+    expect(response.status).toBe(201);
+    expect(purges).toHaveLength(1);
+    // A new post is in no cached `post:` page (it never existed), so still no
+    // `post:` tag — but its tag PAGE now shows one more post, so `tag:rust` joins.
+    expect(purges[0]).toEqual([`author:${actor.userId}`, "listing", "tag:rust"]);
+  });
 });
 
 describe("PATCH /posts/:id purges on edit", () => {
@@ -104,6 +115,17 @@ describe("PATCH /posts/:id purges on edit", () => {
     expect(response.status).toBe(200);
     expect(purges).toHaveLength(1);
     expect(purges[0]).toEqual([`post:${id}`, `author:${actor.userId}`, "listing"]);
+  });
+
+  it("editing tags purges the OLD ∪ NEW tag pages in ONE call", async () => {
+    const id = await createPublished(actor, { tags: ["old-tag"] });
+    const { response, purges } = await fetchCapturingPurges(
+      patchPostRequest(actor, id, "published", { tags: ["new-tag"] }),
+    );
+    expect(response.status).toBe(200);
+    expect(purges).toHaveLength(1);
+    // order: fixed prefix, then tag entries for old ∪ new (sorted for determinism)
+    expect(purges[0]).toEqual([`post:${id}`, `author:${actor.userId}`, "listing", "tag:new-tag", "tag:old-tag"]);
   });
 
   it("a 404 edit (another author's post) purges NOTHING", async () => {

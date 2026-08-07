@@ -59,8 +59,13 @@ const SLUG_BASE_MAX = 60;
  * The trailing-hyphen strip is repeated AFTER the truncation deliberately: the
  * slice can land mid-separator and leave "my-long-title-" behind.
  */
-export function slugify(title: string): string {
-  const base = title
+/**
+ * slugify's sanitize, WITHOUT the ""->"post" fallback. Shared by `slugify` (which
+ * adds the fallback) and `slugifyTag` (which returns null instead) so the two can
+ * never drift apart on accent-folding or the [a-z0-9] rule.
+ */
+function slugifyBase(input: string): string {
+  return input
     .toLowerCase()
     .normalize("NFKD")
     // U+0300\u2013U+036F is the Combining Diacritical Marks block: NFKD splits an
@@ -73,7 +78,80 @@ export function slugify(title: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, SLUG_BASE_MAX)
     .replace(/-+$/, "");
+}
+
+export function slugify(title: string): string {
+  const base = slugifyBase(title);
   return base === "" ? "post" : base;
+}
+
+/** A tag slug, or null when the label has no usable [a-z0-9] content (no "post" fallback). */
+function slugifyTag(label: string): string | null {
+  const base = slugifyBase(label);
+  return base === "" ? null : base;
+}
+
+/** The most tags a single post may carry (also enforced by the Zod schema's `.max(5)`). */
+const MAX_TAGS = 5;
+
+/**
+ * Normalize author labels -> unique, non-empty slugs (<=MAX_TAGS), keeping the
+ * FIRST label seen per slug. A label that slugifies to nothing (all non-Latin /
+ * punctuation) is dropped \u2014 `slugifyTag` returns null there rather than the
+ * `"post"` fallback `slugify` would produce, so an untypable tag never becomes a
+ * spurious "post" tag.
+ */
+function normalizeTags(labels: string[]): { slug: string; label: string }[] {
+  const out: { slug: string; label: string }[] = [];
+  const seen = new Set<string>();
+  for (const label of labels) {
+    const slug = slugifyTag(label);
+    if (slug === null || seen.has(slug)) continue;
+    seen.add(slug);
+    out.push({ slug, label: label.trim() });
+    if (out.length === MAX_TAGS) break;
+  }
+  return out;
+}
+
+/** Read a post's current tag slugs \u2014 the OLD half of the edit purge's old \u222a new. */
+async function readTagSlugs(client: Client, postId: string): Promise<string[]> {
+  const { rows } = await client.query<{ slug: string }>(
+    `SELECT t.slug FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = $1`,
+    [postId],
+  );
+  return rows.map((r) => String(r.slug));
+}
+
+/**
+ * Upsert the tags and rewrite the post's join rows on the SAME held connection.
+ * Returns the post's new slugs (for the purge).
+ *
+ * \u26a0\ufe0f citext CASTS ARE REQUIRED, not decorative. `tags.slug` is citext, and pg's
+ * extended protocol will not implicitly coerce a text[] parameter to citext[] \u2014
+ * `unnest($1::citext[], ...)` and `slug = ANY($2::citext[])` make the type match
+ * the column so the INSERT-select and the join lookup both bind.
+ *
+ * DELETE-then-reinsert (not a diff): a handful of rows, and it makes "the join
+ * rows are exactly `slugs`" true by construction \u2014 no stale row can survive.
+ */
+async function writeTags(client: Client, postId: string, labels: string[]): Promise<string[]> {
+  const tags = normalizeTags(labels);
+  const slugs = tags.map((t) => t.slug);
+  await client.query(`DELETE FROM post_tags WHERE post_id = $1`, [postId]);
+  if (slugs.length === 0) return [];
+  await client.query(
+    `INSERT INTO tags (slug, label)
+     SELECT s, l FROM unnest($1::citext[], $2::text[]) AS x(s, l)
+     ON CONFLICT (slug) DO NOTHING`,
+    [slugs, tags.map((t) => t.label)],
+  );
+  await client.query(
+    `INSERT INTO post_tags (post_id, tag_id)
+     SELECT $1, id FROM tags WHERE slug = ANY($2::citext[])`,
+    [postId, slugs],
+  );
+  return slugs;
 }
 
 /**
@@ -97,6 +175,8 @@ interface InsertedPost {
   id: string;
   slug: string;
   username: string;
+  /** The normalized tag slugs written for this post — the create purge's tag pages. */
+  newSlugs: string[];
 }
 
 /**
@@ -142,6 +222,7 @@ async function insertPost(
   title: string,
   markdownSource: string,
   status: string,
+  tags: string[],
 ): Promise<InsertedPost> {
   const base = slugify(title);
   for (let attempt = 1; attempt <= SLUG_ATTEMPTS; attempt++) {
@@ -154,7 +235,12 @@ async function insertPost(
         [authorId, title, slug, markdownSource, status],
       );
       const { id, slug: insertedSlug } = rows[0]!;
-      return { id, slug: insertedSlug, username: await usernameFor(client, authorId) };
+      // ⚠️ AFTER the RETURNING succeeds, so a tag write can NEVER re-enter the
+      // slug-retry loop: only `posts_author_slug_key` (23505) is retried, and
+      // writeTags cannot raise it (tags upsert is ON CONFLICT DO NOTHING; the
+      // join rows are deduped after a DELETE, so no PK collision either).
+      const newSlugs = await writeTags(client, id, tags);
+      return { id, slug: insertedSlug, username: await usernameFor(client, authorId), newSlugs };
     } catch (err) {
       if (!isUniqueViolation(err) || attempt === SLUG_ATTEMPTS) throw err;
     }
@@ -188,7 +274,7 @@ async function requireChosenUsername(
 async function readPostInput(
   request: Request,
   schema: typeof CreatePostInput | typeof UpdatePostInput,
-): Promise<{ title: string; markdownSource: string; status: string } | Response> {
+): Promise<{ title: string; markdownSource: string; status: string; tags: string[] } | Response> {
   let raw: unknown;
   try {
     raw = await request.json();
@@ -234,7 +320,7 @@ export async function handleCreatePost(
   let inserted: InsertedPost;
   try {
     inserted = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-      insertPost(c, authorId, title, markdownSource, status),
+      insertPost(c, authorId, title, markdownSource, status, input.tags),
     );
   } catch (err) {
     // Every retry collided: answer 409 rather than 500. Astronomically unlikely
@@ -246,10 +332,15 @@ export async function handleCreatePost(
   }
 
   // Publishing changes what a LISTING shows. There is no `post:` tag to purge —
-  // nothing has ever been cached for a post that did not exist until now. A draft
-  // purges NOTHING: it is in no cached listing, and purge quota is scarce.
+  // nothing has ever been cached for a post that did not exist until now. Each
+  // new tag PAGE now shows one more post, so its `tag:<slug>` joins the purge. A
+  // draft purges NOTHING: it is in no cached listing, and purge quota is scarce.
   if (status === "published") {
-    await purgeTags(env, [`author:${authorId}`, "listing"]);
+    await purgeTags(env, [
+      `author:${authorId}`,
+      "listing",
+      ...inserted.newSlugs.map((s) => `tag:${s}`),
+    ]);
   }
 
   return new Response(
@@ -282,7 +373,13 @@ export async function handleUpdatePost(
     if (gate !== null) return gate;
   }
 
-  let updated: { id: string; slug: string; username: string } | null;
+  let updated: {
+    id: string;
+    slug: string;
+    username: string;
+    oldSlugs: string[];
+    newSlugs: string[];
+  } | null;
   try {
     updated = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const { rows } = await c.query<{ id: string; slug: string }>(
@@ -307,7 +404,12 @@ export async function handleUpdatePost(
       // "don't spend anything extra on a request that turns out to be a 404"
       // discipline applies to this SELECT as much as to the purge call.
       if (row === undefined) return null;
-      return { id: row.id, slug: row.slug, username: await usernameFor(c, authorId) };
+      // ⚠️ READ THE OLD SLUGS BEFORE writeTags — it DELETEs the join rows. The
+      // edit purge must cover a REMOVED tag's page (old ∪ new), so a tag dropped
+      // by this edit still gets its now-shorter page invalidated.
+      const oldSlugs = await readTagSlugs(c, row.id);
+      const newSlugs = await writeTags(c, row.id, input.tags);
+      return { id: row.id, slug: row.slug, username: await usernameFor(c, authorId), oldSlugs, newSlugs };
     });
   } catch (err) {
     // A malformed id is a 404, not a 500: `WHERE id = 'not-a-uuid'` throws
@@ -333,7 +435,15 @@ export async function handleUpdatePost(
   // redirect — showing the author their own stale post. Purge is ~10-50ms and
   // edits are rare. It NEVER throws (see src/cache/purge.ts): the post is already
   // committed, so a failed invalidation must not lose the user's work.
-  await purgeTags(env, [`post:${updated.id}`, `author:${authorId}`, "listing"]);
+  //
+  // ⚠️ OLD ∪ NEW tag pages: a tag REMOVED by this edit still owns a cached page
+  // that now lists one fewer post, so it must be invalidated alongside the added
+  // ones. Deduped + SORTED so the purge payload is deterministic (and a tag both
+  // kept and re-sent appears once).
+  const tagTags = [...new Set([...updated.oldSlugs, ...updated.newSlugs])]
+    .sort()
+    .map((s) => `tag:${s}`);
+  await purgeTags(env, [`post:${updated.id}`, `author:${authorId}`, "listing", ...tagTags]);
 
   return new Response(
     JSON.stringify({ id: updated.id, slug: updated.slug, status, username: updated.username }),
@@ -354,9 +464,12 @@ export async function handleGetPost(
   try {
     post = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const { rows } = await c.query(
-        `SELECT id, title, slug, markdown_source AS "markdownSource", status,
-                published_at AS "publishedAt", updated_at AS "updatedAt"
-           FROM posts WHERE id = $1 AND author_id = $2`,
+        `SELECT p.id, p.title, p.slug, p.markdown_source AS "markdownSource", p.status,
+                p.published_at AS "publishedAt", p.updated_at AS "updatedAt",
+                COALESCE((SELECT json_agg(json_build_object('slug', t.slug, 'label', t.label) ORDER BY t.slug)
+                            FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = p.id),
+                         '[]'::json) AS tags
+           FROM posts p WHERE p.id = $1 AND p.author_id = $2`,
         [params.id, session.userId],
       );
       return (rows[0] ?? null) as AuthoredPost | null;
