@@ -215,6 +215,14 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /public/discover",
     build: () => new Request("https://api.test/public/discover?cursor=not-a-uuid"),
   },
+  // GET /public/tag (M2.4c) — a blank slug is rejected BEFORE the DB is
+  // touched, same "no lookup gating it" shape as /public/authors' and
+  // /public/search's cases above. See src/routes/public.ts.
+  {
+    name: "400 public tag with a blank slug",
+    route: "GET /public/tag",
+    build: () => new Request("https://api.test/public/tag?slug="),
+  },
   // GET /public/social's owner lookup runs first, same shape as GET
   // /public/profile above — an unknown username 404s (M2.1).
   {
@@ -442,6 +450,21 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
       // reason describes — losing it is exactly the change this pin must catch.
       handlerSource:
         'async function handleUnsub(request, env, ctx) { const token = new URL(request.url).searchParams.get("token"); const ok = () => new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } }); const userId = token === null ? null : await (0,__vite_ssr_import_1__.verifyUnsubToken)(env, token); if (userId === null) return ok(); try { await (0,__vite_ssr_import_0__.withClient)(env.HYPERDRIVE_FRESH, ctx, (c) => c.query(`INSERT INTO notification_prefs (user_id, master_enabled, updated_at) VALUES ($1, false, now()) ON CONFLICT (user_id) DO UPDATE SET master_enabled = false, updated_at = now()`, [userId])); } catch (err) { // Never logs the token. A valid token for a since-deleted user (FK // violation) or any transient DB failure must still answer neutrally. console.error("unsub write failed", err); }; return ok(); }',
+    },
+  ],
+  // GET /public/tags (M2.4c) has no params to validate and no lookup that can
+  // miss — it is a bounded GROUP BY listing with a single query and a single
+  // 200 branch, same "no client-error path" shape as GET /health above. See
+  // src/routes/public.ts's handlePublicTags.
+  [
+    "GET /public/tags",
+    {
+      reason: "no client-error path: no params — a fixed GROUP BY query with one 200 branch, no lookup that can miss and nothing to validate. See src/routes/public.ts's handlePublicTags.",
+      // ⚠️ The `__vite_ssr_import_1__` ref is the pool's vite-SSR transform of
+      // public.ts's `withClient` import; deterministic for this code and, like
+      // every pin here, breaks loudly if the handler is edited.
+      handlerSource:
+        "async function handlePublicTags(_request, env, ctx) { const tags = await (0,__vite_ssr_import_1__.withClient)(env.HYPERDRIVE_FRESH, ctx, async (c) => { const { rows } = await c.query(`SELECT t.slug, t.label, count(*)::int AS count FROM tags t JOIN post_tags pt ON pt.tag_id = t.id JOIN posts p ON p.id = pt.post_id WHERE p.status = 'published' GROUP BY t.slug, t.label ORDER BY count DESC, t.slug ASC LIMIT ${TAGS_INDEX_MAX}`); return rows; }); return json({ tags }); }",
     },
   ],
 ]);

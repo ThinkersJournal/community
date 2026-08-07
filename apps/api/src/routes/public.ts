@@ -56,6 +56,7 @@ import type {
   PublicPostSummary,
   PublicProfile,
   RecentPost,
+  TagPage,
 } from "@thinkersjournal/shared";
 
 const PAGE_SIZE = 20;
@@ -63,6 +64,20 @@ const PAGE_SIZE = 20;
 const RECENT_MAX = 1000;
 /** Enough for an excerpt; bounds the listing payload. */
 const EXCERPT_SOURCE_CHARS = 400;
+/** Bounds the /public/tags listing — a popularity-ordered index, not a page. */
+const TAGS_INDEX_MAX = 100;
+
+/**
+ * Correlated json_agg of a post row `p`'s tags — []-safe (an untagged post gets
+ * `[]`, never a null or a missing key). Interpolated (static; no params of its
+ * own), so every query that embeds it must alias its own post row as `p` — see
+ * handlePublicTag's `ptx`/`te` aliases below, which exist FOR this reason: the
+ * outer join needs its own aliases precisely so `p` stays free for this to bind.
+ * Exported: Task 5 (M2.4c) reuses it verbatim rather than re-deriving it.
+ */
+export const TAGS_AGG = `COALESCE((SELECT json_agg(json_build_object('slug', t.slug, 'label', t.label) ORDER BY t.slug)
+                              FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
+                             WHERE pt.post_id = p.id), '[]'::json) AS tags`;
 
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -276,4 +291,97 @@ export async function handlePublicDiscover(
     }
     throw err;
   }
+}
+
+/**
+ * One keyset page of published posts carrying `slug` (M2.4c). Near-clone of
+ * handlePublicDiscover: HYPERDRIVE_FRESH (same purge-tagged/read-after-write
+ * reasoning — see this file's header), jsonNoStore, id-DESC keyset.
+ *
+ * An unknown slug is NOT a 404: it 200s with an empty page and the slug
+ * echoed back as its own label, so a client can render "0 posts tagged
+ * <slug>" instead of branching on a lookup miss.
+ */
+export async function handlePublicTag(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const slug = (url.searchParams.get("slug") ?? "").trim();
+  if (slug === "") return errorResponse("INVALID_INPUT", 400, { fields: ["slug"] });
+  // First page uses the all-f sentinel so ONE query serves page 1 and page N.
+  const cursor = url.searchParams.get("cursor") ?? MAX_CURSOR;
+  try {
+    const page = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      // Resolve the tag's canonical label (or fall back to the slug itself for
+      // an unknown tag — see this function's header).
+      const { rows: tagRows } = await c.query<{ slug: string; label: string }>(
+        `SELECT slug, label FROM tags WHERE slug = $1`,
+        [slug],
+      );
+      const tag = tagRows[0] ?? { slug, label: slug };
+
+      // ⚠️ `ptx`/`te` aliases on the outer joins — deliberately NOT `pt`/`t` —
+      // so the `p` alias inside TAGS_AGG still binds THIS query's post row
+      // rather than colliding with the aggregate's own inner join.
+      const { rows } = await c.query(
+        `SELECT p.id, p.title, p.slug, pr.username,
+                left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
+                p.published_at AS "publishedAt", p.updated_at AS "updatedAt",
+                ${TAGS_AGG}
+           FROM post_tags ptx
+           JOIN posts p     ON p.id = ptx.post_id
+           JOIN profiles pr ON pr.user_id = p.author_id
+           JOIN tags te     ON te.id = ptx.tag_id
+          WHERE te.slug = $1 AND p.status = 'published' AND p.id < $2
+          ORDER BY p.id DESC
+          LIMIT ${PAGE_SIZE + 1}`,
+        [slug, cursor],
+      );
+      const list = rows as RecentPost[];
+      const hasMore = list.length > PAGE_SIZE;
+      const posts = list.slice(0, PAGE_SIZE);
+      return {
+        tag,
+        posts,
+        nextCursor: hasMore ? posts[posts.length - 1]!.id : null,
+      } satisfies TagPage;
+    });
+    return jsonNoStore(page);
+  } catch (err) {
+    // `id < 'not-a-uuid'` throws 22P02 — the client's error, not a 500.
+    if (isInvalidTextRepresentation(err)) {
+      return errorResponse("INVALID_INPUT", 400, { fields: ["cursor"] });
+    }
+    throw err;
+  }
+}
+
+/**
+ * Every tag with at least one published post, popularity-ordered (M2.4c).
+ * HYPERDRIVE_FRESH like every other route in this file bar handlePublicRecent
+ * (see the file header); `json()` rather than jsonNoStore — this is a small
+ * bounded listing with no purge-tagged edge entry to protect, unlike
+ * handlePublicTag/handlePublicDiscover.
+ */
+export async function handlePublicTags(
+  _request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const tags = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ slug: string; label: string; count: number }>(
+      `SELECT t.slug, t.label, count(*)::int AS count
+         FROM tags t
+         JOIN post_tags pt ON pt.tag_id = t.id
+         JOIN posts p      ON p.id = pt.post_id
+        WHERE p.status = 'published'
+        GROUP BY t.slug, t.label
+        ORDER BY count DESC, t.slug ASC
+        LIMIT ${TAGS_INDEX_MAX}`,
+    );
+    return rows;
+  });
+  return json({ tags });
 }
