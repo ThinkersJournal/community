@@ -14,6 +14,10 @@ describe("tag page (/tag/[slug])", () => {
     expect(s).not.toContain("markPrivate(");
     expect(s).not.toContain("markFeedCacheable(");
   });
+  it("builds the cache tag from `page.tag.slug` specifically, not the raw route param (would reintroduce the mixed-case-URL stale-purge bug)", () => {
+    const s = src();
+    expect(s).toContain("markPublicCacheable(Astro, [`tag:${page.tag.slug}`]);");
+  });
   it("sets the public CSP and uses the shared page chrome", () => {
     const s = src();
     expect(s).toContain("setPublicPageCsp(Astro)");
