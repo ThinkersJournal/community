@@ -31,6 +31,16 @@ describe("home page (the Discover feed)", () => {
     expect(s).not.toContain("set:html");
     expect(s).toMatch(/\/\?cursor=/);
   });
+  it("renders tag chips per Discover card, linking to /tag/<slug> with encodeURIComponent on the slug", () => {
+    const s = src();
+    // Positive anchor: post.tags is actually mapped, then the exact chip-link
+    // shape — encodeURIComponent'd slug, escaped label, never set:html.
+    expect(s).toMatch(/post\.tags\.map\(/);
+    expect(s).toMatch(/href=\{`\/tag\/\$\{encodeURIComponent\(t\.slug\)\}`\}/);
+    expect(s).toContain("{t.label}");
+    expect(s).not.toContain("set:html");
+  });
+
   it("fails closed (uncached 503) on a non-200 upstream response instead of caching an empty homepage", () => {
     const s = src();
     // a non-200/null-data guard returns a 503 BEFORE the cache helper...

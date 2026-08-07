@@ -64,6 +64,17 @@ describe("feed.astro", () => {
     expect(code).toMatch(/\/feed\?cursor=/);
   });
 
+  it("renders tag chips per feed card, linking to /tag/<slug> with encodeURIComponent on the slug (unlike this page's other, unencoded links)", () => {
+    // Positive anchor: post.tags is actually mapped, then the exact chip-link
+    // shape — encodeURIComponent'd slug, escaped label, never set:html. This
+    // page's other hrefs (`/@${post.username}/${post.slug}`) are deliberately
+    // NOT encoded (constrained charset today); the NEW chip link must be.
+    expect(code).toMatch(/post\.tags\.map\(/);
+    expect(code).toMatch(/href=\{`\/tag\/\$\{encodeURIComponent\(t\.slug\)\}`\}/);
+    expect(code).toContain("{t.label}");
+    expect(code).not.toContain("set:html");
+  });
+
   it("adopts the chrome + CSP while staying markPrivate", () => {
     expect(code).toMatch(/<BaseLayout\s/);
     expect(code).toContain("setPublicPageCsp(Astro)");

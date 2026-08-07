@@ -91,6 +91,16 @@ const displayDate = (value: string): string => {
           <h2><a href={`/@${encodeURIComponent(post.username)}/${encodeURIComponent(post.slug)}`}>{post.title}</a></h2>
           <p class="meta">by <a class="link" href={`/@${encodeURIComponent(post.username)}`}>@{post.username}</a> · <time datetime={post.publishedAt}>{displayDate(post.publishedAt)}</time></p>
           <p>{markdownExcerpt(post.excerptSource)}</p>
+          {/* Freeform tags (M2.4c). encodeURIComponent on the slug (URL needs
+              percent-encoding); the label is an Astro `{}` expression
+              (escaped), never set:html. */}
+          {post.tags.length > 0 && (
+            <ul class="tags">
+              {post.tags.map((t) => (
+                <li><a class="tag" href={`/tag/${encodeURIComponent(t.slug)}`}>{t.label}</a></li>
+              ))}
+            </ul>
+          )}
         </li>
       ))}
     </ul>
@@ -111,5 +121,8 @@ const displayDate = (value: string): string => {
   .card{border:1px solid var(--line);border-radius:12px;padding:22px;background:var(--ink2)}
   .card h2{font-size:22px;margin-bottom:6px}
   .card .meta{color:var(--dim);font-size:14px;margin-bottom:10px}
+  .tags{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0}
+  .tags .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}
+  .tags .tag:hover{color:var(--head)}
   .pager{display:flex;justify-content:space-between;gap:12px}
 </style>

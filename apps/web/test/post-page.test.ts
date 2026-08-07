@@ -177,6 +177,25 @@ describe("security headers + the ld+json escape", () => {
   });
 });
 
+describe("tag chips (M2.4c)", () => {
+  it("renders a chip per post.tags entry, linking to /tag/<slug> with encodeURIComponent on the slug", () => {
+    // Positive anchor: the tags array is actually mapped over (not just named in
+    // prose), then the exact chip-link shape — encodeURIComponent on the slug,
+    // the label rendered as an Astro `{}` expression (escaped), never set:html.
+    expect(code).toMatch(/post\.tags\.map\(/);
+    expect(code).toMatch(/href=\{`\/tag\/\$\{encodeURIComponent\(t\.slug\)\}`\}/);
+    expect(code).toContain("{t.label}");
+  });
+
+  it("⚠️ the tag label is never set:html — the set:html sink inventory below stays at exactly three", () => {
+    // The tags block adds no set:html sink; anchored here so a regression on
+    // THIS feature fails with a message about tags, not just the generic
+    // sink-count test elsewhere in this file.
+    const setHtmlUses = rawSource.match(/set:html=\{[^}]*\}/g) ?? [];
+    expect(setHtmlUses).not.toContain("set:html={t.label}");
+  });
+});
+
 describe("comments SSR (M2.2)", () => {
   it("fetches /public/comments ANONYMOUSLY and renders through renderMarkdown", () => {
     expect(code).toContain("/public/comments");
