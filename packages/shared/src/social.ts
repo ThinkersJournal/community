@@ -5,6 +5,7 @@
  * are never cached.
  */
 import { z } from "zod";
+import type { TagRef } from "./posts";
 
 /** Chosen handles: 3–30 chars of lowercase letters, digits, underscore. */
 export const USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
@@ -65,6 +66,7 @@ export interface FeedPost {
   updatedAt: string;
   username: string;
   displayName: string | null;
+  tags: TagRef[];
 }
 
 /** `GET /feed` — keyset page of feed cards. */
