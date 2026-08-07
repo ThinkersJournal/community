@@ -44,6 +44,7 @@ function samplePost(overrides: Partial<RecentPost> = {}): RecentPost {
     excerptSource: "Some ordinary excerpt text.",
     publishedAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-02T00:00:00.000Z",
+    tags: [],
     ...overrides,
   };
 }
