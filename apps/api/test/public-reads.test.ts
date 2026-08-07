@@ -18,6 +18,11 @@ import type { PublicPost, PublicProfile } from "@thinkersjournal/shared";
  * cached under one viewer's identity and served to everyone. The draft case
  * below sends the AUTHOR'S OWN COOKIE and still demands a 404. If a future change
  * makes these routes read a session, that case is what goes red.
+ *
+ * M2.4c Task 5 added `tags`: the tagged-post cases below create through the
+ * REAL `POST /posts` route (Task 3 already threads `tags` through create), so
+ * the fixture exercises the same normalize/persist path every author uses,
+ * not a hand-rolled `post_tags` row.
  */
 
 /** An origin in `checkOrigin`'s allowlist (src/auth/csrf.ts). */
@@ -34,6 +39,7 @@ interface PostPayload {
   title: string;
   markdownSource: string;
   status?: string;
+  tags?: string[];
 }
 
 async function create(actor: Actor, payload: PostPayload): Promise<{ id: string; slug: string }> {
@@ -98,6 +104,23 @@ describe("GET /public/posts", () => {
     // time. No rendered HTML is ever stored or served from here.
     expect(post.markdownSource).toBe("# body");
     expect(post.username).toBe(actor.username);
+    // Untagged: [] (COALESCE-guaranteed), never undefined — see TAGS_AGG.
+    expect(post.tags).toEqual([]);
+  });
+
+  it("carries its tags", async () => {
+    const { slug } = await create(actor, {
+      title: "Public Tagged",
+      markdownSource: "# body",
+      status: "published",
+      tags: ["Rust"],
+    });
+    const response = await fetchWorker(
+      new Request(`https://api.test/public/posts?username=${actor.username}&slug=${slug}`),
+    );
+    expect(response.status).toBe(200);
+    const post = (await response.json()) as PublicPost;
+    expect(post.tags).toEqual([{ slug: "rust", label: "Rust" }]);
   });
 
   it("404s a DRAFT — anonymously and for its own author alike", async () => {
@@ -183,6 +206,22 @@ describe("GET /public/profile", () => {
     ).toBe(404);
   });
 
+  it("carries each post's tags", async () => {
+    const author = await onboardedActor();
+    await create(author, {
+      title: "Profile Tagged",
+      markdownSource: "x",
+      status: "published",
+      tags: ["Design"],
+    });
+    const profile = (await (
+      await fetchWorker(new Request(`https://api.test/public/profile?username=${author.username}`))
+    ).json()) as PublicProfile;
+    const mine = profile.posts.find((p) => p.title === "Profile Tagged");
+    expect(mine).toBeDefined();
+    expect(mine!.tags).toEqual([{ slug: "design", label: "Design" }]);
+  });
+
   it("400s a malformed cursor rather than 500ing", async () => {
     const response = await fetchWorker(
       new Request(`https://api.test/public/profile?username=${actor.username}&cursor=not-a-uuid`),
@@ -200,13 +239,15 @@ describe("GET /public/recent", () => {
       title: "Recent One",
       markdownSource: "x",
       status: "published",
+      tags: ["Rust"],
     });
     const body = (await (
       await fetchWorker(new Request("https://api.test/public/recent"))
-    ).json()) as { posts: { id: string; username: string }[] };
+    ).json()) as { posts: { id: string; username: string; tags: { slug: string; label: string }[] }[] };
     const mine = body.posts.find((p) => p.id === id);
     expect(mine).toBeDefined();
     expect(mine!.username).toBe(author.username);
+    expect(mine!.tags).toEqual([{ slug: "rust", label: "Rust" }]);
   });
 
   it("excludes drafts", async () => {

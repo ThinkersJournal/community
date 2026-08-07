@@ -116,7 +116,7 @@ export async function handlePublicPost(
     const { rows } = await c.query(
       `SELECT p.id, p.author_id AS "authorId", pr.username, pr.display_name AS "displayName",
               p.title, p.slug, p.markdown_source AS "markdownSource",
-              p.published_at AS "publishedAt", p.updated_at AS "updatedAt"
+              p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
          FROM posts p
          JOIN profiles pr ON pr.user_id = p.author_id
         WHERE pr.username = $1 AND p.slug = $2 AND p.status = 'published'`,
@@ -159,8 +159,8 @@ export async function handlePublicProfile(
       const { rows: posts } = await c.query(
         `SELECT id, title, slug,
                 left(markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
-                published_at AS "publishedAt", updated_at AS "updatedAt"
-           FROM posts
+                published_at AS "publishedAt", updated_at AS "updatedAt", ${TAGS_AGG}
+           FROM posts p
           WHERE author_id = $1 AND status = 'published' AND id < $2
           -- v7 ids are time-ordered, so this IS newest-first. No created_at
           -- index exists, and none is needed. Served by posts_author_published_key.
@@ -238,7 +238,7 @@ export async function handlePublicRecent(
     const { rows } = await c.query(
       `SELECT p.id, p.title, p.slug, pr.username,
               left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
-              p.published_at AS "publishedAt", p.updated_at AS "updatedAt"
+              p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
          FROM posts p
          JOIN profiles pr ON pr.user_id = p.author_id
         WHERE p.status = 'published'
@@ -267,7 +267,7 @@ export async function handlePublicDiscover(
       const { rows } = await c.query(
         `SELECT p.id, p.title, p.slug, pr.username,
                 left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
-                p.published_at AS "publishedAt", p.updated_at AS "updatedAt"
+                p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
            FROM posts p
            JOIN profiles pr ON pr.user_id = p.author_id
           WHERE p.status = 'published' AND p.id < $1

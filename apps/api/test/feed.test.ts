@@ -41,6 +41,31 @@ async function seedPost(authorId: string, title: string, status: "draft" | "publ
   return id;
 }
 
+/**
+ * M2.4c Task 5 — tags on `/feed`. Mirrors test/tag.test.ts's `tagId`/`attachTag`:
+ * this file seeds posts by direct SQL (not through `POST /posts`), so tags need
+ * the same direct-SQL path.
+ */
+async function tagId(slug: string): Promise<string> {
+  const ctx = createExecutionContext();
+  let id = "";
+  await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `INSERT INTO tags (slug,label) VALUES ($1,$2) ON CONFLICT (slug) DO UPDATE SET slug=EXCLUDED.slug RETURNING id`,
+      [slug, slug]);
+    id = rows[0]!.id;
+  });
+  await waitOnExecutionContext(ctx);
+  return id;
+}
+
+async function attachTag(postId: string, tId: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query(`INSERT INTO post_tags (post_id, tag_id) VALUES ($1,$2)`, [postId, tId]));
+  await waitOnExecutionContext(ctx);
+}
+
 function getFeed(actor: Actor, cursor?: string): Promise<Response> {
   const q = cursor === undefined ? "" : `?cursor=${cursor}`;
   return fetchWorker(new Request(`https://api.test/feed${q}`, { headers: { Cookie: actor.cookie } }));
@@ -61,12 +86,18 @@ afterAll(async () => {
 
 describe("GET /feed", () => {
   it("shows a followed author's PUBLISHED post", async () => {
-    await seedPost(followed.userId, "followed-published", "published");
+    const postId = await seedPost(followed.userId, "followed-published", "published");
+    const slug = `feed-topic-${crypto.randomUUID().slice(0, 8)}`;
+    await attachTag(postId, await tagId(slug));
     const response = await getFeed(viewer);
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    const body = (await response.json()) as { posts: { username: string; title: string }[] };
-    expect(body.posts.some((p) => p.username === followed.username)).toBe(true);
+    const body = (await response.json()) as {
+      posts: { username: string; title: string; tags: { slug: string; label: string }[] }[];
+    };
+    const mine = body.posts.find((p) => p.username === followed.username);
+    expect(mine).toBeDefined();
+    expect(mine!.tags).toEqual([{ slug, label: slug }]);
   });
 
   it("never shows a followed author's DRAFT", async () => {

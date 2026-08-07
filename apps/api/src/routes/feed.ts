@@ -12,6 +12,7 @@ import { withClient } from "../db/client";
 import { isInvalidTextRepresentation } from "../db/errors";
 import { errorResponse } from "../http/errors";
 import { getFolloweeIds } from "../social/followees";
+import { TAGS_AGG } from "./public";
 
 import type { Feed, FeedPost } from "@thinkersjournal/shared";
 
@@ -49,7 +50,7 @@ export async function handleFeed(
         `SELECT p.id, p.title, p.slug,
                 left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
                 p.published_at AS "publishedAt", p.updated_at AS "updatedAt",
-                pr.username, pr.display_name AS "displayName"
+                pr.username, pr.display_name AS "displayName", ${TAGS_AGG}
            FROM posts p
            JOIN profiles pr ON pr.user_id = p.author_id
           WHERE p.author_id = ANY($1::uuid[])
