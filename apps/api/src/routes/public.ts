@@ -49,6 +49,10 @@ import { MAX_CURSOR } from "@thinkersjournal/shared";
 import { withClient } from "../db/client";
 import { isInvalidTextRepresentation } from "../db/errors";
 import { errorResponse } from "../http/errors";
+// The write path's slug canonicalizer. Reused here so a read (`?slug=`) and a
+// write (which mints the slug the `tag:<slug>` purge emits) canonicalize
+// IDENTICALLY — see slugifyBase's own comment and handlePublicTag's header.
+import { slugifyBase } from "./posts";
 
 import type {
   DiscoverPage,
@@ -298,18 +302,23 @@ export async function handlePublicDiscover(
  * handlePublicDiscover: HYPERDRIVE_FRESH (same purge-tagged/read-after-write
  * reasoning — see this file's header), jsonNoStore, id-DESC keyset.
  *
- * An unknown slug is NOT a 404: it 200s with an empty page and the (lowercased)
+ * An unknown slug is NOT a 404: it 200s with an empty page and the (canonical)
  * slug echoed back as its own label, so a client can render "0 posts tagged
- * <slug>" instead of branching on a lookup miss.
+ * <slug>" instead of branching on a lookup miss. (A slug with no `[a-z0-9]`
+ * content DOES 400 — there is no canonical tag to echo — and the web page maps
+ * that 400 to 404, since it is client input, not a transient upstream fault.)
  *
  * ⚠️ TWO INVARIANTS, both about what `tag.slug`/`tag.label` may be:
- *   • `tag.slug` is ALWAYS the canonical (lowercase) slug — the raw `slug` param
- *     is lowercased ONCE, up front. The web page keys its edge-cache tag off
- *     `tag.slug` (apps/web/src/pages/tag/[slug].astro) and the purge always emits
- *     the lowercase `tag:<slug>` (posts.ts via slugifyBase's toLowerCase), so an
- *     un-lowercased fallback would cache `/tag/AI` under `tag:AI` — a tag the
- *     `ai` purge never touches, leaving it stale a full maxAge+swr (~25h) window.
- *     Migration 0010's header promises "/tag/AI and /tag/ai are one cache entry".
+ *   • `tag.slug` is ALWAYS a canonical `[a-z0-9-]` slug — the raw `slug` param is
+ *     run ONCE through slugifyBase (posts.ts), the SAME function the write path
+ *     mints slugs with. The web page keys its edge-cache tag off `tag.slug`
+ *     (apps/web/src/pages/tag/[slug].astro) and the purge always emits a canonical
+ *     `tag:<slug>` (posts.ts), so any non-canonical `tag.slug` would cache under a
+ *     `tag:` no purge ever names — `/tag/AI` under `tag:AI`, or `?slug=foo bar`
+ *     under `tag:foo bar` — unpurgeable, stale a full maxAge+swr (~25h) window.
+ *     Canonicalizing with the write path's own function keeps the two structurally
+ *     identical; they cannot drift. Migration 0010's header promises "/tag/AI and
+ *     /tag/ai are one cache entry".
  *   • `tag.label` comes from the `tags` row ONLY when a PUBLISHED post carries the
  *     tag. `writeTags` upserts into the GLOBAL `tags` table for drafts too, so a
  *     bare `WHERE slug = $1` would disclose the existence and display label of a
@@ -322,12 +331,16 @@ export async function handlePublicTag(
   ctx: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
-  // Lowercase up front: canonical slugs are `[a-z0-9-]`, so case is the only
-  // realistic non-canonical URL variation, and `tag.slug` MUST be canonical (see
-  // this function's header). A lowercase param still matches the stored lowercase
-  // slug on every citext comparison below. `"".toLowerCase()` is `""`, so the
-  // blank-slug 400 is unaffected.
-  const slug = (url.searchParams.get("slug") ?? "").trim().toLowerCase();
+  // Canonicalize through slugifyBase — the SAME function the write path mints
+  // slugs with (posts.ts) — not a bare toLowerCase(). Stored slugs, and every
+  // `tag:<slug>` literal purgeTags emits, are `[a-z0-9-]`; `tag.slug` drives the
+  // web page's edge-cache tag (apps/web/src/pages/tag/[slug].astro), so it MUST
+  // be a slug the purge can name. toLowerCase() alone still let `?slug=foo bar`
+  // cache under `tag:foo bar` — a tag no purge ever emits — lingering a full
+  // maxAge+swr window. slugifyBase folds interior whitespace/punctuation to
+  // hyphens and strips the ends (so `.trim()` is subsumed); input with no
+  // `[a-z0-9]` content collapses to "" and 400s (the web page maps that -> 404).
+  const slug = slugifyBase(url.searchParams.get("slug") ?? "");
   if (slug === "") return errorResponse("INVALID_INPUT", 400, { fields: ["slug"] });
   // First page uses the all-f sentinel so ONE query serves page 1 and page N.
   const cursor = url.searchParams.get("cursor") ?? MAX_CURSOR;

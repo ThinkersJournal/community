@@ -19,6 +19,14 @@ const query = new URLSearchParams({ slug });
 if (cursor !== null) query.set("cursor", cursor);
 
 const response = await apiFetch<TagPage>(`/public/tag?${query.toString()}`);
+// A 400 is the api rejecting the slug itself (it canonicalizes to no [a-z0-9]
+// content, e.g. `/tag/!!!`) — client input, not a transient upstream fault. It
+// is a 404 (the URL names no real tag), NOT the 503 below, whose "try again
+// shortly" would be a lie. Both branches return BEFORE markPublicCacheable, so
+// neither an error is ever cached.
+if (response.status === 400) {
+  return new Response(null, { status: 404 });
+}
 if (response.status !== 200 || response.data === null) {
   // Fail closed — never cache an upstream error (see index.astro).
   return new Response("Tag is temporarily unavailable. Please try again shortly.", {

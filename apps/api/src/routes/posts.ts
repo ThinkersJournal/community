@@ -62,9 +62,13 @@ const SLUG_BASE_MAX = 60;
 /**
  * slugify's sanitize, WITHOUT the ""->"post" fallback. Shared by `slugify` (which
  * adds the fallback) and `slugifyTag` (which returns null instead) so the two can
- * never drift apart on accent-folding or the [a-z0-9] rule.
+ * never drift apart on accent-folding or the [a-z0-9] rule. EXPORTED because the
+ * read path canonicalizes the same way: handlePublicTag (public.ts) runs the
+ * requested `?slug=` through THIS function, so the slug it caches under is always
+ * one the `tag:<slug>` purge here can emit. Read and write canonicalization are
+ * the one function — they cannot drift into an unpurgeable cache tag.
  */
-function slugifyBase(input: string): string {
+export function slugifyBase(input: string): string {
   return input
     .toLowerCase()
     .normalize("NFKD")

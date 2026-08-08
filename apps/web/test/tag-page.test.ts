@@ -41,6 +41,19 @@ describe("tag page (/tag/[slug])", () => {
     expect(s).toMatch(/response\.status !== 200/);
     expect(s).toContain("status: 503");
   });
+  it("maps an api 400 (non-canonicalizable slug) to 404 — client input, not a transient 503 — before the cache helper (Copilot #2)", () => {
+    const s = src();
+    // the 400 branch must return a 404...
+    expect(s).toMatch(/response\.status === 400[\s\S]*?status:\s*404/);
+    // ...and be evaluated BEFORE the 503 fail-closed and BEFORE markPublicCacheable,
+    // so a client error is neither mislabelled "temporarily unavailable" nor cached.
+    const i400 = s.indexOf("response.status === 400");
+    const i503 = s.indexOf("503");
+    const iCache = s.indexOf("markPublicCacheable(Astro"); // the CALL, not the import
+    expect(i400).toBeGreaterThan(-1);
+    expect(i400).toBeLessThan(i503);
+    expect(i400).toBeLessThan(iCache);
+  });
   it("percent-encodes every interpolated URL segment", () => {
     const s = src();
     expect(s).toContain("encodeURIComponent");

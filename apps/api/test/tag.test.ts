@@ -222,6 +222,43 @@ describe("GET /public/tag", () => {
     expect(body.posts).toEqual([]);                     // published-only keyset → empty
   });
 
+  it("canonicalizes a non-[a-z0-9-] slug (spaces/punctuation) to the purgeable form, never the raw param (Copilot #1)", async () => {
+    // The web page caches under `tag:${page.tag.slug}`, and the purge only ever
+    // emits `tag:<slug>` for a `[a-z0-9-]` slug (posts.ts slugifyBase). A
+    // `?slug=foo bar` that echoed back `foo bar` would cache under `tag:foo bar`
+    // — a tag no purge can name (~25h unpurgeable). `tag.slug` MUST canonicalize
+    // for BOTH a known tag (must still resolve) and an unknown one.
+    const author = await seedAuthor();
+    const canonical = `multi-word-${crypto.randomUUID().slice(0, 8)}`; // already canonical
+    const t = await tagId(canonical);
+    const pubId = await insertPost(author, "Spaced Query", "published");
+    await attachTag(pubId, t);
+    // Same tag, queried with interior spaces + upper-case + a trailing bang.
+    const noisy = `${canonical.replace(/-/g, " ").toUpperCase()} !`;
+    const known = await fetchWorker(
+      `${U}/public/tag?slug=${encodeURIComponent(noisy)}` +
+        `&cursor=${encodeURIComponent(uuidSuccessor(pubId))}`,
+    );
+    expect(known.status).toBe(200);
+    const kbody = (await known.json()) as {
+      tag: { slug: string; label: string }; posts: { id: string }[];
+    };
+    expect(kbody.tag.slug).toBe(canonical);              // purgeable canonical form, NOT "multi word ..."
+    expect(kbody.tag.slug).toMatch(/^[a-z0-9-]+$/);      // no space/punctuation/uppercase survived
+    expect(kbody.posts.map((p) => p.id)[0]).toBe(pubId); // the real tag still resolves
+
+    // Unknown non-canonical slug: still a 200 empty page, but the echoed slug
+    // (the web cache tag) is canonical, never `tag:foo bar ...`.
+    const unknown = await fetchWorker(
+      `${U}/public/tag?slug=${encodeURIComponent(`foo bar ${crypto.randomUUID().slice(0, 8)}`)}`,
+    );
+    expect(unknown.status).toBe(200);
+    const ubody = (await unknown.json()) as { tag: { slug: string }; posts: unknown[] };
+    expect(ubody.tag.slug).toMatch(/^[a-z0-9-]+$/);
+    expect(ubody.tag.slug.startsWith("foo-bar-")).toBe(true);
+    expect(ubody.posts).toEqual([]);
+  });
+
   it("400s a malformed cursor rather than 500ing", async () => {
     expect((await fetchWorker(`${U}/public/tag?slug=whatever&cursor=not-a-uuid`)).status).toBe(400);
   });
@@ -232,5 +269,9 @@ describe("GET /public/tag", () => {
 
   it("400s a whitespace-only slug", async () => {
     expect((await fetchWorker(`${U}/public/tag?slug=${encodeURIComponent("   ")}`)).status).toBe(400);
+  });
+
+  it("400s a slug with no [a-z0-9] content (punctuation only) — the web page maps this to 404 (Copilot #1/#2)", async () => {
+    expect((await fetchWorker(`${U}/public/tag?slug=${encodeURIComponent("!!!")}`)).status).toBe(400);
   });
 });
