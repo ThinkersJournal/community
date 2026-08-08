@@ -53,6 +53,24 @@ describe("followee-cache (KV)", () => {
     expect(await readFolloweeCache(env, userId)).toBeNull();
   });
 
+  it("fails open on valid JSON of the WRONG shape (not a string[]) — a miss, not a hit", async () => {
+    // JSON.parse succeeds on these, but they are not a string[]; letting them
+    // through as a HIT would flow into `followeeIds.length` / `ANY($1::uuid[])`
+    // and break the feed. Each must read back as null (a miss -> Postgres).
+    for (const bad of ["{}", "[1]", '["a", 2]', '"x"', "42", "true", "null"]) {
+      const userId = crypto.randomUUID();
+      await env.FOLLOWEES.put(followeeKey(userId), bad);
+      expect(await readFolloweeCache(env, userId)).toBeNull();
+    }
+  });
+
+  it("still returns a genuine string[] as a HIT (the wrong-shape guard does not reject valid ids)", async () => {
+    const userId = crypto.randomUUID();
+    const ids = [crypto.randomUUID(), crypto.randomUUID()];
+    await env.FOLLOWEES.put(followeeKey(userId), JSON.stringify(ids));
+    expect(await readFolloweeCache(env, userId)).toEqual(ids);
+  });
+
   it("fails open: a KV whose put throws does not reject (a lost write is swallowed)", async () => {
     const throwingEnv = {
       ...env,

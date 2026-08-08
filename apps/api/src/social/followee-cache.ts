@@ -27,7 +27,19 @@ export function followeeKey(userId: string): string {
 export async function readFolloweeCache(env: Env, userId: string): Promise<string[] | null> {
   try {
     const raw = await env.FOLLOWEES.get(followeeKey(userId));
-    return raw === null ? null : (JSON.parse(raw) as string[]);
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    // Fail-open on an unexpected SHAPE too, not just unparseable text. A value
+    // that is valid JSON but not a string[] (`{}`, `[1]`, `"x"`) can only come
+    // from a corrupt or stale-format write — writeFolloweeCache only ever stores
+    // `JSON.stringify(string[])` — but if one appeared, `as string[]` would let
+    // it flow into `followeeIds.length` / `ANY($1::uuid[])` and break the feed.
+    // Only a genuine string[] is a HIT; anything else is a miss, so the fail-open
+    // contract in this file's header holds for wrong shapes, not just bad syntax.
+    if (!Array.isArray(parsed) || !parsed.every((x) => typeof x === "string")) {
+      return null;
+    }
+    return parsed as string[];
   } catch {
     return null;
   }
