@@ -292,3 +292,23 @@ describe("follow notify push (M2.3b)", () => {
     vi.restoreAllMocks();
   });
 });
+
+describe("follow/unfollow busts the follower's KV followee cache (M2 KV cache)", () => {
+  it("POST /follows deletes the follower's cache key", async () => {
+    const follower = await onboardedActor();
+    // Prime a stale entry, then follow — the write must invalidate it.
+    await env.FOLLOWEES.put(`followees:${follower.userId}`, JSON.stringify([]));
+    const r = await follow(follower, bob.userId);
+    expect(r.status).toBe(201);
+    expect(await env.FOLLOWEES.get(`followees:${follower.userId}`)).toBeNull();
+  });
+
+  it("DELETE /follows/:id deletes the follower's cache key", async () => {
+    const follower = await onboardedActor();
+    await follow(follower, bob.userId);
+    await env.FOLLOWEES.put(`followees:${follower.userId}`, JSON.stringify([bob.userId]));
+    const r = await unfollow(follower, bob.userId);
+    expect(r.status).toBe(200);
+    expect(await env.FOLLOWEES.get(`followees:${follower.userId}`)).toBeNull();
+  });
+});

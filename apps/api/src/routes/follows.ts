@@ -12,6 +12,7 @@ import { isCheckViolation, isForeignKeyViolation } from "../db/errors";
 import { hasChosenUsername } from "../db/onboarding";
 import { errorResponse } from "../http/errors";
 import { notify } from "../notifications/create";
+import { bustFolloweeCache } from "../social/followee-cache";
 
 import { FollowInput } from "@thinkersjournal/shared";
 
@@ -68,6 +69,9 @@ export async function handleFollow(
     if (isCheckViolation(err)) return errorResponse("CANNOT_FOLLOW_SELF", 400);
     throw err;
   }
+  // The follower's followee list changed — invalidate their cached copy.
+  // Best-effort (the 300s TTL backstops a lost delete); never blocks the write.
+  ctx.waitUntil(bustFolloweeCache(env, userId));
   return new Response(null, { status: 201 });
 }
 
@@ -92,6 +96,7 @@ export async function handleUnfollow(
   await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
     c.query("DELETE FROM follows WHERE follower_id = $1 AND followee_id = $2", [userId, followeeId]),
   );
+  ctx.waitUntil(bustFolloweeCache(env, userId));
   return new Response(null, { status: 200 });
 }
 
