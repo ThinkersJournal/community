@@ -191,3 +191,71 @@ describe("GET /feed", () => {
     }
   });
 });
+
+/**
+ * ⚠️ WHAT THE EMPTY-FOLLOW SHORT-CIRCUIT IS WORTH. handleFeed's
+ * `if (followeeIds.length === 0) return feedJson({ posts: [], nextCursor: null })`
+ * (src/routes/feed.ts — "No client opened at all") is byte-identical in its
+ * RESPONSE whether the guard fires or an empty `p.author_id = ANY('{}'::uuid[])`
+ * posts query actually runs — so "returns an empty feed" above proves the
+ * OUTPUT shape but would pass just as happily with the guard deleted. That is
+ * the same trap test/purge-wiring.test.ts's header calls out: an assertion
+ * that is satisfied by "nothing happened" proves nothing on its own unless
+ * something in the same harness proves the harness CAN see "something
+ * happened". The two cases below share one Proxy-based spy on
+ * `env.HYPERDRIVE_FRESH` (property access = a Postgres client was opened) so
+ * the NEGATIVE case is paired with a POSITIVE control: both viewers have a
+ * followee-cache HIT already primed (so `getFolloweeIds` itself never touches
+ * Postgres either way, isolating the spy to the posts query alone), and the
+ * ONLY difference is whether that cached list is empty or not.
+ */
+describe("GET /feed — empty-follow short-circuit truly opens no Postgres client", () => {
+  function spyHyperdrive(): { spied: Hyperdrive; opened: () => boolean } {
+    let opened = false;
+    const spied = new Proxy(env.HYPERDRIVE_FRESH, {
+      get(target, prop, receiver) {
+        opened = true;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    return { spied, opened: () => opened };
+  }
+
+  it("POSITIVE control: a cached non-empty followee list DOES open a Postgres client (proves the spy can see one)", async () => {
+    const reader = await createVerifiedActor();
+    const author = await createVerifiedActor();
+    await seedPost(author.userId, "spy-positive-post", "published");
+    await env.FOLLOWEES.put(`followees:${reader.userId}`, JSON.stringify([author.userId]));
+
+    const { spied, opened } = spyHyperdrive();
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/feed", { headers: { Cookie: reader.cookie } }),
+      { ...env, HYPERDRIVE_FRESH: spied },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(200);
+    expect(opened()).toBe(true);
+  });
+
+  it("NEGATIVE: a cached [] followee list opens NO Postgres client at all", async () => {
+    const lonely = await createVerifiedActor();
+    await env.FOLLOWEES.put(`followees:${lonely.userId}`, JSON.stringify([]));
+
+    const { spied, opened } = spyHyperdrive();
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.test/feed", { headers: { Cookie: lonely.cookie } }),
+      { ...env, HYPERDRIVE_FRESH: spied },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { posts: unknown[]; nextCursor: string | null };
+    expect(body.posts).toEqual([]);
+    expect(opened()).toBe(false);
+  });
+});

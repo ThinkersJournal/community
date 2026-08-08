@@ -52,4 +52,20 @@ describe("followee-cache (KV)", () => {
     await env.FOLLOWEES.put(followeeKey(userId), "not json{");
     expect(await readFolloweeCache(env, userId)).toBeNull();
   });
+
+  it("fails open: a KV whose put throws does not reject (a lost write is swallowed)", async () => {
+    const throwingEnv = {
+      ...env,
+      FOLLOWEES: { put: () => { throw new Error("KV down"); } },
+    } as unknown as Env;
+    await expect(writeFolloweeCache(throwingEnv, crypto.randomUUID(), [])).resolves.toBeUndefined();
+  });
+
+  it("fails open: a KV whose delete throws does not reject (a lost bust is swallowed)", async () => {
+    const throwingEnv = {
+      ...env,
+      FOLLOWEES: { delete: () => { throw new Error("KV down"); } },
+    } as unknown as Env;
+    await expect(bustFolloweeCache(throwingEnv, crypto.randomUUID())).resolves.toBeUndefined();
+  });
 });
