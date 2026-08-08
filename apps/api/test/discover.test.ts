@@ -54,6 +54,31 @@ async function insertPost(
   return postId;
 }
 
+/**
+ * M2.4c Task 5 — tags on `/public/discover`. Mirrors test/tag.test.ts's
+ * `tagId`/`attachTag`: this file seeds posts by direct SQL (not through
+ * `POST /posts`), so tags need the same direct-SQL path.
+ */
+async function tagId(slug: string): Promise<string> {
+  const ctx = createExecutionContext();
+  let id = "";
+  await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `INSERT INTO tags (slug,label) VALUES ($1,$2) ON CONFLICT (slug) DO UPDATE SET slug=EXCLUDED.slug RETURNING id`,
+      [slug, slug]);
+    id = rows[0]!.id;
+  });
+  await waitOnExecutionContext(ctx);
+  return id;
+}
+
+async function attachTag(postId: string, tId: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query(`INSERT INTO post_tags (post_id, tag_id) VALUES ($1,$2)`, [postId, tId]));
+  await waitOnExecutionContext(ctx);
+}
+
 const U = "https://api.test";
 
 // The smallest uuid strictly greater than `id` (its 128-bit successor). Querying
@@ -73,15 +98,21 @@ describe("GET /public/discover", () => {
     // absence proves the status='published' filter, not the cursor bound.
     const draftId = await insertPost(author, "Discover Draft One", "draft");
     const pubId = await insertPost(author, "Discover Published One", "published");
+    const slug = `disc-topic-${crypto.randomUUID().slice(0, 8)}`;
+    await attachTag(pubId, await tagId(slug));
     const r = await fetchWorker(
       `${U}/public/discover?cursor=${encodeURIComponent(uuidSuccessor(pubId))}`,
     );
     expect(r.status).toBe(200);
     expect(r.headers.get("cache-control")).toBe("no-store"); // FRESH api hop, never cached here
-    const body = (await r.json()) as { posts: { id: string }[]; nextCursor: string | null };
+    const body = (await r.json()) as {
+      posts: { id: string; tags: { slug: string; label: string }[] }[];
+      nextCursor: string | null;
+    };
     const ids = body.posts.map((p) => p.id);
     expect(ids[0]).toBe(pubId);          // the just-published post is result #1 (newest <= pubId)
     expect(ids).not.toContain(draftId);  // drafts never surface (excluded by status, not cursor)
+    expect(body.posts[0]!.tags).toEqual([{ slug, label: slug }]);
     // whatever came back is sorted newest-first (id DESC, v7 = time order)
     const desc = [...ids].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
     expect(ids).toEqual(desc);

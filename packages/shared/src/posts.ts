@@ -14,6 +14,12 @@ import { z } from "zod";
 export const PostStatus = z.enum(["draft", "published"]);
 export type PostStatusValue = z.infer<typeof PostStatus>;
 
+/** A tag as rendered: the URL slug + the author-facing display label. */
+export interface TagRef {
+  slug: string;
+  label: string;
+}
+
 /** ~100k characters. Bounds the render cost and the row width. */
 const MARKDOWN_MAX = 100_000;
 
@@ -23,12 +29,18 @@ export const CreatePostInput = z.object({
   // Default draft: publishing must be an explicit act, never the fallback of a
   // client that omitted a field.
   status: PostStatus.default("draft"),
+  // Freeform labels; the server slugifies + dedupes + caps. Trim here so
+  // "  ai  " -> "ai"; empty-after-trim is rejected (min(1)).
+  tags: z.array(z.string().trim().min(1).max(50)).max(5).default([]),
 });
 
 export const UpdatePostInput = z.object({
   title: z.string().trim().min(1).max(200),
   markdownSource: z.string().min(1).max(MARKDOWN_MAX),
   status: PostStatus,
+  // Freeform labels; the server slugifies + dedupes + caps. Trim here so
+  // "  ai  " -> "ai"; empty-after-trim is rejected (min(1)).
+  tags: z.array(z.string().trim().min(1).max(50)).max(5).default([]),
 });
 
 /**
@@ -50,6 +62,7 @@ export interface PublicPost {
   markdownSource: string;
   publishedAt: string;
   updatedAt: string;
+  tags: TagRef[];
 }
 
 export interface PublicPostSummary {
@@ -60,6 +73,7 @@ export interface PublicPostSummary {
   excerptSource: string;
   publishedAt: string;
   updatedAt: string;
+  tags: TagRef[];
 }
 
 export interface PublicProfile {
@@ -81,6 +95,7 @@ export interface AuthoredPost {
   status: PostStatusValue;
   publishedAt: string | null;
   updatedAt: string;
+  tags: TagRef[];
 }
 
 /** What `GET /public/recent` returns — the source for sitemap.xml + rss.xml. */
@@ -93,4 +108,18 @@ export interface DiscoverPage {
   posts: RecentPost[];
   /** The last id on this page, or null when there are no more. */
   nextCursor: string | null;
+}
+
+/** `GET /public/tag` — one keyset page of published posts carrying a tag. */
+export interface TagPage {
+  tag: TagRef;
+  posts: RecentPost[];
+  nextCursor: string | null;
+}
+
+/** A row in `GET /public/tags`: a tag with its published-post count. */
+export interface TagCount {
+  slug: string;
+  label: string;
+  count: number;
 }

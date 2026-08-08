@@ -178,6 +178,19 @@ describe("excerpts — never rendered as HTML", () => {
   });
 });
 
+describe("tag chips (M2.4c)", () => {
+  it("renders a chip per listed post's tags, linking to /tag/<slug> with encodeURIComponent on the slug", () => {
+    // Positive anchor: post.tags is actually mapped, then the exact chip-link
+    // shape — encodeURIComponent'd slug, escaped label, never set:html.
+    expect(code).toMatch(/post\.tags\.map\(/);
+    expect(code).toMatch(/href=\{`\/tag\/\$\{encodeURIComponent\(t\.slug\)\}`\}/);
+    expect(code).toContain("{t.label}");
+    // This page's page-wide "never set:html" invariant (below) already covers
+    // this, but anchor it here too so a regression on THIS feature names tags.
+    expect(code).not.toContain("set:html");
+  });
+});
+
 describe("canonical — a constant origin, never Astro.url", () => {
   it("builds the canonical/OG url from profileUrl, not the request's host", () => {
     expect(code).toContain("profileUrl(");

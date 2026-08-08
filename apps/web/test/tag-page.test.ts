@@ -1,0 +1,61 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+const src = () =>
+  readFileSync(join(import.meta.dirname, "../src/pages/tag/[slug].astro"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+
+describe("tag page (/tag/[slug])", () => {
+  it("is anonymous + edge-cacheable via the `tag:<slug>` tag (one cache helper, byte-matches the api purge literal)", () => {
+    const s = src();
+    expect(s).toMatch(/markPublicCacheable\(Astro,\s*\[\s*`tag:/);
+    expect(s).not.toContain("markPrivate(");
+    expect(s).not.toContain("markFeedCacheable(");
+  });
+  it("builds the cache tag from `page.tag.slug` specifically, not the raw route param (would reintroduce the mixed-case-URL stale-purge bug)", () => {
+    const s = src();
+    expect(s).toContain("markPublicCacheable(Astro, [`tag:${page.tag.slug}`]);");
+  });
+  it("sets the public CSP and uses the shared page chrome", () => {
+    const s = src();
+    expect(s).toContain("setPublicPageCsp(Astro)");
+    expect(s).toMatch(/<PageLayout\s/);
+  });
+  it("reads the tag ANONYMOUSLY (apiFetch without request)", () => {
+    const s = src();
+    expect(s).toContain("/public/tag");
+    expect(s).toContain("apiFetch");
+    expect(s).not.toMatch(/apiFetch<[^>]*>\([^)]*request:/); // no cookie forwarded
+  });
+  it("renders escaped excerpts (markdownExcerpt, never set:html) and a keyset pager with a Newest back-link", () => {
+    const s = src();
+    expect(s).toContain("markdownExcerpt");
+    expect(s).not.toContain("set:html");
+    expect(s).toMatch(/\?cursor=/);
+    expect(s).toContain("← Newest");
+  });
+  it("fails closed (uncached 503) on a non-200 upstream response", () => {
+    const s = src();
+    expect(s).toMatch(/response\.status !== 200/);
+    expect(s).toContain("status: 503");
+  });
+  it("maps an api 400 (non-canonicalizable slug) to 404 — client input, not a transient 503 — before the cache helper (Copilot #2)", () => {
+    const s = src();
+    // the 400 branch must return a 404...
+    expect(s).toMatch(/response\.status === 400[\s\S]*?status:\s*404/);
+    // ...and be evaluated BEFORE the 503 fail-closed and BEFORE markPublicCacheable,
+    // so a client error is neither mislabelled "temporarily unavailable" nor cached.
+    const i400 = s.indexOf("response.status === 400");
+    const i503 = s.indexOf("503");
+    const iCache = s.indexOf("markPublicCacheable(Astro"); // the CALL, not the import
+    expect(i400).toBeGreaterThan(-1);
+    expect(i400).toBeLessThan(i503);
+    expect(i400).toBeLessThan(iCache);
+  });
+  it("percent-encodes every interpolated URL segment", () => {
+    const s = src();
+    expect(s).toContain("encodeURIComponent");
+  });
+});

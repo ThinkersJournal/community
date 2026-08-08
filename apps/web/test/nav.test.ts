@@ -21,6 +21,13 @@ describe("Nav", () => {
     expect(s).not.toContain("apiFetch");
     expect(s).not.toMatch(/Astro\.request/);
   });
+  it("has a static Tags browse link to /tags", () => {
+    const s = src();
+    expect(s).toMatch(/<a\s+href="\/tags"\s*>Tags<\/a>/);
+    // still no data fetching — the nav stays viewer-independent
+    expect(s).not.toContain("apiFetch");
+    expect(s).not.toMatch(/Astro\.request/);
+  });
   it("has the client-hydrated auth slot with an anonymous-default SSR view", () => {
     const s = src();
     expect(s).toMatch(/data-auth-slot/);

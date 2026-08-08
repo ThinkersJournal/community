@@ -198,7 +198,7 @@ export interface PublishedPost {
  */
 export async function publishPost(
   page: Page,
-  post: { title: string; markdownSource: string },
+  post: { title: string; markdownSource: string; tags?: string[] },
 ): Promise<PublishedPost> {
   // M2.1: a public post needs a chosen @handle. Claim one, then publish.
   const username = uniqueHandle("author");
@@ -207,6 +207,7 @@ export async function publishPost(
   await page.goto("/new-post");
   await page.fill("#title", post.title);
   await page.fill("#markdownSource", post.markdownSource);
+  if (post.tags?.length) await page.fill("#tags", post.tags.join(", "));
 
   await page.click("button[value='draft']");
   await expect(page.locator("#saved")).toBeVisible();

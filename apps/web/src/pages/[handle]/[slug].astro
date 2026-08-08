@@ -203,6 +203,16 @@ const jsonLd = {
       <a class="link" href={`/@${encodeURIComponent(post.username)}`}>{post.displayName ?? post.username}</a>
       · <time datetime={post.publishedAt}>{publishedDisplay}</time>
     </p>
+    {/* Freeform tags (M2.4c). encodeURIComponent on the slug in the href — a URL
+        needs percent-encoding; Astro `{}` only HTML-escapes. The label is an
+        Astro `{}` expression (escaped), never set:html. */}
+    {post.tags.length > 0 && (
+      <ul class="tags">
+        {post.tags.map((t) => (
+          <li><a class="tag" href={`/tag/${encodeURIComponent(t.slug)}`}>{t.label}</a></li>
+        ))}
+      </ul>
+    )}
     {/* ⚠️ THE ONE PLACE THIS APP EMITS UNESCAPED HTML (alongside the ld+json
         script above). It is safe for exactly one reason: `html` came out of
         packages/markdown, whose LAST UNSAFE THING is rehype-sanitize. Never
@@ -271,6 +281,9 @@ const jsonLd = {
 <style>
   .post{padding:clamp(40px,7vw,80px) 0;max-width:min(var(--wrap),760px)}
   .post .meta{color:var(--dim);margin:8px 0 28px}
+  .tags{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0}
+  .tags .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}
+  .tags .tag:hover{color:var(--head)}
   #post-body{line-height:1.7}
   #post-body :global(h2),#post-body :global(h3){margin:1.6em 0 .5em}
   #post-body :global(p){margin:0 0 1em}

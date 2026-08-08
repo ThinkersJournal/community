@@ -40,6 +40,8 @@ import {
   handlePublicPost,
   handlePublicProfile,
   handlePublicRecent,
+  handlePublicTag,
+  handlePublicTags,
 } from "./routes/public";
 import {
   handleAddReaction,
@@ -195,6 +197,14 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/public/profile", handler: handlePublicProfile },
   { method: "GET", pattern: "/public/recent", handler: handlePublicRecent },
   { method: "GET", pattern: "/public/discover", handler: handlePublicDiscover },
+
+  // A tag's own keyset page (M2.4c) — same purge-tagged/read-after-write
+  // reasoning as /public/discover above (a post's tag set changes on every
+  // edit) — and the site-wide tag index. Literal patterns, distinct from
+  // each other and from every other /public/* route: no shadow risk. See
+  // src/routes/public.ts.
+  { method: "GET", pattern: "/public/tag", handler: handlePublicTag },
+  { method: "GET", pattern: "/public/tags", handler: handlePublicTags },
 
   // ANONYMOUS social reads (M2.1) — see src/routes/social-public.ts's header:
   // viewer-independent like the routes above, but NOT edge-cached (they change

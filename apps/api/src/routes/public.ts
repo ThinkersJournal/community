@@ -49,6 +49,10 @@ import { MAX_CURSOR } from "@thinkersjournal/shared";
 import { withClient } from "../db/client";
 import { isInvalidTextRepresentation } from "../db/errors";
 import { errorResponse } from "../http/errors";
+// The write path's slug canonicalizer. Reused here so a read (`?slug=`) and a
+// write (which mints the slug the `tag:<slug>` purge emits) canonicalize
+// IDENTICALLY — see slugifyBase's own comment and handlePublicTag's header.
+import { slugifyBase } from "./posts";
 
 import type {
   DiscoverPage,
@@ -56,6 +60,7 @@ import type {
   PublicPostSummary,
   PublicProfile,
   RecentPost,
+  TagPage,
 } from "@thinkersjournal/shared";
 
 const PAGE_SIZE = 20;
@@ -63,6 +68,20 @@ const PAGE_SIZE = 20;
 const RECENT_MAX = 1000;
 /** Enough for an excerpt; bounds the listing payload. */
 const EXCERPT_SOURCE_CHARS = 400;
+/** Bounds the /public/tags listing — a popularity-ordered index, not a page. */
+const TAGS_INDEX_MAX = 100;
+
+/**
+ * Correlated json_agg of a post row `p`'s tags — []-safe (an untagged post gets
+ * `[]`, never a null or a missing key). Interpolated (static; no params of its
+ * own), so every query that embeds it must alias its own post row as `p` — see
+ * handlePublicTag's `ptx`/`te` aliases below, which exist FOR this reason: the
+ * outer join needs its own aliases precisely so `p` stays free for this to bind.
+ * Exported: Task 5 (M2.4c) reuses it verbatim rather than re-deriving it.
+ */
+export const TAGS_AGG = `COALESCE((SELECT json_agg(json_build_object('slug', t.slug, 'label', t.label) ORDER BY t.slug)
+                              FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
+                             WHERE pt.post_id = p.id), '[]'::json) AS tags`;
 
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -101,7 +120,7 @@ export async function handlePublicPost(
     const { rows } = await c.query(
       `SELECT p.id, p.author_id AS "authorId", pr.username, pr.display_name AS "displayName",
               p.title, p.slug, p.markdown_source AS "markdownSource",
-              p.published_at AS "publishedAt", p.updated_at AS "updatedAt"
+              p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
          FROM posts p
          JOIN profiles pr ON pr.user_id = p.author_id
         WHERE pr.username = $1 AND p.slug = $2 AND p.status = 'published'`,
@@ -144,8 +163,8 @@ export async function handlePublicProfile(
       const { rows: posts } = await c.query(
         `SELECT id, title, slug,
                 left(markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
-                published_at AS "publishedAt", updated_at AS "updatedAt"
-           FROM posts
+                published_at AS "publishedAt", updated_at AS "updatedAt", ${TAGS_AGG}
+           FROM posts p
           WHERE author_id = $1 AND status = 'published' AND id < $2
           -- v7 ids are time-ordered, so this IS newest-first. No created_at
           -- index exists, and none is needed. Served by posts_author_published_key.
@@ -223,7 +242,7 @@ export async function handlePublicRecent(
     const { rows } = await c.query(
       `SELECT p.id, p.title, p.slug, pr.username,
               left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
-              p.published_at AS "publishedAt", p.updated_at AS "updatedAt"
+              p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
          FROM posts p
          JOIN profiles pr ON pr.user_id = p.author_id
         WHERE p.status = 'published'
@@ -252,7 +271,7 @@ export async function handlePublicDiscover(
       const { rows } = await c.query(
         `SELECT p.id, p.title, p.slug, pr.username,
                 left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
-                p.published_at AS "publishedAt", p.updated_at AS "updatedAt"
+                p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
            FROM posts p
            JOIN profiles pr ON pr.user_id = p.author_id
           WHERE p.status = 'published' AND p.id < $1
@@ -276,4 +295,130 @@ export async function handlePublicDiscover(
     }
     throw err;
   }
+}
+
+/**
+ * One keyset page of published posts carrying `slug` (M2.4c). Near-clone of
+ * handlePublicDiscover: HYPERDRIVE_FRESH (same purge-tagged/read-after-write
+ * reasoning — see this file's header), jsonNoStore, id-DESC keyset.
+ *
+ * An unknown slug is NOT a 404: it 200s with an empty page and the (canonical)
+ * slug echoed back as its own label, so a client can render "0 posts tagged
+ * <slug>" instead of branching on a lookup miss. (A slug with no `[a-z0-9]`
+ * content DOES 400 — there is no canonical tag to echo — and the web page maps
+ * that 400 to 404, since it is client input, not a transient upstream fault.)
+ *
+ * ⚠️ TWO INVARIANTS, both about what `tag.slug`/`tag.label` may be:
+ *   • `tag.slug` is ALWAYS a canonical `[a-z0-9-]` slug — the raw `slug` param is
+ *     run ONCE through slugifyBase (posts.ts), the SAME function the write path
+ *     mints slugs with. The web page keys its edge-cache tag off `tag.slug`
+ *     (apps/web/src/pages/tag/[slug].astro) and the purge always emits a canonical
+ *     `tag:<slug>` (posts.ts), so any non-canonical `tag.slug` would cache under a
+ *     `tag:` no purge ever names — `/tag/AI` under `tag:AI`, or `?slug=foo bar`
+ *     under `tag:foo bar` — unpurgeable, stale a full maxAge+swr (~25h) window.
+ *     Canonicalizing with the write path's own function keeps the two structurally
+ *     identical; they cannot drift. Migration 0010's header promises "/tag/AI and
+ *     /tag/ai are one cache entry".
+ *   • `tag.label` comes from the `tags` row ONLY when a PUBLISHED post carries the
+ *     tag. `writeTags` upserts into the GLOBAL `tags` table for drafts too, so a
+ *     bare `WHERE slug = $1` would disclose the existence and display label of a
+ *     tag used only on unpublished drafts. The EXISTS guard makes a draft-only tag
+ *     indistinguishable from a never-existed one (both fall back to slug-as-label).
+ */
+export async function handlePublicTag(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const url = new URL(request.url);
+  // Canonicalize through slugifyBase — the SAME function the write path mints
+  // slugs with (posts.ts) — not a bare toLowerCase(). Stored slugs, and every
+  // `tag:<slug>` literal purgeTags emits, are `[a-z0-9-]`; `tag.slug` drives the
+  // web page's edge-cache tag (apps/web/src/pages/tag/[slug].astro), so it MUST
+  // be a slug the purge can name. toLowerCase() alone still let `?slug=foo bar`
+  // cache under `tag:foo bar` — a tag no purge ever emits — lingering a full
+  // maxAge+swr window. slugifyBase folds interior whitespace/punctuation to
+  // hyphens and strips the ends (so `.trim()` is subsumed); input with no
+  // `[a-z0-9]` content collapses to "" and 400s (the web page maps that -> 404).
+  const slug = slugifyBase(url.searchParams.get("slug") ?? "");
+  if (slug === "") return errorResponse("INVALID_INPUT", 400, { fields: ["slug"] });
+  // First page uses the all-f sentinel so ONE query serves page 1 and page N.
+  const cursor = url.searchParams.get("cursor") ?? MAX_CURSOR;
+  try {
+    const page = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      // Resolve the tag's canonical label — but ONLY when a PUBLISHED post carries
+      // it. A tag used only on drafts (writeTags upserts for drafts too) must not
+      // leak its label/existence, so it falls through to the slug-as-label fallback
+      // exactly like an unknown tag. See this function's header.
+      const { rows: tagRows } = await c.query<{ slug: string; label: string }>(
+        `SELECT t.slug, t.label FROM tags t
+          WHERE t.slug = $1
+            AND EXISTS (SELECT 1 FROM post_tags pt JOIN posts p ON p.id = pt.post_id
+                         WHERE pt.tag_id = t.id AND p.status = 'published')`,
+        [slug],
+      );
+      const tag = tagRows[0] ?? { slug, label: slug };
+
+      // ⚠️ `ptx`/`te` aliases on the outer joins — deliberately NOT `pt`/`t` —
+      // so the `p` alias inside TAGS_AGG still binds THIS query's post row
+      // rather than colliding with the aggregate's own inner join.
+      const { rows } = await c.query(
+        `SELECT p.id, p.title, p.slug, pr.username,
+                left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
+                p.published_at AS "publishedAt", p.updated_at AS "updatedAt",
+                ${TAGS_AGG}
+           FROM post_tags ptx
+           JOIN posts p     ON p.id = ptx.post_id
+           JOIN profiles pr ON pr.user_id = p.author_id
+           JOIN tags te     ON te.id = ptx.tag_id
+          WHERE te.slug = $1 AND p.status = 'published' AND p.id < $2
+          ORDER BY p.id DESC
+          LIMIT ${PAGE_SIZE + 1}`,
+        [slug, cursor],
+      );
+      const list = rows as RecentPost[];
+      const hasMore = list.length > PAGE_SIZE;
+      const posts = list.slice(0, PAGE_SIZE);
+      return {
+        tag,
+        posts,
+        nextCursor: hasMore ? posts[posts.length - 1]!.id : null,
+      } satisfies TagPage;
+    });
+    return jsonNoStore(page);
+  } catch (err) {
+    // `id < 'not-a-uuid'` throws 22P02 — the client's error, not a 500.
+    if (isInvalidTextRepresentation(err)) {
+      return errorResponse("INVALID_INPUT", 400, { fields: ["cursor"] });
+    }
+    throw err;
+  }
+}
+
+/**
+ * Every tag with at least one published post, popularity-ordered (M2.4c).
+ * HYPERDRIVE_FRESH like every other route in this file bar handlePublicRecent
+ * (see the file header); `json()` rather than jsonNoStore — this is a small
+ * bounded listing with no purge-tagged edge entry to protect, unlike
+ * handlePublicTag/handlePublicDiscover.
+ */
+export async function handlePublicTags(
+  _request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const tags = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ slug: string; label: string; count: number }>(
+      `SELECT t.slug, t.label, count(*)::int AS count
+         FROM tags t
+         JOIN post_tags pt ON pt.tag_id = t.id
+         JOIN posts p      ON p.id = pt.post_id
+        WHERE p.status = 'published'
+        GROUP BY t.slug, t.label
+        ORDER BY count DESC, t.slug ASC
+        LIMIT ${TAGS_INDEX_MAX}`,
+    );
+    return rows;
+  });
+  return json({ tags });
 }

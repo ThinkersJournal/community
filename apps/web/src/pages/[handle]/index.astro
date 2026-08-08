@@ -184,6 +184,16 @@ const displayDate = (value: string): string => {
                   Never set:html here — this is untrusted source, unsanitized. */}
               <p>{markdownExcerpt(post.excerptSource)}</p>
               <time datetime={post.publishedAt}>{displayDate(post.publishedAt)}</time>
+              {/* Freeform tags (M2.4c). encodeURIComponent on the slug (URL
+                  needs percent-encoding); the label is an Astro `{}`
+                  expression (escaped), never set:html. */}
+              {post.tags.length > 0 && (
+                <ul class="tags">
+                  {post.tags.map((t) => (
+                    <li><a class="tag" href={`/tag/${encodeURIComponent(t.slug)}`}>{t.label}</a></li>
+                  ))}
+                </ul>
+              )}
             </li>
           ))}
         </ul>
@@ -208,4 +218,7 @@ const displayDate = (value: string): string => {
   .social{display:flex;gap:22px;color:var(--muted);margin:18px 0}
   .lists{display:flex;flex-wrap:wrap;gap:12px;margin:18px 0}
   .posts{list-style:none;display:flex;flex-direction:column;gap:24px;margin-top:28px}
+  .tags{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0}
+  .tags .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}
+  .tags .tag:hover{color:var(--head)}
 </style>
