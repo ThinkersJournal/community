@@ -29,10 +29,19 @@
   // Opaque session tokens keyed by `sess:<sha256hex(token)>` (see src/auth/session.ts).
   // The `id` is a FAKE PLACEHOLDER until the real KV namespace is created at
   // first deploy (`wrangler kv namespace create SESSIONS`).
+  //
+  // FOLLOWEES (M2 followee-cache) — each viewer's followee-id list keyed by
+  // `followees:<userId>`, a cache-aside layer over the follow graph (see
+  // src/social/followee-cache.ts). Same deploy dance: the id is a placeholder
+  // until `wrangler kv namespace create FOLLOWEES` at first deploy.
   "kv_namespaces": [
     {
       "binding": "SESSIONS",
       "id": "PLACEHOLDER_SESSIONS_KV_ID_SET_AT_DEPLOY"
+    },
+    {
+      "binding": "FOLLOWEES",
+      "id": "PLACEHOLDER_FOLLOWEES_KV_ID_SET_AT_DEPLOY"
     }
   ],
   // Cloudflare Images. NO zone, NO Images subscription, NO base fee — it is a
