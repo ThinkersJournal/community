@@ -3,6 +3,7 @@
 // Runtime types generated with workerd@1.20260708.1 2026-07-13 nodejs_compat
 interface __BaseEnv_Env {
 	SESSIONS: KVNamespace;
+	FOLLOWEES: KVNamespace;
 	MEDIA: R2Bucket;
 	HYPERDRIVE_CACHED: Hyperdrive;
 	HYPERDRIVE_FRESH: Hyperdrive;
