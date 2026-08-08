@@ -1,16 +1,29 @@
 /**
  * THE FOLLOWEE-GRAPH SEAM. Every feed read routes its "whose posts?" question
- * through this one function. Today it is a single indexed Postgres query; the
- * roadmapped KV followee-list cache (memory: m2-kv-followee-cache-roadmap) drops
- * in HERE — a KV read with a Postgres fallback, invalidated on follow/unfollow —
- * without touching a single feed call site. Do not inline this query elsewhere.
+ * through this one function — now cache-aside over KV (followee-cache.ts) with a
+ * Postgres fallback, invalidated on follow/unfollow. A hit costs ZERO Postgres;
+ * a zero-follow viewer is a cached `[]` that lets the feed skip the posts query
+ * entirely. Do not inline this query elsewhere.
  */
-import type { Client } from "pg";
+import { withClient } from "../db/client";
 
-export async function getFolloweeIds(client: Client, userId: string): Promise<string[]> {
-  const { rows } = await client.query<{ followee_id: string }>(
-    "SELECT followee_id FROM follows WHERE follower_id = $1",
-    [userId],
-  );
-  return rows.map((r) => r.followee_id);
+import { readFolloweeCache, writeFolloweeCache } from "./followee-cache";
+
+export async function getFolloweeIds(
+  env: Env,
+  ctx: ExecutionContext,
+  userId: string,
+): Promise<string[]> {
+  const cached = await readFolloweeCache(env, userId);
+  if (cached !== null) return cached;
+
+  const ids = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ followee_id: string }>(
+      "SELECT followee_id FROM follows WHERE follower_id = $1",
+      [userId],
+    );
+    return rows.map((r) => r.followee_id);
+  });
+  await writeFolloweeCache(env, userId, ids);
+  return ids;
 }

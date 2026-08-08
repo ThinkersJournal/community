@@ -121,6 +121,16 @@ describe("GET /feed", () => {
     expect(body.nextCursor).toBeNull();
   });
 
+  it("populates the viewer's KV followee cache on a feed read (wired through getFolloweeIds)", async () => {
+    const reader = await createVerifiedActor();
+    const author = await createVerifiedActor();
+    await seedFollow(reader.userId, author.userId);
+    expect(await env.FOLLOWEES.get(`followees:${reader.userId}`)).toBeNull(); // cold
+    await getFeed(reader);
+    expect(await env.FOLLOWEES.get(`followees:${reader.userId}`))
+      .toBe(JSON.stringify([author.userId]));
+  });
+
   it("401s without a session", async () => {
     const response = await fetchWorker(new Request("https://api.test/feed"));
     expect(response.status).toBe(401);

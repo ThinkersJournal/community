@@ -40,12 +40,13 @@ export async function handleFeed(
   const cursor = new URL(request.url).searchParams.get("cursor") ?? MAX_CURSOR;
 
   try {
-    const feed = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-      const followeeIds = await getFolloweeIds(c, session.userId);
-      if (followeeIds.length === 0) {
-        return { posts: [], nextCursor: null } satisfies Feed;
-      }
+    const followeeIds = await getFolloweeIds(env, ctx, session.userId);
+    if (followeeIds.length === 0) {
+      // No client opened at all — the whole feed is empty.
+      return feedJson({ posts: [], nextCursor: null });
+    }
 
+    const feed = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const { rows } = await c.query<FeedPost>(
         `SELECT p.id, p.title, p.slug,
                 left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
@@ -60,7 +61,6 @@ export async function handleFeed(
           LIMIT ${PAGE_SIZE + 1}`,
         [followeeIds, cursor],
       );
-
       const hasMore = rows.length > PAGE_SIZE;
       const page = rows.slice(0, PAGE_SIZE);
       return {
