@@ -74,9 +74,19 @@ const PRODUCTION_AND_DEV_ORIGINS: ReadonlySet<string> = new Set([
 
 /** The allowlist in force for `env` — see the note above. */
 function allowedOrigins(env: Env): ReadonlySet<string> {
-  return env.TEST_ROUTES === "1"
-    ? PRODUCTION_AND_DEV_ORIGINS
-    : PRODUCTION_ONLY_ORIGINS;
+  const base =
+    env.TEST_ROUTES === "1" ? PRODUCTION_AND_DEV_ORIGINS : PRODUCTION_ONLY_ORIGINS;
+  // PRE-LAUNCH PREVIEW ORIGIN (temporary). Active ONLY when the optional
+  // `PREVIEW_ORIGIN` var is present at deploy (`wrangler deploy --var
+  // PREVIEW_ORIGIN:https://<worker>.workers.dev`). It lets mutations be tested on
+  // the *.workers.dev hostname before DNS points the real domain here. It is NOT
+  // in wrangler.jsonc's `vars`, so real production (deployed without the flag)
+  // never sees it and it cannot drift — redeploy without the flag at DNS launch
+  // and this collapses back to `base`.
+  if (env.PREVIEW_ORIGIN !== undefined && env.PREVIEW_ORIGIN !== "") {
+    return new Set([...base, env.PREVIEW_ORIGIN]);
+  }
+  return base;
 }
 
 /**
