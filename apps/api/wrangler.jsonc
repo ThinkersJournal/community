@@ -6,7 +6,7 @@
   "compatibility_date": "2026-07-13",
   "compatibility_flags": ["nodejs_compat"],
   // The api has NO public route — the web Worker's service binding is its whole
-  // surface (see src/index.ts / lib/api.ts). Keep it off workers.dev.
+  // surface (see src/index.ts and apps/web/src/lib/api.ts). Keep it off workers.dev.
   "workers_dev": false,
   // Dual Hyperdrive bindings over the same Postgres.
   //   HYPERDRIVE_FRESH  = cache-disabled (`--caching-disabled`) — used for ALL
