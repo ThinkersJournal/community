@@ -29,7 +29,7 @@ let message = "";
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
 
-  const response = await apiFetch<{ code?: string; suggestions?: string[] }>(
+  const response = await apiFetch<{ code?: string; message?: string; suggestions?: string[] }>(
     "/auth/signup",
     {
       method: "POST",
@@ -73,6 +73,14 @@ if (Astro.request.method === "POST") {
       message = suggestions.length
         ? `That handle is taken. Available: ${suggestions.map((h) => "@" + h).join(", ")}.`
         : "That handle is taken — please choose another.";
+    } else if (response.status === 400 && response.data?.message) {
+      // Of the two 400 causes, only the RESERVED handle carries a `message`
+      // (apps/api/src/routes/signup.ts:99-104) — a static, non-reflective
+      // string safe to surface verbatim (see that route's comment at
+      // signup.ts:88-89). The plain zod bad-format 400 has no `message`, so
+      // it falls through to the generic copy below rather than showing
+      // nothing meaningful.
+      message = response.data.message;
     } else {
       message =
         response.status === 409
