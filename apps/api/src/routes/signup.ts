@@ -50,20 +50,13 @@ import {
 import { base64urlEncode } from "../auth/encoding";
 import { hashPassword } from "../auth/password";
 import { enforceRateLimit } from "../auth/ratelimit";
+import { RESERVED_USERNAMES } from "../auth/reserved-usernames";
 import { createSession } from "../auth/session";
 import { verifyTurnstile } from "../auth/turnstile";
+import { suggestUsernames } from "../auth/username-suggest";
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
 import { isUniqueViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
-import { randomSuffix } from "../util/random";
-
-import type { Client } from "pg";
-
-/** Longest sanitized email local-part kept as a generated username's base. */
-const USERNAME_BASE_MAX = 20;
-
-/** Attempts to place a generated username before giving up (see `insertProfile`). */
-const USERNAME_ATTEMPTS = 3;
 
 /**
  * The 403 returned for BOTH a failed Turnstile challenge and a rejected origin.
@@ -71,89 +64,6 @@ const USERNAME_ATTEMPTS = 3;
  */
 function forbidden(): Response {
   return errorResponse("FORBIDDEN", 403);
-}
-
-/**
- * Generate a username from an email address.
- *
- * `profiles.username` is NOT NULL UNIQUE but `SignupInput` carries NO username
- * field — signup must therefore MINT one. (User-CHOSEN usernames are M1 profile
- * editing; do not add a username field here.)
- *
- * The email local-part is sanitized to `[a-z0-9_]`, truncated, and given a
- * ~64-bit random base36 suffix. The suffix is what makes the result unique:
- * collisions are negligible at that entropy, and `insertProfile` still retries
- * on the unique violation rather than trusting the odds.
- *
- * ⚠️ The sanitized local-part leaks a hint of the email address to anyone who
- * can see the username. That is accepted for the auto-generated M0 default
- * (it is what most platforms do, and the user renames it in M1) — but it is the
- * reason the base is truncated and never the full address.
- */
-function generateUsername(email: string): string {
-  const local = email.slice(0, email.lastIndexOf("@")).toLowerCase();
-  // Strip everything outside the allowed charset; an address whose local-part is
-  // entirely non-ASCII sanitizes to "" and falls back to "user".
-  const base = local.replace(/[^a-z0-9_]/g, "").slice(0, USERNAME_BASE_MAX);
-  return `${base === "" ? "user" : base}_${randomSuffix()}`;
-}
-
-/**
- * INSERT the profile row, retrying with a freshly generated username if the
- * `profiles.username` unique index rejects it.
- *
- * The SAVEPOINT is what makes a retry possible at all: in Postgres ANY failed
- * statement poisons the enclosing transaction ("current transaction is aborted"),
- * so without rolling back to a savepoint the retry — and the COMMIT — would fail
- * too. Only a unique violation is retried; anything else propagates and rolls
- * the whole signup back.
- *
- * ⚠️ TWO DIFFERENT UNIQUE INDEXES, ONLY ONE OF THEM SWALLOWED. `ON CONFLICT
- * (user_id) DO NOTHING` names the PK alone, so a re-signup over a user that
- * ALREADY has a profile is a silent no-op (that is the point — the caller runs
- * this on every path and no longer has to assume the row is there). A
- * `profiles.username` collision is a different index, is NOT covered by that
- * conflict target, and still surfaces as 23505 — which is exactly what the retry
- * loop below needs, since the mint-a-new-suffix recovery only makes sense for
- * the username. Do not widen the target to `DO NOTHING` on every conflict: that
- * would swallow username collisions into a signup that silently has no profile.
- */
-async function insertProfile(client: Client, userId: string, email: string): Promise<void> {
-  for (let attempt = 1; attempt <= USERNAME_ATTEMPTS; attempt++) {
-    await client.query("SAVEPOINT profile_insert");
-    try {
-      await client.query(
-        `INSERT INTO profiles (user_id, username) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO NOTHING`,
-        [userId, generateUsername(email)],
-      );
-      await client.query("RELEASE SAVEPOINT profile_insert");
-      return;
-    } catch (err) {
-      // The recovery gets its OWN try/catch so it cannot REPLACE the root error:
-      // on a dead connection this ROLLBACK throws too, and an escaping rollback
-      // failure would bury `err` — the actual cause — leaving a "connection
-      // terminated" in the logs with no trace of what really went wrong.
-      let recovered = true;
-      try {
-        await client.query("ROLLBACK TO SAVEPOINT profile_insert");
-      } catch (rollbackErr) {
-        recovered = false;
-        console.error(
-          "ROLLBACK TO SAVEPOINT after a failed profile insert failed",
-          rollbackErr,
-        );
-      }
-
-      // Retry ONLY a username collision we actually rolled back: without the
-      // savepoint rollback the transaction stays poisoned ("current transaction
-      // is aborted"), so a retry — and the COMMIT — would fail anyway. Either
-      // way `err`, not the rollback failure, is what propagates.
-      if (!recovered || !isUniqueViolation(err) || attempt === USERNAME_ATTEMPTS) {
-        throw err;
-      }
-    }
-  }
 }
 
 /**
@@ -181,7 +91,17 @@ export async function handleSignup(
       fields: parsed.error.issues.map((issue) => issue.path.map(String).join(".")),
     });
   }
-  const { email, password, turnstileToken } = parsed.data;
+  const { email, password, username, turnstileToken } = parsed.data;
+
+  // Pure, no-I/O — belongs with the zod validation above, not with the
+  // I/O-bearing checks below. `username` is already trimmed + lowercased by
+  // `SignupInput`, matching the (also-lowercase) `RESERVED_USERNAMES` entries.
+  if (RESERVED_USERNAMES.has(username)) {
+    return errorResponse("INVALID_INPUT", 400, {
+      fields: ["username"],
+      message: "That handle is reserved.",
+    });
+  }
 
   // ---- 2. Origin (CSRF) — before the limiter, and before any I/O -----------
   // See the file header's ORIGIN BEFORE THE LIMITER note: quota must only ever
@@ -304,94 +224,122 @@ export async function handleSignup(
   // against real Postgres, so drift breaks them loudly. Residual gap:
   // test/postgres-version.db.test.ts asserts `>= 18`, so it would not catch a
   // behavior change on some FUTURE major — re-verify this idiom when upgrading.
-  const upserted = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    // NOT a bare `BEGIN`: this transaction holds a row lock across the epoch
-    // bump's DO RPC below, so its lock hold is bounded database-side. See
-    // `BEGIN_BOUNDED_TX` in src/db/client.ts for the values and why they cannot
-    // live on the connection.
-    await c.query(BEGIN_BOUNDED_TX);
-    try {
-      const { rows } = await c.query<{ id: string; inserted: boolean }>(
-        `INSERT INTO users (email, password_hash)
-              VALUES ($1, $2)
-         ON CONFLICT (email) DO UPDATE
-                 SET password_hash = EXCLUDED.password_hash
-               WHERE users.email_verified_at IS NULL
-           RETURNING id, (xmax = 0) AS inserted`,
-        [email, passwordHash],
-      );
-
-      const row = rows[0] ?? null;
-      if (row === null) {
-        // A VERIFIED account owns this address. Nothing was written.
-        await c.query("ROLLBACK");
-        return null;
-      }
-
-      // ---- Epoch bump — RE-SIGNUP ONLY, and BEFORE THE COMMIT ---------------
-      // ⚠️ LOAD-BEARING SECURITY STEP, and half of the account-takeover fix
-      // documented at the top of src/routes/verify-email.ts. Taking over an
-      // unverified account changes its password, so every session issued against
-      // the OLD password must die. Bumping the epoch does that in O(1): each of
-      // those sessions carries a now-stale `securityEpoch` and fails the
-      // revocation check. WITHOUT it, the previous claimant's surviving session
-      // satisfies that route's auth checks by itself and their click on the old
-      // emailed link verifies an account holding SOMEONE ELSE'S password. Do not
-      // remove; test/signup.test.ts pins this.
-      //
-      // ⚠️ ORDER: INSIDE the transaction, BEFORE the COMMIT — NOT after it.
-      // Revoke-then-mutate is the fail-safe direction and it survives the move to
-      // an upsert intact, because what matters is not which line runs first but
-      // what is OBSERVABLE. The bump is a Durable Object call and is NOT part of
-      // this transaction, so the two can fail independently:
-      //   • bump throws  -> the catch below ROLLS BACK -> the new password never
-      //                     existed. The OLD password stays live and nothing was
-      //                     granted. Harmless.
-      //   • COMMIT throws after a successful bump -> the password never changes
-      //                     and the previous claimant is merely logged out of an
-      //                     account nobody took over. Harmless — and unverified
-      //                     accounts cannot mutate content anyway (auth/pipeline).
-      // Committing FIRST and bumping after would invert this into the takeover
-      // state: the attacker's password live, the victim's session UNREVOKED and
-      // its epoch still MATCHING, so the victim's own click on their emailed link
-      // verifies an account holding the attacker's password. `bumpEpoch` is
-      // load-bearing precisely WHEN it fails, so "it is only a crash window" is
-      // not a defense. The COMMIT is the gate: no observer can ever see the new
-      // password unless the bump already succeeded.
-      //
-      // The cost is that the re-signup path holds this connection and the row's
-      // lock across one DO round-trip. That is bounded, far cheaper than the
-      // Argon2id hash already done above (outside the tx), and only on re-signup.
-      if (!row.inserted) {
-        await env.USER_SECURITY.getByName(row.id).bumpEpoch();
-      }
-
-      // Runs on EVERY path, not just the insert: `ON CONFLICT (user_id) DO
-      // NOTHING` makes it a no-op when the profile is already there, so a
-      // re-signup no longer has to ASSUME the unverified row has one — a user
-      // without a profile heals here instead. Note the two ON CONFLICTs target
-      // DIFFERENT indexes: `profiles.user_id` (swallowed) and `profiles.username`
-      // (still raised as 23505, still retried under the savepoint).
-      await insertProfile(c, row.id, email);
-
-      await c.query("COMMIT");
-      return row;
-    } catch (err) {
-      // The ROLLBACK gets its OWN try/catch so it cannot REPLACE the root error:
-      // if the connection is dead, ROLLBACK throws too and `throw err` below
-      // would never run — the caller would see "connection terminated" instead of
-      // whatever actually failed the signup.
+  // ⚠️ WRAPPED IN A try/catch — the ONLY unique violation that can escape this
+  // transaction is `profiles.username`: `users.email` and `profiles.user_id`
+  // are both named by an `ON CONFLICT ... DO UPDATE` above/below, so neither
+  // can raise 23505. A username collision therefore means exactly one thing —
+  // someone else already holds the chosen handle — and is translated to a 409
+  // with a few available alternatives. Anything else rethrows unchanged.
+  let upserted: { id: string; inserted: boolean } | null;
+  try {
+    upserted = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      // NOT a bare `BEGIN`: this transaction holds a row lock across the epoch
+      // bump's DO RPC below, so its lock hold is bounded database-side. See
+      // `BEGIN_BOUNDED_TX` in src/db/client.ts for the values and why they cannot
+      // live on the connection.
+      await c.query(BEGIN_BOUNDED_TX);
       try {
-        await c.query("ROLLBACK");
-      } catch (rollbackErr) {
-        console.error(
-          "ROLLBACK after a failed signup transaction failed",
-          rollbackErr,
+        const { rows } = await c.query<{ id: string; inserted: boolean }>(
+          `INSERT INTO users (email, password_hash)
+                VALUES ($1, $2)
+           ON CONFLICT (email) DO UPDATE
+                   SET password_hash = EXCLUDED.password_hash
+                 WHERE users.email_verified_at IS NULL
+             RETURNING id, (xmax = 0) AS inserted`,
+          [email, passwordHash],
         );
+
+        const row = rows[0] ?? null;
+        if (row === null) {
+          // A VERIFIED account owns this address. Nothing was written.
+          await c.query("ROLLBACK");
+          return null;
+        }
+
+        // ---- Epoch bump — RE-SIGNUP ONLY, and BEFORE THE COMMIT ---------------
+        // ⚠️ LOAD-BEARING SECURITY STEP, and half of the account-takeover fix
+        // documented at the top of src/routes/verify-email.ts. Taking over an
+        // unverified account changes its password, so every session issued against
+        // the OLD password must die. Bumping the epoch does that in O(1): each of
+        // those sessions carries a now-stale `securityEpoch` and fails the
+        // revocation check. WITHOUT it, the previous claimant's surviving session
+        // satisfies that route's auth checks by itself and their click on the old
+        // emailed link verifies an account holding SOMEONE ELSE'S password. Do not
+        // remove; test/signup.test.ts pins this.
+        //
+        // ⚠️ ORDER: INSIDE the transaction, BEFORE the COMMIT — NOT after it.
+        // Revoke-then-mutate is the fail-safe direction and it survives the move to
+        // an upsert intact, because what matters is not which line runs first but
+        // what is OBSERVABLE. The bump is a Durable Object call and is NOT part of
+        // this transaction, so the two can fail independently:
+        //   • bump throws  -> the catch below ROLLS BACK -> the new password never
+        //                     existed. The OLD password stays live and nothing was
+        //                     granted. Harmless.
+        //   • COMMIT throws after a successful bump -> the password never changes
+        //                     and the previous claimant is merely logged out of an
+        //                     account nobody took over. Harmless — and unverified
+        //                     accounts cannot mutate content anyway (auth/pipeline).
+        // Committing FIRST and bumping after would invert this into the takeover
+        // state: the attacker's password live, the victim's session UNREVOKED and
+        // its epoch still MATCHING, so the victim's own click on their emailed link
+        // verifies an account holding the attacker's password. `bumpEpoch` is
+        // load-bearing precisely WHEN it fails, so "it is only a crash window" is
+        // not a defense. The COMMIT is the gate: no observer can ever see the new
+        // password unless the bump already succeeded.
+        //
+        // The cost is that the re-signup path holds this connection and the row's
+        // lock across one DO round-trip. That is bounded, far cheaper than the
+        // Argon2id hash already done above (outside the tx), and only on re-signup.
+        if (!row.inserted) {
+          await env.USER_SECURITY.getByName(row.id).bumpEpoch();
+        }
+
+        // Runs on EVERY path, not just the insert: `ON CONFLICT (user_id) DO
+        // UPDATE` both heals a user row that somehow has no profile (insert) AND
+        // lets a re-signup change its handle (update) — a re-signup no longer has
+        // to ASSUME the unverified row's existing username is the one being kept.
+        // Note the two ON CONFLICTs target DIFFERENT indexes: `profiles.user_id`
+        // (handled here, always succeeds) and `profiles.username` (NOT a conflict
+        // target of this statement, so a collision still raises 23505 and is
+        // caught by the try/catch wrapping this whole transaction below).
+        await c.query(
+          `INSERT INTO profiles (user_id, username) VALUES ($1, $2)
+           ON CONFLICT (user_id) DO UPDATE SET username = EXCLUDED.username`,
+          [row.id, username],
+        );
+
+        await c.query("COMMIT");
+        return row;
+      } catch (err) {
+        // The ROLLBACK gets its OWN try/catch so it cannot REPLACE the root error:
+        // if the connection is dead, ROLLBACK throws too and `throw err` below
+        // would never run — the caller would see "connection terminated" instead of
+        // whatever actually failed the signup.
+        try {
+          await c.query("ROLLBACK");
+        } catch (rollbackErr) {
+          console.error(
+            "ROLLBACK after a failed signup transaction failed",
+            rollbackErr,
+          );
+        }
+        throw err;
       }
-      throw err;
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      // A fresh connection: the one above is already being torn down by
+      // `withClient`'s `finally`, and its transaction rolled back above.
+      const suggestions = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+        suggestUsernames(c, username),
+      );
+      return errorResponse("USERNAME_TAKEN", 409, {
+        fields: ["username"],
+        suggestions,
+      });
     }
-  });
+    throw err;
+  }
 
   // Zero rows came back: a VERIFIED account owns this address (see the guard).
   if (upserted === null) {
