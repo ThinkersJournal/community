@@ -5,43 +5,44 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-13",
   "compatibility_flags": ["nodejs_compat"],
+  // The api has NO public route — the web Worker's service binding is its whole
+  // surface (see src/index.ts and apps/web/src/lib/api.ts). Keep it off workers.dev.
+  "workers_dev": false,
   // Dual Hyperdrive bindings over the same Postgres.
   //   HYPERDRIVE_FRESH  = cache-disabled (`--caching-disabled`) — used for ALL
   //     auth / session / permission / dup-email / verify / read-after-write
   //     reads. Hyperdrive never invalidates on write, so a cached auth/verify
   //     read is a real security bug.
   //   HYPERDRIVE_CACHED = 60s cache — ONLY public feeds/listings.
-  // The `id`s are FAKE PLACEHOLDERS until Task 6b, which creates the real
-  // configs at first deploy (`wrangler hyperdrive create tj-cached ...` and
-  // `... tj-fresh ... --caching-disabled`) and pastes the returned ids here.
+  // The `id`s below are the LIVE Hyperdrive configs, created at first deploy
+  // (2026-08-08): `tj-hyperdrive-cached` and `tj-hyperdrive-fresh`
+  // (`--caching-disabled`), both over the same Neon Postgres.
   // Local tests resolve both bindings to the test DB via `miniflare.hyperdrives`
   // in vitest.config.ts, so these ids are never dereferenced in tests.
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE_CACHED",
-      "id": "PLACEHOLDER_CACHED_ID_SET_IN_TASK_6B"
+      "id": "8e0f6c638c1941e880ecceb802041e60"
     },
     {
       "binding": "HYPERDRIVE_FRESH",
-      "id": "PLACEHOLDER_FRESH_ID_SET_IN_TASK_6B"
+      "id": "0c47794783ec473bbbf7b4769fe0c98f"
     }
   ],
   // Opaque session tokens keyed by `sess:<sha256hex(token)>` (see src/auth/session.ts).
-  // The `id` is a FAKE PLACEHOLDER until the real KV namespace is created at
-  // first deploy (`wrangler kv namespace create SESSIONS`).
+  // The `id` below is the LIVE KV namespace (created at first deploy 2026-08-08).
   //
   // FOLLOWEES (M2 followee-cache) — each viewer's followee-id list keyed by
   // `followees:<userId>`, a cache-aside layer over the follow graph (see
-  // src/social/followee-cache.ts). Same deploy dance: the id is a placeholder
-  // until `wrangler kv namespace create FOLLOWEES` at first deploy.
+  // src/social/followee-cache.ts). The id below is the LIVE namespace.
   "kv_namespaces": [
     {
       "binding": "SESSIONS",
-      "id": "PLACEHOLDER_SESSIONS_KV_ID_SET_AT_DEPLOY"
+      "id": "54a738c5fe30458ab2980260a88b3e79"
     },
     {
       "binding": "FOLLOWEES",
-      "id": "PLACEHOLDER_FOLLOWEES_KV_ID_SET_AT_DEPLOY"
+      "id": "12b22c01a86249569d67e91f6b4758d0"
     }
   ],
   // Cloudflare Images. NO zone, NO Images subscription, NO base fee — it is a

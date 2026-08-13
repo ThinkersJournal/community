@@ -217,6 +217,85 @@ describe("checkOrigin — the TEST_ROUTES gate on the dev origins", () => {
 });
 
 /**
+ * THE PRE-LAUNCH `PREVIEW_ORIGIN` MECHANISM (src/auth/csrf.ts).
+ *
+ * A temporary, deploy-time-only affordance: setting the optional `PREVIEW_ORIGIN`
+ * var (`wrangler deploy --var PREVIEW_ORIGIN:https://<worker>.workers.dev`) adds
+ * exactly that one origin to the allowlist, so mutations (signup/login) can be
+ * exercised on the `*.workers.dev` hostname BEFORE DNS points the real domain at
+ * the Worker. It is NOT in wrangler.jsonc's `vars`, so a normal production deploy
+ * (no `--var`) never sees it and it collapses back to the base allowlist.
+ *
+ * The security-load-bearing pair here is (a) the preview origin is accepted ONLY
+ * when the var names it, and (b) it is REJECTED the moment the var is absent or
+ * empty — i.e. it is genuinely additive and cannot silently persist after the
+ * `--var` is dropped at DNS launch. Both `Origin` and `Referer` branches must
+ * honour it, and it must add to — never replace — the production origin.
+ */
+describe("checkOrigin — the pre-launch PREVIEW_ORIGIN affordance", () => {
+  const PREVIEW = "https://thinkersjournal-web.ciresnave.workers.dev";
+  // Production shape (TEST_ROUTES unset) PLUS the preview origin — this is
+  // exactly the shipped preview deploy: prod allowlist, no dev origins, one
+  // extra workers.dev host.
+  const PREVIEW_ENV = {
+    ...env,
+    TEST_ROUTES: undefined,
+    PREVIEW_ORIGIN: PREVIEW,
+  } as unknown as Env;
+
+  it("allows a POST from the preview origin when PREVIEW_ORIGIN names it", () => {
+    expect(checkOrigin(PREVIEW_ENV, postRequest({ Origin: PREVIEW }))).toBe(true);
+  });
+
+  it("honours the preview origin via the Referer fallback too", () => {
+    const request = postRequest({ Referer: `${PREVIEW}/signup` });
+    expect(checkOrigin(PREVIEW_ENV, request)).toBe(true);
+  });
+
+  it("still allows the production origin when PREVIEW_ORIGIN is set (additive, not a replacement)", () => {
+    expect(
+      checkOrigin(
+        PREVIEW_ENV,
+        postRequest({ Origin: "https://community.thinkersjournal.com" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("REJECTS the preview origin when PREVIEW_ORIGIN is unset (the var must be load-bearing)", () => {
+    // PROD_ENV has no PREVIEW_ORIGIN at all — dropping the `--var` at DNS launch
+    // must make this origin stop working, or the affordance could silently
+    // outlive its purpose.
+    expect(checkOrigin(PROD_ENV, postRequest({ Origin: PREVIEW }))).toBe(false);
+  });
+
+  it.each(["", undefined])(
+    "treats PREVIEW_ORIGIN=%j as OFF — an empty/absent value adds nothing",
+    (value) => {
+      const emptyEnv = {
+        ...env,
+        TEST_ROUTES: undefined,
+        PREVIEW_ORIGIN: value,
+      } as unknown as Env;
+      expect(checkOrigin(emptyEnv, postRequest({ Origin: PREVIEW }))).toBe(false);
+      // ...and an empty PREVIEW_ORIGIN must not disturb the production origin.
+      expect(
+        checkOrigin(
+          emptyEnv,
+          postRequest({ Origin: "https://community.thinkersjournal.com" }),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("does not treat PREVIEW_ORIGIN as a substring/prefix match", () => {
+    // The check is exact-set membership. A look-alike origin that merely starts
+    // with the preview host must not slip through.
+    const lookalike = "https://thinkersjournal-web.ciresnave.workers.dev.evil.com";
+    expect(checkOrigin(PREVIEW_ENV, postRequest({ Origin: lookalike }))).toBe(false);
+  });
+});
+
+/**
  * The allowlist is a property of the METHOD CLASS (anything not GET/HEAD), not
  * of POST. Only POST was exercised above; a `method === "POST"` check
  * substituted for the safe-method guard would pass every one of those cases

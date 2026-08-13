@@ -18,6 +18,7 @@ interface __BaseEnv_Env {
 	TURNSTILE_SECRET_KEY: string;
 	POSTMARK_SERVER_TOKEN: string;
 	TEST_ROUTES: string;
+	PREVIEW_ORIGIN?: string;
 	PURGE_SECRET: string;
 	UNSUBSCRIBE_SIGNING_KEY: string;
 	USER_SECURITY: DurableObjectNamespace<import("./index").UserSecurityDO>;
