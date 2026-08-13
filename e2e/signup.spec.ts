@@ -93,7 +93,11 @@ test.describe("signup -> verify -> post, across both Workers", () => {
     page,
   }) => {
     const email = uniqueEmail("unverified");
-    const handle = uniqueHandle("stillunverified");
+    // ⚠️ Short prefix: uniqueHandle appends a 16-char hex suffix + "_" (17
+    // chars), and the signup form's handle field caps at `maxlength="30"` —
+    // a longer prefix like "stillunverified" (15) pushes the total to 32,
+    // over the limit.
+    const handle = uniqueHandle("unv");
 
     await signUp(page, email, handle);
     await expect(page.locator("#check-email")).toBeVisible();
@@ -125,7 +129,22 @@ test.describe("signup with a chosen @handle", () => {
 
     // The handle is live the instant signup succeeds — no separate claim
     // step, no delay: the author page resolves right away.
-    await page.goto(`/@${username}`);
+    //
+    // ⚠️ ASSERT THE RESPONSE STATUS, NOT JUST THE URL. `page.goto()` does NOT
+    // throw on a 4xx, and apps/web/src/pages/[handle]/index.astro answers an
+    // UNKNOWN handle with a bare 404 at this EXACT url shape — no redirect
+    // elsewhere. A `toHaveURL` check alone would pass identically whether the
+    // profile actually rendered (200) or 404'd, which is precisely the
+    // signup->profile linkage this test exists to prove, so it would not
+    // fail even if that linkage were broken. The status check below is the
+    // load-bearing assertion; `[data-social-counts]` (only present on a real
+    // profile render, never on the 404's empty body) is belt-and-braces.
+    const response = await page.goto(`/@${username}`);
+    expect(
+      response?.status(),
+      "the author page did not resolve (404?) for a handle just chosen at signup",
+    ).toBe(200);
+    await expect(page.locator("[data-social-counts]")).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/@${username}$`));
   });
 
