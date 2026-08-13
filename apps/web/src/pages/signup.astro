@@ -111,7 +111,7 @@ if (Astro.request.method === "POST") {
             <label>
               Handle
               <input type="text" name="username" required minlength="3" maxlength="30"
-                     pattern="[a-z0-9_]+" title="3–30 lowercase letters, numbers, or _" />
+                     pattern="[A-Za-z0-9_]+" title="3–30 letters, numbers, or _ (automatically lowercased)" />
               <small>Your @handle is permanent — choose carefully.</small>
             </label>
             <label>
