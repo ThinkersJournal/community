@@ -19,8 +19,8 @@ import Wordmark from './Wordmark.astro';
         <input type="search" name="q" placeholder="Search" aria-label="Search" minlength="2" maxlength="100" required />
       </form>
       <span class="notify" data-notify-bell hidden>
-        <button type="button" class="bell" data-notify-toggle aria-label="Notifications">🔔<span class="badge" data-notify-badge hidden></span></button>
-        <div class="notify-panel" data-notify-panel hidden></div>
+        <button type="button" class="bell" data-notify-toggle aria-label="Notifications" aria-haspopup="true" aria-expanded="false" aria-controls="notify-panel">🔔<span class="badge" data-notify-badge hidden></span></button>
+        <div class="notify-panel" data-notify-panel id="notify-panel" hidden></div>
       </span>
       <span class="auth" data-auth-slot>
         <a href="/login">Sign in</a>
@@ -39,6 +39,13 @@ import Wordmark from './Wordmark.astro';
   .auth .signout{font:inherit;color:var(--muted);background:none;border:0;padding:0;cursor:pointer}
   .auth .signout:hover{color:var(--text)}
   .notify{position:relative;display:flex;align-items:center}
+  /* The bell reveal (auth) and the panel open/close both drive the `hidden`
+     attribute; the display:flex on .notify / .notify-panel (author origin)
+     would otherwise defeat the UA sheet's [hidden]{display:none}. This
+     higher-specificity guard restores it, so `el.hidden = true` actually hides
+     — fixing the empty "oval" (panel shown when it should be hidden) and the
+     un-closable dropdown (panel.hidden = true was inert). */
+  .notify[hidden],.notify-panel[hidden]{display:none}
   .bell{position:relative;font:inherit;font-size:17px;line-height:1;color:var(--muted);
     background:none;border:0;padding:4px;cursor:pointer}
   .bell:hover{color:var(--text)}

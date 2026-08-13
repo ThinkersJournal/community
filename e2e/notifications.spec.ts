@@ -66,3 +66,54 @@ test("comment → author's bell shows 1 → open → read → clears; follow bum
     await bCtx.close();
   }
 });
+
+/**
+ * THE DROPDOWN UI CONTRACT — a real browser, where the CSS cascade actually
+ * applies (the unit suites only see source text). Regression coverage for the
+ * pre-launch fix: the empty panel must NOT render until opened (the "empty
+ * oval"), and the dropdown must close on a second bell click, an outside click,
+ * and Escape — none of which worked while `.notify-panel{display:flex}` was
+ * defeating the `hidden` attribute. Only sign-in is needed (the bell reveals on
+ * any signed-in page); no notifications required — an empty panel still opens.
+ */
+test("nav bell dropdown: hidden by default, opens, and closes on re-click / outside-click / Escape", async ({
+  page,
+}) => {
+  await signUpAndVerify(page, page.request);
+  await page.goto("/");
+
+  const bell = page.locator("[data-notify-bell]");
+  const toggle = page.locator("[data-notify-toggle]");
+  const panel = page.locator("[data-notify-panel]");
+
+  // Revealed for the signed-in viewer; the panel is NOT shown yet (no oval).
+  await expect(bell).toBeVisible();
+  await expect(panel).toBeHidden();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+  // Open.
+  await toggle.click();
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("No notifications yet.");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+  // A second click on the bell closes it (the primary bug: this was inert).
+  await toggle.click();
+  await expect(panel).toBeHidden();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+  // Re-open, then dismiss by clicking OUTSIDE the bell subtree. The nav search
+  // box is a stable, non-navigating element outside [data-notify-bell].
+  await toggle.click();
+  await expect(panel).toBeVisible();
+  await page.locator('input[name="q"]').click();
+  await expect(panel).toBeHidden();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+  // Re-open, then dismiss with Escape.
+  await toggle.click();
+  await expect(panel).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+});
