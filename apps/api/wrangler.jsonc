@@ -164,7 +164,12 @@
   ],
   // Email outbox drains (M2.3c) — api's FIRST cron. */2 = instant pass; the daily
   // 14:00 UTC = digest pass. src/index.ts's scheduled() branches on controller.cron.
-  "triggers": { "crons": ["*/2 * * * *", "0 14 * * *"] },
+  //
+  // 03:30 UTC = the unverified-account reaper (handle-at-signup Task 8) — hard-
+  // deletes accounts that never verified within 7 days, freeing squatted
+  // handles + emails. See src/auth/reap-unverified.ts. Its own explicit branch
+  // in scheduled(), checked BEFORE the digest/instant dispatch above.
+  "triggers": { "crons": ["*/2 * * * *", "0 14 * * *", "30 3 * * *"] },
   "observability": {
     "enabled": true
   }

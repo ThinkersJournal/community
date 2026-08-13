@@ -7,7 +7,14 @@
  * issued by this Worker. That token verifies an arbitrary account, so if this
  * route ever answered in production it would be a full account-takeover vector.
  *
- * Three layers keep that from happening:
+ * `POST /__test/reap-unverified` (handle-at-signup Task 8) invokes the daily
+ * unverified-account reaper (src/auth/reap-unverified.ts) on demand and
+ * returns how many rows it deleted — a test seam for exercising a cron-only
+ * code path from an ordinary HTTP request. Lower blast radius than the token
+ * route (it only deletes accounts that are ALREADY 7+ days unverified), but
+ * it is still an unthrottled DELETE trigger and gets the same gate.
+ *
+ * Three layers keep both from reaching production:
  *   1. `TEST_ROUTES` is set ONLY in the gitignored `.dev.vars` (local dev) and
  *      in `miniflare.bindings` in vitest.config.ts (tests). It is deliberately
  *      NOT in wrangler.jsonc's `vars`, so a deploy cannot carry it along.
@@ -16,13 +23,20 @@
  *      making the route byte-for-byte indistinguishable from a path that does
  *      not exist. It does not 403, which would confirm the route exists.
  *   3. `createVerificationToken` only writes the stash under the same `=== "1"`
- *      condition, so in production the KV key this route reads never exists.
+ *      condition, so in production the KV key the token route reads never
+ *      exists.
  *
- * test/email-verify.test.ts covers both states, including the unset-TEST_ROUTES
- * 404.
+ * test/email-verify.test.ts covers both states for the token route, including
+ * the unset-TEST_ROUTES 404. `POST /__test/reap-unverified` additionally runs
+ * `checkOrigin` inline (same as signup/login — see src/auth/csrf.ts) so it
+ * carries the SAME default-deny shape as every other mutating route in
+ * src/routes.ts, even though `TEST_ROUTES` already makes it unreachable
+ * outside dev/test.
  */
+import { checkOrigin } from "../auth/csrf";
 import { TEST_LAST_TOKEN_KEY } from "../auth/email-verify";
-import { notFoundResponse } from "../http/errors";
+import { reapUnverifiedAccounts } from "../auth/reap-unverified";
+import { errorResponse, notFoundResponse } from "../http/errors";
 
 /**
  * Handle a `/__test/*` request, or return `null` to mean "no such route" —
@@ -32,6 +46,7 @@ import { notFoundResponse } from "../http/errors";
 export async function handleTestRoute(
   request: Request,
   env: Env,
+  ctx: ExecutionContext,
 ): Promise<Response | null> {
   // THE GATE. Anything other than exactly "1" ⇒ these routes do not exist.
   //
@@ -55,6 +70,22 @@ export async function handleTestRoute(
     return new Response(token, {
       status: 200,
       headers: { "content-type": "text/plain" },
+    });
+  }
+
+  // A mutating (POST) test seam, so it carries the same inline origin check
+  // every other pipeline-exempt mutating route does (see src/routes.ts's
+  // PIPELINE_EXEMPT and test/route-protection.test.ts) — TEST_ROUTES already
+  // makes this unreachable in production, but there is no reason to make it
+  // the one mutating route in this codebase with no CSRF defense at all.
+  if (request.method === "POST" && pathname === "/__test/reap-unverified") {
+    if (!checkOrigin(env, request)) {
+      return errorResponse("FORBIDDEN", 403);
+    }
+    const reaped = await reapUnverifiedAccounts(env, ctx);
+    return new Response(JSON.stringify({ reaped }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
     });
   }
 
