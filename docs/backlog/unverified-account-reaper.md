@@ -38,6 +38,6 @@ Periodically reclaim handles from never-verified accounts:
 
 ## Disposition
 
-Ship-before-launch vs. defer is a founder sub-decision (see
-`docs/pre-launch-fixes.md` #1). Requirement captured now so it isn't lost
-regardless of timing.
+**Decided 2026-08-13: ships before launch**, folded into the handle-at-signup
+milestone (see `docs/pre-launch-fixes.md` #1). Grace period and reap-action
+(hard delete vs. soft-release) to be settled during that milestone's spec.

@@ -41,8 +41,8 @@ because handles are now claimed *before* verification, an unverified/bot account
 can reserve a handle it never uses. A reaper must release handles from accounts
 left unverified past a grace period. Requirements captured in
 `docs/backlog/unverified-account-reaper.md`.
-**Sub-decision needed:** ship the reaper before launch, or accept the risk early
-(Turnstile is on signup) and defer it?
+**Decided (2026-08-13): ships before launch**, folded into this handle-at-signup
+milestone (no one is waiting on the launch — do it right).
 
 **Note:** feature-sized change (signup schema, auth flow, route removals, new
 reaper) — recommend a short spec → plan → build, not an inline patch.
