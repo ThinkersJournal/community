@@ -2,10 +2,10 @@
  * THE API ERROR ENVELOPE — a WIRE CONTRACT shared by the `api` Worker (which
  * emits it) and the `web` Worker (which branches on it).
  *
- * ⚠️ EVERY non-2xx api response body is `{ code, message?, fields? }` with
- * `content-type: application/json`. Success bodies are per-route and are NOT
- * covered by this type — `POST /auth/logout` still answers 200 with an empty
- * body and `GET /health` still answers "ok".
+ * ⚠️ EVERY non-2xx api response body is `{ code, message?, fields?, suggestions? }`
+ * with `content-type: application/json`. Success bodies are per-route and are
+ * NOT covered by this type — `POST /auth/logout` still answers 200 with an
+ * empty body and `GET /health` still answers "ok".
  *
  * ⚠️ THE `code` STRINGS ARE THE CONTRACT, NOT THE `message`. `web` keys off
  * `code`; renaming one is a breaking change to both Workers at once. `message`
@@ -55,6 +55,8 @@ export interface ApiErrorBody {
   message?: string;
   /** For INVALID_INPUT: the offending FIELD NAMES only — never their values. */
   fields?: string[];
+  /** For USERNAME_TAKEN: a few available handle suggestions. Advisory; never branch on it. */
+  suggestions?: string[];
 }
 
 /** Narrow an unknown parsed body to the envelope. Structural, not exhaustive. */

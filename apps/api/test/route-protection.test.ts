@@ -144,6 +144,9 @@ function probeBody(): string {
   return JSON.stringify({
     email: `route-protection-${crypto.randomUUID()}@example.com`,
     password: "correct-horse-battery-staple",
+    // Satisfies SignupInput's now-required `username` (Task 1) — LoginInput has
+    // no such field and simply ignores the extra key.
+    username: `probe${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`,
     turnstileToken: "dummy-turnstile-token",
   });
 }

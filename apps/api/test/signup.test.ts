@@ -142,8 +142,17 @@ async function signupWithEnv(body: unknown, patchedEnv: Env): Promise<Response> 
 }
 
 
+/**
+ * A valid, unique `SignupInput.username`. `SignupInput` now REQUIRES the
+ * field (Task 1), but the handler still IGNORES it (Task 3 wires it up) — so
+ * this only has to satisfy the schema, not be globally meaningful.
+ */
+function uniqHandle(): string {
+  return `h${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+}
+
 function validBody(email: string, password: string = VALID_PASSWORD) {
-  return { email, password, turnstileToken: "dummy-turnstile-token" };
+  return { email, password, username: uniqHandle(), turnstileToken: "dummy-turnstile-token" };
 }
 
 /** The `Cookie` header value carrying the session a signup response just set. */

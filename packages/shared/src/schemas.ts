@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { USERNAME_PATTERN } from './social';
+
 /**
  * An email address, NORMALIZED TO LOWERCASE.
  *
@@ -33,6 +35,10 @@ const NormalizedEmail = z.email().toLowerCase();
 export const SignupInput = z.object({
   email: NormalizedEmail,
   password: z.string().min(12),
+  // Trim + lowercase BEFORE the pattern check so "  Ada  " → "ada", matching
+  // ChooseUsernameInput in ./social — same field, same normalization, two
+  // entry points (signup vs. post-signup handle selection).
+  username: z.string().trim().toLowerCase().regex(USERNAME_PATTERN),
   turnstileToken: z.string().min(1),
 });
 
