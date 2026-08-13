@@ -10,7 +10,6 @@ interface MeResponse {
   loggedIn: boolean;
   userId: string | null;
   username: string | null;
-  usernameChosen: boolean;
   csrfToken: string | null;
 }
 
@@ -27,7 +26,7 @@ async function loadMe(): Promise<MeResponse> {
     if (!resp.ok) throw new Error("me failed");
     return (await resp.json()) as MeResponse;
   } catch {
-    return { loggedIn: false, userId: null, username: null, usernameChosen: false, csrfToken: null };
+    return { loggedIn: false, userId: null, username: null, csrfToken: null };
   }
 }
 
@@ -72,10 +71,6 @@ function buildForm(opts: {
           return;
         }
         const body = (await resp.json().catch(() => null)) as { code?: string } | null;
-        if (body?.code === "USERNAME_REQUIRED") {
-          location.href = `/choose-username?next=${encodeURIComponent(location.pathname)}`;
-          return;
-        }
         button.disabled = false;
         showError(
           form,
@@ -207,26 +202,15 @@ export function initCommentsIsland(): void {
   const slot = section.querySelector<HTMLElement>("[data-comment-form-slot]");
 
   void loadMe().then((me) => {
-    // 1. The form slot, three distinct logged-in cases (logged-out keeps the SSR
-    //    login link). ⚠️ !usernameChosen and csrfToken===null are SEPARATE states
-    //    and must not be conflated: an ONBOARDED viewer whose /auth/csrf hop
-    //    transiently failed still has a handle, so "Choose your handle" would
-    //    misdirect them to /choose-username (which 409s USERNAME_ALREADY_SET).
+    // 1. The form slot, two distinct logged-in cases (logged-out keeps the SSR
+    //    login link). A signed-in verified user already has a handle (chosen at
+    //    signup — see handle-at-signup) — the only thing that can still be
+    //    missing is the CSRF token itself, e.g. a transiently-failed /auth/csrf
+    //    hop.
     if (slot !== null && me.loggedIn) {
-      if (!me.usernameChosen) {
-        // Not onboarded — choose a durable handle before commenting.
-        const p = document.createElement("p");
-        const a = document.createElement("a");
-        a.className = "link";
-        a.href = `/choose-username?next=${encodeURIComponent(location.pathname)}`;
-        a.textContent = "Choose your handle";
-        p.appendChild(a);
-        p.appendChild(document.createTextNode(" to join the conversation."));
-        slot.replaceChildren(p);
-      } else if (me.csrfToken === null) {
-        // Onboarded, but no CSRF token — a transient degraded state, NOT an
-        // onboarding gap. A working form can't be built without the token, so
-        // prompt a reload rather than mislabel this as needing a handle.
+      if (me.csrfToken === null) {
+        // No CSRF token — a transient degraded state. A working form can't be
+        // built without the token, so prompt a reload.
         const p = document.createElement("p");
         p.className = "comment-degraded";
         p.textContent = "Couldn't load the comment form — reload the page to comment.";
@@ -244,8 +228,8 @@ export function initCommentsIsland(): void {
       }
     }
 
-    // 2. Per-comment affordances — only for onboarded viewers with a token.
-    if (!me.loggedIn || !me.usernameChosen || me.csrfToken === null || me.userId === null) return;
+    // 2. Per-comment affordances — only for signed-in viewers with a token.
+    if (!me.loggedIn || me.csrfToken === null || me.userId === null) return;
     const csrfToken = me.csrfToken;
     const viewerId = me.userId;
 

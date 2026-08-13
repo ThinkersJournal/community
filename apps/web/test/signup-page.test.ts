@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
  * MINIMAL STRUCTURE TEST — src/pages/signup.astro (Task 10 theming retrofit).
  *
  * ⚠️ SOURCE/STRUCTURE TEST, NOT A RENDER — same reasoning as
- * test/choose-username-page.test.ts / test/login-page.test.ts: this app's
+ * test/login-page.test.ts: this app's
  * vitest is plain Node, and the page imports `cloudflare:workers` (via
  * src/lib/api.ts), which does not resolve outside workerd.
  */

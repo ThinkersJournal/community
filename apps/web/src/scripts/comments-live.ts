@@ -61,7 +61,6 @@ interface MeResponse {
   loggedIn: boolean;
   userId: string | null;
   username: string | null;
-  usernameChosen: boolean;
   csrfToken: string | null;
 }
 
@@ -185,7 +184,7 @@ export function initCommentsLive(): void {
   const viewerPromise: Promise<{ csrfToken: string; viewerId: string } | null> = fetch("/api/me")
     .then((r) => (r.ok ? (r.json() as Promise<MeResponse>) : null))
     .then((me) =>
-      me !== null && me.loggedIn && me.usernameChosen && me.csrfToken !== null && me.userId !== null
+      me !== null && me.loggedIn && me.csrfToken !== null && me.userId !== null
         ? { csrfToken: me.csrfToken, viewerId: me.userId }
         : null,
     )

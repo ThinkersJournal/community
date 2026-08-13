@@ -8,7 +8,6 @@
 interface MeResponse {
   loggedIn: boolean;
   username: string | null;
-  usernameChosen: boolean;
   csrfToken: string | null;
 }
 

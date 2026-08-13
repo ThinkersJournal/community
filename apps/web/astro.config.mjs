@@ -186,7 +186,7 @@ export default defineConfig({
       // renders as a literal `<script type="module">…</script>` with no
       // `src` — exactly what `script-src 'self'` (no nonce, no hash) blocks.
       // That is a LIVE bug on every already-CSP'd page (login.astro,
-      // signup.astro, choose-username.astro, verify-email.astro all render
+      // signup.astro, verify-email.astro all render
       // Nav via BaseLayout) predating this task — see the task report.
       //
       // `assetsInlineLimit: 0` is Astro's own documented escape hatch:
