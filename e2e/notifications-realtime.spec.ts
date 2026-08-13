@@ -39,7 +39,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { chooseUsername, publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
+import { publishPost, signUpAndVerify } from "./helpers";
 
 test("comment → recipient's bell updates live via WebSocket (no navigation); mark-seen syncs live to a second tab", async ({
   page: a,
@@ -65,7 +65,6 @@ test("comment → recipient's bell updates live via WebSocket (no navigation); m
     // ---- B comments on A's post -----------------------------------------
     const b = await bCtx.newPage();
     await signUpAndVerify(b, b.request);
-    await chooseUsername(b, uniqueHandle("reader"));
 
     await b.goto(url);
     const form = b.locator("[data-comment-form-slot] form");

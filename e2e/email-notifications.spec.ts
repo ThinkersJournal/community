@@ -33,11 +33,10 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { chooseUsername, publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
+import { publishPost, signUpAndVerify } from "./helpers";
 
 test("notification settings persist across reload", async ({ page, request }) => {
   await signUpAndVerify(page, request);
-  await chooseUsername(page, uniqueHandle("settings"));
 
   // Save prefs: turn Reactions off.
   await page.goto("/settings/notifications");
@@ -56,18 +55,16 @@ test("opening the bell clears the badge (seen) but does not mark rows read", asy
   request,
   browser,
 }) => {
-  // ---- A publishes a post (publishPost onboards A internally — do not also
-  // call chooseUsername for A). ------------------------------------------
+  // ---- A publishes a post (the handle comes from signup). -----------------
   await signUpAndVerify(page, request);
   const post = await publishPost(page, { title: "Live", markdownSource: "hello" });
 
-  // ---- B signs up, onboards (B never publishes, so chooseUsername here IS
-  // needed), and top-level-comments on A's post -> A gets one notification. --
+  // ---- B signs up (handle-at-signup: no separate onboarding step) and -----
+  // top-level-comments on A's post -> A gets one notification. ---------------
   const ctxB = await browser.newContext();
   try {
     const b = await ctxB.newPage();
     await signUpAndVerify(b, b.request);
-    await chooseUsername(b, uniqueHandle("commenter"));
     await b.goto(post.url);
 
     const form = b.locator("[data-comment-form-slot] form");

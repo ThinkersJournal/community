@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { chooseUsername, publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
+import { publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
 
 test("search finds a post by a partial+typo term and a person by partial name", async ({ page, request }) => {
   await signUpAndVerify(page, request);
@@ -25,7 +25,6 @@ test("search finds a post by a partial+typo term and a person by partial name", 
 
 test("the nav search box routes to /search", async ({ page, request }) => {
   await signUpAndVerify(page, request);
-  await chooseUsername(page, uniqueHandle("navsearch"));
   await page.goto("/feed");
   await page.fill('.nav-search input[name="q"]', "anything");
   await page.press('.nav-search input[name="q"]', "Enter");

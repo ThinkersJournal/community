@@ -72,10 +72,22 @@ async function readVerificationToken(request: APIRequestContext): Promise<string
   return token;
 }
 
-/** Sign up through the real form in the real browser. */
-export async function signUp(page: Page, email: string): Promise<void> {
+/**
+ * Sign up through the real form in the real browser.
+ *
+ * ⚠️ HANDLE-AT-SIGNUP: `username` is now a REQUIRED, `pattern`-validated field
+ * right on this form (apps/web/src/pages/signup.astro) — there is no more
+ * separate onboarding page for claiming a handle, and the browser's native
+ * HTML5 validation blocks submission if it is left empty. A caller with no
+ * opinion on the handle should reach for `signUpAndVerify` (which mints one
+ * via `uniqueHandle`); this function stays a thin, honest mirror of the real
+ * form so a caller that DOES care about a specific handle — e.g. to provoke
+ * a USERNAME_TAKEN collision — can drive it directly.
+ */
+export async function signUp(page: Page, email: string, handle: string): Promise<void> {
   await page.goto("/signup");
 
+  await page.fill('input[name="username"]', handle);
   await page.fill('input[name="email"]', email);
   await page.fill('input[name="password"]', PASSWORD);
   // A real Turnstile widget (M1) will populate this; for now it is a plain
@@ -90,26 +102,23 @@ export async function signUp(page: Page, email: string): Promise<void> {
  * The full signup → fetch-token → verify spine, ending on a live VERIFIED
  * session in `page`'s context. Extracted verbatim from e2e/signup.spec.ts.
  *
- * ⚠️ RETURNS `{ email }` ONLY — NOT `{ email, username }`, a DELIBERATE deviation
- * from the task brief's stated interface, and the honest one. Signup MINTS the
- * username (apps/api/src/routes/signup.ts's `generateUsername`) as
- * `<sanitized-local-part>_<~64-bit random base36 suffix>`, so it is NOT derivable
- * from the email, and NO route surfaces it to the browser except the editor's
- * own publish redirect (`/@<username>/<slug>`). Having this helper learn it would
- * mean publishing a probe post — which would give EVERY signed-up user a
- * published post and break the draft-only / single-post-listing assertions in
- * publish.spec. So the username is discovered per-test from the publish each test
- * already performs (see `publishPost`), and this helper stays side-effect-free
- * beyond the account it creates.
+ * ⚠️ HANDLE-AT-SIGNUP: the @handle is now chosen ON THE SIGNUP FORM itself
+ * (see `signUp`) — there is no more separate onboarding step to discover it
+ * through. So this helper picks one too (a fresh `uniqueHandle("user")` by
+ * default) and hands it straight back as `{ email, username }`: no more
+ * publishing a probe post just to learn it. A caller that needs a KNOWN
+ * handle — to assert on it later, or to provoke a collision by reusing it in
+ * a second signup — can pass one explicitly.
  */
 export async function signUpAndVerify(
   page: Page,
   request: APIRequestContext,
-): Promise<{ email: string }> {
+  handle: string = uniqueHandle("user"),
+): Promise<{ email: string; username: string }> {
   const email = uniqueEmail("verified");
 
   // ---- 1. Sign up ----------------------------------------------------------
-  await signUp(page, email);
+  await signUp(page, email, handle);
 
   await expect(
     page.locator("#check-email"),
@@ -148,7 +157,7 @@ export async function signUpAndVerify(
     "verification failed — the signup session was probably not carried to /verify-email",
   ).toBeVisible();
 
-  return { email };
+  return { email, username: handle };
 }
 
 /** A valid chosen handle: lowercase, 3–30 of [a-z0-9_]. */
@@ -156,17 +165,9 @@ export function uniqueHandle(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 }
 
-/** Claim a durable @handle via the onboarding page. Assumes not-yet-onboarded. */
-export async function chooseUsername(page: Page, handle: string): Promise<void> {
-  await page.goto("/choose-username");
-  await page.fill('input[name="username"]', handle);
-  await page.click('button[type="submit"]');
-  await page.waitForURL(/\/feed$/);
-}
-
 /** What `publishPost` resolves to once the post is live at its public URL. */
 export interface PublishedPost {
-  /** The author's chosen @handle (random-suffixed; minted by `publishPost` itself). */
+  /** The author's chosen @handle — set at signup, read back here from `/api/me`. */
   username: string;
   /** The slug the api derived from the title. */
   slug: string;
@@ -180,12 +181,15 @@ export interface PublishedPost {
  * Author a post through the real editor and PUBLISH it, returning everything the
  * public page cannot tell you: the author's username, the slug, and the post id.
  *
- * ⚠️ M2.1: publishing is gated on a CHOSEN @handle (Task 8's `USERNAME_REQUIRED`,
- * apps/api/src/routes/posts.ts). Signup still mints an internal default username,
- * but that one can never publish — so this helper claims a durable handle via
- * `chooseUsername` FIRST, and returns THAT handle, not anything scraped off the
- * signup-minted default. `chooseUsername` assumes the caller has not already
- * onboarded, so callers of `publishPost` must not have called it already.
+ * ⚠️ HANDLE-AT-SIGNUP: the caller's @handle was already chosen ON THE SIGNUP
+ * FORM (`signUp`/`signUpAndVerify`) — there is no more separate onboarding
+ * step to claim one here. This still has to LEARN the caller's handle somehow,
+ * though: it is never surfaced on the public page or the profile, and the
+ * publish redirect (`/@user/slug`) embeds it only in a URL this function has
+ * no reason to have visited yet. `/api/me` — the same endpoint the nav auth
+ * slot and the comments island read — is the one browser-reachable source of
+ * the signed-in viewer's own handle, so that is where this reads it from, NOT
+ * a value `publishPost` mints or claims itself (unlike before handle-at-signup).
  *
  * ⚠️ SAVES A DRAFT FIRST, THEN PUBLISHES — and that two-step is load-bearing, not
  * laziness. The post id appears NOWHERE on the public page or the profile, and
@@ -200,9 +204,20 @@ export async function publishPost(
   page: Page,
   post: { title: string; markdownSource: string; tags?: string[] },
 ): Promise<PublishedPost> {
-  // M2.1: a public post needs a chosen @handle. Claim one, then publish.
-  const username = uniqueHandle("author");
-  await chooseUsername(page, username);
+  // The caller must already be signed in (signUp/signUpAndVerify) — that is
+  // where the handle-at-signup handle came from. Read it back via the same
+  // browser-facing endpoint the nav auth slot and comments island use.
+  const me = (await (await page.request.get("/api/me")).json()) as {
+    loggedIn: boolean;
+    userId: string | null;
+    username: string | null;
+    csrfToken: string | null;
+  };
+  expect(
+    me.username,
+    "publishPost: /api/me returned no username — was the caller signed up (signUp/signUpAndVerify) first?",
+  ).not.toBeNull();
+  const username = me.username as string;
 
   await page.goto("/new-post");
   await page.fill("#title", post.title);
