@@ -301,11 +301,54 @@ export function initNotifyBell(): void {
 
   setInterval(poll, 60_000);
 
+  // Reflect the panel's open state on the button for assistive tech. SSR ships
+  // aria-expanded="false"; this keeps it honest across every open/close path.
+  const setExpanded = (open: boolean): void => {
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+
+  // Closing is the SAME operation from three triggers (re-click, outside-click,
+  // Escape): hide the panel and update the button. openPanel sets
+  // panel.hidden = false itself, and ONLY when the list actually loaded, so the
+  // open path below reflects the panel's REAL state after it resolves rather
+  // than assuming success.
+  const closePanel = (): void => {
+    panel.hidden = true;
+    setExpanded(false);
+  };
+
   toggle.addEventListener("click", () => {
     if (!panel.hidden) {
-      panel.hidden = true;
+      closePanel();
       return;
     }
-    void openPanel(panel, badge);
+    void openPanel(panel, badge).then(() => setExpanded(!panel.hidden));
+  });
+
+  // Escape closes the open panel and returns focus to the bell — the standard
+  // dropdown affordance (the burger menu is zero-JS/native; the bell is not).
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !panel.hidden) {
+      closePanel();
+      toggle.focus();
+    }
+  });
+
+  // A click anywhere OUTSIDE the bell subtree dismisses the panel. The toggle
+  // and the panel both live inside [data-notify-bell], so opening the panel,
+  // re-clicking the toggle, and clicking a notification row are all "inside" and
+  // handled by their own logic — this only catches genuine outside clicks.
+  // The OPEN click does NOT self-close, for two independent reasons (either
+  // suffices): its target is the toggle button — inside `bell` — so the
+  // `bell.contains(target)` guard below returns early regardless of the panel's
+  // state; AND openPanel only sets panel.hidden=false AFTER awaiting a network
+  // fetch, so panel.hidden is still true when this handler runs on the same
+  // event and the `if (panel.hidden) return` short-circuits anyway. The
+  // containment check is the load-bearing one — do not rely on the async timing.
+  document.addEventListener("click", (event) => {
+    if (panel.hidden) return;
+    const target = event.target;
+    if (target instanceof Node && bell.contains(target)) return;
+    closePanel();
   });
 }

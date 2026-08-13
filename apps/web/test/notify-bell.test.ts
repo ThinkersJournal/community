@@ -118,3 +118,27 @@ describe("notify bell island", () => {
     expect(code).not.toContain("insertAdjacentHTML");
   });
 });
+
+describe("notify bell — dropdown dismissal & a11y (pre-launch fix)", () => {
+  // The empty-oval + can't-close symptoms were a CSS defect (Nav.astro's
+  // display:flex defeating the `hidden` attribute), but the JS must also provide
+  // the standard dropdown affordances the bug had masked. These pin the island
+  // side; the actual open/close is proven in e2e/notifications.spec.ts against a
+  // real browser — source-text asserts here can't see computed styles.
+  it("closes the panel on Escape and returns focus to the bell", () => {
+    expect(code).toContain('addEventListener("keydown"');
+    expect(code).toMatch(/=== "Escape"|key === "Escape"/);
+    expect(code).toContain("toggle.focus()");
+  });
+
+  it("closes the panel on a click OUTSIDE the bell subtree only", () => {
+    // A document-level click handler that dismisses when the target is not
+    // contained by [data-notify-bell] — co-located with the containment check so
+    // a click on the toggle or inside the panel never self-closes.
+    expect(code).toMatch(/addEventListener\("click"[\s\S]{0,300}bell\.contains\(/);
+  });
+
+  it("keeps aria-expanded honest on the toggle button across open/close", () => {
+    expect(code).toMatch(/setAttribute\(\s*"aria-expanded"/);
+  });
+});

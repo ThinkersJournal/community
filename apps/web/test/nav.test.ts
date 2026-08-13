@@ -57,6 +57,27 @@ describe("Nav", () => {
     expect(nav).toContain("data-notify-bell"); // placeholder present
     expect(nav).toContain("initNotifyBell"); // island mounted
   });
+
+  it("guards the notify bell/panel `hidden` attribute against the display:flex override (empty-oval + can't-close fix)", () => {
+    const s = src();
+    // The bell reveal (auth) and the panel open/close both drive the `hidden`
+    // attribute; without this higher-specificity guard the earlier
+    // `.notify{display:flex}` / `.notify-panel{display:flex}` defeat the UA
+    // sheet's [hidden]{display:none}, so the empty panel renders as an oval and
+    // `panel.hidden = true` cannot close it.
+    expect(s).toMatch(/\.notify\[hidden\]\s*,\s*\.notify-panel\[hidden\]\s*\{\s*display:\s*none/);
+  });
+
+  it("exposes the bell toggle as an accessible popup button (aria-expanded/haspopup/controls)", () => {
+    const s = src();
+    // aria-expanded sits ON the toggle button and defaults to false — an honest
+    // SSR/pre-JS state; the island keeps it in sync on open/close.
+    expect(s).toMatch(/data-notify-toggle[^>]*aria-expanded="false"/);
+    expect(s).toContain('aria-haspopup="true"');
+    expect(s).toContain('aria-controls="notify-panel"');
+    // ...and the panel it controls carries that id.
+    expect(s).toMatch(/data-notify-panel[^>]*id="notify-panel"/);
+  });
   it("has a static GET search form to /search (no per-viewer state)", () => {
     const s = src();
     expect(s).toMatch(/<form[^>]*method="GET"[^>]*action="\/search"/);
