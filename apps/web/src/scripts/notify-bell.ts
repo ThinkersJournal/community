@@ -317,12 +317,26 @@ export function initNotifyBell(): void {
     setExpanded(false);
   };
 
+  // One open in flight at a time. openPanel awaits a fetch before it reveals the
+  // panel, so rapid clicks while it is still hidden would each pass the
+  // `!panel.hidden` check and fan out into N concurrent /api/notifications loads
+  // and N seen-POSTs. This latch collapses that to a single open.
+  let opening = false;
+
   toggle.addEventListener("click", () => {
     if (!panel.hidden) {
       closePanel();
       return;
     }
-    void openPanel(panel, badge).then(() => setExpanded(!panel.hidden));
+    if (opening) return;
+    opening = true;
+    // `.finally`, not `.then`: reset the latch and re-sync aria-expanded to the
+    // panel's REAL post-attempt state (openPanel reveals it only when the list
+    // loaded) even if openPanel were to reject.
+    void openPanel(panel, badge).finally(() => {
+      opening = false;
+      setExpanded(!panel.hidden);
+    });
   });
 
   // Escape closes the open panel and returns focus to the bell — the standard

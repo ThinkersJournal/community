@@ -141,4 +141,15 @@ describe("notify bell — dropdown dismissal & a11y (pre-launch fix)", () => {
   it("keeps aria-expanded honest on the toggle button across open/close", () => {
     expect(code).toMatch(/setAttribute\(\s*"aria-expanded"/);
   });
+
+  it("guards against concurrent opens — a repeat click while an open is in-flight is a no-op", () => {
+    // ⚠️ ANTI-VACUITY: openPanel awaits a fetch before revealing the panel, so
+    // rapid clicks while it is still hidden would each pass `!panel.hidden` and
+    // fan out into N /api/notifications loads + N seen-POSTs. A latch collapses
+    // that to one open; the latch is released (and aria re-synced) when the
+    // attempt SETTLES — hence finally, so it releases even on rejection.
+    expect(code).toMatch(/if \(opening\) return/);
+    expect(code).toMatch(/opening = true/);
+    expect(code).toMatch(/\.finally\(\(\) => \{[\s\S]{0,120}opening = false/);
+  });
 });
