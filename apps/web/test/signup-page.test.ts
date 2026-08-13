@@ -40,4 +40,18 @@ describe("signup.astro", () => {
   it("still forwards the real browser Origin, never a synthesized one, on the signup POST", () => {
     expect(code).toContain('Astro.request.headers.get("Origin")');
   });
+
+  // handle-at-signup Task 7: the signup form now collects a chosen @handle
+  // and surfaces the api's USERNAME_TAKEN suggestions as plain server-rendered
+  // text (no client JS — this page keeps a strict `script-src 'self'` CSP).
+  it("has a username field with permanence copy, and forwards it to the api", () => {
+    expect(rawSource).toMatch(/name="username"/);
+    expect(rawSource).toMatch(/permanent/i);
+    expect(code).toContain('username: form.get("username")');
+  });
+
+  it("branches on USERNAME_TAKEN and renders the returned suggestions as plain text", () => {
+    expect(code).toContain("USERNAME_TAKEN");
+    expect(code).toMatch(/suggestions/);
+  });
 });

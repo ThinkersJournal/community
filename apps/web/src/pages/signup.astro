@@ -7,7 +7,7 @@
  * keeps the api unreachable from the browser at all.
  */
 import BaseLayout from "../components/BaseLayout.astro";
-import { apiFetch, applyCookies } from "../lib/api";
+import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
 
@@ -29,14 +29,15 @@ let message = "";
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
 
-  const response = await apiFetch<{ code?: string }>(
+  const response = await apiFetch<{ code?: string; suggestions?: string[] }>(
     "/auth/signup",
     {
       method: "POST",
-      // The api validates all three with zod and 400s on anything malformed —
+      // The api validates all four with zod and 400s on anything malformed —
       // no client-side validation here on purpose (it would only ever be a
       // duplicate of the real check, and a bypassable one).
       body: {
+        username: form.get("username"),
         email: form.get("email"),
         password: form.get("password"),
         turnstileToken: form.get("turnstileToken"),
@@ -61,18 +62,27 @@ if (Astro.request.method === "POST") {
     result = "created";
   } else {
     result = "error";
-    // The api's statuses, surfaced as-is. 409 is only ever returned for an
-    // already-VERIFIED address (an unverified one is legitimately taken over
-    // by re-signup), so it is safe to say so; it reveals nothing that
-    // attempting a login would not.
-    message =
-      response.status === 409
-        ? "That email is already registered. Try logging in."
-        : response.status === 429
-          ? "Too many attempts. Please wait and try again."
-          : response.status === 403
-            ? "Rejected (failed bot check)."
-            : "Signup failed. Check your email and password and try again.";
+    // 409 now has TWO causes (handle-at-signup): an already-registered,
+    // VERIFIED email (EMAIL_TAKEN — safe to say so, it reveals nothing that
+    // attempting a login would not) and a handle collision (USERNAME_TAKEN,
+    // checked first, below). Branch on `code`, never on status alone.
+    if (apiErrorCode(response) === "USERNAME_TAKEN") {
+      // Suggestions are advisory plain text — no client JS involved, just
+      // server-rendered into the existing #error block below.
+      const suggestions = response.data?.suggestions ?? [];
+      message = suggestions.length
+        ? `That handle is taken. Available: ${suggestions.map((h) => "@" + h).join(", ")}.`
+        : "That handle is taken — please choose another.";
+    } else {
+      message =
+        response.status === 409
+          ? "That email is already registered. Try logging in."
+          : response.status === 429
+            ? "Too many attempts. Please wait and try again."
+            : response.status === 403
+              ? "Rejected (failed bot check)."
+              : "Signup failed. Check your email and password and try again.";
+    }
   }
 }
 ---
@@ -90,6 +100,12 @@ if (Astro.request.method === "POST") {
         <>
           {result === "error" && <p id="error" role="alert">{message}</p>}
           <form method="POST" class="form">
+            <label>
+              Handle
+              <input type="text" name="username" required minlength="3" maxlength="30"
+                     pattern="[a-z0-9_]+" title="3–30 lowercase letters, numbers, or _" />
+              <small>Your @handle is permanent — choose carefully.</small>
+            </label>
             <label>
               Email
               <input type="email" name="email" required />
