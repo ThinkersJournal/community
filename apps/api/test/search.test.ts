@@ -31,8 +31,8 @@ async function seedAuthorWithPost(title: string): Promise<{ username: string }> 
     const id = rows[0]!.id;
     created.push(id);
     await c.query(
-      `INSERT INTO profiles (user_id, username, display_name, bio, username_chosen)
-       VALUES ($1,$2,'Search Ada','bio text', true)`, [id, username]);
+      `INSERT INTO profiles (user_id, username, display_name, bio)
+       VALUES ($1,$2,'Search Ada','bio text')`, [id, username]);
     await c.query(
       `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
        VALUES ($1,$2,$3,'body', 'published', now())`,
@@ -56,8 +56,8 @@ async function seedAuthorWithNPosts(term: string, n: number): Promise<string[]> 
     const id = rows[0]!.id;
     created.push(id);
     await c.query(
-      `INSERT INTO profiles (user_id, username, display_name, bio, username_chosen)
-       VALUES ($1,$2,'Pager Author','pager bio', true)`,
+      `INSERT INTO profiles (user_id, username, display_name, bio)
+       VALUES ($1,$2,'Pager Author','pager bio')`,
       [id, `pgr_${crypto.randomUUID().slice(0, 8)}`]);
     for (const title of titles) {
       await c.query(
@@ -85,6 +85,34 @@ describe("GET /public/search", () => {
   it("finds a person by partial name on the people tab", async () => {
     const { username } = await seedAuthorWithPost("Irrelevant Title Zzz");
     const r = await fetchWorker(`${U}/public/search?q=${encodeURIComponent("Search Ada")}&type=people`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { results: { username: string }[] };
+    expect(body.results.some((p) => p.username === username)).toBe(true);
+  });
+
+  /**
+   * handle-at-signup Task 4/6: people search no longer filters on the retired
+   * username-chosen onboarding flag — every account has a handle from
+   * signup, there is no "not yet chosen" state to exclude, and (as of Task 6)
+   * the column itself is gone. A freshly-created profile must appear with no
+   * extra precondition.
+   */
+  it("finds a freshly-created author with no extra precondition", async () => {
+    const ctx = createExecutionContext();
+    const username = `fresh_${crypto.randomUUID().slice(0, 8)}`;
+    await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO users (email, password_hash) VALUES ($1,'x') RETURNING id`,
+        [`s-${crypto.randomUUID()}@t.test`]);
+      const id = rows[0]!.id;
+      created.push(id);
+      await c.query(
+        `INSERT INTO profiles (user_id, username, display_name, bio)
+         VALUES ($1,$2,'Fresh Signup','writes about being new here')`, [id, username]);
+    });
+    await waitOnExecutionContext(ctx);
+
+    const r = await fetchWorker(`${U}/public/search?q=${encodeURIComponent("Fresh Signup")}&type=people`);
     expect(r.status).toBe(200);
     const body = (await r.json()) as { results: { username: string }[] };
     expect(body.results.some((p) => p.username === username)).toBe(true);

@@ -2,7 +2,7 @@
  * THE ENGAGEMENT SPINE — a real browser drives comment + reaction life-cycles
  * across both Workers: author A publishes; reader B comments, replies, edits,
  * reacts; an anonymous reader sees the comments; A moderates (deletes B's
- * comment on A's post); the un-onboarded see the gate affordance, not a form.
+ * comment on A's post).
  *
  * ⚠️ miniflare does not simulate Workers Cache (see publish.spec.ts's header):
  * "the comment appears after reload" here observes the DB-backed re-render,
@@ -11,7 +11,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { chooseUsername, publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
+import { publishPost, signUpAndVerify } from "./helpers";
 
 test("comment → reply → edit → react → anonymous sees it → author moderates", async ({
   page,
@@ -29,7 +29,6 @@ test("comment → reply → edit → react → anonymous sees it → author mode
   const readerPage = await readerCtx.newPage();
   try {
     await signUpAndVerify(readerPage, readerPage.request);
-    await chooseUsername(readerPage, uniqueHandle("reader"));
 
     await readerPage.goto(url);
     // The island replaced the SSR login-link with a real form.
@@ -114,22 +113,11 @@ test("comment → reply → edit → react → anonymous sees it → author mode
   }
 });
 
-test("a verified but UN-ONBOARDED user gets the choose-handle affordance, not a form", async ({
-  page,
-  browser,
-}) => {
-  await signUpAndVerify(page, page.request);
-  const { url } = await publishPost(page, { title: "Gate Probe", markdownSource: "body" });
-
-  const ctx = await browser.newContext();
-  try {
-    const p = await ctx.newPage();
-    await signUpAndVerify(p, p.request); // verified, NO chooseUsername
-    await p.goto(url);
-    const slot = p.locator("[data-comment-form-slot]");
-    await expect(slot.locator("a", { hasText: "Choose your handle" })).toBeVisible();
-    await expect(slot.locator("form")).toHaveCount(0);
-  } finally {
-    await ctx.close();
-  }
-});
+// ⚠️ HANDLE-AT-SIGNUP REMOVAL. This file used to carry a test proving that a
+// verified-but-un-onboarded viewer got a "Choose your handle" affordance in
+// the comment-form slot instead of the form itself. That state no longer
+// exists: the @handle is now chosen ON THE SIGNUP FORM, so every verified
+// account already has one — `comments.ts`'s `initCommentsIsland` no longer
+// even has a branch for "logged in, no handle" (see its own comment on the
+// two logged-in cases, both requiring only a CSRF token). Nothing left to
+// probe here.

@@ -13,7 +13,7 @@ beforeAll(async () => {
     `INSERT INTO users (email, password_hash) VALUES ($1,'x') RETURNING id`, [`tag-${crypto.randomUUID()}@t.test`]);
   author = rows[0]!.id;
   await client.query(
-    `INSERT INTO profiles (user_id, username, username_chosen) VALUES ($1,$2,true)`,
+    `INSERT INTO profiles (user_id, username) VALUES ($1,$2)`,
     [author, `tager_${author.slice(0, 8)}`]);
 });
 afterAll(async () => { await client.query(`DELETE FROM users WHERE id=$1`, [author]); await client.end(); });

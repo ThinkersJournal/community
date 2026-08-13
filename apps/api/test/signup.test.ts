@@ -142,8 +142,17 @@ async function signupWithEnv(body: unknown, patchedEnv: Env): Promise<Response> 
 }
 
 
+/**
+ * A valid, unique `SignupInput.username`. `SignupInput` now REQUIRES the
+ * field (Task 1), but the handler still IGNORES it (Task 3 wires it up) — so
+ * this only has to satisfy the schema, not be globally meaningful.
+ */
+function uniqHandle(): string {
+  return `h${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+}
+
 function validBody(email: string, password: string = VALID_PASSWORD) {
-  return { email, password, turnstileToken: "dummy-turnstile-token" };
+  return { email, password, username: uniqHandle(), turnstileToken: "dummy-turnstile-token" };
 }
 
 /** The `Cookie` header value carrying the session a signup response just set. */
@@ -216,8 +225,9 @@ describe("POST /auth/signup", () => {
   it("creates the user, profile, session cookie and verification token", async () => {
     const postmarkCalls = stubFetch(true);
     const email = uniqueEmail();
+    const signupBody = validBody(email);
 
-    const response = await signup(validBody(email));
+    const response = await signup(signupBody);
 
     expect(response.status).toBe(201);
 
@@ -237,14 +247,14 @@ describe("POST /auth/signup", () => {
     expect(String(users[0]!.password_hash)).toMatch(/^\$argon2id\$/);
     expect(String(users[0]!.password_hash)).not.toContain(VALID_PASSWORD);
 
-    // ... and a `profiles` row exists for it (username is GENERATED — signup
-    // takes no username field; user-chosen usernames are M1).
+    // ... and a `profiles` row exists for it, holding the CALLER-CHOSEN handle
+    // (Task 3: signup no longer mints a username — it accepts one).
     const profiles = await query(
       "SELECT username FROM profiles WHERE user_id = $1",
       [users[0]!.id],
     );
     expect(profiles).toHaveLength(1);
-    expect(String(profiles[0]!.username)).toMatch(/^[a-z0-9_]+$/);
+    expect(String(profiles[0]!.username)).toBe(signupBody.username);
 
     // A verification token was stored in KV (hashed — see src/auth/email-verify.ts).
     const { keys } = await env.SESSIONS.list({ prefix: "verify-email:" });
@@ -271,6 +281,126 @@ describe("POST /auth/signup", () => {
     // appear nowhere in the mail.
     expect(String(body.TextBody)).not.toContain("api.test");
     expect(String(body.HtmlBody)).not.toContain("api.test");
+  });
+
+  /**
+   * Task 3 — the handler now ACCEPTS the caller-chosen handle rather than
+   * minting one. See the previous test for the full round-trip assertion
+   * (the profile row holds exactly `signupBody.username`); this one just pins
+   * the happy-path status per the task brief.
+   */
+  it("creates an account with the chosen handle", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+
+    const response = await signup(validBody(email));
+
+    expect(response.status).toBe(201);
+  });
+
+  /**
+   * `profiles.username` is UNIQUE; a collision on the chosen handle is not a
+   * 500 (see `isUniqueViolation` in src/db/errors.ts) — it is a 409 carrying a
+   * few available alternatives (src/auth/username-suggest.ts), so the client
+   * can offer them without another round trip.
+   */
+  it("409 USERNAME_TAKEN with available suggestions when the handle is claimed", async () => {
+    stubFetch(true);
+    const handle = uniqHandle();
+    const emailSecond = uniqueEmail();
+
+    const first = await signup({
+      email: uniqueEmail(),
+      password: VALID_PASSWORD,
+      username: handle,
+      turnstileToken: "dummy-turnstile-token",
+    });
+    expect(first.status).toBe(201);
+
+    const second = await signup({
+      email: emailSecond,
+      password: VALID_PASSWORD,
+      username: handle,
+      turnstileToken: "dummy-turnstile-token",
+    });
+
+    expect(second.status).toBe(409);
+    const body = (await second.json()) as { code: string; suggestions: unknown };
+    expect(body.code).toBe("USERNAME_TAKEN");
+    expect(Array.isArray(body.suggestions)).toBe(true);
+    expect((body.suggestions as unknown[]).length).toBeGreaterThan(0);
+
+    // The rejected attempt left NO trace: a username collision rolls back the
+    // WHOLE transaction (the `users` insert included), so no orphaned account
+    // was created for the second email.
+    expect(
+      await query("SELECT id FROM users WHERE email = $1", [emailSecond]),
+    ).toHaveLength(0);
+  });
+
+  /**
+   * The reserved check is pure/no-I/O and runs with the zod validation
+   * (src/routes/signup.ts) — before Turnstile or any DB touch.
+   */
+  it("400s for a reserved handle", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+
+    const response = await signup({
+      email,
+      password: VALID_PASSWORD,
+      username: "admin",
+      turnstileToken: "dummy-turnstile-token",
+    });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { fields: string[] };
+    expect(body.fields).toContain("username");
+    // Rejected before any DB write.
+    expect(await query("SELECT id FROM users WHERE email = $1", [email])).toHaveLength(
+      0,
+    );
+  });
+
+  /**
+   * The profile upsert is `ON CONFLICT (user_id) DO UPDATE SET username =
+   * EXCLUDED.username` — it runs on EVERY path, including a re-signup, so a
+   * re-signup with a DIFFERENT handle must actually change it, not just leave
+   * the original one in place.
+   */
+  it("an unverified re-signup UPDATES the handle", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+    const h1 = uniqHandle();
+    const h2 = uniqHandle();
+
+    expect(
+      (
+        await signup({
+          email,
+          password: VALID_PASSWORD,
+          username: h1,
+          turnstileToken: "dummy-turnstile-token",
+        })
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await signup({
+          email,
+          password: "a-completely-different-password",
+          username: h2,
+          turnstileToken: "dummy-turnstile-token",
+        })
+      ).status,
+    ).toBe(201);
+
+    const userId = await userIdFor(email);
+    const profiles = await query("SELECT username FROM profiles WHERE user_id = $1", [
+      userId,
+    ]);
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0]!.username).toBe(h2);
   });
 
   /**

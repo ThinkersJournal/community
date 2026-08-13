@@ -33,15 +33,15 @@ describe("feed.astro", () => {
    * `Response` and does NOT carry `Astro.response.headers` — any `Set-Cookie`
    * the api emitted on this 401 (a stale/expired session can be CLEARED on
    * this reachable path) would be silently dropped, same class of bug
-   * login.astro's and choose-username.astro's headers warn about at length.
-   * The fix, mirrored from those two pages: build the 302 by hand and apply
+   * login.astro's headers warn about at length.
+   * The fix, mirrored from that page: build the 302 by hand and apply
    * cookies to IT, not to `Astro.response.headers`.
    */
   it("⚠️ does NOT use Astro.redirect for the 401 case — builds a manual 302 and applies cookies to it", () => {
     // Negative: the naive, cookie-dropping form is never used for this page's
     // login bounce.
     expect(code).not.toMatch(/Astro\.redirect\(\s*["']\/login["']/);
-    // Positive, mirroring login.astro / choose-username.astro's idiom: a
+    // Positive, mirroring login.astro's idiom: a
     // hand-built Response with a 302 status and a Location header...
     expect(code).toMatch(/status:\s*302/);
     expect(code).toMatch(/Location:\s*["']\/login["']/);

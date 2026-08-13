@@ -16,15 +16,12 @@ async function fetchWorker(request: Request): Promise<Response> {
   return response;
 }
 
-/** Verified + handle chosen (mirrors follows.test.ts). */
+/**
+ * A verified actor (mirrors follows.test.ts's `onboardedActor`, kept unrenamed
+ * for the same reason — see its comment there).
+ */
 async function onboardedActor(): Promise<Actor> {
-  const actor = await createVerifiedActor();
-  const ctx = createExecutionContext();
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query("UPDATE profiles SET username_chosen = true WHERE user_id = $1", [actor.userId]),
-  );
-  await waitOnExecutionContext(ctx);
-  return actor;
+  return createVerifiedActor();
 }
 
 function mutatingHeaders(actor: Actor): Record<string, string> {
@@ -239,11 +236,10 @@ describe("POST /comments", () => {
     expect(((await response.json()) as { code: string }).code).toBe("EMAIL_NOT_VERIFIED");
   });
 
-  it("409s USERNAME_REQUIRED for a verified commenter with no handle", async () => {
-    const noHandle = await createVerifiedActor();
-    const response = await createComment(noHandle, { postId, markdownSource: "x" });
-    expect(response.status).toBe(409);
-    expect(((await response.json()) as { code: string }).code).toBe("USERNAME_REQUIRED");
+  it("a verified commenter with no separate onboarding step can comment immediately (handle comes from signup)", async () => {
+    const noExtraStep = await createVerifiedActor();
+    const response = await createComment(noExtraStep, { postId, markdownSource: "x" });
+    expect(response.status).toBe(201);
   });
 
   it("400s INVALID_INPUT for an empty body and an over-cap body", async () => {

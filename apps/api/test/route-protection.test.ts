@@ -87,6 +87,13 @@ const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // is NOT asserted by the `exempt routes enforce checkOrigin inline` block
   // below — it is excluded there explicitly with the same justification.
   "POST /unsub",
+  // TEST-ONLY (handle-at-signup Task 8): a debug seam gated on TEST_ROUTES ===
+  // "1" (see src/routes/__test.ts), reachable only in dev/test — it has no
+  // session by design, so the pipeline's step 2 would 401 every call. UNLIKE
+  // /unsub above it DOES run an inline `checkOrigin` (there is no bearer token
+  // to substitute for one here), so it is asserted by the `exempt routes
+  // enforce checkOrigin inline` block below, not excluded from it.
+  "POST /__test/reap-unverified",
 ]);
 
 /**
@@ -144,6 +151,9 @@ function probeBody(): string {
   return JSON.stringify({
     email: `route-protection-${crypto.randomUUID()}@example.com`,
     password: "correct-horse-battery-staple",
+    // Satisfies SignupInput's now-required `username` (Task 1) — LoginInput has
+    // no such field and simply ignores the extra key.
+    username: `probe${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`,
     turnstileToken: "dummy-turnstile-token",
   });
 }
@@ -185,6 +195,7 @@ const DISPATCHER_BODY = indexSource
  * make you look.
  */
 const EXPECTED_DISPATCHER_BODY =
+  'import { reapUnverifiedAccounts } from "./auth/reap-unverified"; ' +
   'import { notFoundResponse } from "./http/errors"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
@@ -198,10 +209,15 @@ const EXPECTED_DISPATCHER_BODY =
   "if (match === null) return notFoundResponse(); " +
   "return await match.route.handler(request, env, ctx, match.params); " +
   "}, " +
-  // The scheduled() cron dispatcher (M2.3c) — a THIN dispatcher alongside fetch,
-  // not a route (route-protection enumerates ROUTES; a cron has no path). Pinned
-  // here for the same reason as fetch: this file's whole body is the allowlist.
+  // The scheduled() cron dispatcher (M2.3c + handle-at-signup Task 8) — a THIN
+  // dispatcher alongside fetch, not a route (route-protection enumerates
+  // ROUTES; a cron has no path). Pinned here for the same reason as fetch:
+  // this file's whole body is the allowlist.
   "async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> { " +
+  'if (controller.cron === "30 3 * * *") { ' +
+  "ctx.waitUntil(reapUnverifiedAccounts(env, ctx)); " +
+  "return; " +
+  "} " +
   'const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant"; ' +
   "ctx.waitUntil(runEmailDrain(env, ctx, disposition)); " +
   "}, } satisfies ExportedHandler<Env>;";

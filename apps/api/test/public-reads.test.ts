@@ -62,20 +62,13 @@ async function create(actor: Actor, payload: PostPayload): Promise<{ id: string;
 }
 
 /**
- * A verified actor who has ALSO chosen a handle (so Task 8's publish-username
- * gate passes). This suite creates PUBLISHED posts through the real API to
- * prove what the anonymous reads show; the gate itself belongs to
- * test/publish-username-gate.test.ts. Mirrors test/follows.test.ts's
+ * A verified actor — every account already has a handle from signup, so
+ * publishing is never gated on a separate onboarding step (see
+ * test/publish-username-gate.test.ts). Mirrors test/follows.test.ts's
  * `onboardedActor()`.
  */
 async function onboardedActor(): Promise<Actor> {
-  const created = await createVerifiedActor();
-  const ctx = createExecutionContext();
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query("UPDATE profiles SET username_chosen = true WHERE user_id = $1", [created.userId]),
-  );
-  await waitOnExecutionContext(ctx);
-  return created;
+  return createVerifiedActor();
 }
 
 let actor: Actor;

@@ -38,7 +38,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { chooseUsername, publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
+import { publishPost, signUpAndVerify } from "./helpers";
 
 test("comment/reaction/edit/delete on an open post page appear live in a second tab", async ({
   page: a,
@@ -69,10 +69,10 @@ test("comment/reaction/edit/delete on an open post page appear live in a second 
     await expect(v.locator("[data-comments]")).toBeVisible();
     await vWsOpened;
 
-    // ---- Commenter B signs up, onboards, and comments ------------------------
+    // ---- Commenter B signs up and comments (handle-at-signup: no separate --
+    // onboarding step) ---------------------------------------------------------
     const b = await bCtx.newPage();
     await signUpAndVerify(b, b.request);
-    await chooseUsername(b, uniqueHandle("commenter"));
     await b.goto(url);
 
     const commentText = "Live comment from B";
@@ -156,8 +156,8 @@ test("a live-inserted comment's reaction chip is clickable (wired), not enabled-
   page: a,
   browser,
 }) => {
-  // A publishes (publishPost onboards A) and stays on the post SIGNED IN so it
-  // can react — unlike the anonymous viewer in the spine above.
+  // A publishes and stays on the post SIGNED IN so it can react — unlike the
+  // anonymous viewer in the spine above.
   await signUpAndVerify(a, a.request);
   const { url } = await publishPost(a, {
     title: "Live Chip Wiring Probe",
@@ -175,10 +175,9 @@ test("a live-inserted comment's reaction chip is clickable (wired), not enabled-
     await expect(a.locator("[data-comments]")).toBeVisible();
     await aWsOpened;
 
-    // B signs up, onboards, and comments.
+    // B signs up (handle-at-signup: no separate onboarding step) and comments.
     const b = await bCtx.newPage();
     await signUpAndVerify(b, b.request);
-    await chooseUsername(b, uniqueHandle("commenter"));
     await b.goto(url);
     const commentText = "Comment whose live chip A will click";
     const form = b.locator("[data-comment-form-slot] form");

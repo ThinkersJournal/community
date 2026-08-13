@@ -258,22 +258,6 @@ async function insertPost(
   throw new Error("unreachable: insertPost exhausted its slug-retry loop");
 }
 
-/** The onboarding gate: a public post needs a durable @handle. Drafts are exempt. */
-async function requireChosenUsername(
-  env: Env,
-  ctx: ExecutionContext,
-  userId: string,
-): Promise<Response | null> {
-  const chosen = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    const { rows } = await c.query<{ username_chosen: boolean }>(
-      "SELECT username_chosen FROM profiles WHERE user_id = $1",
-      [userId],
-    );
-    return rows[0]?.username_chosen === true;
-  });
-  return chosen ? null : errorResponse("USERNAME_REQUIRED", 409);
-}
-
 /** Parse + validate a post body. Resolves the fields, or the 400 to return. */
 async function readPostInput(
   request: Request,
@@ -312,14 +296,6 @@ export async function handleCreatePost(
   // which a caller controls. `CreatePostInput` has no authorId field at all, so
   // this is unrepresentable rather than merely unused.
   const authorId = result.session.userId;
-
-  // ⚠️ A published post appears under the author's @handle immediately (decision
-  // #7), so a public post requires one to already exist. Drafts are exempt —
-  // gate on the RESULTING status, before the write, never after.
-  if (status === "published") {
-    const gate = await requireChosenUsername(env, ctx, authorId);
-    if (gate !== null) return gate;
-  }
 
   let inserted: InsertedPost;
   try {
@@ -366,16 +342,6 @@ export async function handleUpdatePost(
   if (input instanceof Response) return input;
   const { title, markdownSource, status } = input;
   const authorId = result.session.userId;
-
-  // ⚠️ Gate on the RESULTING (incoming) status, before the write — a draft->
-  // published transition and a published-and-still-published edit both count;
-  // draft->draft never does. This runs BEFORE the ownership check embedded in
-  // the UPDATE's WHERE clause below, so it answers from the SESSION's own
-  // username_chosen — never a proxy for whether the post exists or is theirs.
-  if (status === "published") {
-    const gate = await requireChosenUsername(env, ctx, authorId);
-    if (gate !== null) return gate;
-  }
 
   let updated: {
     id: string;

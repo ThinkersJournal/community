@@ -15,18 +15,19 @@ describe("comments island", () => {
     expect(code).not.toContain("innerHTML");
     expect(code).not.toContain("insertAdjacentHTML");
   });
-  it("routes the un-onboarded to /choose-username with a return path", () => {
-    expect(code).toContain("/choose-username?next=");
+  it("never redirects to /choose-username — a handle is chosen once, at signup", () => {
+    expect(code).not.toContain("/choose-username");
+    expect(code).not.toContain("usernameChosen");
   });
-  it("keeps onboarding (!usernameChosen) and a missing CSRF token as SEPARATE form-slot cases", () => {
-    // The onboarded-but-no-token state is a transient degraded case, NOT an
-    // onboarding gap — it has its own affordance, never "Choose your handle".
-    // Two positive anchors: the un-onboarded branch stands alone, and the
-    // degraded prompt exists. (A blanket `!usernameChosen || csrfToken===null`
-    // negative can't be used — line ~154's per-comment guard legitimately
-    // withholds affordances on that same combined condition.)
-    expect(code).toContain("if (!me.usernameChosen) {"); // its own branch, not an `||`
+  it("shows the degraded prompt when a signed-in viewer has no CSRF token yet", () => {
+    // A signed-in verified user always has a handle (chosen at signup); the
+    // only thing that can still be missing is the CSRF token itself, e.g. a
+    // transiently-failed /auth/csrf hop.
+    expect(code).toContain("if (me.csrfToken === null) {");
     expect(code).toContain("Couldn't load the comment form"); // the degraded prompt exists
+  });
+  it("enables commenting/affordances on loggedIn + csrfToken + userId, nothing more", () => {
+    expect(code).toContain("if (!me.loggedIn || me.csrfToken === null || me.userId === null) return;");
   });
   it("reloads after a successful write (the purge already made the page fresh)", () => {
     expect(code).toContain("location.reload()");

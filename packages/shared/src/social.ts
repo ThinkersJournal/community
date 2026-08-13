@@ -10,24 +10,20 @@ import type { TagRef } from "./posts";
 /** Chosen handles: 3–30 chars of lowercase letters, digits, underscore. */
 export const USERNAME_PATTERN = /^[a-z0-9_]{3,30}$/;
 
-export const ChooseUsernameInput = z.object({
-  // Trim + lowercase BEFORE the pattern check so "  Ada  " → "ada", and casing
-  // never causes a spurious reject (profiles.username is citext-unique anyway).
-  username: z.string().trim().toLowerCase().regex(USERNAME_PATTERN),
-});
-export type ChooseUsernameValue = z.infer<typeof ChooseUsernameInput>;
-
 export const FollowInput = z.object({
   followeeId: z.string().uuid(),
 });
 export type FollowValue = z.infer<typeof FollowInput>;
 
-/** `GET /profile/me` — the signed-in viewer's own handle + onboarding state. */
+/**
+ * `GET /profile/me` — the signed-in viewer's own id + handle. The handle is
+ * chosen at signup (see docs/superpowers/specs/2026-08-13-handle-at-signup-design.md)
+ * and always present — there is no more "not yet chosen" onboarding state.
+ */
 export interface Me {
   /** The viewer's own user id — the comments island compares it to data-author-id. */
   userId: string;
   username: string;
-  usernameChosen: boolean;
 }
 
 /** `GET /public/social` — viewer-independent counts. */

@@ -35,9 +35,9 @@ const response = await apiFetch<Feed>(
 // a Response it owns ITSELF, which does not carry `Astro.response.headers`
 // — so the api's `Set-Cookie` on this very 401 (a stale/expired session can
 // be CLEARED on this reachable path) would be silently dropped, leaving a
-// cleared-but-still-present cookie on the browser. Same bug class login.astro
-// and choose-username.astro's headers document at length; the fix is
-// identical — build the redirect by hand and apply cookies to IT.
+// cleared-but-still-present cookie on the browser. Same bug class login.astro's
+// headers document at length; the fix is identical — build the redirect by
+// hand and apply cookies to IT.
 if (response.status === 401) {
   const redirect = new Response(null, {
     status: 302,

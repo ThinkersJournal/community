@@ -59,7 +59,7 @@ import {
   handlePublicSocial,
 } from "./routes/social-public";
 import { handleUnsub } from "./routes/unsub";
-import { handleChooseUsername, handleGetMe } from "./routes/username";
+import { handleGetMe } from "./routes/username";
 import { handleVerifyEmail } from "./routes/verify-email";
 
 import type { RouteDef } from "./routing";
@@ -124,8 +124,9 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/posts/live", handler: handlerPostsLive },
   { method: "GET", pattern: "/posts/:id", handler: handleGetPost },
 
-  // Durable-handle onboarding + the viewer's own profile state (M2.1).
-  { method: "POST", pattern: "/profile/username", handler: handleChooseUsername },
+  // The viewer's own profile state (M2.1). The handle is chosen at signup
+  // (see routes/signup.ts) — there is no more post-signup "choose a handle"
+  // route; `POST /profile/username` is gone, not moved.
   { method: "GET", pattern: "/profile/me", handler: handleGetMe },
 
   // Social-graph writes (M2.1). The literal `DELETE /follows/:followeeId` and
@@ -240,6 +241,18 @@ export const ROUTES: readonly RouteDef[] = [
   {
     method: "GET",
     pattern: "/__test/last-verify-token",
-    handler: async (request, env) => (await handleTestRoute(request, env)) ?? notFoundResponse(),
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
+
+  // TEST-ONLY (handle-at-signup Task 8). Same null-means-404 contract as
+  // above, and the same handler — it dispatches on method+pathname itself.
+  // See src/routes/__test.ts for why this one is a POST with an inline
+  // checkOrigin rather than the pipeline.
+  {
+    method: "POST",
+    pattern: "/__test/reap-unverified",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },
 ];

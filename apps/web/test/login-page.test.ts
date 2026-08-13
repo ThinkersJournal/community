@@ -6,10 +6,9 @@ import { describe, expect, it } from "vitest";
 /**
  * MINIMAL STRUCTURE TEST — src/pages/login.astro (Task 10 theming retrofit).
  *
- * ⚠️ SOURCE/STRUCTURE TEST, NOT A RENDER — same reasoning as
- * test/choose-username-page.test.ts: this app's vitest is plain Node, and the
- * page imports `cloudflare:workers` (via src/lib/api.ts), which does not
- * resolve outside workerd.
+ * ⚠️ SOURCE/STRUCTURE TEST, NOT A RENDER — this app's vitest is plain Node,
+ * and the page imports `cloudflare:workers` (via src/lib/api.ts), which does
+ * not resolve outside workerd.
  *
  * This file exists ONLY to pin the theming retrofit (BaseLayout + CSP) without
  * disturbing the page's own logic, which stays proven elsewhere (the manual

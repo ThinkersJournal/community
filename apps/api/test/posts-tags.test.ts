@@ -30,15 +30,9 @@ async function fetchWorker(request: Request): Promise<Response> {
   return response;
 }
 
-/** A verified actor past the publish-username gate — see purge-wiring.test.ts. */
+/** A verified actor — every account already has a handle from signup. */
 async function onboardedActor(): Promise<Actor> {
-  const created = await createVerifiedActor();
-  const ctx = createExecutionContext();
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query("UPDATE profiles SET username_chosen = true WHERE user_id = $1", [created.userId]),
-  );
-  await waitOnExecutionContext(ctx);
-  return created;
+  return createVerifiedActor();
 }
 
 async function tagsOf(actor: Actor, id: string): Promise<TagRef[]> {

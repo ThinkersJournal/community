@@ -11,6 +11,7 @@ describe('SignupInput', () => {
   const validPayload = {
     email: 'reader@example.com',
     password: 'correct-horse-battery',
+    username: 'reader_1',
     turnstileToken: 'a-turnstile-token',
   };
 
@@ -35,6 +36,17 @@ describe('SignupInput', () => {
     const result = SignupInput.safeParse({ ...validPayload, email: 'Reader@Example.COM' });
     expect(result.success).toBe(true);
     expect(result.success && result.data.email).toBe('reader@example.com');
+  });
+
+  it('requires a valid normalized handle', () => {
+    const ok = SignupInput.safeParse({
+      email: 'A@B.com', password: 'x'.repeat(12), username: '  Ada_1  ', turnstileToken: 't',
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success) expect(ok.data.username).toBe('ada_1'); // trimmed + lowercased
+
+    expect(SignupInput.safeParse({ email: 'a@b.com', password: 'x'.repeat(12), username: 'ab', turnstileToken: 't' }).success).toBe(false); // too short
+    expect(SignupInput.safeParse({ email: 'a@b.com', password: 'x'.repeat(12), username: 'bad handle', turnstileToken: 't' }).success).toBe(false); // space
   });
 });
 

@@ -29,6 +29,8 @@
  */
 import { expect, test } from "@playwright/test";
 
+import { uniqueHandle } from "./helpers";
+
 /** Satisfies the api's zod schema (>= 12 chars). Not what this test is about. */
 const PASSWORD = "correct-horse-battery-staple";
 
@@ -45,15 +47,24 @@ function uniqueEmail(prefix: string): string {
  *
  * Deliberately a small local copy rather than an import from
  * e2e/signup.spec.ts: importing a spec module would REGISTER that file's tests
- * a second time. It is 5 lines of form-filling with no security property to
+ * a second time. It is 6 lines of form-filling with no security property to
  * drift — unlike apps/api/test/actor.ts, which was extracted precisely because
  * it carries one (the epoch subtlety its header describes).
+ *
+ * ⚠️ HANDLE-AT-SIGNUP: `username` is now a REQUIRED field on this form, and the
+ * browser's native HTML5 validation silently blocks submission if it is left
+ * empty — so this fills a fresh `uniqueHandle`, imported from e2e/helpers.ts
+ * (a HELPER module, not a spec — importing it does not re-register anything;
+ * see its own header). Each of this test's two `signUp` calls mints its own
+ * handle, which is fine: they deliberately reuse the same EMAIL (that is the
+ * whole point — see the test below), not the same handle.
  */
 async function signUp(
   page: import("@playwright/test").Page,
   email: string,
 ): Promise<void> {
   await page.goto("/signup");
+  await page.fill('input[name="username"]', uniqueHandle("resend"));
   await page.fill('input[name="email"]', email);
   await page.fill('input[name="password"]', PASSWORD);
   await page.fill('input[name="turnstileToken"]', "dummy-turnstile-token");

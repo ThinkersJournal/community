@@ -20,6 +20,8 @@ export interface ErrorResponseInit {
   headers?: Record<string, string>;
   message?: string;
   fields?: string[];
+  /** For USERNAME_TAKEN: a few available handle suggestions. Advisory; never branch on it. */
+  suggestions?: string[];
 }
 
 export function errorResponse(
@@ -30,6 +32,7 @@ export function errorResponse(
   const body: Record<string, unknown> = { code };
   if (init.message !== undefined) body.message = init.message;
   if (init.fields !== undefined) body.fields = init.fields;
+  if (init.suggestions !== undefined) body.suggestions = init.suggestions;
 
   return new Response(JSON.stringify(body), {
     status,

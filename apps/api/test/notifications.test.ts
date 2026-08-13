@@ -15,13 +15,9 @@ async function fetchWorker(request: Request): Promise<Response> {
   return r;
 }
 
+/** A verified actor — every account already has a handle from signup. */
 async function onboardedActor(): Promise<Actor> {
-  const a = await createVerifiedActor();
-  const ctx = createExecutionContext();
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query("UPDATE profiles SET username_chosen=true WHERE user_id=$1", [a.userId]));
-  await waitOnExecutionContext(ctx);
-  return a;
+  return createVerifiedActor();
 }
 
 /** Seed a follow-notification from actorId to recipientId, returns the row id. */

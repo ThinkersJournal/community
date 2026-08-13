@@ -235,7 +235,14 @@ async function checkHealth(baseUrl) {
  */
 async function checkSignup(baseUrl, turnstileToken) {
   const url = `${baseUrl}${SIGNUP_PATH}`;
-  const email = `smoke-${crypto.randomUUID()}@example.com`;
+  const uuid = crypto.randomUUID();
+  const email = `smoke-${uuid}@example.com`;
+  // handle-at-signup: /auth/signup now REQUIRES `username` and 400s
+  // (INVALID_INPUT) without it. Derived from the same uuid as `email` (hyphens
+  // stripped — the api's handle format is `[a-z0-9_]{3,30}`, no hyphens) so a
+  // run's row is identifiable from either field; `smoke_` (6 chars) + 24 of the
+  // uuid's 32 hex chars lands exactly at the 30-char cap.
+  const username = `smoke_${uuid.replace(/-/g, "")}`.slice(0, 30);
 
   const response = await get(url, {
     method: "POST",
@@ -245,7 +252,7 @@ async function checkSignup(baseUrl, turnstileToken) {
       Origin: PRODUCTION_ORIGIN,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ email, password: SMOKE_PASSWORD, turnstileToken }),
+    body: JSON.stringify({ username, email, password: SMOKE_PASSWORD, turnstileToken }),
   });
 
   if (response.status !== 201) {

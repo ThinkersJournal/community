@@ -7,7 +7,7 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { chooseUsername, publishPost, signUpAndVerify, toggleFollowTo, uniqueHandle } from "./helpers";
+import { publishPost, signUpAndVerify, toggleFollowTo } from "./helpers";
 
 test("comment → author's bell shows 1 → open → read → clears; follow bumps it again", async ({
   page,
@@ -25,7 +25,6 @@ test("comment → author's bell shows 1 → open → read → clears; follow bum
   try {
     const b = await bCtx.newPage();
     await signUpAndVerify(b, b.request);
-    await chooseUsername(b, uniqueHandle("reader"));
 
     await b.goto(url);
     const form = b.locator("[data-comment-form-slot] form");

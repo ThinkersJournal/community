@@ -16,15 +16,14 @@ async function fetchWorker(request: Request): Promise<Response> {
   return response;
 }
 
-/** A verified actor who has ALSO chosen a handle (so the onboarding gate passes). */
+/**
+ * A verified actor. Named `onboardedActor` (kept, not renamed, to hold this
+ * file's diff to the handle-at-signup cleanup) from when it also had to flip
+ * a now-retired onboarding flag marking a handle as chosen — every account
+ * has a handle from signup now, so a plain verified actor already qualifies.
+ */
 async function onboardedActor(): Promise<Actor> {
-  const actor = await createVerifiedActor();
-  const ctx = createExecutionContext();
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query("UPDATE profiles SET username_chosen = true WHERE user_id = $1", [actor.userId]),
-  );
-  await waitOnExecutionContext(ctx);
-  return actor;
+  return createVerifiedActor();
 }
 
 function follow(actor: Actor, followeeId: string): Promise<Response> {
@@ -119,11 +118,10 @@ describe("POST /follows", () => {
     expect(((await response.json()) as { code: string }).code).toBe("EMAIL_NOT_VERIFIED");
   });
 
-  it("409s USERNAME_REQUIRED for a verified follower who has not chosen a handle", async () => {
-    const noHandle = await createVerifiedActor(); // username_chosen stays false
-    const response = await follow(noHandle, bob.userId);
-    expect(response.status).toBe(409);
-    expect(((await response.json()) as { code: string }).code).toBe("USERNAME_REQUIRED");
+  it("a verified follower with no separate onboarding step can follow immediately (handle comes from signup)", async () => {
+    const noExtraStep = await createVerifiedActor();
+    const response = await follow(noExtraStep, bob.userId);
+    expect(response.status).toBe(201);
   });
 });
 

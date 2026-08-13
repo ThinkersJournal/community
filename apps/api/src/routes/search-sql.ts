@@ -28,11 +28,14 @@ export const POSTS_SQL = `
             p.id DESC
    LIMIT $2 OFFSET $3`;
 
+// This query does not filter profiles by onboarding status — everyone has a
+// handle from signup now (see Task 4's report), and migration 0011 rebuilt
+// `profiles_search_trgm_idx` as a full (non-partial) index to match, so the
+// index remains usable without requiring a matching WHERE clause here.
 export const PEOPLE_SQL = `
   SELECT pr.username, pr.display_name AS "displayName", pr.bio
     FROM profiles pr
-   WHERE pr.username_chosen = true
-     AND lower($1) <% lower(coalesce(pr.username::text,'') || ' ' || coalesce(pr.display_name,'') || ' ' || coalesce(pr.bio,''))
+   WHERE lower($1) <% lower(coalesce(pr.username::text,'') || ' ' || coalesce(pr.display_name,'') || ' ' || coalesce(pr.bio,''))
    ORDER BY word_similarity(lower($1), lower(coalesce(pr.username::text,'') || ' ' || coalesce(pr.display_name,'') || ' ' || coalesce(pr.bio,''))) DESC,
             pr.user_id DESC
    LIMIT $2 OFFSET $3`;

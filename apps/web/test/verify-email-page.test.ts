@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
  * retrofit).
  *
  * ⚠️ SOURCE/STRUCTURE TEST, NOT A RENDER — same reasoning as
- * test/choose-username-page.test.ts / test/login-page.test.ts: this app's
+ * test/login-page.test.ts: this app's
  * vitest is plain Node, and the page imports `cloudflare:workers` (via
  * src/lib/api.ts), which does not resolve outside workerd. The runtime
  * behaviour (including the LOGIN_REQUIRED ripple and the resend-form CSRF

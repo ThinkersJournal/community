@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
  * MINIMAL STRUCTURE TEST — src/pages/signup.astro (Task 10 theming retrofit).
  *
  * ⚠️ SOURCE/STRUCTURE TEST, NOT A RENDER — same reasoning as
- * test/choose-username-page.test.ts / test/login-page.test.ts: this app's
+ * test/login-page.test.ts: this app's
  * vitest is plain Node, and the page imports `cloudflare:workers` (via
  * src/lib/api.ts), which does not resolve outside workerd.
  */
@@ -39,5 +39,29 @@ describe("signup.astro", () => {
 
   it("still forwards the real browser Origin, never a synthesized one, on the signup POST", () => {
     expect(code).toContain('Astro.request.headers.get("Origin")');
+  });
+
+  // handle-at-signup Task 7: the signup form now collects a chosen @handle
+  // and surfaces the api's USERNAME_TAKEN suggestions as plain server-rendered
+  // text (no client JS — this page keeps a strict `script-src 'self'` CSP).
+  it("has a username field with permanence copy, and forwards it to the api", () => {
+    expect(rawSource).toMatch(/name="username"/);
+    expect(rawSource).toMatch(/permanent/i);
+    expect(code).toContain('username: form.get("username")');
+  });
+
+  it("branches on USERNAME_TAKEN and renders the returned suggestions as plain text", () => {
+    expect(code).toContain("USERNAME_TAKEN");
+    expect(code).toMatch(/suggestions/);
+  });
+
+  // Fix round 1: 400 has TWO causes — reserved handle (api attaches a static
+  // `message`, e.g. "That handle is reserved.") vs. plain zod bad-format
+  // (no `message`). Only the reserved case should surface api-supplied copy;
+  // bad-format must keep the generic fallback, never show nothing meaningful.
+  it("surfaces the api's message verbatim on a 400 that carries one (reserved handle), and keeps the generic fallback for a 400 that doesn't (bad format)", () => {
+    expect(code).toContain("response.status === 400 && response.data?.message");
+    expect(code).toContain("message = response.data.message;");
+    expect(code).toContain("Signup failed. Check your email and password and try again.");
   });
 });

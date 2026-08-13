@@ -2,6 +2,7 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { describe, expect, it } from "vitest";
 
 import worker from "../src";
+import { errorResponse } from "../src/http/errors";
 import { ROUTES } from "../src/routes";
 
 import type { RouteDef } from "../src/routing";
@@ -72,6 +73,9 @@ function probeBody(): string {
   return JSON.stringify({
     email: `error-envelope-${crypto.randomUUID()}@example.com`,
     password: "correct-horse-battery-staple",
+    // Satisfies SignupInput's now-required `username` (Task 1) — LoginInput has
+    // no such field and simply ignores the extra key.
+    username: `probe${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`,
     turnstileToken: "dummy-turnstile-token",
   });
 }
@@ -597,4 +601,17 @@ describe("error-envelope coverage", () => {
       ).toContain(errorCase.route);
     }
   });
+});
+
+/**
+ * `suggestions` — the optional envelope extension a future USERNAME_TAKEN
+ * response uses to offer a few available handles (Task 2+). Unit-level,
+ * against `errorResponse` directly rather than through a route: no route
+ * emits `suggestions` yet, so this is what pins the wire shape ahead of that.
+ */
+it("errorResponse carries optional suggestions", async () => {
+  const res = errorResponse("USERNAME_TAKEN", 409, { fields: ["username"], suggestions: ["ada2", "ada3"] });
+  expect(res.status).toBe(409);
+  const body = await res.json();
+  expect(body).toMatchObject({ code: "USERNAME_TAKEN", fields: ["username"], suggestions: ["ada2", "ada3"] });
 });

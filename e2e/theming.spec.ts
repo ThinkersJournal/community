@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { chooseUsername, signUpAndVerify, uniqueHandle } from "./helpers";
+import { signUpAndVerify, uniqueHandle } from "./helpers";
 
 test("themed shell renders with nav + footer on a public page", async ({ page }) => {
   await page.goto("/authors");
@@ -16,10 +16,10 @@ test("nav auth slot: logged-out shows Sign in/up; logged-in shows @handle + Sign
   await expect(page.locator('[data-auth-slot] a[href="/login"]')).toBeVisible();
   await expect(page.locator('[data-auth-slot] a[href="/signup"]')).toBeVisible();
 
-  // Sign up + onboard
-  await signUpAndVerify(page, page.request);
+  // Sign up, choosing a known handle so the assertion below can target it
+  // (handle-at-signup: no more separate onboarding step).
   const handle = uniqueHandle("themer");
-  await chooseUsername(page, handle);
+  await signUpAndVerify(page, page.request, handle);
 
   // Logged in — the island upgrades the slot
   await page.goto("/authors");

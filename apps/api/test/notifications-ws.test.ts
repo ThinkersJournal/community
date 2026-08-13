@@ -21,14 +21,9 @@ async function fetchWorker(request: Request): Promise<Response> {
   return r;
 }
 
-/** A verified actor who has ALSO chosen a handle — mirrors notifications.test.ts. */
+/** A verified actor — every account already has a handle from signup. */
 async function onboardedActor(): Promise<Actor> {
-  const a = await createVerifiedActor();
-  const ctx = createExecutionContext();
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query("UPDATE profiles SET username_chosen=true WHERE user_id=$1", [a.userId]));
-  await waitOnExecutionContext(ctx);
-  return a;
+  return createVerifiedActor();
 }
 
 function wsReq(actor?: { cookie: string }, origin = "http://localhost:8787"): Request {

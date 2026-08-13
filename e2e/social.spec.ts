@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-import { chooseUsername, publishPost, signUpAndVerify, toggleFollowTo, uniqueHandle } from "./helpers";
+import { publishPost, signUpAndVerify, toggleFollowTo } from "./helpers";
 
 test("follow → the feed shows the followee's post → unfollow removes it", async ({ page, browser }) => {
-  // Author A publishes a post (publishPost onboards A with a chosen handle).
+  // Author A publishes a post (the handle comes from signup — handle-at-signup).
   await signUpAndVerify(page, page.request);
   const { username: authorHandle } = await publishPost(page, {
     title: "Alice On Systems",
@@ -15,7 +15,6 @@ test("follow → the feed shows the followee's post → unfollow removes it", as
   try {
     const b = await ctxB.newPage();
     await signUpAndVerify(b, b.request);
-    await chooseUsername(b, uniqueHandle("reader"));
 
     // B follows A from A's profile — the island reveals the button, then flips it.
     // (toggleFollowTo tolerates the E2E dev-harness's lost-follow-response stall;
@@ -37,34 +36,19 @@ test("follow → the feed shows the followee's post → unfollow removes it", as
   }
 });
 
-test("a not-yet-onboarded user opening the editor sees a choose-handle prompt, not a fillable form", async ({ page }) => {
-  // ⚠️ MILESTONE-REVIEW FIX (content-loss). Before this fix, an unonboarded
-  // author could type a title + body and only THEN discover (on publish)
-  // that they needed a handle — losing everything typed across the
-  // new-post → choose-username → /feed redirect chain. The fix gates at
-  // EDITOR-OPEN: an unonboarded visitor never sees the form at all, so
-  // there's nothing to fill or lose. Do NOT fill/publish here — there is no
-  // form to fill.
-  await signUpAndVerify(page, page.request);
-  await page.goto("/new-post");
-
-  await expect(page.locator("#onboarding-required")).toBeVisible();
-  const link = page.locator('a[href="/choose-username?next=/new-post"]');
-  await expect(link).toBeVisible();
-  await expect(page.locator("#editor-form")).toHaveCount(0);
-
-  // Following the prompt to onboard returns the author to the editor
-  // (?next= honored), where the form is now actually present.
-  await link.click();
-  await page.fill('input[name="username"]', uniqueHandle("late"));
-  await page.click('button[type="submit"]');
-  await page.waitForURL(/\/new-post$/);
-  await expect(page.locator("#editor-form")).toBeVisible();
-});
+// ⚠️ HANDLE-AT-SIGNUP REMOVAL. This file used to carry a test proving that a
+// not-yet-onboarded author opening the editor got a choose-handle prompt
+// instead of a fillable form (the M2.1 content-loss fix's payoff). That state
+// no longer exists to test: the @handle is now chosen ON THE SIGNUP FORM
+// itself, so every signed-up account — this test's premise notwithstanding —
+// already has one by the time it can reach `/new-post` at all. See
+// apps/web/src/pages/new-post.astro (no more "not onboarded" branch) and
+// e2e/signup.spec.ts's rewritten negative test for where that gate's
+// underlying security property (an unverified user cannot get a post saved)
+// now lives instead.
 
 test("a new user's feed is empty and points at discovery", async ({ page }) => {
   await signUpAndVerify(page, page.request);
-  await chooseUsername(page, uniqueHandle("lonely"));
   await page.goto("/feed");
   // Scoped to <main>: the themed shell's global footer (a sibling of <main>,
   // see BaseLayout.astro) now ALSO has a "Discover authors" link, so an
