@@ -1,8 +1,17 @@
-# Media Garbage Collector — Requirements (future, ~M4)
+# Media Garbage Collector — Requirements
 
-> **Status:** Backlog. Not yet scheduled. This note seeds the eventual GC
-> spec/plan. Added 2026-08-13 after pre-launch testing surfaced an orphan class
-> the originally-planned GC would not reclaim.
+> **Status:** PRE-LAUNCH (re-scoped 2026-08-13). Originally slated for ~M4, but
+> promoted because **post deletion** ships pre-launch (`docs/pre-launch-fixes.md`
+> #5) and deleting a post orphans its images — so reclamation must ship with it.
+> Build as one "content deletion + media reclamation" milestone with #5. This
+> note seeds that milestone's spec.
+>
+> **Key unification:** post-deletion orphans and abandoned-upload orphans are the
+> SAME thing — a `media` row referenced by no post — so ONE reference-based
+> reclaimer serves both. Class 1 (below) is the object-side reclamation; Class 2
+> is the row-side. Post deletion never touches R2 directly (preserving the
+> never-delete-inline dedup rule); it just makes media unreferenced, and the
+> reclaimer catches up.
 
 ## Context
 

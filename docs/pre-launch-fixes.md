@@ -83,17 +83,46 @@ selection moved to the signup form (Option A, item #1), this is now implemented
 
 ---
 
-## 4. Orphaned media — abandoned-upload reclamation   `Defer to M4 GC`
+## 4. Media reclamation (garbage collector)   `Promoted to pre-launch — coupled with #5`
 
-**What:** An image added to a post that's then discarded leaves a `media` row +
-R2 object referenced by nothing, consuming the owner's quota forever. The
-currently-planned GC ("drop objects with no remaining media row") does **not**
-catch this class — the row persists.
+**What:** Media becomes orphaned two ways: (Class 2) an image added to a post
+that's then discarded, and — once #5 ships — (the post-deletion case) a
+published post's images when the post is deleted. There is **no FK from `media`
+to `posts`** (the only link is the image URL inside `posts.markdown_source`), so
+deleting a post does **not** cascade to its media; the images simply become
+referenced-by-nothing. Both cases are the **same orphan**: a `media` row
+referenced by no post, consuming the owner's quota forever.
 
-**Disposition:** Deferred to the eventual media garbage collector (~M4). The
-requirement — reap never-referenced `media` rows after a grace period — is
-captured as **Class 2** in `docs/backlog/media-garbage-collector.md`. Not a
-pre-launch fix.
+**Disposition — was "defer to M4", now PRE-LAUNCH (decided 2026-08-13):** because
+#5 (post deletion) ships pre-launch, deleting a post would leak its images
+without reclamation — so the reclamation must ship alongside it. Crucially it is
+**one mechanism**: a reference-based reclamation ("reclaim `media` rows
+referenced by no post, then dedup-safe R2 object deletion") serves both the
+post-deletion orphans and the abandoned-upload orphans. The design's
+never-delete-R2-inline rule (content-addressed dedup) is preserved — deletion
+makes media unreferenced; the reclaimer removes rows and ref-count-deletes
+objects. Requirements in `docs/backlog/media-garbage-collector.md`. Build as one
+milestone with #5.
+
+---
+
+## 5. Post deletion   `Fix before launch`
+
+**What:** A published post cannot be deleted. There is no `DELETE /posts/...`
+route, no delete handler (only `handleCreatePost`/`handleUpdatePost`/
+`handleGetPost` in `apps/api/src/routes/posts.ts`), and no web UI. The only
+`DELETE` routes in the app are follows, comments, and reactions. Users cannot
+remove their own content.
+
+**Evidence:** `apps/api/src/routes.ts` (no `DELETE`/posts entry);
+`apps/api/src/routes/posts.ts` (exports create/update/get only).
+
+**Scope:** add a `DELETE /posts/:id` route (owner-authorized, verified-email
+gated per the existing mutation pipeline) + the web affordance to trigger it.
+Deleting a post must free its images — see #4. **Build #4 and #5 together** as
+one "content deletion + media reclamation" milestone: post deletion is the first
+concrete producer of post-deletion media orphans, and the reclaimer is what
+keeps that from leaking storage/quota.
 
 ---
 
