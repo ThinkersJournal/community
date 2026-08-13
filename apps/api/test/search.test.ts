@@ -31,8 +31,8 @@ async function seedAuthorWithPost(title: string): Promise<{ username: string }> 
     const id = rows[0]!.id;
     created.push(id);
     await c.query(
-      `INSERT INTO profiles (user_id, username, display_name, bio, username_chosen)
-       VALUES ($1,$2,'Search Ada','bio text', true)`, [id, username]);
+      `INSERT INTO profiles (user_id, username, display_name, bio)
+       VALUES ($1,$2,'Search Ada','bio text')`, [id, username]);
     await c.query(
       `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
        VALUES ($1,$2,$3,'body', 'published', now())`,
@@ -56,8 +56,8 @@ async function seedAuthorWithNPosts(term: string, n: number): Promise<string[]> 
     const id = rows[0]!.id;
     created.push(id);
     await c.query(
-      `INSERT INTO profiles (user_id, username, display_name, bio, username_chosen)
-       VALUES ($1,$2,'Pager Author','pager bio', true)`,
+      `INSERT INTO profiles (user_id, username, display_name, bio)
+       VALUES ($1,$2,'Pager Author','pager bio')`,
       [id, `pgr_${crypto.randomUUID().slice(0, 8)}`]);
     for (const title of titles) {
       await c.query(
@@ -91,13 +91,13 @@ describe("GET /public/search", () => {
   });
 
   /**
-   * handle-at-signup Task 4: people search no longer filters on the retired
-   * `username_chosen` onboarding flag (every account has a handle from signup
-   * — there is no "not yet chosen" state to exclude). A freshly-created
-   * profile — the column still defaults false until the Task 6 migration
-   * drops it — must appear with no extra precondition.
+   * handle-at-signup Task 4/6: people search no longer filters on the retired
+   * username-chosen onboarding flag — every account has a handle from
+   * signup, there is no "not yet chosen" state to exclude, and (as of Task 6)
+   * the column itself is gone. A freshly-created profile must appear with no
+   * extra precondition.
    */
-  it("finds a freshly-created author with no username_chosen precondition", async () => {
+  it("finds a freshly-created author with no extra precondition", async () => {
     const ctx = createExecutionContext();
     const username = `fresh_${crypto.randomUUID().slice(0, 8)}`;
     await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
@@ -106,8 +106,6 @@ describe("GET /public/search", () => {
         [`s-${crypto.randomUUID()}@t.test`]);
       const id = rows[0]!.id;
       created.push(id);
-      // No `username_chosen` column in this INSERT at all — it takes the
-      // schema default (false), exactly like a real just-signed-up account.
       await c.query(
         `INSERT INTO profiles (user_id, username, display_name, bio)
          VALUES ($1,$2,'Fresh Signup','writes about being new here')`, [id, username]);

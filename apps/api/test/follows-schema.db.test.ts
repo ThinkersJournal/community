@@ -64,19 +64,3 @@ describe("follows schema", () => {
     expect(rows).toHaveLength(0);
   });
 });
-
-describe("profiles.username_chosen", () => {
-  it("defaults to false for a freshly inserted profile", async () => {
-    const uid = await makeUser();
-    await client.query("INSERT INTO profiles (user_id, username) VALUES ($1,$2)", [
-      uid,
-      `u${uid.replace(/-/g, "").slice(0, 20)}`,
-    ]);
-    const { rows } = await client.query<{ username_chosen: boolean }>(
-      "SELECT username_chosen FROM profiles WHERE user_id=$1",
-      [uid],
-    );
-    expect(rows[0]!.username_chosen).toBe(false);
-    await client.query("DELETE FROM users WHERE id=$1", [uid]);
-  });
-});

@@ -40,8 +40,8 @@ async function seedAuthor(): Promise<string> {
     id = rows[0]!.id;
     created.push(id);
     await c.query(
-      `INSERT INTO profiles (user_id, username, display_name, username_chosen)
-       VALUES ($1,$2,'Tag Author', true)`,
+      `INSERT INTO profiles (user_id, username, display_name)
+       VALUES ($1,$2,'Tag Author')`,
       [id, `tagr_${crypto.randomUUID().slice(0, 8)}`]);
   });
   await waitOnExecutionContext(ctx);

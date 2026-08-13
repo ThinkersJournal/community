@@ -19,8 +19,8 @@ async function fetchWorker(request: Request): Promise<Response> {
 /**
  * A verified actor. Named `onboardedActor` (kept, not renamed, to hold this
  * file's diff to the handle-at-signup cleanup) from when it also had to flip
- * the now-retired `username_chosen` onboarding flag — every account has a
- * handle from signup now, so a plain verified actor already qualifies.
+ * a now-retired onboarding flag marking a handle as chosen — every account
+ * has a handle from signup now, so a plain verified actor already qualifies.
  */
 async function onboardedActor(): Promise<Actor> {
   return createVerifiedActor();

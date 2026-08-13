@@ -28,14 +28,10 @@ export const POSTS_SQL = `
             p.id DESC
    LIMIT $2 OFFSET $3`;
 
-// ⚠️ KNOWN DIVERGENCE FROM migration 0009's `profiles_search_trgm_idx`, left for
-// a later task (handle-at-signup Task 6, which drops `profiles.username_chosen`):
-// that index is still PARTIAL (`WHERE username_chosen = true`), but this query no
-// longer filters on that column (everyone has a handle from signup now — see
-// Task 4's report). A partial index requires the QUERY's WHERE to imply the
-// index's predicate, so Postgres can no longer use it here — it falls back to a
-// full scan (still CORRECT, just not index-accelerated) until the index itself
-// is rebuilt without that predicate.
+// This query does not filter profiles by onboarding status — everyone has a
+// handle from signup now (see Task 4's report), and migration 0011 rebuilt
+// `profiles_search_trgm_idx` as a full (non-partial) index to match, so the
+// index remains usable without requiring a matching WHERE clause here.
 export const PEOPLE_SQL = `
   SELECT pr.username, pr.display_name AS "displayName", pr.bio
     FROM profiles pr

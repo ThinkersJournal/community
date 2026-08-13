@@ -21,8 +21,8 @@ beforeAll(async () => {
   );
   author = rows[0]!.id;
   await client.query(
-    `INSERT INTO profiles (user_id, username, display_name, bio, username_chosen)
-     VALUES ($1, $2, 'Ada Lovelace', 'writes about analytical engines', true)`,
+    `INSERT INTO profiles (user_id, username, display_name, bio)
+     VALUES ($1, $2, 'Ada Lovelace', 'writes about analytical engines')`,
     [author, `ada_${author.slice(0, 8)}`],
   );
 });
@@ -133,38 +133,12 @@ describe("0009 search trigram", () => {
     // Same NULL-propagation guard as above, for the two nullable profile columns.
     expect(people).toContain("COALESCE(display_name");
     expect(people).toContain("COALESCE(bio");
-    expect(people.toLowerCase()).toContain("where (username_chosen");
-  });
-
-  /**
-   * handle-at-signup Task 4: PEOPLE_SQL (src/routes/search-sql.ts) no longer
-   * filters on `username_chosen` — every account has a handle from signup, so
-   * there is no "not yet chosen" profile left to exclude. This replaces the
-   * old "excludes un-onboarded" case, which pinned behavior the app no longer
-   * has; it now proves a profile with `username_chosen = false` (the column's
-   * default, and still the row shape of every profile until the Task 6
-   * migration drops the column) is FOUND, not hidden.
-   */
-  it("finds a person via PEOPLE_SQL regardless of the (retired) username_chosen flag", async () => {
-    const { rows: u } = await client.query<{ id: string }>(
-      `INSERT INTO users (email, password_hash) VALUES ($1,'x') RETURNING id`,
-      [`notyet-${crypto.randomUUID()}@t.test`],
-    );
-    const notYetId = u[0]!.id;
-    // Deliberately username_chosen = false (the schema default) — PEOPLE_SQL
-    // must still return this profile.
-    await client.query(
-      `INSERT INTO profiles (user_id, username, display_name, username_chosen) VALUES ($1, $2, 'Ada NotYet', false)`,
-      [notYetId, `ada_notyet_${notYetId.slice(0, 8)}`],
-    );
-    try {
-      await client.query("BEGIN; SET LOCAL pg_trgm.word_similarity_threshold = 0.3");
-      const { rows } = await client.query<{ username: string }>(PEOPLE_SQL, ["ada notyet", 20, 0]);
-      await client.query("COMMIT");
-      expect(rows.some((r) => r.username.startsWith("ada_notyet_"))).toBe(true);
-    } finally {
-      await client.query(`DELETE FROM users WHERE id = $1`, [notYetId]);
-    }
+    // handle-at-signup Task 6: the index was rebuilt WITHOUT a partial
+    // predicate (dropping the retired onboarding flag it used to filter on)
+    // — every account has a handle from signup, so there is no "not yet
+    // chosen" profile left to exclude. Pin the absence: no WHERE clause at
+    // all on this index anymore.
+    expect(people.toLowerCase()).not.toContain("where");
   });
 
   it("couples the handler search expression to the migration 0009 index expression", () => {
