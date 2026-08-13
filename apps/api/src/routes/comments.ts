@@ -16,7 +16,6 @@ import { enforceRateLimit } from "../auth/ratelimit";
 import { purgeTags } from "../cache/purge";
 import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
-import { hasChosenUsername } from "../db/onboarding";
 import { errorResponse } from "../http/errors";
 import { notify } from "../notifications/create";
 import { notifyPostLive } from "../notifications/post-live";
@@ -44,10 +43,6 @@ export async function handleCreateComment(
 
   const limited = await enforceRateLimit(env.COMMENT_LIMITER, `comment:${userId}`);
   if (limited !== null) return limited;
-
-  if (!(await hasChosenUsername(env, ctx, userId))) {
-    return errorResponse("USERNAME_REQUIRED", 409);
-  }
 
   let body: unknown;
   try {

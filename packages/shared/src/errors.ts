@@ -33,13 +33,16 @@ export type ApiErrorCode =
   | "EMAIL_NOT_VERIFIED"     // 403 — the soft gate
   | "ALREADY_VERIFIED"       // 409 — resend-verification on a verified account (T10)
   | "QUOTA_EXCEEDED"         // 403 — per-user media quota (T8)
-  | "USERNAME_REQUIRED"      // 409 — must choose a durable handle before publish/follow (M2.1)
   // --- resources -----------------------------------------------------------
   | "NOT_FOUND"              // 404 — no such route, or no such visible resource
   | "EMAIL_TAKEN"            // 409 — a VERIFIED duplicate at signup
   | "SLUG_TAKEN"             // 409 — could not place a unique slug (T9)
-  | "USERNAME_TAKEN"         // 409 — the requested handle is already in use (M2.1)
-  | "USERNAME_ALREADY_SET"   // 409 — the handle was already chosen; it is immutable (M2.1)
+  // USERNAME_TAKEN is now also signup's collision code (handle-at-signup Task
+  // 3) — no longer M2.1-only. USERNAME_REQUIRED/USERNAME_ALREADY_SET, the old
+  // post-signup "choose a handle" flow's codes, are RETIRED (handle-at-signup
+  // Task 4): the handle is chosen once, at signup, with no separate step to
+  // gate or re-choose.
+  | "USERNAME_TAKEN"         // 409 — the requested handle is already in use
   | "COMMENT_NOT_FOUND"      // 404 — no such visible comment / parent (M2.2)
   | "COMMENT_DELETED"        // 409 — the target comment is tombstoned (M2.2)
   | "COMMENT_DEPTH_EXCEEDED" // 409 — reply would exceed the depth-8 cap (M2.2)

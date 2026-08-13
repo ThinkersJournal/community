@@ -136,30 +136,34 @@ describe("0009 search trigram", () => {
     expect(people.toLowerCase()).toContain("where (username_chosen");
   });
 
-  it("finds an onboarded person by partial name, excludes un-onboarded", async () => {
+  /**
+   * handle-at-signup Task 4: PEOPLE_SQL (src/routes/search-sql.ts) no longer
+   * filters on `username_chosen` — every account has a handle from signup, so
+   * there is no "not yet chosen" profile left to exclude. This replaces the
+   * old "excludes un-onboarded" case, which pinned behavior the app no longer
+   * has; it now proves a profile with `username_chosen = false` (the column's
+   * default, and still the row shape of every profile until the Task 6
+   * migration drops the column) is FOUND, not hidden.
+   */
+  it("finds a person via PEOPLE_SQL regardless of the (retired) username_chosen flag", async () => {
     const { rows: u } = await client.query<{ id: string }>(
       `INSERT INTO users (email, password_hash) VALUES ($1,'x') RETURNING id`,
-      [`hidden-${crypto.randomUUID()}@t.test`],
+      [`notyet-${crypto.randomUUID()}@t.test`],
     );
-    const hiddenId = u[0]!.id;
+    const notYetId = u[0]!.id;
+    // Deliberately username_chosen = false (the schema default) — PEOPLE_SQL
+    // must still return this profile.
     await client.query(
-      `INSERT INTO profiles (user_id, username, display_name, username_chosen) VALUES ($1, $2, 'Ada Hidden', false)`,
-      [hiddenId, `ada_hidden_${hiddenId.slice(0, 8)}`],
+      `INSERT INTO profiles (user_id, username, display_name, username_chosen) VALUES ($1, $2, 'Ada NotYet', false)`,
+      [notYetId, `ada_notyet_${notYetId.slice(0, 8)}`],
     );
     try {
       await client.query("BEGIN; SET LOCAL pg_trgm.word_similarity_threshold = 0.3");
-      const { rows } = await client.query<{ username: string }>(
-        `SELECT pr.username FROM profiles pr
-          WHERE pr.username_chosen = true
-            AND lower($1) <% lower(coalesce(pr.username::text,'') || ' ' || coalesce(pr.display_name,'') || ' ' || coalesce(pr.bio,''))`,
-        ["ada lovelace"],
-      );
+      const { rows } = await client.query<{ username: string }>(PEOPLE_SQL, ["ada notyet", 20, 0]);
       await client.query("COMMIT");
-      const names = rows.map((r) => r.username);
-      expect(names.some((n) => n.startsWith("ada_") && !n.includes("hidden"))).toBe(true);
-      expect(names.some((n) => n.includes("hidden"))).toBe(false);
+      expect(rows.some((r) => r.username.startsWith("ada_notyet_"))).toBe(true);
     } finally {
-      await client.query(`DELETE FROM users WHERE id = $1`, [hiddenId]);
+      await client.query(`DELETE FROM users WHERE id = $1`, [notYetId]);
     }
   });
 

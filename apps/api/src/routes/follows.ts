@@ -3,13 +3,13 @@
  * construction: the edge is `INSERT ... ON CONFLICT DO NOTHING` and the delete
  * is unconditional, so a double-tap or a retry is never an error. Self-follow is
  * blocked in the app AND by the DB CHECK (defense in depth). The verified-email
- * soft gate and the username-onboarding gate both apply before any write.
+ * soft gate applies before any write; the old username-onboarding gate is gone
+ * (every account has a handle from signup — see handle-at-signup Task 4).
  */
 import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isCheckViolation, isForeignKeyViolation } from "../db/errors";
-import { hasChosenUsername } from "../db/onboarding";
 import { errorResponse } from "../http/errors";
 import { notify } from "../notifications/create";
 import { bustFolloweeCache } from "../social/followee-cache";
@@ -29,10 +29,6 @@ export async function handleFollow(
 
   const limited = await enforceRateLimit(env.FOLLOW_LIMITER, `follow:${userId}`);
   if (limited !== null) return limited;
-
-  if (!(await hasChosenUsername(env, ctx, userId))) {
-    return errorResponse("USERNAME_REQUIRED", 409);
-  }
 
   let body: unknown;
   try {

@@ -68,20 +68,14 @@ function patchPost(actor: Actor, id: string, payload: PostPayload): Promise<Resp
 }
 
 /**
- * A verified actor who has ALSO chosen a handle (so the publish-username gate
- * passes). This suite is about authorship/ownership, not onboarding — the gate
- * itself is test/publish-username-gate.test.ts's — so every actor here that
- * PUBLISHES through the API must be pre-onboarded, mirroring
- * test/follows.test.ts's `onboardedActor()`.
+ * A verified actor. Named `onboardedActor` (kept, not renamed, to hold this
+ * file's diff to the handle-at-signup cleanup), mirroring
+ * test/follows.test.ts's helper of the same name — see its comment for why a
+ * plain verified actor is now enough (the handle comes from signup; there is
+ * no more separate onboarding step to publish through).
  */
 async function onboardedActor(): Promise<Actor> {
-  const created = await createVerifiedActor();
-  const ctx = createExecutionContext();
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query("UPDATE profiles SET username_chosen = true WHERE user_id = $1", [created.userId]),
-  );
-  await waitOnExecutionContext(ctx);
-  return created;
+  return createVerifiedActor();
 }
 
 function getPost(actor: Actor, id: string): Promise<Response> {
@@ -130,10 +124,6 @@ async function authorOf(id: string): Promise<string> {
 let actor: Actor;
 
 beforeAll(async () => {
-  // Onboarded, not merely verified: several cases in this file publish
-  // (status: "published") through the real API, and the gate added in Task 8
-  // 409s an un-onboarded author. This suite is about authorship/ownership, not
-  // onboarding, so the fixture represents an author past that gate already.
   actor = await onboardedActor();
 });
 
@@ -256,11 +246,6 @@ describe("PATCH /posts/:id", () => {
    */
   it("404s on ANOTHER author's post — never 403", async () => {
     const { id } = await create(actor, { title: "Mine", markdownSource: "a" });
-    // Onboarded: the attacker's OWN username_chosen gates a `status: "published"`
-    // PATCH before the ownership check ever runs (Task 8's gate reads the
-    // session's own row, not the target post's author). An un-onboarded attacker
-    // would 409 here for an unrelated reason, never reaching the 404 this case
-    // exists to pin.
     const attacker = await onboardedActor();
     const response = await patchPost(attacker, id, {
       title: "Yours",

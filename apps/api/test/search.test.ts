@@ -90,6 +90,36 @@ describe("GET /public/search", () => {
     expect(body.results.some((p) => p.username === username)).toBe(true);
   });
 
+  /**
+   * handle-at-signup Task 4: people search no longer filters on the retired
+   * `username_chosen` onboarding flag (every account has a handle from signup
+   * — there is no "not yet chosen" state to exclude). A freshly-created
+   * profile — the column still defaults false until the Task 6 migration
+   * drops it — must appear with no extra precondition.
+   */
+  it("finds a freshly-created author with no username_chosen precondition", async () => {
+    const ctx = createExecutionContext();
+    const username = `fresh_${crypto.randomUUID().slice(0, 8)}`;
+    await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO users (email, password_hash) VALUES ($1,'x') RETURNING id`,
+        [`s-${crypto.randomUUID()}@t.test`]);
+      const id = rows[0]!.id;
+      created.push(id);
+      // No `username_chosen` column in this INSERT at all — it takes the
+      // schema default (false), exactly like a real just-signed-up account.
+      await c.query(
+        `INSERT INTO profiles (user_id, username, display_name, bio)
+         VALUES ($1,$2,'Fresh Signup','writes about being new here')`, [id, username]);
+    });
+    await waitOnExecutionContext(ctx);
+
+    const r = await fetchWorker(`${U}/public/search?q=${encodeURIComponent("Fresh Signup")}&type=people`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { results: { username: string }[] };
+    expect(body.results.some((p) => p.username === username)).toBe(true);
+  });
+
   it("400s on q shorter than 2, longer than 100, and on a bad type/offset", async () => {
     expect((await fetchWorker(`${U}/public/search?q=a`)).status).toBe(400);
     expect((await fetchWorker(`${U}/public/search?q=${"x".repeat(101)}`)).status).toBe(400);

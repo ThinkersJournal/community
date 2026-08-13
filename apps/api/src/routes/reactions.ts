@@ -11,7 +11,6 @@ import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
-import { hasChosenUsername } from "../db/onboarding";
 import { errorResponse } from "../http/errors";
 import { notify } from "../notifications/create";
 import { notifyPostLive } from "../notifications/post-live";
@@ -44,10 +43,6 @@ export async function handleAddReaction(
 
   const limited = await enforceRateLimit(env.REACTION_LIMITER, `reaction:${userId}`);
   if (limited !== null) return limited;
-
-  if (!(await hasChosenUsername(env, ctx, userId))) {
-    return errorResponse("USERNAME_REQUIRED", 409);
-  }
 
   let body: unknown;
   try {

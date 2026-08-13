@@ -16,15 +16,12 @@ async function fetchWorker(request: Request): Promise<Response> {
   return response;
 }
 
-/** Verified + handle chosen (mirrors follows.test.ts / comments.test.ts). */
+/**
+ * A verified actor (mirrors follows.test.ts's `onboardedActor`, kept unrenamed
+ * for the same reason — see its comment there).
+ */
 async function onboardedActor(): Promise<Actor> {
-  const actor = await createVerifiedActor();
-  const ctx = createExecutionContext();
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query("UPDATE profiles SET username_chosen = true WHERE user_id = $1", [actor.userId]),
-  );
-  await waitOnExecutionContext(ctx);
-  return actor;
+  return createVerifiedActor();
 }
 
 function mutatingHeaders(actor: Actor): Record<string, string> {
@@ -183,11 +180,11 @@ describe("POST /reactions", () => {
     expect(((await dead.json()) as { code: string }).code).toBe("COMMENT_DELETED");
   });
 
-  it("gates: 403 unverified, 409 no handle", async () => {
+  it("gates: 403 unverified; a verified reactor with no separate onboarding step can react immediately", async () => {
     const unverified = await createUnverifiedActor();
     expect((await react(unverified, { postId, kind: "agree" })).status).toBe(403);
-    const noHandle = await createVerifiedActor();
-    expect((await react(noHandle, { postId, kind: "agree" })).status).toBe(409);
+    const noExtraStep = await createVerifiedActor();
+    expect((await react(noExtraStep, { postId, kind: "agree" })).status).toBe(201);
   });
 });
 
