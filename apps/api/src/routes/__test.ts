@@ -14,7 +14,14 @@
  * route (it only deletes accounts that are ALREADY 7+ days unverified), but
  * it is still an unthrottled DELETE trigger and gets the same gate.
  *
- * Three layers keep both from reaching production:
+ * `POST /__test/reap-orphan-media` (content-deletion + media-reclamation,
+ * Task 4) is the same test seam for the daily orphan-media reclaimer
+ * (src/media/reap-orphan-media.ts) — invokes it on demand and returns
+ * `{ rows, objects }`. Same blast-radius reasoning as reap-unverified above
+ * (it only frees `media` rows that are ALREADY unreferenced and past their
+ * 24h grace window), and the same gate.
+ *
+ * Three layers keep all three from reaching production:
  *   1. `TEST_ROUTES` is set ONLY in the gitignored `.dev.vars` (local dev) and
  *      in `miniflare.bindings` in vitest.config.ts (tests). It is deliberately
  *      NOT in wrangler.jsonc's `vars`, so a deploy cannot carry it along.
@@ -27,16 +34,17 @@
  *      exists.
  *
  * test/email-verify.test.ts covers both states for the token route, including
- * the unset-TEST_ROUTES 404. `POST /__test/reap-unverified` additionally runs
- * `checkOrigin` inline (same as signup/login — see src/auth/csrf.ts) so it
- * carries the SAME default-deny shape as every other mutating route in
- * src/routes.ts, even though `TEST_ROUTES` already makes it unreachable
- * outside dev/test.
+ * the unset-TEST_ROUTES 404. `POST /__test/reap-unverified` and `POST
+ * /__test/reap-orphan-media` additionally run `checkOrigin` inline (same as
+ * signup/login — see src/auth/csrf.ts) so each carries the SAME default-deny
+ * shape as every other mutating route in src/routes.ts, even though
+ * `TEST_ROUTES` already makes it unreachable outside dev/test.
  */
 import { checkOrigin } from "../auth/csrf";
 import { TEST_LAST_TOKEN_KEY } from "../auth/email-verify";
 import { reapUnverifiedAccounts } from "../auth/reap-unverified";
 import { errorResponse, notFoundResponse } from "../http/errors";
+import { reapOrphanMedia } from "../media/reap-orphan-media";
 
 /**
  * Handle a `/__test/*` request, or return `null` to mean "no such route" —
@@ -84,6 +92,20 @@ export async function handleTestRoute(
     }
     const reaped = await reapUnverifiedAccounts(env, ctx);
     return new Response(JSON.stringify({ reaped }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  // Same test-seam shape as reap-unverified above, for the daily orphan-media
+  // reclaimer (content-deletion + media-reclamation, Task 4). See
+  // src/media/reap-orphan-media.ts.
+  if (request.method === "POST" && pathname === "/__test/reap-orphan-media") {
+    if (!checkOrigin(env, request)) {
+      return errorResponse("FORBIDDEN", 403);
+    }
+    const result = await reapOrphanMedia(env, ctx);
+    return new Response(JSON.stringify(result), {
       status: 200,
       headers: { "content-type": "application/json" },
     });

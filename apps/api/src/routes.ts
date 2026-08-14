@@ -259,4 +259,14 @@ export const ROUTES: readonly RouteDef[] = [
     handler: async (request, env, ctx) =>
       (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },
+
+  // TEST-ONLY (content-deletion + media-reclamation, Task 4). Same
+  // null-means-404 contract and same handler as the two above — see
+  // src/routes/__test.ts.
+  {
+    method: "POST",
+    pattern: "/__test/reap-orphan-media",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
 ];
