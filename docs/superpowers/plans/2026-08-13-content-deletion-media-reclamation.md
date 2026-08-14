@@ -335,6 +335,14 @@ const REAP_BATCH = 500;
  * grace window means an in-progress compose is never raced. R2 objects are
  * content-addressed and shareable, so an object is deleted ONLY when no media
  * row still holds its key (dedup-safe).
+ *
+ * ⚠️ A failed `env.MEDIA.delete` below is logged and moved past, NOT retried —
+ * the `media` row is already gone by the time the delete runs, and this
+ * reaper only ever scans SURVIVING rows, so a key whose R2 delete fails is
+ * never revisited by a later run. That leaves a PERMANENT orphaned object,
+ * not a transient one. Accepted: rare, storage-bytes only, and in the safe
+ * direction (an orphaned object costs bytes; it never causes a 404 for live
+ * content) — a future bucket-vs-DB sweep could reclaim it if it ever matters.
  */
 export async function reapOrphanMedia(env: Env, ctx: ExecutionContext): Promise<{ rows: number; objects: number }> {
   const orphanKeys = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {

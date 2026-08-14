@@ -446,18 +446,19 @@ export async function handleDeletePost(
   if (result instanceof Response) return result;
   const authorId = result.session.userId;
 
-  let deleted: { username: string; tagSlugs: string[] } | null;
+  let deleted: { id: string; username: string; tagSlugs: string[] } | null;
   try {
     deleted = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const tagSlugs = await readTagSlugs(c, params.id!);
       // ⚠️ OWNERSHIP IS THIS LINE, not a preceding SELECT — same race-safety
       // reasoning as handleUpdatePost's WHERE clause above.
-      const { rows } = await c.query<{ slug: string }>(
-        `DELETE FROM posts WHERE id = $1 AND author_id = $2 RETURNING slug`,
+      const { rows } = await c.query<{ id: string }>(
+        `DELETE FROM posts WHERE id = $1 AND author_id = $2 RETURNING id`,
         [params.id, authorId],
       );
-      if (rows[0] === undefined) return null; // no such post, or not this author's
-      return { username: await usernameFor(c, authorId), tagSlugs };
+      const row = rows[0];
+      if (row === undefined) return null; // no such post, or not this author's
+      return { id: row.id, username: await usernameFor(c, authorId), tagSlugs };
     });
   } catch (err) {
     // A malformed id is a 404, not a 500: `WHERE id = 'not-a-uuid'` throws (22P02).
@@ -472,8 +473,18 @@ export async function handleDeletePost(
   // class ("a 404 edit purges NOTHING") is mirrored for delete in
   // test/posts-delete.test.ts. Awaited, never throws — the delete is already
   // committed, so a failed invalidation must not turn into an error response.
+  //
+  // ⚠️ `deleted.id`, THE DB-CANONICAL id FROM `RETURNING` — NOT `params.id`, the
+  // raw route param. Postgres's `uuid` type matches on value, not on textual
+  // form (`WHERE id = $1` matches an uppercase-cased UUID just as well as a
+  // lowercase one), so a caller sending a non-canonical case would otherwise
+  // purge `post:<RAW-CASED>` while the web Worker cached under
+  // `post:<canonical-lowercase>` — a mismatch that leaves the now-deleted post
+  // page edge-cached as a stale 200 until TTL. Same discipline as
+  // handleUpdatePost, which purges `post:${updated.id}` for the identical
+  // reason.
   await purgeTags(env, [
-    `post:${params.id}`,
+    `post:${deleted.id}`,
     `author:${authorId}`,
     "listing",
     ...deleted.tagSlugs.map((s) => `tag:${s}`),

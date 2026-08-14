@@ -150,8 +150,12 @@ can be shared between users).
   - **Dedup-safe R2 object delete:** for each DISTINCT `r2_key` returned, check
     `SELECT 1 FROM media WHERE r2_key = $1 LIMIT 1`; if none remain, `await
     env.MEDIA.delete(key)`. A key still held by another user's row keeps its
-    object. Swallow per-object R2 errors (log; the row is already gone, and the
-    next run retries the object).
+    object. Swallow per-object R2 errors (log and move on): the `media` row is
+    already gone by this point, and the reaper only ever scans surviving
+    rows — a failed R2 delete is never revisited, so it leaves a PERMANENT
+    orphaned object, not a retry candidate. Accepted: rare, storage-bytes
+    only, and in the safe direction (the object outlives the row, never the
+    reverse); a future bucket-vs-DB sweep could reclaim it if it ever matters.
   - Log the counts (`rows`, `objects`).
 - **Cron** `"15 4 * * *"` added to `apps/api/wrangler.jsonc` `triggers.crons`.
 - **Dispatcher** (`apps/api/src/index.ts` `scheduled`): add an explicit branch

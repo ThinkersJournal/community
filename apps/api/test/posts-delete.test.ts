@@ -196,6 +196,30 @@ describe("DELETE /posts/:id", () => {
     expect(purges[0]).toEqual([`post:${postId}`, `author:${actor.userId}`, "listing", "tag:purge-tag"]);
   });
 
+  it("purges the DB-canonical id, not the raw route param's case", async () => {
+    // Postgres's `uuid` type matches on VALUE, not textual form: an uppercase
+    // -cased id in the URL still lands the DELETE (`WHERE id = $1` casts and
+    // matches case-insensitively). The purge tag must come from the DB's
+    // `RETURNING id` (canonical lowercase), never `params.id` verbatim —
+    // otherwise the web Worker's `post:<canonical>` cache tag would never
+    // match a `post:<RAW-CASED>` purge, leaving the deleted page edge-cached
+    // as a stale 200 until TTL.
+    const postId = await createPublishedWithTag(actor, "case-fixture");
+    expect(postId).toBe(postId.toLowerCase()); // sanity: RETURNING gives canonical lowercase
+    const { response, purges } = await fetchCapturingPurges(
+      delRequest(`/posts/${postId.toUpperCase()}`, actor),
+    );
+    expect(response.status).toBe(200);
+    expect(purges).toHaveLength(1);
+    expect(purges[0]).toEqual([
+      `post:${postId}`, // canonical lowercase, not the uppercase param
+      `author:${actor.userId}`,
+      "listing",
+      "tag:case-fixture",
+    ]);
+    expect(await getPostRow(postId)).toBeUndefined();
+  });
+
   it("a non-owner delete → 404 and purges nothing", async () => {
     const postId = await createPublishedWithTag(actor, "non-owner-fixture");
     const { response, purges } = await fetchCapturingPurges(
