@@ -91,6 +91,14 @@ describe("post-delete island", () => {
     expect(island).toMatch(/\/@.*handle/);
   });
 
+  it("⚠️ percent-encodes the handle in the redirect (fix round 1) — matches the page's own /@ links and comments-live.ts's precedent", () => {
+    // A bare `"/@" + handle` is a no-op today (usernames are `[a-z0-9_]`), but
+    // every OTHER `/@` link in this app (the byline href on this same page,
+    // comments-live.ts's author link) goes through encodeURIComponent —
+    // defense-in-depth for a future relaxed username charset.
+    expect(island).toMatch(/location\.href\s*=\s*"\/@"\s*\+\s*encodeURIComponent\(handle\)/);
+  });
+
   it("exports initPostDelete", () => {
     expect(island).toContain("export function initPostDelete");
   });
@@ -113,5 +121,19 @@ describe("[handle]/[slug].astro wires the delete control", () => {
     // Same defect class the nav bell fixed: an author display rule on the
     // control's class must not defeat the UA sheet's [hidden]{display:none}.
     expect(page).toMatch(/\[hidden\]\s*\{\s*display:\s*none/);
+  });
+
+  it("⚠️ guards EVERY hidden descendant, not just the container (fix round 1)", () => {
+    // `.post-delete[hidden]` alone only covers the container. `.btn` (global.css)
+    // is AUTHOR-origin, so it beats the UA sheet's [hidden]{display:none}
+    // regardless of specificity — origin is resolved before specificity, and
+    // specificity only breaks ties WITHIN the same origin. The start button and
+    // the confirm row's Confirm/Cancel buttons are `.btn`-classed DESCENDANTS of
+    // `.post-delete`, so they need a same-origin, higher-specificity descendant
+    // guard of their own: `.post-delete [hidden]` (space = descendant
+    // combinator, specificity 0,2,0, beats `.btn`'s 0,1,0). Mirrors
+    // nav.test.ts's pin of Nav.astro's `.notify[hidden],.notify-panel[hidden]`
+    // guard — same defect class, same fix shape.
+    expect(page).toMatch(/\.post-delete\s+\[hidden\]\s*\{\s*display:\s*none/);
   });
 });

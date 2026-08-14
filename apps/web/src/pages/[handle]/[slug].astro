@@ -300,15 +300,27 @@ const jsonLd = {
   .post{padding:clamp(40px,7vw,80px) 0;max-width:min(var(--wrap),760px)}
   .post .meta{color:var(--dim);margin:8px 0 28px}
   .post-delete{display:flex;align-items:center;gap:10px;margin:-14px 0 20px}
-  /* Nav-bell fix pattern (Nav.astro:48): the `display:flex` above is same
-     specificity as the UA sheet's [hidden]{display:none} and comes AFTER it in
-     the cascade, so it would silently win and defeat `root.hidden = true/false`
-     from the island. This higher-specificity guard restores `hidden`. */
+  /* Nav-bell fix pattern (Nav.astro:48) — CORRECTED FOR ORIGIN, not just
+     specificity (fix round 1). `.btn{display:inline-block}` (global.css) is
+     AUTHOR-origin, so it beats the UA sheet's `[hidden]{display:none}`
+     regardless of selector specificity: CSS resolves ORIGIN first (UA loses to
+     author unconditionally) and only falls back to specificity to break ties
+     WITHIN the same origin. A rule scoped to just the container
+     (`.post-delete[hidden]`) does nothing for the `.btn`-classed
+     start/confirm/cancel buttons the island creates as its DESCENDANTS — they
+     stay visually on-screen even after `el.hidden = true`. The fix is a
+     DESCENDANT-combinator guard: still author-origin (so it now competes
+     author-vs-author with `.btn`, on specificity, which is where 0,1,0 vs
+     0,2,0 actually matters) and higher-specificity than `.btn` — so it wins
+     for the container itself AND every hidden descendant (start button,
+     confirm row, its Confirm/Cancel buttons, any future addition) in one
+     rule. Kept alongside the compound `.post-delete[hidden]` rule, which is
+     still needed for the *root itself* — the descendant combinator only
+     matches a `[hidden]` element strictly inside `.post-delete`, not the
+     `.post-delete` element carrying `hidden` itself. */
   .post-delete[hidden]{display:none}
+  .post-delete [hidden]{display:none}
   .post-delete-confirm{display:flex;align-items:center;gap:10px;color:var(--dim)}
-  /* Same guard, same reason — the confirm row's own `hidden` is toggled by the
-     island's [Delete] / [Cancel] handlers, so it needs the identical fix. */
-  .post-delete-confirm[hidden]{display:none}
   .post-delete-error{color:var(--dim);margin:6px 0 0;font-size:.9em}
   .tags{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0}
   .tags .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}

@@ -113,7 +113,10 @@ export function initPostDelete(): void {
         .then((res) => {
           if (res.ok) {
             // The post is gone — nothing left to reload back to.
-            location.href = "/@" + handle;
+            // encodeURIComponent, like the page's own `/@${encodeURIComponent(post.username)}`
+            // link and comments-live.ts's precedent — a no-op for today's
+            // `[a-z0-9_]` usernames, defense-in-depth for a future relaxed charset.
+            location.href = "/@" + encodeURIComponent(handle);
             return;
           }
           confirmBtn.disabled = false;
