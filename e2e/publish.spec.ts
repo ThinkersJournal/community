@@ -197,6 +197,40 @@ test("⚠️ an AUTHED render of a public page is NEVER cacheable", async ({ pag
   );
 });
 
+test("author deletes their post from the post page → it 404s", async ({ page }) => {
+  await signUpAndVerify(page, page.request);
+  const { url } = await publishPost(page, { title: "Delete Me", markdownSource: "body" });
+
+  await page.goto(url);
+
+  // ⚠️ THE ISLAND REVEALS ASYNCHRONOUSLY. `[data-post-delete]` ships
+  // `hidden` in the SSR markup (this render is anonymous/cached — see the
+  // page's own header) and post-delete.ts only unhides it, and only builds
+  // the start/confirm buttons, after its own `/api/me` fetch resolves and
+  // confirms this viewer IS the post's author. A bare `.click()` would race
+  // that fetch; waiting for `[data-delete-start]` to be visible is the same
+  // hydration wait `toggleFollowTo` (helpers.ts) needs for the follow
+  // island, for the identical reason.
+  const startBtn = page.locator("[data-post-delete] [data-delete-start]");
+  await expect(startBtn).toBeVisible();
+  await startBtn.click();
+
+  await page.locator("[data-post-delete] [data-delete-confirm]").click();
+
+  // The island's fetch succeeds and redirects to the author's own profile —
+  // NOT the post URL, so this also proves the delete actually landed rather
+  // than merely being requested.
+  await page.waitForURL(/\/@[^/]+$/);
+
+  // Re-fetching the post's own URL now 404s: the api hard-deletes the row
+  // (apps/api/src/routes/posts.ts's DELETE handler), so `GET /public/posts`
+  // for it comes back empty exactly like a post that never existed
+  // (see [handle]/[slug].astro's "a draft and a nonexistent post are the
+  // same answer" branch), and this uncached-404 GET reaches that live.
+  const resp = await page.goto(url);
+  expect(resp?.status()).toBe(404);
+});
+
 test("sitemap.xml is untagged and short-TTL", async ({ page }) => {
   const response = await page.request.get("/sitemap.xml");
   // ⚠️ `cloudflare-cdn-cache-control`, not `cache-control` — see above.
