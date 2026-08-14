@@ -421,6 +421,70 @@ export async function handleUpdatePost(
   );
 }
 
+/**
+ * Owner hard-delete (content-deletion + media-reclamation, Task 1).
+ *
+ * ⚠️ A REAL `DELETE FROM posts`, not a tombstone (unlike comments — see
+ * handleDeleteComment). `post_tags`, `comments`, and `reactions` all carry
+ * `post_id ... ON DELETE CASCADE`, so this single statement clears every row
+ * that references the post.
+ *
+ * ⚠️ TAGS ARE READ BEFORE THE DELETE. Unlike the edit path (which reads
+ * `oldSlugs` AFTER its UPDATE, since an UPDATE leaves `post_tags` intact), the
+ * DELETE cascades `post_tags` away — reading afterward would return nothing,
+ * and the purge would silently stop invalidating the post's tag pages. Tags
+ * are public, so a wasted read on a not-owner/nonexistent id leaks nothing;
+ * it is one cheap SELECT, discarded on the 404 below.
+ */
+export async function handleDeletePost(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  const result = await runMutatingPipeline(request, env, ctx, { requireVerifiedEmail: true });
+  if (result instanceof Response) return result;
+  const authorId = result.session.userId;
+
+  let deleted: { username: string; tagSlugs: string[] } | null;
+  try {
+    deleted = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const tagSlugs = await readTagSlugs(c, params.id!);
+      // ⚠️ OWNERSHIP IS THIS LINE, not a preceding SELECT — same race-safety
+      // reasoning as handleUpdatePost's WHERE clause above.
+      const { rows } = await c.query<{ slug: string }>(
+        `DELETE FROM posts WHERE id = $1 AND author_id = $2 RETURNING slug`,
+        [params.id, authorId],
+      );
+      if (rows[0] === undefined) return null; // no such post, or not this author's
+      return { username: await usernameFor(c, authorId), tagSlugs };
+    });
+  } catch (err) {
+    // A malformed id is a 404, not a 500: `WHERE id = 'not-a-uuid'` throws (22P02).
+    if (isInvalidTextRepresentation(err)) return notFound();
+    throw err;
+  }
+  if (deleted === null) return notFound();
+
+  // ⚠️ BELOW THE 404 ABOVE — same purge-quota ordering as handleUpdatePost: a
+  // 404 delete must purge NOTHING, or any caller could burn the zone's 5/min
+  // purge budget on ids they do not own. test/purge-wiring.test.ts's sibling
+  // class ("a 404 edit purges NOTHING") is mirrored for delete in
+  // test/posts-delete.test.ts. Awaited, never throws — the delete is already
+  // committed, so a failed invalidation must not turn into an error response.
+  await purgeTags(env, [
+    `post:${params.id}`,
+    `author:${authorId}`,
+    "listing",
+    ...deleted.tagSlugs.map((s) => `tag:${s}`),
+  ]);
+
+  return new Response(JSON.stringify({ username: deleted.username }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 export async function handleGetPost(
   request: Request,
   env: Env,
