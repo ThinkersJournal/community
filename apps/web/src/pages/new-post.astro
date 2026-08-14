@@ -110,7 +110,61 @@ if (Astro.request.method === "POST") {
   tagsValue = tagsRaw;
   const submittedToken = String(form.get("csrfToken") ?? "");
 
-  if (intent === "preview") {
+  if (intent === "delete") {
+    // ⚠️ CONVENIENCE DELETE FROM THE EDITOR (content-deletion + media-reclamation,
+    // Task 3). The editor's edit mode is ALREADY owner-only + per-viewer — the
+    // GET branch below 404s on a post that is not this caller's — so there is
+    // no separate ownership check to make here; the api's own `WHERE id = $1
+    // AND author_id = $2` (handleDeletePost) is still the actual authority.
+    // This branch only exists to forward the same-origin form POST to
+    // `DELETE /posts/:id`, using the SAME apiFetch/origin/csrfToken idiom as
+    // the save/publish calls below it — never a second CSRF mechanism.
+    if (postId === null) {
+      outcome = "error";
+      message = "Could not delete: missing post id.";
+    } else {
+      interface DeletedPost {
+        // Only present so the redirect below can land on the author's own
+        // profile without a second round trip — see apps/api/src/routes/posts.ts's
+        // `handleDeletePost`, which returns exactly this shape on success.
+        username: string;
+      }
+      const response = await apiFetch<DeletedPost>(`/posts/${encodeURIComponent(postId)}`, {
+        method: "DELETE",
+        request: Astro.request,
+        origin,
+        csrfToken: submittedToken,
+      });
+
+      if (response.status === 200 && response.data !== null) {
+        // ⚠️ SAME RULE AS THE PUBLISH/DRAFT REDIRECTS BELOW — build the
+        // redirect Response by hand and applyCookies onto IT, never
+        // `Astro.redirect()` (see that branch's warning; a response it builds
+        // itself does not carry `Astro.response.headers`).
+        //
+        // The post is gone, so there is nothing to link back to but the
+        // author's own profile — percent-encoded, matching every other
+        // `/@<handle>` link in this app (post-delete.ts's island precedent).
+        const redirect = new Response(null, {
+          status: 302,
+          headers: { Location: `/@${encodeURIComponent(response.data.username)}` },
+        });
+        applyCookies(redirect.headers, response.setCookies);
+        return redirect;
+      }
+
+      // Non-200: re-render THIS page with an inline error, same fallback path
+      // the save/publish branch uses below (including the 401 cookie-clear
+      // rule — see that branch's warning for why this must not be skipped).
+      applyCookies(Astro.response.headers, response.setCookies);
+      if (response.status === 401) {
+        outcome = "unauthenticated";
+      } else {
+        outcome = "error";
+        message = `Could not delete this post (status ${response.status}).`;
+      }
+    }
+  } else if (intent === "preview") {
     // ⚠️ REQUIRES A SESSION, DELIBERATELY NARROWER THAN "pure render, no auth
     // needed" might suggest. It IS a pure render — no api call, no mutation,
     // and NOT gated on email verification (an unverified author must still be
@@ -273,40 +327,68 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
           <a class="link" href={loginHref}>Log in to write a post</a>
         </p>
       ) : (
-        <form method="POST" id="editor-form" class="form">
-          {/* The api's per-session CSRF token, promoted to the X-CSRF-Token
-              header server-side on submit (see the frontmatter) — a form
-              cannot set a header itself. */}
-          <input type="hidden" name="csrfToken" value={csrfToken} />
-          <input type="hidden" name="postId" value={postId ?? ""} />
-          <label>
-            Title
-            <input type="text" id="title" name="title" value={title} required />
-          </label>
-          <label>
-            Body (Markdown)
-            <textarea id="markdownSource" name="markdownSource" rows="24" required>{markdownSource}</textarea>
-          </label>
-          <label>
-            Tags (comma-separated, up to 5)
-            <input type="text" id="tags" name="tags" value={tagsValue} placeholder="rust, web-dev" />
-          </label>
+        <>
+          <form method="POST" id="editor-form" class="form">
+            {/* The api's per-session CSRF token, promoted to the X-CSRF-Token
+                header server-side on submit (see the frontmatter) — a form
+                cannot set a header itself. */}
+            <input type="hidden" name="csrfToken" value={csrfToken} />
+            <input type="hidden" name="postId" value={postId ?? ""} />
+            <label>
+              Title
+              <input type="text" id="title" name="title" value={title} required />
+            </label>
+            <label>
+              Body (Markdown)
+              <textarea id="markdownSource" name="markdownSource" rows="24" required>{markdownSource}</textarea>
+            </label>
+            <label>
+              Tags (comma-separated, up to 5)
+              <input type="text" id="tags" name="tags" value={tagsValue} placeholder="rust, web-dev" />
+            </label>
 
-          <fieldset>
-            <legend>Insert an image</legend>
-            {/* NOT inside a nested form — HTML forbids that. The island below
-                uploads it with fetch() and writes the Markdown into the
-                textarea. */}
-            <input type="file" id="media-file" accept="image/jpeg,image/png,image/gif,image/webp" />
-            <p id="media-status" role="status" />
-          </fieldset>
+            <fieldset>
+              <legend>Insert an image</legend>
+              {/* NOT inside a nested form — HTML forbids that. The island below
+                  uploads it with fetch() and writes the Markdown into the
+                  textarea. */}
+              <input type="file" id="media-file" accept="image/jpeg,image/png,image/gif,image/webp" />
+              <p id="media-status" role="status" />
+            </fieldset>
 
-          <div class="actions">
-            <button type="submit" name="intent" value="preview" class="btn btn-ghost">Preview</button>
-            <button type="submit" name="intent" value="draft" class="btn btn-ghost">Save draft</button>
-            <button type="submit" name="intent" value="publish" class="btn btn-primary">Publish</button>
-          </div>
-        </form>
+            <div class="actions">
+              <button type="submit" name="intent" value="preview" class="btn btn-ghost">Preview</button>
+              <button type="submit" name="intent" value="draft" class="btn btn-ghost">Save draft</button>
+              <button type="submit" name="intent" value="publish" class="btn btn-primary">Publish</button>
+            </div>
+          </form>
+
+          {
+            // ⚠️ EDIT MODE ONLY — never for a brand-new post (postId === null),
+            // which has nothing to delete yet. The editor is already
+            // owner-only + per-viewer (a not-mine `?post=<id>` 404s before
+            // this ever renders — see the GET branch in the frontmatter), so
+            // this needs no ownership check of its own.
+            postId !== null && (
+              // A no-JS, server-rendered two-step confirm: <details>/<summary>
+              // reveals a SEPARATE <form> (HTML forbids nesting forms) whose
+              // only action is the submit button below — no `confirm()`, no
+              // client script, unlike the post page's client-JS island
+              // (src/scripts/post-delete.ts), which this page does not need
+              // since it already renders per-viewer server-side.
+              <details class="danger-zone">
+                <summary class="btn btn-ghost">Delete post</summary>
+                <form method="POST" class="delete-confirm">
+                  <input type="hidden" name="intent" value="delete" />
+                  <input type="hidden" name="postId" value={postId} />
+                  <input type="hidden" name="csrfToken" value={csrfToken} />
+                  <p>Really delete this post? This cannot be undone.</p>
+                  <button type="submit" class="btn btn-primary">Confirm delete</button>
+                </form>
+              </details>
+            )
+          }
+        </>
       )
     }
 
@@ -346,4 +428,9 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     display:flex;flex-direction:column;gap:8px}
   .form legend{color:var(--muted);font-size:14px;padding:0 6px}
   .actions{display:flex;gap:12px;flex-wrap:wrap}
+  .danger-zone{margin-top:32px}
+  .danger-zone summary{cursor:pointer;list-style:none}
+  .danger-zone summary::-webkit-details-marker{display:none}
+  .delete-confirm{display:flex;flex-direction:column;gap:10px;margin-top:12px;
+    padding:16px;border:1px solid var(--line);border-radius:8px}
 </style>
