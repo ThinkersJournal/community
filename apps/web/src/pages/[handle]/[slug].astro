@@ -203,6 +203,22 @@ const jsonLd = {
       <a class="link" href={`/@${encodeURIComponent(post.username)}`}>{post.displayName ?? post.username}</a>
       · <time datetime={post.publishedAt}>{publishedDisplay}</time>
     </p>
+
+    {/* THE DELETE CONTROL — SSR-hidden placeholder, a SEPARATE element from
+        `.comments`'s data-post-id/data-post-author-id (that pair is the
+        comments island's ownership contract; this is the post-delete
+        island's, and a shared element would couple two independent
+        reveal decisions). SSR default is hidden — this render is fully
+        anonymous + edge-cached (see this file's header), so there is no
+        viewer-specific value to decide "is this viewer the author" here.
+        The post-delete island (src/scripts/post-delete.ts) reveals it
+        client-side, ONLY for the signed-in author. `data-handle` carries
+        `post.username` (NOT the `handle` route param, which still carries
+        its `@` prefix) — the island builds `"/@" + handle` for the
+        post-delete redirect, exactly the unprefixed form every other link
+        on this page already uses (see the href just above). */}
+    <div class="post-delete" data-post-delete data-post-id={post.id} data-post-author-id={post.authorId} data-handle={post.username} hidden></div>
+
     {/* Freeform tags (M2.4c). encodeURIComponent on the slug in the href — a URL
         needs percent-encoding; Astro `{}` only HTML-escapes. The label is an
         Astro `{}` expression (escaped), never set:html. */}
@@ -273,14 +289,27 @@ const jsonLd = {
     import { initCommentsIsland } from "../../scripts/comments";
     import { initReactionsIsland } from "../../scripts/reactions";
     import { initCommentsLive } from "../../scripts/comments-live";
+    import { initPostDelete } from "../../scripts/post-delete";
     initCommentsIsland();
     initReactionsIsland();
     initCommentsLive();
+    initPostDelete();
   </script>
 </BaseLayout>
 <style>
   .post{padding:clamp(40px,7vw,80px) 0;max-width:min(var(--wrap),760px)}
   .post .meta{color:var(--dim);margin:8px 0 28px}
+  .post-delete{display:flex;align-items:center;gap:10px;margin:-14px 0 20px}
+  /* Nav-bell fix pattern (Nav.astro:48): the `display:flex` above is same
+     specificity as the UA sheet's [hidden]{display:none} and comes AFTER it in
+     the cascade, so it would silently win and defeat `root.hidden = true/false`
+     from the island. This higher-specificity guard restores `hidden`. */
+  .post-delete[hidden]{display:none}
+  .post-delete-confirm{display:flex;align-items:center;gap:10px;color:var(--dim)}
+  /* Same guard, same reason — the confirm row's own `hidden` is toggled by the
+     island's [Delete] / [Cancel] handlers, so it needs the identical fix. */
+  .post-delete-confirm[hidden]{display:none}
+  .post-delete-error{color:var(--dim);margin:6px 0 0;font-size:.9em}
   .tags{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0}
   .tags .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}
   .tags .tag:hover{color:var(--head)}
