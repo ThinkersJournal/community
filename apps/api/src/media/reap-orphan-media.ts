@@ -46,9 +46,14 @@ const REAP_BATCH = 500;
  * `media.r2_key`. Deleting a DB row is always safe on its own (each row is its
  * own artifact/quota entry), but the underlying R2 OBJECT must be deleted
  * ONLY when NO `media` row — including a grace-kept sibling on the same key
- * that survives THIS run — still holds it. That is checked with ONE
- * follow-up query over the distinct keys just freed (not per-key), so the
- * number of round trips stays bounded regardless of batch size.
+ * that survives THIS run — still holds it. That is re-checked PER KEY with a
+ * `SELECT 1 ... WHERE r2_key = $1` issued IMMEDIATELY before each R2 delete, so
+ * the check sits as close to the delete as possible (a batch snapshot taken up
+ * front would leave a wider window for a racing duplicate upload). The window
+ * cannot be fully closed — the DB and R2 are not one transaction — but it is
+ * narrowed to a single query, and the residual race (the identical image
+ * re-uploaded in that gap) is astronomically unlikely and self-healing (the
+ * user simply re-uploads).
  *
  * @returns `{ rows, objects }` — rows deleted from `media`, and R2 objects
  * actually removed. `objects` can be less than `rows` when a batch reaps more
@@ -81,22 +86,33 @@ export async function reapOrphanMedia(
 
   const distinctKeys = [...new Set(orphanKeys)];
   let objects = 0;
-  if (distinctKeys.length > 0) {
-    const stillHeld = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-      const { rows } = await c.query<{ r2_key: string }>(
-        `SELECT DISTINCT r2_key FROM media WHERE r2_key = ANY($1::text[])`,
-        [distinctKeys],
-      );
-      return new Set(rows.map((r) => r.r2_key));
+  for (const key of distinctKeys) {
+    // ⚠️ DEDUP-SAFE, WITH A PER-KEY RECHECK IMMEDIATELY BEFORE THE R2 DELETE.
+    // The rows for this key were just deleted above, but the R2 object is
+    // content-addressed and shareable, so a media row may still hold this same
+    // `r2_key`: a grace-kept sibling (uploaded <24h ago), OR a brand-new
+    // DUPLICATE upload racing this run (media.ts does PUT-then-INSERT). Re-verify
+    // no media row references the key right before deleting the object — and do
+    // it per-key, not from a batch snapshot, so the check is as close to the
+    // delete as possible.
+    //
+    // This narrows the DB↔R2 window to a single query; it CANNOT fully close it
+    // (the two systems are not atomic — a row could still be inserted in the gap
+    // between this SELECT and the delete). The residual race requires the
+    // IDENTICAL image re-uploaded in that sub-millisecond gap during the daily
+    // cron, and its worst case is one re-uploadable broken image, never loss of
+    // any saved content. The connection is released before the (slow) R2 delete
+    // rather than held across it.
+    const held = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rowCount } = await c.query(`SELECT 1 FROM media WHERE r2_key = $1 LIMIT 1`, [key]);
+      return (rowCount ?? 0) > 0;
     });
-    for (const key of distinctKeys) {
-      if (stillHeld.has(key)) continue; // a surviving row (e.g. a grace-kept sibling) still needs the object
-      try {
-        await env.MEDIA.delete(key);
-        objects++;
-      } catch (err) {
-        console.error("reap-orphan-media: R2 delete failed for", key, err);
-      }
+    if (held) continue; // a media row still holds this object — keep it
+    try {
+      await env.MEDIA.delete(key);
+      objects++;
+    } catch (err) {
+      console.error("reap-orphan-media: R2 delete failed for", key, err);
     }
   }
   if (orphanKeys.length > 0) {
