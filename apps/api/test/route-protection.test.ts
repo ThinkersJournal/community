@@ -94,6 +94,11 @@ const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // to substitute for one here), so it is asserted by the `exempt routes
   // enforce checkOrigin inline` block below, not excluded from it.
   "POST /__test/reap-unverified",
+  // TEST-ONLY (content-deletion + media-reclamation, Task 4): the same
+  // TEST_ROUTES-gated debug seam shape as reap-unverified above, for the daily
+  // orphan-media reclaimer (src/media/reap-orphan-media.ts). Same reasoning,
+  // same inline `checkOrigin`.
+  "POST /__test/reap-orphan-media",
 ]);
 
 /**
@@ -197,6 +202,7 @@ const DISPATCHER_BODY = indexSource
 const EXPECTED_DISPATCHER_BODY =
   'import { reapUnverifiedAccounts } from "./auth/reap-unverified"; ' +
   'import { notFoundResponse } from "./http/errors"; ' +
+  'import { reapOrphanMedia } from "./media/reap-orphan-media"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
@@ -209,13 +215,18 @@ const EXPECTED_DISPATCHER_BODY =
   "if (match === null) return notFoundResponse(); " +
   "return await match.route.handler(request, env, ctx, match.params); " +
   "}, " +
-  // The scheduled() cron dispatcher (M2.3c + handle-at-signup Task 8) — a THIN
-  // dispatcher alongside fetch, not a route (route-protection enumerates
-  // ROUTES; a cron has no path). Pinned here for the same reason as fetch:
-  // this file's whole body is the allowlist.
+  // The scheduled() cron dispatcher (M2.3c + handle-at-signup Task 8 +
+  // content-deletion/media-reclamation Task 4) — a THIN dispatcher alongside
+  // fetch, not a route (route-protection enumerates ROUTES; a cron has no
+  // path). Pinned here for the same reason as fetch: this file's whole body
+  // is the allowlist.
   "async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> { " +
   'if (controller.cron === "30 3 * * *") { ' +
   "ctx.waitUntil(reapUnverifiedAccounts(env, ctx)); " +
+  "return; " +
+  "} " +
+  'if (controller.cron === "15 4 * * *") { ' +
+  "ctx.waitUntil(reapOrphanMedia(env, ctx)); " +
   "return; " +
   "} " +
   'const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant"; ' +

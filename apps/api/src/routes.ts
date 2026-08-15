@@ -33,7 +33,7 @@ import {
 } from "./routes/notifications";
 import { handleNotificationsWs } from "./routes/notifications-ws";
 import { handleGetNotificationPrefs, handlePutNotificationPrefs } from "./routes/notification-prefs";
-import { handleCreatePost, handleGetPost, handleUpdatePost } from "./routes/posts";
+import { handleCreatePost, handleDeletePost, handleGetPost, handleUpdatePost } from "./routes/posts";
 import { handlerPostsLive } from "./routes/posts-live";
 import {
   handlePublicDiscover,
@@ -111,6 +111,10 @@ export const ROUTES: readonly RouteDef[] = [
   // lies is worse than one that does not exist.
   { method: "POST", pattern: "/posts", handler: handleCreatePost },
   { method: "PATCH", pattern: "/posts/:id", handler: handleUpdatePost },
+  // Owner hard-delete (content-deletion + media-reclamation, Task 1). Cascades
+  // post_tags/comments/reactions via FK; see src/routes/posts.ts's
+  // handleDeletePost header for the tag-read-before-delete ordering.
+  { method: "DELETE", pattern: "/posts/:id", handler: handleDeletePost },
 
   // ⚠️ MUST come before `GET /posts/:id` below — `/live` is a literal segment
   // under the SAME first path component, and `findRoute` is first-match-wins
@@ -252,6 +256,16 @@ export const ROUTES: readonly RouteDef[] = [
   {
     method: "POST",
     pattern: "/__test/reap-unverified",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
+
+  // TEST-ONLY (content-deletion + media-reclamation, Task 4). Same
+  // null-means-404 contract and same handler as the two above — see
+  // src/routes/__test.ts.
+  {
+    method: "POST",
+    pattern: "/__test/reap-orphan-media",
     handler: async (request, env, ctx) =>
       (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },

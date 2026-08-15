@@ -169,7 +169,13 @@
   // deletes accounts that never verified within 7 days, freeing squatted
   // handles + emails. See src/auth/reap-unverified.ts. Its own explicit branch
   // in scheduled(), checked BEFORE the digest/instant dispatch above.
-  "triggers": { "crons": ["*/2 * * * *", "0 14 * * *", "30 3 * * *"] },
+  //
+  // 04:15 UTC = the orphan-media reclaimer (content-deletion + media-
+  // reclamation, Task 4) — frees `media` rows (and, dedup-safely, their R2
+  // objects) referenced by no post. See src/media/reap-orphan-media.ts. Its
+  // own explicit branch in scheduled(), checked AFTER the unverified-account
+  // reaper's above and BEFORE the digest/instant dispatch.
+  "triggers": { "crons": ["*/2 * * * *", "0 14 * * *", "30 3 * * *", "15 4 * * *"] },
   "observability": {
     "enabled": true
   }

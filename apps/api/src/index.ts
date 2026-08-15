@@ -1,5 +1,6 @@
 import { reapUnverifiedAccounts } from "./auth/reap-unverified";
 import { notFoundResponse } from "./http/errors";
+import { reapOrphanMedia } from "./media/reap-orphan-media";
 import { runEmailDrain } from "./notifications/email-drain";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
@@ -22,18 +23,24 @@ export default {
     return await match.route.handler(request, env, ctx, match.params);
   },
   /*
-   * Three cron patterns, one dispatcher. `30 3 * * *` is the unverified-account
-   * reaper (handle-at-signup Task 8) — an EXPLICIT branch, checked BEFORE the
-   * email-drain dispatch below, because that dispatch otherwise treats every
-   * non-`0 14` cron as the INSTANT drain. The other two are the email outbox
-   * drains (M2.3c): the daily pattern drains DIGEST-disposition rows, every
-   * other pattern drains INSTANT. A THIN dispatcher, like `fetch` above — the
-   * reap and the drain themselves live in src/auth/reap-unverified.ts and
-   * src/notifications/email-drain.ts.
+   * Four cron patterns, one dispatcher. `30 3 * * *` is the unverified-account
+   * reaper (handle-at-signup Task 8) and `15 4 * * *` is the orphan-media
+   * reclaimer (content-deletion + media-reclamation, Task 4) — two EXPLICIT
+   * branches, both checked BEFORE the email-drain dispatch below, because that
+   * dispatch otherwise treats every non-`0 14` cron as the INSTANT drain. The
+   * other two patterns are the email outbox drains (M2.3c): the daily pattern
+   * drains DIGEST-disposition rows, every other pattern drains INSTANT. A THIN
+   * dispatcher, like `fetch` above — the reap, the reclaim and the drain
+   * themselves live in src/auth/reap-unverified.ts,
+   * src/media/reap-orphan-media.ts and src/notifications/email-drain.ts.
    */
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     if (controller.cron === "30 3 * * *") {
       ctx.waitUntil(reapUnverifiedAccounts(env, ctx));
+      return;
+    }
+    if (controller.cron === "15 4 * * *") {
+      ctx.waitUntil(reapOrphanMedia(env, ctx));
       return;
     }
     const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant";
