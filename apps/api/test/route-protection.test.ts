@@ -201,6 +201,7 @@ const DISPATCHER_BODY = indexSource
  */
 const EXPECTED_DISPATCHER_BODY =
   'import { reapUnverifiedAccounts } from "./auth/reap-unverified"; ' +
+  'import { recordDbProbe } from "./health/probe"; ' +
   'import { notFoundResponse } from "./http/errors"; ' +
   'import { reapOrphanMedia } from "./media/reap-orphan-media"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
@@ -216,11 +217,12 @@ const EXPECTED_DISPATCHER_BODY =
   "return await match.route.handler(request, env, ctx, match.params); " +
   "}, " +
   // The scheduled() cron dispatcher (M2.3c + handle-at-signup Task 8 +
-  // content-deletion/media-reclamation Task 4) — a THIN dispatcher alongside
-  // fetch, not a route (route-protection enumerates ROUTES; a cron has no
-  // path). Pinned here for the same reason as fetch: this file's whole body
-  // is the allowlist.
+  // content-deletion/media-reclamation Task 4 + db-health-probe) — a THIN
+  // dispatcher alongside fetch, not a route (route-protection enumerates
+  // ROUTES; a cron has no path). Pinned here for the same reason as fetch:
+  // this file's whole body is the allowlist.
   "async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> { " +
+  "ctx.waitUntil(recordDbProbe(env, ctx)); " +
   'if (controller.cron === "30 3 * * *") { ' +
   "ctx.waitUntil(reapUnverifiedAccounts(env, ctx)); " +
   "return; " +

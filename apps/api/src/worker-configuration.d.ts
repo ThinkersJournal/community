@@ -4,6 +4,7 @@
 interface __BaseEnv_Env {
 	SESSIONS: KVNamespace;
 	FOLLOWEES: KVNamespace;
+	HEALTH: KVNamespace;
 	MEDIA: R2Bucket;
 	HYPERDRIVE_CACHED: Hyperdrive;
 	HYPERDRIVE_FRESH: Hyperdrive;

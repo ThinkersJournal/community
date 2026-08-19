@@ -1,4 +1,5 @@
 import { reapUnverifiedAccounts } from "./auth/reap-unverified";
+import { recordDbProbe } from "./health/probe";
 import { notFoundResponse } from "./http/errors";
 import { reapOrphanMedia } from "./media/reap-orphan-media";
 import { runEmailDrain } from "./notifications/email-drain";
@@ -35,6 +36,15 @@ export default {
    * src/media/reap-orphan-media.ts and src/notifications/email-drain.ts.
    */
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    /*
+     * DB-reachability heartbeat (db-health-probe), on EVERY cron tick, not
+     * just one pattern, so the probe log never has a gap wider than the
+     * shortest configured cron interval. waitUntil so it can never block or
+     * break the tick's real work below; recordDbProbe itself never throws.
+     * The logic lives in src/health/probe.ts — this file only dispatches.
+     */
+    ctx.waitUntil(recordDbProbe(env, ctx));
+
     if (controller.cron === "30 3 * * *") {
       ctx.waitUntil(reapUnverifiedAccounts(env, ctx));
       return;
