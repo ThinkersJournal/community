@@ -22,6 +22,7 @@ import { handlePublicComments } from "./routes/comments-public";
 import { handleCsrf } from "./routes/csrf";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
+import { handleHealthDb } from "./routes/health-db";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleUploadMedia } from "./routes/media";
@@ -66,6 +67,11 @@ import type { RouteDef } from "./routing";
 
 export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/health", handler: async () => new Response("ok", { status: 200 }) },
+
+  // DB-reachability probe readout (db-health-probe). Distinct literal path
+  // from `/health` above — no shadow risk. Reads only KV (never the DB); see
+  // src/routes/health-db.ts and src/health/probe.ts.
+  { method: "GET", pattern: "/health/db", handler: handleHealthDb },
 
   // ⚠️ Signup and login do NOT run the mutating pipeline (src/auth/pipeline.ts)
   // — they are how a session comes to exist, so its "401 if no session" step

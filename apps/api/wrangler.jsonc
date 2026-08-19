@@ -35,6 +35,12 @@
   // FOLLOWEES (M2 followee-cache) — each viewer's followee-id list keyed by
   // `followees:<userId>`, a cache-aside layer over the follow graph (see
   // src/social/followee-cache.ts). The id below is the LIVE namespace.
+  //
+  // HEALTH (db-health probe) — the DB-reachability probe log (see
+  // src/health/probe.ts). Deliberately in KV, NOT Postgres: a probe that
+  // fails when Postgres fails would tell us nothing — the monitor must not
+  // share a failure mode with the thing it monitors. The id below is the
+  // LIVE namespace.
   "kv_namespaces": [
     {
       "binding": "SESSIONS",
@@ -43,6 +49,10 @@
     {
       "binding": "FOLLOWEES",
       "id": "12b22c01a86249569d67e91f6b4758d0"
+    },
+    {
+      "binding": "HEALTH",
+      "id": "a743626ce3664d0ebd3c4f7fc165c882"
     }
   ],
   // Cloudflare Images. NO zone, NO Images subscription, NO base fee — it is a

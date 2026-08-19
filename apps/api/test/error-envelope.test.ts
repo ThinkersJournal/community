@@ -429,6 +429,27 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
       handlerSource: 'async () => new Response("ok", { status: 200 })',
     },
   ],
+  // GET /health/db (db-health-probe) — a STATUS body, not an error envelope.
+  // It answers 200 when the last recorded probe is ok and NOT stale, 503
+  // otherwise ("stale"/"down"/"unknown") — but the 503 body is still
+  // `{status, lastCheckAt, ageMs, staleAfterMs, checkedRecently}` (plus
+  // gated detail under TEST_ROUTES), never a `{code}` envelope. It has no
+  // params to validate and reads only KV (never the DB), so there is no
+  // request-validation or lookup failure mode to probe either. See
+  // src/routes/health-db.ts.
+  [
+    "GET /health/db",
+    {
+      reason:
+        "Answers a health STATUS body (200 ok / 503 stale|down|unknown), never a {code} envelope — same shape as GET /health above, just with more states. No params to validate, and it reads only KV (never the DB), so it has no request-validation or lookup failure mode either. See src/routes/health-db.ts's handleHealthDb.",
+      // ⚠️ The `__vite_ssr_import_0__` refs are the pool's vite-SSR transform
+      // of health-db.ts's single import (readDbProbe + STALE_AFTER_MS, both
+      // from src/health/probe.ts); deterministic for this code and, like
+      // every pin here, breaks loudly if the handler is edited.
+      handlerSource:
+        'async function handleHealthDb(_request, env, _ctx, _params) { const state = await (0,__vite_ssr_import_0__.readDbProbe)(env); const now = Date.now(); const ageMs = state === null ? null : now - state.lastCheckAt; const isStale = ageMs !== null && ageMs > __vite_ssr_import_0__.STALE_AFTER_MS; const status = state === null ? "unknown" : isStale ? "stale" : state.ok ? "ok" : "down"; // A dumb external HTTP monitor (uptime checker, load balancer health check) // alerts on non-200 — so "ok" is the ONLY 2xx; every other status is 503. const httpStatus = status === "ok" ? 200 : 503; const body = { status, lastCheckAt: state?.lastCheckAt ?? null, ageMs, staleAfterMs: __vite_ssr_import_0__.STALE_AFTER_MS, checkedRecently: !isStale }; // Detail (the raw error string and the recent-probe series) is withheld // from the public/prod response — a leaked connection error (hostname, // driver internals) reads badly surfaced in an incident writeup, and the // recent series is more than an external monitor needs. Gated on the same // TEST_ROUTES flag every other dev/test-only seam uses (src/routes/__test.ts); // a future prod-auth gate can widen this deliberately. if (env.TEST_ROUTES === "1") { body.error = state?.error ?? null; body.latencyMs = state?.latencyMs ?? null; body.recent = state?.recent ?? []; }; return new Response(JSON.stringify(body), { status: httpStatus, headers: { "content-type": "application/json" } }); }',
+    },
+  ],
   // ⚠️ THE FIRST *MUTATING* ERROR_FREE ENTRY, and it is error-free BY SECURITY
   // DESIGN, not by lacking I/O. One-click unsubscribe (M2.3c, RFC 8058;
   // src/routes/unsub.ts) ALWAYS returns a neutral 200 (empty JSON) — for an
