@@ -36,8 +36,19 @@ import Wordmark from './Wordmark.astro';
   .links{display:flex;gap:26px;align-items:center;font-size:14px;color:var(--muted)}
   .links a:hover{color:var(--text)}
   .auth{display:flex;gap:26px;align-items:center}
-  .auth .signout{font:inherit;color:var(--muted);background:none;border:0;padding:0;cursor:pointer}
-  .auth .signout:hover{color:var(--text)}
+  /* ⚠️ The signed-in items (New post / @handle / Sign out) are inserted
+     CLIENT-SIDE by scripts/nav-auth.ts (document.createElement), so they carry
+     NO astro-scope marker — a component-scoped selector like `.auth .signout`
+     compiles to `.auth[data-astro-cid-…] .signout[data-astro-cid-…]` and never
+     matches them, leaving a bare created <button> to fall back to the UA grey
+     box (and .support to lose its green). These rules use :global() UNDER the
+     scoped `.auth`, so they still belong to THIS nav (the `.auth` half keeps the
+     cid) yet reach the dynamic children. The bell (a TEMPLATE element toggled
+     via `hidden`) does not need this — only created elements do. */
+  .auth :global(a){color:var(--muted)}
+  .auth :global(a:hover){color:var(--text)}
+  .auth :global(.signout){font:inherit;color:var(--muted);background:none;border:0;padding:0;cursor:pointer}
+  .auth :global(.signout:hover){color:var(--text)}
   .notify{position:relative;display:flex;align-items:center}
   /* The bell reveal (auth) and the panel open/close both drive the `hidden`
      attribute; the display:flex on .notify / .notify-panel (author origin)
@@ -63,7 +74,7 @@ import Wordmark from './Wordmark.astro';
   @media(max-width:840px){
     .notify-panel{position:static;width:auto;box-shadow:none;margin:8px clamp(20px,6vw,48px)}
   }
-  .support{font-size:13.5px;font-weight:600;color:var(--on-green) !important;background:var(--green);
+  .auth :global(.support){font-size:13.5px;font-weight:600;color:var(--on-green) !important;background:var(--green);
     padding:9px 17px;border-radius:999px;box-shadow:0 0 20px var(--green-glow)}
   .nav-search input{width:150px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--ink2);color:var(--head);font-size:14px}
   .nav-toggle{display:none}
@@ -87,10 +98,17 @@ import Wordmark from './Wordmark.astro';
       border-bottom:1px solid var(--line);padding:8px 0 16px;display:none}
     .nav-toggle:checked ~ .links{display:flex}
     .links a{padding:13px clamp(20px,6vw,48px);font-size:16px}
-    .links a:not(.support):hover{background:rgba(255,255,255,.04);color:var(--text)}
+    /* :global() so this reaches the CLIENT-CREATED @handle link too (same
+       reason as the .auth rules above) — otherwise the signed-in profile link
+       is the one mobile menu item without the hover affordance. */
+    .links :global(a:not(.support)):hover{background:rgba(255,255,255,.04);color:var(--text)}
     .auth{flex-direction:column;align-items:stretch;gap:0}
-    .auth .signout{padding:13px clamp(20px,6vw,48px);text-align:left;width:100%;font-size:16px}
-    .support{margin:12px clamp(20px,6vw,48px) 4px;text-align:center}
+    .auth :global(.signout){padding:13px clamp(20px,6vw,48px);text-align:left;width:100%;font-size:16px}
+    /* The client-created @handle link needs the same touch target as the other
+       stacked mobile items (it is an <a> with no class; .signout is a <button>
+       handled above, .support has its own margin below). */
+    .auth :global(a:not(.support)){padding:13px clamp(20px,6vw,48px);font-size:16px}
+    .auth :global(.support){margin:12px clamp(20px,6vw,48px) 4px;text-align:center}
     .nav-search{width:100%}
     .nav-search input{width:100%}
   }

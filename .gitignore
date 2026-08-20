@@ -27,6 +27,14 @@ coverage/
 # Brainstorm/SDD scratch (session-local; contains keys)
 /.superpowers/
 
+# Agent tooling (session-local), ignored so a stray `git add -A` can't land it.
+# `supertool` here is a ~540KB executable binary (not source). `.claude`/`.serena`
+# are agent state dirs (elsewhere embedded git repos, which would commit as
+# broken gitlinks).
+/supertool
+/.claude/
+/.serena/
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
