@@ -1,0 +1,37 @@
+# Line-ending & binary policy.
+#
+# Verified 2026-08-26: the index holds 0 CRLF/mixed blobs (`git ls-files --eol`),
+# so introducing this file produces NO renormalization diff — it pins the all-LF
+# state the repo already has, against a contributor whose core.autocrlf differs
+# (Windows defaults to autocrlf=true; every blob here is already LF).
+
+# Default: let git detect text vs binary, normalize text to LF in the repo, and
+# convert to the platform's native ending on checkout.
+* text=auto
+
+# Must stay LF even on a Windows checkout (shebang / bash correctness), whatever a
+# contributor's core.autocrlf is. None committed today; this is future-proofing.
+*.sh     text eol=lf
+
+# A LICENSE is a planned addition (founder to-do). Keep it byte-stable LF.
+LICENSE* text eol=lf
+
+# Binaries. None are committed today, but this is a web app that will add images
+# and OG/social assets. Marking them binary removes any ambiguity: a mis-normalized
+# binary corrupts silently and fails when SERVED, not when committed.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.webp   binary
+*.avif   binary
+*.woff   binary
+*.woff2  binary
+*.wasm   binary
+*.pdf    binary
+
+# Migrations (apps/api/migrations/*.sql) need no special pin: node-pg-migrate
+# tracks applied migrations by NAME, not by a content hash, and nothing in this
+# repo byte-compares them — the `* text=auto` LF normalization above is sufficient
+# and does not affect migration tracking.
