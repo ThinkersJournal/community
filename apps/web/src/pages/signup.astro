@@ -24,6 +24,14 @@ markPrivate(Astro);
 // exists for holds.
 setPublicPageCsp(Astro, { turnstile: true });
 
+// The real Turnstile widget renders ONLY in production builds, where
+// PUBLIC_TURNSTILE_SITE_KEY is baked in at build time (set on the deploy build —
+// like the api's PREVIEW_ORIGIN). Dev/e2e builds leave it unset and fall back to
+// the always-pass dummy token below: a domain-locked real widget cannot render
+// on localhost in a headless CI browser, which hangs signup (the flow never
+// gets a token). The site key is PUBLIC by design.
+const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY as string | undefined;
+
 /** Rendered outcome. `null` = first visit, nothing submitted yet. */
 let result: "created" | "error" | null = null;
 let message = "";
@@ -125,29 +133,42 @@ if (Astro.request.method === "POST") {
               <input type="password" name="password" required />
             </label>
             {/*
-              Cloudflare Turnstile. The external api.js (below — allowed by the
-              signup-only CSP addition in src/lib/csp.ts) renders the challenge
-              and, via `data-response-field-name`, injects the hidden
-              `turnstileToken` field the api reads (routes/signup.ts →
-              auth/turnstile.ts's siteverify). The site key is PUBLIC by design;
-              the SECRET half lives only in the api's TURNSTILE_SECRET_KEY.
+              Cloudflare Turnstile. In PRODUCTION (turnstileSiteKey set at build
+              time) the real widget renders and, via `data-response-field-name`,
+              injects the hidden `turnstileToken` field the api reads
+              (routes/signup.ts → auth/turnstile.ts's siteverify). In dev/e2e (no
+              key — a domain-locked widget can't render on localhost) we emit the
+              always-pass dummy token instead. Site key is PUBLIC by design; the
+              SECRET half lives only in the api's TURNSTILE_SECRET_KEY.
             */}
-            <div
-              class="cf-turnstile"
-              data-sitekey="0x4AAAAAAEeHIE7gGXEOrrpY"
-              data-response-field-name="turnstileToken"
-            ></div>
+            {
+              turnstileSiteKey ? (
+                <div
+                  class="cf-turnstile"
+                  data-sitekey={turnstileSiteKey}
+                  data-response-field-name="turnstileToken"
+                ></div>
+              ) : (
+                <input type="hidden" name="turnstileToken" value="dummy-token" />
+              )
+            }
             <button type="submit" class="btn btn-primary">Sign up</button>
           </form>
-          {/*
-            NO Subresource Integrity, deliberately. Turnstile's api.js is a
-            Cloudflare-updated LOADER (versionless by design), so a pinned
-            `integrity` hash would break the widget the moment they update it —
-            Cloudflare does not support SRI on it. The integrity control here is
-            instead the CSP: script-src is allowlisted to challenges.cloudflare.com
-            only (src/lib/csp.ts's signup policy), so nothing else can load.
-          */}
-          <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+          {
+            turnstileSiteKey && (
+              <>
+                {/*
+                  NO Subresource Integrity, deliberately. Turnstile's api.js is a
+                  Cloudflare-updated LOADER (versionless by design), so a pinned
+                  `integrity` hash would break the widget the moment they update it
+                  — Cloudflare does not support SRI on it. The integrity control is
+                  instead the CSP: script-src is allowlisted to
+                  challenges.cloudflare.com only (src/lib/csp.ts's signup policy).
+                */}
+                <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+              </>
+            )
+          }
         </>
       )
     }

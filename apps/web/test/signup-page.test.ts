@@ -34,15 +34,20 @@ describe("signup.astro", () => {
     expect(code).toMatch(/result === ["']created["']/);
   });
 
-  it("renders the real Turnstile widget wired to feed the api's `turnstileToken` field", () => {
-    // The dummy placeholder `<input value="dummy-token">` is gone; the widget's
-    // `data-response-field-name` injects the hidden `turnstileToken` the api reads.
-    // The site key is PUBLIC by design.
+  it("renders the real Turnstile widget in prod builds, with a dummy-token fallback for dev/e2e", () => {
+    // PROD branch: the real widget, keyed from the build-time
+    // PUBLIC_TURNSTILE_SITE_KEY (a domain-locked widget can't render on
+    // localhost, so it is prod-only — dev/e2e would otherwise hang signup).
+    expect(code).toContain("import.meta.env.PUBLIC_TURNSTILE_SITE_KEY");
     expect(rawSource).toContain('class="cf-turnstile"');
-    expect(rawSource).toContain('data-sitekey="0x4AAAAAAEeHIE7gGXEOrrpY"');
+    expect(rawSource).toContain("data-sitekey={turnstileSiteKey}");
     expect(rawSource).toContain('data-response-field-name="turnstileToken"');
     expect(rawSource).toContain("challenges.cloudflare.com/turnstile/v0/api.js");
-    expect(rawSource).not.toContain('value="dummy-token"');
+    // DEV/E2E branch: the always-pass dummy token, so signup is exercisable on
+    // localhost where the real widget can't render.
+    expect(rawSource).toContain('name="turnstileToken" value="dummy-token"');
+    // Both are gated on the same build-time key.
+    expect(code).toMatch(/turnstileSiteKey \?/);
   });
 
   it("still forwards the real browser Origin, never a synthesized one, on the signup POST", () => {
