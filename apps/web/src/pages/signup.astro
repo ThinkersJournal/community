@@ -149,7 +149,12 @@ if (Astro.request.method === "POST") {
                   data-response-field-name="turnstileToken"
                 ></div>
               ) : (
-                <input type="hidden" name="turnstileToken" value="dummy-token" />
+                // ⚠️ type="text", NOT hidden. This dev/e2e-only fallback must be
+                // a VISIBLE, fillable input: the Playwright helper drives it with
+                // page.fill() (e2e/helpers.ts), which waits for an editable
+                // element and times out on a hidden one. Its value is irrelevant
+                // — the api's always-pass dummy secret clears any non-empty token.
+                <input type="text" name="turnstileToken" value="dummy-token" />
               )
             }
             <button type="submit" class="btn btn-primary">Sign up</button>
