@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PUBLIC_PAGE_CSP, setPublicPageCsp } from "../src/lib/csp";
+import { PUBLIC_PAGE_CSP, SIGNUP_PAGE_CSP, setPublicPageCsp } from "../src/lib/csp";
 
 import type { CspContext } from "../src/lib/csp";
 
@@ -135,5 +135,68 @@ describe("setPublicPageCsp", () => {
     expect(ctx.response.headers.get("content-security-policy")).toBe(PUBLIC_PAGE_CSP);
     expect(ctx.response.headers.get("cache-control")).toBeNull();
     expect(ctx.response.headers.get("cloudflare-cdn-cache-control")).toBeNull();
+  });
+});
+
+describe("setPublicPageCsp({ turnstile: true }) — the signup page only", () => {
+  const TURNSTILE = "https://challenges.cloudflare.com";
+
+  /** The signup CSP, proven PRESENT — same anti-vacuity discipline as emittedCsp. */
+  function emittedSignupCsp(): string {
+    const ctx = context();
+    setPublicPageCsp(ctx, { turnstile: true });
+    const header = ctx.response.headers.get("content-security-policy");
+    expect(header, "no content-security-policy header was emitted at all").not.toBeNull();
+    return header as string;
+  }
+
+  it("adds the Turnstile host to script-src — but STILL no 'unsafe-inline'", () => {
+    // The api.js is an EXTERNAL script (a src), so the host allowance suffices;
+    // the no-inline property this whole file exists for is preserved even here.
+    const scriptSrc = directive(emittedSignupCsp(), "script-src");
+    expect(scriptSrc).toBe(`'self' ${TURNSTILE}`);
+    expect(scriptSrc).not.toContain("unsafe-inline");
+    expect(scriptSrc).not.toContain("unsafe-eval");
+  });
+
+  it("adds the Turnstile host to connect-src and frame-src (its XHR + challenge iframe)", () => {
+    const csp = emittedSignupCsp();
+    expect(directive(csp, "connect-src")).toBe(`'self' ${TURNSTILE}`);
+    expect(directive(csp, "frame-src")).toBe(TURNSTILE);
+  });
+
+  it("⚠️ 'unsafe-inline' STILL appears in style-src and NOWHERE else (creep guard)", () => {
+    const relaxed = SIGNUP_PAGE_CSP.split(";")
+      .map((part) => part.trim())
+      .filter((part) => part.includes("unsafe-inline"))
+      .map((part) => part.split(" ")[0]);
+    expect(relaxed).toEqual(["style-src"]);
+  });
+
+  it("the base lock-downs are unchanged from the public policy", () => {
+    const csp = emittedSignupCsp();
+    expect(directive(csp, "object-src")).toBe("'none'");
+    expect(directive(csp, "base-uri")).toBe("'none'");
+    expect(directive(csp, "frame-ancestors")).toBe("'none'");
+    expect(directive(csp, "default-src")).toBe("'self'");
+    expect(directive(csp, "form-action")).toBe("'self'");
+    expect(directive(csp, "img-src")).toBe("'self' https://cdn.thinkersjournal.com");
+  });
+
+  it("pins the EXACT signup policy (an unreviewed edit must redden)", () => {
+    expect(SIGNUP_PAGE_CSP).toBe(
+      "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; " +
+        "style-src 'self' 'unsafe-inline'; img-src 'self' https://cdn.thinkersjournal.com; " +
+        "font-src 'self'; connect-src 'self' https://challenges.cloudflare.com; " +
+        "frame-src https://challenges.cloudflare.com; form-action 'self'; " +
+        "frame-ancestors 'none'; base-uri 'none'; object-src 'none'",
+    );
+  });
+
+  it("⚠️ PUBLIC_PAGE_CSP (the attacker-authored post page etc.) does NOT carry Turnstile", () => {
+    // The whole reason this is a per-page opt-in: the cached, attacker-authored
+    // post page's policy must stay as tight as before.
+    expect(PUBLIC_PAGE_CSP).not.toContain("challenges.cloudflare.com");
+    expect(PUBLIC_PAGE_CSP).not.toContain("frame-src");
   });
 });

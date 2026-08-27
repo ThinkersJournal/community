@@ -17,10 +17,12 @@ import { setPublicPageCsp } from "../lib/csp";
 // serve one signup's outcome to every later visitor. See src/lib/cache.ts.
 markPrivate(Astro);
 
-// Now carries the shared nav island + fonts (BaseLayout, below). No inline
-// `<script>` on this page, so `script-src 'self'` (setPublicPageCsp's policy)
-// is safe.
-setPublicPageCsp(Astro);
+// Carries the shared nav island + fonts (BaseLayout, below) and the Turnstile
+// widget. `{ turnstile: true }` widens THIS page's CSP to allow Turnstile's host
+// (script-/connect-/frame-src) — see src/lib/csp.ts. Still no INLINE script: the
+// api.js is external, so no 'unsafe-inline' is needed and the property that file
+// exists for holds.
+setPublicPageCsp(Astro, { turnstile: true });
 
 /** Rendered outcome. `null` = first visit, nothing submitted yet. */
 let result: "created" | "error" | null = null;
@@ -123,17 +125,29 @@ if (Astro.request.method === "POST") {
               <input type="password" name="password" required />
             </label>
             {/*
-              The Turnstile response token. A real widget (client-side script,
-              M1) populates this field; it stays a plain input here so the flow
-              is exercisable end-to-end in dev, where the api runs with
-              Cloudflare's dummy always-pass secret.
+              Cloudflare Turnstile. The external api.js (below — allowed by the
+              signup-only CSP addition in src/lib/csp.ts) renders the challenge
+              and, via `data-response-field-name`, injects the hidden
+              `turnstileToken` field the api reads (routes/signup.ts →
+              auth/turnstile.ts's siteverify). The site key is PUBLIC by design;
+              the SECRET half lives only in the api's TURNSTILE_SECRET_KEY.
             */}
-            <label>
-              Turnstile token
-              <input type="text" name="turnstileToken" value="dummy-token" />
-            </label>
+            <div
+              class="cf-turnstile"
+              data-sitekey="0x4AAAAAAEeHIE7gGXEOrrpY"
+              data-response-field-name="turnstileToken"
+            ></div>
             <button type="submit" class="btn btn-primary">Sign up</button>
           </form>
+          {/*
+            NO Subresource Integrity, deliberately. Turnstile's api.js is a
+            Cloudflare-updated LOADER (versionless by design), so a pinned
+            `integrity` hash would break the widget the moment they update it —
+            Cloudflare does not support SRI on it. The integrity control here is
+            instead the CSP: script-src is allowlisted to challenges.cloudflare.com
+            only (src/lib/csp.ts's signup policy), so nothing else can load.
+          */}
+          <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
         </>
       )
     }
