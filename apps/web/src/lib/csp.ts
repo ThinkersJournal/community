@@ -48,21 +48,45 @@ export interface CspContext {
   response: { headers: Headers };
 }
 
-export const PUBLIC_PAGE_CSP = [
-  "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  // Post images come from the R2 custom domain and nowhere else. No `data:`:
-  // packages/markdown's schema blocks data: URLs in `src` outright, so allowing
-  // them here would only widen what a sanitizer failure could reach.
-  "img-src 'self' https://cdn.thinkersjournal.com",
-  "font-src 'self'",
-  "connect-src 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-  "base-uri 'none'",
-  "object-src 'none'",
-].join("; ");
+/**
+ * Cloudflare Turnstile's host — the widget's script (`api.js`), its challenge
+ * iframe, and its XHRs all come from here. ONLY the signup page loads Turnstile,
+ * so this is added to that page's policy alone (see setPublicPageCsp's
+ * `turnstile` opt-in). The shared PUBLIC_PAGE_CSP — which also guards the cached,
+ * ATTACKER-AUTHORED post page — stays exactly as tight as it was.
+ */
+const TURNSTILE_HOST = "https://challenges.cloudflare.com";
+
+function buildCsp(turnstile: boolean): string {
+  return [
+    "default-src 'self'",
+    // ⚠️ STILL no 'unsafe-inline'. Turnstile's api.js is an EXTERNAL script (a
+    // `src`, not inline code), so a host allowance is all it needs — the
+    // property this file exists for is preserved.
+    `script-src 'self'${turnstile ? ` ${TURNSTILE_HOST}` : ""}`,
+    "style-src 'self' 'unsafe-inline'",
+    // Post images come from the R2 custom domain and nowhere else. No `data:`:
+    // packages/markdown's schema blocks data: URLs in `src` outright, so allowing
+    // them here would only widen what a sanitizer failure could reach.
+    "img-src 'self' https://cdn.thinkersjournal.com",
+    "font-src 'self'",
+    `connect-src 'self'${turnstile ? ` ${TURNSTILE_HOST}` : ""}`,
+    // `frame-src` exists ONLY when Turnstile is loaded (its challenge iframe);
+    // absent otherwise, so frames fall back to `default-src 'self'`.
+    ...(turnstile ? [`frame-src ${TURNSTILE_HOST}`] : []),
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+  ].join("; ");
+}
+
+/** Public pages. `buildCsp(false)` — byte-identical to before Turnstile existed. */
+export const PUBLIC_PAGE_CSP = buildCsp(false);
+
+/** The signup page only: PUBLIC_PAGE_CSP plus the Turnstile host in
+ * script-/connect-/frame-src. */
+export const SIGNUP_PAGE_CSP = buildCsp(true);
 
 /**
  * Apply the public-page security headers. Every SSR public page calls this.
@@ -73,8 +97,11 @@ export const PUBLIC_PAGE_CSP = [
  * on a response can rescue an edge leak once that happens.
  * test/page-cache-inventory.test.ts (sweep B) enforces this across all of src/.
  */
-export function setPublicPageCsp(context: CspContext): void {
-  context.response.headers.set("content-security-policy", PUBLIC_PAGE_CSP);
+export function setPublicPageCsp(context: CspContext, opts: { turnstile?: boolean } = {}): void {
+  context.response.headers.set(
+    "content-security-policy",
+    opts.turnstile ? SIGNUP_PAGE_CSP : PUBLIC_PAGE_CSP,
+  );
   // Belt-and-braces for the media path too: never let a browser sniff a served
   // byte stream into something executable.
   context.response.headers.set("x-content-type-options", "nosniff");

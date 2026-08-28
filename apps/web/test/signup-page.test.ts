@@ -24,7 +24,8 @@ describe("signup.astro", () => {
   it("adopts the shared chrome + CSP while staying markPrivate", () => {
     // `code` is the comment-stripped source already read in this file
     expect(code).toMatch(/<BaseLayout\s/);
-    expect(code).toContain("setPublicPageCsp(Astro)");
+    // Opts into the Turnstile CSP addition (signup is the only page that does).
+    expect(code).toContain("setPublicPageCsp(Astro, { turnstile: true })");
     expect(code).toContain("markPrivate(Astro)");
   });
 
@@ -33,8 +34,20 @@ describe("signup.astro", () => {
     expect(code).toMatch(/result === ["']created["']/);
   });
 
-  it("still carries the turnstileToken input in the form branch", () => {
-    expect(rawSource).toContain('name="turnstileToken"');
+  it("renders the real Turnstile widget in prod builds, with a dummy-token fallback for dev/e2e", () => {
+    // PROD branch: the real widget, keyed from the build-time
+    // PUBLIC_TURNSTILE_SITE_KEY (a domain-locked widget can't render on
+    // localhost, so it is prod-only — dev/e2e would otherwise hang signup).
+    expect(code).toContain("import.meta.env.PUBLIC_TURNSTILE_SITE_KEY");
+    expect(rawSource).toContain('class="cf-turnstile"');
+    expect(rawSource).toContain("data-sitekey={turnstileSiteKey}");
+    expect(rawSource).toContain('data-response-field-name="turnstileToken"');
+    expect(rawSource).toContain("challenges.cloudflare.com/turnstile/v0/api.js");
+    // DEV/E2E branch: the always-pass dummy token, so signup is exercisable on
+    // localhost where the real widget can't render.
+    expect(rawSource).toContain('name="turnstileToken" value="dummy-token"');
+    // Both are gated on the same build-time key.
+    expect(code).toMatch(/turnstileSiteKey \?/);
   });
 
   it("still forwards the real browser Origin, never a synthesized one, on the signup POST", () => {
@@ -43,7 +56,8 @@ describe("signup.astro", () => {
 
   // handle-at-signup Task 7: the signup form now collects a chosen @handle
   // and surfaces the api's USERNAME_TAKEN suggestions as plain server-rendered
-  // text (no client JS — this page keeps a strict `script-src 'self'` CSP).
+  // text (no client JS for the suggestions; the page's only script is Turnstile's
+  // external api.js, and script-src still carries no 'unsafe-inline').
   it("has a username field with permanence copy, and forwards it to the api", () => {
     expect(rawSource).toMatch(/name="username"/);
     expect(rawSource).toMatch(/permanent/i);

@@ -17,10 +17,20 @@ import { setPublicPageCsp } from "../lib/csp";
 // serve one signup's outcome to every later visitor. See src/lib/cache.ts.
 markPrivate(Astro);
 
-// Now carries the shared nav island + fonts (BaseLayout, below). No inline
-// `<script>` on this page, so `script-src 'self'` (setPublicPageCsp's policy)
-// is safe.
-setPublicPageCsp(Astro);
+// Carries the shared nav island + fonts (BaseLayout, below) and the Turnstile
+// widget. `{ turnstile: true }` widens THIS page's CSP to allow Turnstile's host
+// (script-/connect-/frame-src) — see src/lib/csp.ts. Still no INLINE script: the
+// api.js is external, so no 'unsafe-inline' is needed and the property that file
+// exists for holds.
+setPublicPageCsp(Astro, { turnstile: true });
+
+// The real Turnstile widget renders ONLY in production builds, where
+// PUBLIC_TURNSTILE_SITE_KEY is baked in at build time (set on the deploy build —
+// like the api's PREVIEW_ORIGIN). Dev/e2e builds leave it unset and fall back to
+// the always-pass dummy token below: a domain-locked real widget cannot render
+// on localhost in a headless CI browser, which hangs signup (the flow never
+// gets a token). The site key is PUBLIC by design.
+const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY as string | undefined;
 
 /** Rendered outcome. `null` = first visit, nothing submitted yet. */
 let result: "created" | "error" | null = null;
@@ -123,17 +133,47 @@ if (Astro.request.method === "POST") {
               <input type="password" name="password" required />
             </label>
             {/*
-              The Turnstile response token. A real widget (client-side script,
-              M1) populates this field; it stays a plain input here so the flow
-              is exercisable end-to-end in dev, where the api runs with
-              Cloudflare's dummy always-pass secret.
+              Cloudflare Turnstile. In PRODUCTION (turnstileSiteKey set at build
+              time) the real widget renders and, via `data-response-field-name`,
+              injects the hidden `turnstileToken` field the api reads
+              (routes/signup.ts → auth/turnstile.ts's siteverify). In dev/e2e (no
+              key — a domain-locked widget can't render on localhost) we emit the
+              always-pass dummy token instead. Site key is PUBLIC by design; the
+              SECRET half lives only in the api's TURNSTILE_SECRET_KEY.
             */}
-            <label>
-              Turnstile token
-              <input type="text" name="turnstileToken" value="dummy-token" />
-            </label>
+            {
+              turnstileSiteKey ? (
+                <div
+                  class="cf-turnstile"
+                  data-sitekey={turnstileSiteKey}
+                  data-response-field-name="turnstileToken"
+                ></div>
+              ) : (
+                // ⚠️ type="text", NOT hidden. This dev/e2e-only fallback must be
+                // a VISIBLE, fillable input: the Playwright helper drives it with
+                // page.fill() (e2e/helpers.ts), which waits for an editable
+                // element and times out on a hidden one. Its value is irrelevant
+                // — the api's always-pass dummy secret clears any non-empty token.
+                <input type="text" name="turnstileToken" value="dummy-token" />
+              )
+            }
             <button type="submit" class="btn btn-primary">Sign up</button>
           </form>
+          {
+            turnstileSiteKey && (
+              <>
+                {/*
+                  NO Subresource Integrity, deliberately. Turnstile's api.js is a
+                  Cloudflare-updated LOADER (versionless by design), so a pinned
+                  `integrity` hash would break the widget the moment they update it
+                  — Cloudflare does not support SRI on it. The integrity control is
+                  instead the CSP: script-src is allowlisted to
+                  challenges.cloudflare.com only (src/lib/csp.ts's signup policy).
+                */}
+                <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+              </>
+            )
+          }
         </>
       )
     }
