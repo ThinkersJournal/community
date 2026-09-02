@@ -40,4 +40,13 @@ describe("verify-email.astro", () => {
   it("still applies cookies on the resend 401 revocation path", () => {
     expect(code).toContain("applyCookies(Astro.response.headers, response.setCookies)");
   });
+
+  it("does NOT offer to resend right after a successful verify on this visit", () => {
+    // Stale-UI fix: the resend form is gated on `outcome !== "verified"`, so a
+    // user who just clicked their link (outcome === "verified") is not offered a
+    // confusing "resend". The endpoint is separately server-side guarded (resend
+    // 409s ALREADY_VERIFIED — apps/api/src/routes/resend-verification.ts), so this
+    // is UX polish, not the control.
+    expect(code).toMatch(/csrfToken !== null && outcome !== "verified"/);
+  });
 });

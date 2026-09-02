@@ -218,8 +218,12 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
       )
     }
 
+    {/* The resend form: only for a session holder with something to resend, and
+        NOT right after a successful verify on THIS visit (outcome === "verified")
+        — offering "resend" to someone who just verified is confusing. It still
+        shows for an expired/invalid link or a direct visit. */}
     {
-      csrfToken !== null && (
+      csrfToken !== null && outcome !== "verified" && (
         <form method="POST" action="/verify-email" class="form">
           {/*
             The api's per-session CSRF token. Promoted to the `X-CSRF-Token`
