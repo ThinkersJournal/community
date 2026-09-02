@@ -71,6 +71,15 @@ async function tableExists(client: Client, table: string): Promise<boolean> {
   return rows.length === 1;
 }
 
+async function columnExists(client: Client, table: string, column: string): Promise<boolean> {
+  const { rows } = await client.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`,
+    [table, column],
+  );
+  return rows.length === 1;
+}
+
 // globalSetup migrates the SHARED DB; this one is ours to set up. Idempotent
 // (node-pg-migrate's `pgmigrations` table), so this is a no-op after run 1.
 beforeAll(async () => {
@@ -141,6 +150,12 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "profiles")).toBe(true);
       expect(await tableExists(client, "posts")).toBe(true);
       expect(await tableExists(client, "media")).toBe(true);
+      // 0012_moderation.sql — proves the whole stack, including the newest
+      // migration, is reversible, not just the original 0001/0002 tables.
+      expect(await tableExists(client, "blocks")).toBe(true);
+      expect(await tableExists(client, "reports")).toBe(true);
+      expect(await columnExists(client, "posts", "hidden_at")).toBe(true);
+      expect(await columnExists(client, "comments", "hidden_at")).toBe(true);
     });
 
     await migrate("down");
@@ -149,6 +164,8 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "profiles")).toBe(false);
       expect(await tableExists(client, "posts")).toBe(false);
       expect(await tableExists(client, "media")).toBe(false);
+      expect(await tableExists(client, "blocks")).toBe(false);
+      expect(await tableExists(client, "reports")).toBe(false);
     });
 
     // THE ISOLATION PROPERTY, pinned. The stack is torn down above — in OUR
@@ -169,6 +186,10 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "profiles")).toBe(true);
       expect(await tableExists(client, "posts")).toBe(true);
       expect(await tableExists(client, "media")).toBe(true);
+      expect(await tableExists(client, "blocks")).toBe(true);
+      expect(await tableExists(client, "reports")).toBe(true);
+      expect(await columnExists(client, "posts", "hidden_at")).toBe(true);
+      expect(await columnExists(client, "comments", "hidden_at")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });
