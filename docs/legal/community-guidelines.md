@@ -65,14 +65,31 @@ signals only *prioritize* review, they do not decide it.
 - **Audit.** Moderation actions are recorded in an append-only internal log for
   accountability and to support appeals.
 
-## 3. Your responsibilities
+## 3. Blocking another user
+
+You can **block** another member. A block is about **interaction, not
+invisibility**, and we describe it honestly:
+
+- The person you block **cannot follow you, comment on your posts, or react to
+  your content**, their posts no longer appear in your feed, and notifications
+  between you are suppressed.
+- **It does not make your public posts private.** Your posts stay public, so a
+  blocked person may still read them — for example while signed out — the same as
+  anyone else. Blocking is not a way to hide public writing from a specific person.
+
+If you also want to stop *seeing* someone, that is what muting is for, where
+offered: block stops them reaching you; mute stops you seeing them. If someone's
+behavior violates these Guidelines, **report** it — blocking manages your own
+experience, reporting is how content gets reviewed.
+
+## 4. Your responsibilities
 
 - Post your own work, or work you have the right to share, and attribute honestly.
 - Report content you believe violates these Guidelines rather than escalating it
   yourself.
 - Keep your account secure; you are responsible for activity under it.
 
-## 4. Changes
+## 5. Changes
 
 We may update these Guidelines as the community grows or the law changes. Material
 changes will be announced. Continued use after a change means you accept it.
