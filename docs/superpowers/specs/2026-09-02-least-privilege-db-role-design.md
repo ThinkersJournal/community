@@ -217,23 +217,20 @@ dangerous thing." Verify BOTH, from a `psql` session connected as `app_runtime`:
 ```sql
 -- CAN (must succeed):
 SELECT count(*) FROM posts;                          -- read
--- Write test — EXPLICITLY transaction-scoped so nothing is left in prod. A bare
--- `INSERT …; ROLLBACK;` would autocommit under psql's default and the ROLLBACK
--- would be a no-op warning, leaving a live test row behind. This is the only
--- step in the whole runbook that writes to prod data; it is the one to bound
--- most carefully, not least.
+-- Write tests use the `WHERE false` pattern: each exercises the INSERT/UPDATE/
+-- DELETE privilege while affecting ZERO rows — no valid row to construct, no
+-- schema-specific placeholders, copy-pasteable as-is, and it cannot fail for a
+-- constraint reason that would mask the privilege check. Wrapped in
+-- BEGIN/ROLLBACK as a second layer so even a mistyped test can never persist.
+-- These are the only steps that touch prod at all; bound them most carefully.
 BEGIN;
-  INSERT INTO tags (…) VALUES (…);                   -- write
-ROLLBACK;                                            -- scoped: the row never commits
-
--- Exercise the CRON-path tables too (drain/reap run as app_runtime after cutover,
--- on a schedule nobody triggers pre-cutover — §2.5). `WHERE false` tests the
--- privilege without touching a row or needing a valid id/type:
-BEGIN;
-  DELETE FROM email_outbox    WHERE false;           -- drain
-  DELETE FROM media           WHERE false;           -- orphan-media reap
+  INSERT INTO tags SELECT * FROM tags WHERE false;     -- request-path write
+  -- CRON-path tables too (drain/reap run as app_runtime after cutover, on a
+  -- schedule nobody triggers pre-cutover — §2.5):
+  DELETE FROM email_outbox    WHERE false;             -- drain
+  DELETE FROM media           WHERE false;             -- orphan-media reap
   UPDATE email_drain_lock SET pass = pass WHERE false; -- drain lease
-  DELETE FROM users           WHERE false;           -- unverified-account reaper
+  DELETE FROM users           WHERE false;             -- unverified-account reaper
 ROLLBACK;
 
 -- CANNOT (must each error):
