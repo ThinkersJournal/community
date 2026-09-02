@@ -132,3 +132,7 @@
 - **Type consistency:** `isBlockedBy(c, target, actor)` is defined in T5 and reused in T6; `maybeAutoHide` in T3; `AUTO_HIDE_REPORTER_THRESHOLD` single-sourced in T3.
 - **Ordering:** T1 (schema) and T2 (shared) are prerequisites for T3–T7. T5 defines `isBlockedBy`, which T6 consumes — dispatch T5 before T6.
 - **Deferred (later M4 modules):** the moderation review queue + admin UI, author-facing "hidden pending review" state, warn/suspend/ban ladder, `moderation_actions` audit log. This module records + auto-hides + enforces; it does not adjudicate.
+
+## Manual walkthrough (AFTER the suite is green — not instead of it)
+
+A structure/route suite covers what it was written for; it structurally misses **seam defects** — UI state after a successful transition, and layout — which is exactly the category a real signup just surfaced (the resend-after-verified button, the wrapped nav pill). So after all seven tasks are green, do one pass as a real user against a deployed build: sign up a throwaway account → report a post (×3 distinct accounts to trip auto-hide) → block a user → confirm the blocked user can't follow/comment/react, drops from the feed, and generates no notification; and confirm the block **UI copy** matches §2.1 (never implies invisibility). Look for what the tests cannot see, not for what they already assert.
