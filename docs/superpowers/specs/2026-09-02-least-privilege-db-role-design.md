@@ -95,13 +95,27 @@ GRANT SELECT, INSERT, UPDATE, DELETE
 --     runtime until someone remembered to re-run 3.3 — a latent outage.
 ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_runtime;
+
+-- 3.5 THE SAME LINE, FOR SEQUENCES — and it is here for exactly the reason 3.4
+--     is, one object class over. There are ZERO sequences today (no
+--     SERIAL/IDENTITY anywhere — §2), so there is nothing to GRANT on now. But
+--     "no sequences today" is a fact about the CURRENT schema; this is a rule
+--     about every FUTURE one. The first migration to add a SERIAL/IDENTITY column
+--     creates a neondb_owner-owned sequence, and without a default privilege the
+--     INSERT that needs nextval() fails at RUNTIME, in production, attributed to
+--     the new column rather than to a grant nobody made in September. Set it now
+--     so no future migration has to remember — identical posture to 3.4.
+ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO app_runtime;
 ```
 
-**No `GRANT ... ON ALL SEQUENCES`** — there are none (see §2). If a future
-migration ever introduces a `SERIAL`/`IDENTITY` column, that migration must also
-add `GRANT USAGE, SELECT ON <seq> TO app_runtime` **and** a matching
-`ALTER DEFAULT PRIVILEGES ... GRANT USAGE, SELECT ON SEQUENCES` — flagged in §7
-as a standing rule.
+**No `GRANT ... ON ALL SEQUENCES` is issued** — there are none to grant on today
+(§2). §3.5 instead sets the *default* privilege, so any sequence a future
+migration creates auto-grants `USAGE, SELECT` to `app_runtime`, exactly as §3.4
+does for tables. This **removes** the "future migration author must remember"
+fragility rather than merely documenting it — grounding a forward-looking grant
+in a present-tense "there are no sequences" measurement is the very trap §3.4
+exists to defeat.
 
 ---
 
@@ -166,8 +180,15 @@ dangerous thing." Verify BOTH, from a `psql` session connected as `app_runtime`:
 
 ```sql
 -- CAN (must succeed):
-SELECT count(*) FROM posts;                         -- read
-INSERT INTO tags (…) VALUES (…); ROLLBACK;          -- write (rolled back)
+SELECT count(*) FROM posts;                          -- read
+-- Write test — EXPLICITLY transaction-scoped so nothing is left in prod. A bare
+-- `INSERT …; ROLLBACK;` would autocommit under psql's default and the ROLLBACK
+-- would be a no-op warning, leaving a live test row behind. This is the only
+-- step in the whole runbook that writes to prod data; it is the one to bound
+-- most carefully, not least.
+BEGIN;
+  INSERT INTO tags (…) VALUES (…);                   -- write
+ROLLBACK;                                            -- scoped: the row never commits
 
 -- CANNOT (must each error):
 CREATE TABLE evil (x int);                           -- ERROR: permission denied for schema public
@@ -187,10 +208,11 @@ If any "CANNOT" succeeds, the role is over-privileged — stop and re-check §3.
   FOR ROLE neondb_owner` in §3.4 is what makes new tables reachable by the
   runtime; if the migration runner's role ever changes, that line must change to
   match, or new tables become invisible to the app.
-- **Any migration that adds a sequence** (`SERIAL`/`IDENTITY`/`CREATE SEQUENCE`)
-  must grant `USAGE, SELECT` on it to `app_runtime` and add a matching
-  `ALTER DEFAULT PRIVILEGES ... ON SEQUENCES`. There are none today; this is the
-  rule for when there is.
+- **Sequences are already handled by §3.5's default privilege** — a future
+  `SERIAL`/`IDENTITY` column's sequence auto-grants `USAGE, SELECT` to
+  `app_runtime`, so no per-migration action is needed. (Only an edge case would
+  escape it: a sequence created by a role *other than* `neondb_owner`, which
+  nothing in this project does — migrations run as `neondb_owner`.)
 - **Any migration that adds a `SECURITY DEFINER` function or a table with RLS**
   needs its own grant review — `NOBYPASSRLS` on the role means RLS would actually
   apply to it, which is usually what you want but must be designed with the policy.
