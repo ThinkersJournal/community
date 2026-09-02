@@ -170,6 +170,15 @@
       "name": "REACTION_LIMITER",
       "namespace_id": "1007",
       "simple": { "limit": 60, "period": 60 }
+    },
+    // Bounds POST /reports (see src/routes/reports.ts). Session-user-keyed,
+    // same reasoning as FOLLOW_LIMITER/REACTION_LIMITER. Tighter than reactions:
+    // a report is a moderation signal (and feeds the auto-hide count), not a
+    // cheap toggle a reader fires repeatedly down a thread.
+    {
+      "name": "REPORT_LIMITER",
+      "namespace_id": "1008",
+      "simple": { "limit": 20, "period": 60 }
     }
   ],
   // Email outbox drains (M2.3c) — api's FIRST cron. */2 = instant pass; the daily

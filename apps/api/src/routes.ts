@@ -50,6 +50,7 @@ import {
   handlePublicReactions,
   handleRemoveReaction,
 } from "./routes/reactions";
+import { handleCreateReport } from "./routes/reports";
 import { handleResendVerification } from "./routes/resend-verification";
 import { handlePublicSearch } from "./routes/search";
 import { handleSignup } from "./routes/signup";
@@ -165,6 +166,11 @@ export const ROUTES: readonly RouteDef[] = [
   // decision 5). See src/routes/reactions.ts's header.
   { method: "POST", pattern: "/reactions", handler: handleAddReaction },
   { method: "DELETE", pattern: "/reactions", handler: handleRemoveReaction },
+
+  // Moderation report (M4) — a verified member flags a post/comment for
+  // review; a target drawing >=3 distinct reporters within 24h is auto-hidden.
+  // See src/routes/reports.ts and src/moderation/auto-hide.ts.
+  { method: "POST", pattern: "/reports", handler: handleCreateReport },
 
   // Per-viewer home feed (M2.1) — no-store, never edge-cached.
   { method: "GET", pattern: "/feed", handler: handleFeed },
