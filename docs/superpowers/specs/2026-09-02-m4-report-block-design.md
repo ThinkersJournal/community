@@ -53,6 +53,28 @@ It does **not** hide A's public posts from B on the anonymous edge-cached pages.
 **Auto-hide is the exception that IS global** (hidden for everyone pending
 review), so it applies to those same pages cleanly via `hidden_at IS NULL`.
 
+### 2.1 ⚠️ SAFETY REQUIREMENT — block copy MUST NOT imply invisibility
+
+Because block is interaction-control and NOT invisibility, the UI must say so
+plainly. A user reaching for block during harassment often believes it makes them
+invisible to that person; if the copy implies that and the block does not deliver
+it, the user makes safety decisions on a false model (staying on the platform,
+posting things they otherwise would not) — a **materially worse outcome than
+having no block at all**. This will never surface in a test; it is a copy
+decision, so it is fixed here as a hard requirement.
+
+```
+WRONG   "Block — they will no longer be able to see your posts."
+RIGHT   "Block — they can't follow, comment, react, or reach you.
+         Your public posts stay public and they may still be able to read them."
+```
+
+This binds the **web block button, its confirmation dialog, and any help text**
+(this module is API-only; the requirement propagates to the web block-UI task).
+The same honest description goes in the Community Guidelines. If a true
+invisibility primitive is wanted later, the honest pair is **`mute`** (I don't see
+them) + **`block`** (they can't interact) — neither lies about reach.
+
 ---
 
 ## 3. Data model — migration `0012_moderation.sql`
