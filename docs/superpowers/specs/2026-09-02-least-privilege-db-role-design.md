@@ -1,9 +1,16 @@
 # Least-Privilege Runtime DB Role — Design & Runbook
 
-**Status:** Design for founder review. The two production steps (role creation,
-Hyperdrive rewiring) are **founder-executed** — they need Neon SQL access and
-the Cloudflare dashboard, neither of which the agent holds (token is `zone: read`
-only, and the rotated Neon password is deliberately never in agent context).
+> ⚠️ **THE CUTOVER IS THE FOUNDER'S STEP, AND IT IS THE SCHEDULE.** Everything up
+> to the Hyperdrive swap — the design, the SQL, the verification — is the agent's.
+> The swap itself needs Neon SQL + Cloudflare-dashboard credentials only CireSnave
+> holds, so "ASAP" is bounded by his availability for that one step, not by the
+> build. Everything up to the swap is the agent's; the swap is his.
+
+**Status:** Design **APPROVED by the PM 2026-09-02**. The two production steps
+(role creation, Hyperdrive rewiring) are **founder-executed** — they need Neon SQL
+access and the Cloudflare dashboard, neither of which the agent holds (token is
+`zone: read` only, and the rotated Neon password is deliberately never in agent
+context).
 
 **Author:** controller agent, 2026-09-02, dispatched by the portfolio PM as
 non-DNS-gated security work.
@@ -56,6 +63,35 @@ Application tables (from migrations 0001–0011): `users`, `profiles`, `posts`,
 `notification_prefs`, `email_outbox`, `email_drain_lock`, `tags`, `post_tags`.
 Plus the `pgmigrations` bookkeeping table (node-pg-migrate) — which the runtime
 **never touches** (optional tightening in §4).
+
+---
+
+## 2.5 Non-request-path coverage — crons and migrations
+
+§2 audits the REQUEST path. Two other things run against Postgres, and a role
+scoped to only the request path's writes would pass every test and then fail on
+first contact with them. Both are covered here.
+
+**Migrations run as a SEPARATE identity — the structural reason the scope is
+sufficient.** `apps/api/scripts/migrate.mjs` connects via a supplied `DATABASE_URL`
+= the `neondb_owner` string (migration 0011 was run exactly that way on
+2026-08-19). DDL therefore never executes as `app_runtime`. The 12-table DML scope
+is sufficient *because* migrations are not on this role — a structural guarantee,
+not an empirical "we happened to see no DDL."
+
+**The 4 crons DO run as `app_runtime` after cutover — and are covered by
+construction.** `src/index.ts`'s `scheduled()` dispatches, on the Hyperdrive
+connection: the every-tick DB-health probe (`SELECT 1`); the email drain
+(`*/2` instant, `0 14` digest — writes `email_outbox` and `email_drain_lock`,
+reads `notifications`/`users`); orphan-media reap (`30 3` — `DELETE media`); and
+the unverified-account reaper (`15 4` — `DELETE users`). Every one touches only
+TABLES plus `SELECT 1`. Because §3.3 grants DML on **ALL** tables, these are
+covered **whether or not each was individually enumerated** — e.g. the drain's
+`email_outbox` writes never surfaced in a request-path grep but are covered
+regardless. The grant does not depend on the enumeration being complete; that is
+the reason to grant on ALL tables rather than a hand-listed set. The only way a
+cron (or any path) could hit a permission error is a NON-table object
+(sequence / function / schema) — and §2 established there are none to need.
 
 ---
 
@@ -181,14 +217,21 @@ dangerous thing." Verify BOTH, from a `psql` session connected as `app_runtime`:
 ```sql
 -- CAN (must succeed):
 SELECT count(*) FROM posts;                          -- read
--- Write test — EXPLICITLY transaction-scoped so nothing is left in prod. A bare
--- `INSERT …; ROLLBACK;` would autocommit under psql's default and the ROLLBACK
--- would be a no-op warning, leaving a live test row behind. This is the only
--- step in the whole runbook that writes to prod data; it is the one to bound
--- most carefully, not least.
+-- Write tests use the `WHERE false` pattern: each exercises the INSERT/UPDATE/
+-- DELETE privilege while affecting ZERO rows — no valid row to construct, no
+-- schema-specific placeholders, copy-pasteable as-is, and it cannot fail for a
+-- constraint reason that would mask the privilege check. Wrapped in
+-- BEGIN/ROLLBACK as a second layer so even a mistyped test can never persist.
+-- These are the only steps that touch prod at all; bound them most carefully.
 BEGIN;
-  INSERT INTO tags (…) VALUES (…);                   -- write
-ROLLBACK;                                            -- scoped: the row never commits
+  INSERT INTO tags SELECT * FROM tags WHERE false;     -- request-path write
+  -- CRON-path tables too (drain/reap run as app_runtime after cutover, on a
+  -- schedule nobody triggers pre-cutover — §2.5):
+  DELETE FROM email_outbox    WHERE false;             -- drain
+  DELETE FROM media           WHERE false;             -- orphan-media reap
+  UPDATE email_drain_lock SET pass = pass WHERE false; -- drain lease
+  DELETE FROM users           WHERE false;             -- unverified-account reaper
+ROLLBACK;
 
 -- CANNOT (must each error):
 CREATE TABLE evil (x int);                           -- ERROR: permission denied for schema public
