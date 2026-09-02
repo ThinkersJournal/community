@@ -67,6 +67,15 @@ async function edgeExists(followerId: string, followeeId: string): Promise<boole
   return exists;
 }
 
+/** Insert a `blocks` row directly (Task 4's own route is not exercised here). */
+async function insertBlock(blockerId: string, blockedId: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1, $2)", [blockerId, blockedId]),
+  );
+  await waitOnExecutionContext(ctx);
+}
+
 let alice: Actor;
 let bob: Actor;
 beforeAll(async () => {
@@ -121,6 +130,25 @@ describe("POST /follows", () => {
   it("a verified follower with no separate onboarding step can follow immediately (handle comes from signup)", async () => {
     const noExtraStep = await createVerifiedActor();
     const response = await follow(noExtraStep, bob.userId);
+    expect(response.status).toBe(201);
+  });
+});
+
+describe("block enforcement (M4)", () => {
+  it("403s BLOCKED when the followee (target) has blocked the actor, and the edge is not created", async () => {
+    const target = await onboardedActor();
+    const actor = await onboardedActor();
+    await insertBlock(target.userId, actor.userId);
+    const response = await follow(actor, target.userId);
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { code: string }).code).toBe("BLOCKED");
+    expect(await edgeExists(actor.userId, target.userId)).toBe(false);
+  });
+
+  it("a NON-blocked actor still follows successfully (guard against over-blocking)", async () => {
+    const target = await onboardedActor();
+    const actor = await onboardedActor();
+    const response = await follow(actor, target.userId);
     expect(response.status).toBe(201);
   });
 });

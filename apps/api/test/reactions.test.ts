@@ -108,6 +108,15 @@ function unreact(
   );
 }
 
+/** Insert a `blocks` row directly (Task 4's own route is not exercised here). */
+async function insertBlock(blockerId: string, blockedId: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1, $2)", [blockerId, blockedId]),
+  );
+  await waitOnExecutionContext(ctx);
+}
+
 async function reactionCount(where: { postId?: string; commentId?: string }, kind: string): Promise<number> {
   const ctx = createExecutionContext();
   const n = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
@@ -185,6 +194,38 @@ describe("POST /reactions", () => {
     expect((await react(unverified, { postId, kind: "agree" })).status).toBe(403);
     const noExtraStep = await createVerifiedActor();
     expect((await react(noExtraStep, { postId, kind: "agree" })).status).toBe(201);
+  });
+});
+
+describe("block enforcement (M4)", () => {
+  it("403s BLOCKED reacting to a post whose author has blocked the actor", async () => {
+    const poster = await onboardedActor();
+    const reactor = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    await insertBlock(poster.userId, reactor.userId);
+    const response = await react(reactor, { postId: p, kind: "agree" });
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { code: string }).code).toBe("BLOCKED");
+  });
+
+  it("403s BLOCKED reacting to a comment whose author has blocked the actor", async () => {
+    const poster = await onboardedActor();
+    const commentAuthor = await onboardedActor();
+    const reactor = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const c = await insertComment(p, commentAuthor.userId);
+    await insertBlock(commentAuthor.userId, reactor.userId);
+    const response = await react(reactor, { commentId: c.id, kind: "agree" });
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { code: string }).code).toBe("BLOCKED");
+  });
+
+  it("a NON-blocked reactor still succeeds (guard against over-blocking)", async () => {
+    const poster = await onboardedActor();
+    const reactor = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const response = await react(reactor, { postId: p, kind: "agree" });
+    expect(response.status).toBe(201);
   });
 });
 

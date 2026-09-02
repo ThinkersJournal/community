@@ -11,6 +11,7 @@ import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isCheckViolation, isForeignKeyViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
+import { isBlockedBy } from "../moderation/is-blocked";
 import { notify } from "../notifications/create";
 import { bustFolloweeCache } from "../social/followee-cache";
 
@@ -44,8 +45,13 @@ export async function handleFollow(
 
   if (followeeId === userId) return errorResponse("CANNOT_FOLLOW_SELF", 400);
 
+  let blocked: Response | null = null;
   try {
-    await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    blocked = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      // Block enforcement (design doc §7): the followee (target) may have
+      // blocked this actor — refuse before the write, on the SAME connection.
+      if (await isBlockedBy(c, followeeId, userId)) return errorResponse("BLOCKED", 403);
+
       await c.query(
         `INSERT INTO follows (follower_id, followee_id) VALUES ($1, $2)
            ON CONFLICT (follower_id, followee_id) DO NOTHING`,
@@ -54,6 +60,7 @@ export async function handleFollow(
       // Notify the followee. Dedup means a follow/unfollow/re-follow loop cannot
       // spam their bell (anti-harassment). self-follow is already rejected above.
       await notify(c, env, ctx, { recipientId: followeeId, actorId: userId, kind: "follow" });
+      return null;
     });
   } catch (err) {
     // followee_id references a nonexistent user → FK violation (23503).
@@ -65,6 +72,7 @@ export async function handleFollow(
     if (isCheckViolation(err)) return errorResponse("CANNOT_FOLLOW_SELF", 400);
     throw err;
   }
+  if (blocked !== null) return blocked;
   // The follower's followee list changed — invalidate their cached copy.
   // Best-effort (the 300s TTL backstops a lost delete); never blocks the write.
   ctx.waitUntil(bustFolloweeCache(env, userId));

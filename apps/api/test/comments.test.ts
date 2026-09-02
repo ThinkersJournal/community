@@ -99,6 +99,15 @@ async function tombstoned(id: string): Promise<{ deleted: boolean; body: string 
   return row;
 }
 
+/** Insert a `blocks` row directly (Task 4's own route is not exercised here). */
+async function insertBlock(blockerId: string, blockedId: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1, $2)", [blockerId, blockedId]),
+  );
+  await waitOnExecutionContext(ctx);
+}
+
 async function commentRow(id: string): Promise<{ path: string; depth: number } | null> {
   const ctx = createExecutionContext();
   const row = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
@@ -247,6 +256,39 @@ describe("POST /comments", () => {
     expect(empty.status).toBe(400);
     const over = await createComment(reader, { postId, markdownSource: "a".repeat(10_001) });
     expect(over.status).toBe(400);
+  });
+});
+
+describe("block enforcement (M4)", () => {
+  it("403s BLOCKED commenting on a post whose author has blocked the actor", async () => {
+    const poster = await onboardedActor();
+    const commenter = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    await insertBlock(poster.userId, commenter.userId);
+    const response = await createComment(commenter, { postId: p, markdownSource: "x" });
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { code: string }).code).toBe("BLOCKED");
+  });
+
+  it("403s BLOCKED replying to a comment whose author (parent author) has blocked the actor", async () => {
+    const poster = await onboardedActor();
+    const parentAuthor = await onboardedActor();
+    const replier = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const top = await createComment(parentAuthor, { postId: p, markdownSource: "top" });
+    const { id: parentId } = (await top.json()) as { id: string };
+    await insertBlock(parentAuthor.userId, replier.userId);
+    const response = await createComment(replier, { postId: p, parentId, markdownSource: "re" });
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { code: string }).code).toBe("BLOCKED");
+  });
+
+  it("a NON-blocked commenter still succeeds (guard against over-blocking)", async () => {
+    const poster = await onboardedActor();
+    const commenter = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const response = await createComment(commenter, { postId: p, markdownSource: "x" });
+    expect(response.status).toBe(201);
   });
 });
 

@@ -17,6 +17,7 @@ import { purgeTags } from "../cache/purge";
 import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
+import { isBlockedBy } from "../moderation/is-blocked";
 import { notify } from "../notifications/create";
 import { notifyPostLive } from "../notifications/post-live";
 
@@ -89,6 +90,17 @@ export async function handleCreateComment(
         parentPath = row.path;
         depth = row.depth + 1;
         parentAuthorId = row.authorId;
+      }
+
+      // Block enforcement (design doc §7): the actor is refused if EITHER the
+      // post author or (on a reply) the parent commenter has blocked them —
+      // both are "the interaction's target" here. Checked on the SAME
+      // connection, before the write.
+      if (await isBlockedBy(c, postAuthorId, userId)) {
+        return { error: errorResponse("BLOCKED", 403) };
+      }
+      if (parentAuthorId !== null && (await isBlockedBy(c, parentAuthorId, userId))) {
+        return { error: errorResponse("BLOCKED", 403) };
       }
 
       const { rows } = await c.query<{ id: string }>(

@@ -12,6 +12,7 @@ import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
+import { isBlockedBy } from "../moderation/is-blocked";
 import { notify } from "../notifications/create";
 import { notifyPostLive } from "../notifications/post-live";
 
@@ -85,6 +86,12 @@ export async function handleAddReaction(
         recipientId = row.authorId;
         notifPostId = row.postId;
         notifCommentId = commentId;
+      }
+
+      // Block enforcement (design doc §7): the recipient (target) may have
+      // blocked this actor — refuse before the write, on the SAME connection.
+      if (recipientId !== null && (await isBlockedBy(c, recipientId, userId))) {
+        return errorResponse("BLOCKED", 403);
       }
 
       const { rowCount } = await c.query(
