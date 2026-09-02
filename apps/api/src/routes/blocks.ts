@@ -112,5 +112,8 @@ export async function handleUnblock(
 
   ctx.waitUntil(bustFolloweeCache(env, userId));
   ctx.waitUntil(bustFolloweeCache(env, blockedId));
-  return new Response(null, { status: 204 });
+  // 200, not 204: this codebase returns 200 for every mutation, DELETEs
+  // included (handleUnfollow follows.ts:96, handleDeletePost posts.ts). A lone
+  // 204 here would make unblock the one DELETE a uniform client must special-case.
+  return new Response(null, { status: 200 });
 }

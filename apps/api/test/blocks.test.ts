@@ -174,12 +174,12 @@ describe("POST /blocks", () => {
 });
 
 describe("DELETE /blocks/:blockedId", () => {
-  it("removes the row and 204s", async () => {
+  it("removes the row and 200s (codebase mutation convention)", async () => {
     const blocker = await createVerifiedActor();
     const blocked = await createVerifiedActor();
     await block(blocker, blocked.userId);
     const response = await unblock(blocker, blocked.userId);
-    expect(response.status).toBe(204);
+    expect(response.status).toBe(200);
     expect(await blockRowCount(blocker.userId, blocked.userId)).toBe(0);
   });
 
@@ -218,7 +218,7 @@ describe("DELETE /blocks/:blockedId", () => {
       ctx,
     );
     await waitOnExecutionContext(ctx);
-    expect(response.status).toBe(204);
+    expect(response.status).toBe(200);
     expect(busted.sort()).toEqual(
       [`followees:${blocker.userId}`, `followees:${blocked.userId}`].sort(),
     );
