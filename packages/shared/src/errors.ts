@@ -24,6 +24,8 @@ export type ApiErrorCode =
   | "INVALID_TOKEN"          // 400 — a verification token is unknown/expired/used
   | "CANNOT_FOLLOW_SELF"     // 400 — a user cannot follow themselves (M2.1)
   | "INVALID_REACTION_KIND"  // 400 — kind not in the four-tone set (M2.2)
+  | "CANNOT_BLOCK_SELF"      // 400 — a user cannot block themselves (M4)
+  | "INVALID_REPORT_TARGET"  // 400 — zero or both of postId/commentId set (M4)
   // --- authentication ------------------------------------------------------
   | "UNAUTHORIZED"           // 401 — no usable session (pipeline)
   | "LOGIN_REQUIRED"         // 401 — this route needs a session to proceed
@@ -33,10 +35,13 @@ export type ApiErrorCode =
   | "EMAIL_NOT_VERIFIED"     // 403 — the soft gate
   | "ALREADY_VERIFIED"       // 409 — resend-verification on a verified account (T10)
   | "QUOTA_EXCEEDED"         // 403 — per-user media quota (T8)
+  | "BLOCKED"                // 403 — actor is blocked by the interaction's target (M4)
   // --- resources -----------------------------------------------------------
   | "NOT_FOUND"              // 404 — no such route, or no such visible resource
   | "EMAIL_TAKEN"            // 409 — a VERIFIED duplicate at signup
   | "SLUG_TAKEN"             // 409 — could not place a unique slug (T9)
+  | "ALREADY_BLOCKED"        // 409 — reserved for future use; block is idempotent (M4)
+  | "NOT_BLOCKED"            // 404 — unblock of a pair that is not blocked (M4)
   // USERNAME_TAKEN is now also signup's collision code (handle-at-signup Task
   // 3) — no longer M2.1-only. USERNAME_REQUIRED/USERNAME_ALREADY_SET, the old
   // post-signup "choose a handle" flow's codes, are RETIRED (handle-at-signup

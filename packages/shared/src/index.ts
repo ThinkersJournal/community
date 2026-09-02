@@ -2,6 +2,7 @@ export * from './cookie';
 export * from './engagement';
 export * from './engagement-write';
 export * from './errors';
+export * from './moderation';
 export * from './notifications';
 export * from './notifications-categories';
 export * from './notifications-prefs';
