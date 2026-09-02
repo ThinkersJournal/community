@@ -25,6 +25,18 @@ async function seedFollow(followerId: string, followeeId: string): Promise<void>
   await waitOnExecutionContext(ctx);
 }
 
+/** Insert a `blocks` row directly (M4 Task 6 — feed filtering, not the block route itself). */
+async function seedBlock(blockerId: string, blockedId: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [
+      blockerId,
+      blockedId,
+    ]),
+  );
+  await waitOnExecutionContext(ctx);
+}
+
 /** Insert a post directly (status controls visibility) and return its id. */
 async function seedPost(authorId: string, title: string, status: "draft" | "published"): Promise<string> {
   const ctx = createExecutionContext();
@@ -139,6 +151,24 @@ describe("GET /feed", () => {
   it("400s on a malformed cursor", async () => {
     const response = await getFeed(viewer, "not-a-uuid");
     expect(response.status).toBe(400);
+  });
+
+  it("filters out a BLOCKED followee's post while a non-blocked followee's post still shows (M4 Task 6)", async () => {
+    const filterViewer = await createVerifiedActor();
+    const blockedFollowee = await createVerifiedActor();
+    const okFollowee = await createVerifiedActor();
+    await seedFollow(filterViewer.userId, blockedFollowee.userId);
+    await seedFollow(filterViewer.userId, okFollowee.userId);
+    await seedBlock(filterViewer.userId, blockedFollowee.userId);
+
+    await seedPost(blockedFollowee.userId, "blocked-author-post", "published");
+    await seedPost(okFollowee.userId, "ok-author-post", "published");
+
+    const body = (await getFeed(filterViewer).then((r) => r.json())) as {
+      posts: { title: string }[];
+    };
+    expect(body.posts.some((p) => p.title === "blocked-author-post")).toBe(false);
+    expect(body.posts.some((p) => p.title === "ok-author-post")).toBe(true);
   });
 
   // ⚠️ PAGE-BOUNDARY COVERAGE — the keyset `+1`-sentinel/`nextCursor` path is

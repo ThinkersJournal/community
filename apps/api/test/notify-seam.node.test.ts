@@ -97,3 +97,55 @@ describe("notify()", () => {
     await client.query("DELETE FROM notifications WHERE recipient_id=$1", [alice]);
   });
 });
+
+// M4 Task 6 — block suppression (design doc §7): a block between recipient and
+// actor, in EITHER direction, suppresses the notification entirely (no row, no
+// push) — mirrors the self-suppression discipline just above but keyed off
+// `blocks` instead of `recipientId === actorId`. Uses its own pair (carol/dave)
+// so a leftover `blocks` row can never leak into the alice/bob cases above.
+describe("notify() suppresses across a block, either direction (M4)", () => {
+  let carol: string;
+  let dave: string;
+
+  function spy(): { env: { NOTIFY: { getByName: (id: string) => { push: (k: string) => void } } }; pushed: string[] } {
+    const pushed: string[] = [];
+    return {
+      env: { NOTIFY: { getByName: (id: string) => ({ push: () => { pushed.push(id); } }) } },
+      pushed,
+    };
+  }
+
+  beforeAll(async () => {
+    carol = await makeUser();
+    dave = await makeUser();
+  });
+  afterAll(async () => {
+    await client.query("DELETE FROM users WHERE id = ANY($1)", [[carol, dave]]);
+  });
+
+  it("recipient has blocked actor → no row, no push", async () => {
+    await client.query("INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1,$2)", [carol, dave]);
+    const { env: spyEnv, pushed } = spy();
+    await notify(client, spyEnv, fakeCtx, { recipientId: carol, actorId: dave, kind: "follow" });
+    expect(await count(carol)).toBe(0);
+    expect(pushed).toEqual([]);
+    await client.query("DELETE FROM blocks WHERE blocker_id=$1 AND blocked_id=$2", [carol, dave]);
+  });
+
+  it("actor has blocked recipient (reverse direction) → no row, no push", async () => {
+    await client.query("INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1,$2)", [dave, carol]);
+    const { env: spyEnv, pushed } = spy();
+    await notify(client, spyEnv, fakeCtx, { recipientId: carol, actorId: dave, kind: "follow" });
+    expect(await count(carol)).toBe(0);
+    expect(pushed).toEqual([]);
+    await client.query("DELETE FROM blocks WHERE blocker_id=$1 AND blocked_id=$2", [dave, carol]);
+  });
+
+  it("a non-blocked pair still fires (guard against over-suppression)", async () => {
+    const { env: spyEnv, pushed } = spy();
+    await notify(client, spyEnv, fakeCtx, { recipientId: carol, actorId: dave, kind: "follow" });
+    expect(await count(carol)).toBe(1);
+    expect(pushed).toEqual([carol]);
+    await client.query("DELETE FROM notifications WHERE recipient_id=$1", [carol]);
+  });
+});

@@ -4,6 +4,13 @@
  * cache key; a cached feed would be one viewer's graph served to everyone).
  * uuidv7 post ids are time-ordered, so ORDER BY id DESC is newest-first with no
  * created_at index — served by posts_author_published_key.
+ *
+ * BLOCK FILTERING (M4 Task 6 / design doc §7): a post whose author the viewer
+ * has blocked is dropped via `NOT EXISTS (... blocks WHERE blocker_id =
+ * <viewer> AND blocked_id = p.author_id)` — the viewer's OWN block list, not
+ * the enforcement-predicate direction used at write time (which asks "has the
+ * TARGET blocked the ACTOR"). Reading is symmetric: it's always the viewer's
+ * blocks that filter the viewer's feed.
  */
 import { MAX_CURSOR } from "@thinkersjournal/shared";
 
@@ -57,9 +64,12 @@ export async function handleFeed(
           WHERE p.author_id = ANY($1::uuid[])
             AND p.status = 'published'
             AND p.id < $2
+            AND NOT EXISTS (
+              SELECT 1 FROM blocks WHERE blocker_id = $3 AND blocked_id = p.author_id
+            )
           ORDER BY p.id DESC
           LIMIT ${PAGE_SIZE + 1}`,
-        [followeeIds, cursor],
+        [followeeIds, cursor, session.userId],
       );
       const hasMore = rows.length > PAGE_SIZE;
       const page = rows.slice(0, PAGE_SIZE);
