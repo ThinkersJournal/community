@@ -75,6 +75,14 @@ async function attachTag(postId: string, tId: string): Promise<void> {
   await waitOnExecutionContext(ctx);
 }
 
+/** Auto-hide a post directly (M4 Task 7). */
+async function hidePost(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
 const U = "https://api.test";
 
 describe("GET /public/tags", () => {
@@ -105,6 +113,34 @@ describe("GET /public/tags", () => {
     expect(popularIdx).toBeGreaterThanOrEqual(0);
     expect(rareIdx).toBeGreaterThanOrEqual(0);
     expect(popularIdx).toBeLessThan(rareIdx); // higher count sorts first
+  });
+
+  it("a tag whose only post is auto-HIDDEN is absent; a mixed tag counts only the visible post (M4 Task 7)", async () => {
+    const author = await seedAuthor();
+    const suffix = crypto.randomUUID().slice(0, 8);
+    const hiddenOnlySlug = `hiddenonly-${suffix}`;
+    const mixedSlug = `mixed-${suffix}`;
+    const hiddenOnly = await tagId(hiddenOnlySlug);
+    const mixed = await tagId(mixedSlug);
+
+    // hiddenOnly: its ONE post is hidden → the tag must vanish from the index.
+    const hp = await insertPost(author, "HiddenOnly Post", "published");
+    await attachTag(hp, hiddenOnly);
+    await hidePost(hp);
+
+    // mixed: one visible + one hidden → count must reflect ONLY the visible post.
+    const vis = await insertPost(author, "Mixed Visible", "published");
+    await attachTag(vis, mixed);
+    const hid = await insertPost(author, "Mixed Hidden", "published");
+    await attachTag(hid, mixed);
+    await hidePost(hid);
+
+    const body = (await (await fetchWorker(`${U}/public/tags`)).json()) as {
+      tags: { slug: string; label: string; count: number }[];
+    };
+    const bySlug = new Map(body.tags.map((t) => [t.slug.toLowerCase(), t]));
+    expect(bySlug.has(hiddenOnlySlug)).toBe(false); // hidden-only tag is gone
+    expect(bySlug.get(mixedSlug)?.count).toBe(1);    // only the visible post counts
   });
 
   it("a tag with only a draft has count 0 and is absent — drafts don't inflate counts", async () => {

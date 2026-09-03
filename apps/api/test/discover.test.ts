@@ -79,6 +79,14 @@ async function attachTag(postId: string, tId: string): Promise<void> {
   await waitOnExecutionContext(ctx);
 }
 
+/** Auto-hide a post directly (M4 Task 7). */
+async function hidePost(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
 const U = "https://api.test";
 
 // The smallest uuid strictly greater than `id` (its 128-bit successor). Querying
@@ -116,6 +124,23 @@ describe("GET /public/discover", () => {
     // whatever came back is sorted newest-first (id DESC, v7 = time order)
     const desc = [...ids].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
     expect(ids).toEqual(desc);
+  });
+
+  it("excludes an auto-HIDDEN post while a non-hidden one is present (M4 Task 7)", async () => {
+    const author = await seedAuthor();
+    // Hidden first (older id) so it sits INSIDE the cursor window below and its
+    // absence proves the hidden_at filter, not the cursor bound.
+    const hiddenId = await insertPost(author, "Discover Hidden", "published");
+    const pubId = await insertPost(author, "Discover Visible", "published");
+    await hidePost(hiddenId);
+    const r = await fetchWorker(
+      `${U}/public/discover?cursor=${encodeURIComponent(uuidSuccessor(pubId))}`,
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { posts: { id: string }[] };
+    const ids = body.posts.map((p) => p.id);
+    expect(ids).toContain(pubId);       // control: the non-hidden post is result #1
+    expect(ids).not.toContain(hiddenId); // the hidden post is gone
   });
 
   it("keyset-paginates: a full page yields a nextCursor onto a non-overlapping older page", async () => {

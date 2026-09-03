@@ -92,6 +92,14 @@ async function attachTag(postId: string, tId: string): Promise<void> {
   await waitOnExecutionContext(ctx);
 }
 
+/** Auto-hide a post directly (M4 Task 7). */
+async function hidePost(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
 const U = "https://api.test";
 
 // The smallest uuid strictly greater than `id` (its 128-bit successor). Querying
@@ -130,6 +138,28 @@ describe("GET /public/tag", () => {
     const ids = body.posts.map((p) => p.id);
     expect(ids[0]).toBe(pubId);          // the just-published post is result #1 (newest <= pubId)
     expect(ids).not.toContain(draftId);  // drafts never surface (excluded by status, not cursor)
+  });
+
+  it("excludes an auto-HIDDEN post carrying the tag while a non-hidden one remains (M4 Task 7)", async () => {
+    const author = await seedAuthor();
+    const slug = `topic-${crypto.randomUUID().slice(0, 8)}`;
+    const t = await tagId(slug);
+    // Hidden first (older id) so it sits INSIDE the cursor window and its absence
+    // proves the hidden_at filter, not the cursor bound.
+    const hiddenId = await insertPost(author, "Tag Hidden", "published");
+    await attachTag(hiddenId, t);
+    const pubId = await insertPost(author, "Tag Visible", "published");
+    await attachTag(pubId, t);
+    await hidePost(hiddenId);
+
+    const r = await fetchWorker(
+      `${U}/public/tag?slug=${slug}&cursor=${encodeURIComponent(uuidSuccessor(pubId))}`,
+    );
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { posts: { id: string }[] };
+    const ids = body.posts.map((p) => p.id);
+    expect(ids).toContain(pubId);        // control: non-hidden tagged post present
+    expect(ids).not.toContain(hiddenId); // hidden tagged post gone
   });
 
   it("keyset-paginates: a full page yields a nextCursor onto a non-overlapping older page", async () => {

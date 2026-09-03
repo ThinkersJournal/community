@@ -66,9 +66,11 @@ export async function handleAddReaction(
       let notifCommentId: string | undefined;
       if (postId !== undefined) {
         const post = await c.query<{ status: string; authorId: string }>(
-          `SELECT status, author_id AS "authorId" FROM posts WHERE id = $1`,
+          `SELECT status, author_id AS "authorId" FROM posts WHERE id = $1 AND hidden_at IS NULL`,
           [postId],
         );
+        // An auto-hidden post returns no row here → the same NOT_FOUND a
+        // nonexistent or draft post gives (M4 Task 7).
         if (post.rows[0]?.status !== "published") return errorResponse("NOT_FOUND", 404);
         recipientId = post.rows[0].authorId;
         notifPostId = postId;
@@ -76,8 +78,8 @@ export async function handleAddReaction(
         // A comment target must be live AND sit on a published post (draft parity).
         const comment = await c.query<{ deleted: boolean; authorId: string; postId: string }>(
           `SELECT (c.deleted_at IS NOT NULL) AS deleted, c.author_id AS "authorId", c.post_id AS "postId"
-             FROM comments c JOIN posts p ON p.id = c.post_id AND p.status = 'published'
-            WHERE c.id = $1`,
+             FROM comments c JOIN posts p ON p.id = c.post_id AND p.status = 'published' AND p.hidden_at IS NULL
+            WHERE c.id = $1 AND c.hidden_at IS NULL`,
           [commentId],
         );
         const row = comment.rows[0];
@@ -182,7 +184,7 @@ function zeroCounts(): ReactionCounts {
 async function postIsPublished(env: Env, ctx: ExecutionContext, postId: string): Promise<boolean> {
   return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<{ status: string }>(
-      "SELECT status FROM posts WHERE id = $1",
+      "SELECT status FROM posts WHERE id = $1 AND hidden_at IS NULL",
       [postId],
     );
     return rows[0]?.status === "published";
@@ -206,7 +208,7 @@ export async function handlePublicReactions(
     const comments = await c.query<{ commentId: string; kind: ReactionKind; n: number }>(
       `SELECT r.comment_id AS "commentId", r.kind, count(*)::int AS n
          FROM reactions r JOIN comments c2 ON c2.id = r.comment_id
-        WHERE c2.post_id = $1
+        WHERE c2.post_id = $1 AND c2.hidden_at IS NULL
         GROUP BY r.comment_id, r.kind`,
       [postId],
     );
@@ -242,7 +244,7 @@ export async function handleMyReactions(
     const comments = await c.query<{ commentId: string; kind: ReactionKind }>(
       `SELECT r.comment_id AS "commentId", r.kind
          FROM reactions r JOIN comments c2 ON c2.id = r.comment_id
-        WHERE r.user_id = $1 AND c2.post_id = $2`,
+        WHERE r.user_id = $1 AND c2.post_id = $2 AND c2.hidden_at IS NULL`,
       [session.userId, postId],
     );
     const result: MyReactions = { post: post.rows.map((r) => r.kind), comments: {} };

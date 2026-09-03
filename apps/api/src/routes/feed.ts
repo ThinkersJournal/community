@@ -63,6 +63,7 @@ export async function handleFeed(
            JOIN profiles pr ON pr.user_id = p.author_id
           WHERE p.author_id = ANY($1::uuid[])
             AND p.status = 'published'
+            AND p.hidden_at IS NULL
             AND p.id < $2
             AND NOT EXISTS (
               SELECT 1 FROM blocks WHERE blocker_id = $3 AND blocked_id = p.author_id

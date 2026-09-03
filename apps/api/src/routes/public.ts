@@ -123,7 +123,7 @@ export async function handlePublicPost(
               p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
          FROM posts p
          JOIN profiles pr ON pr.user_id = p.author_id
-        WHERE pr.username = $1 AND p.slug = $2 AND p.status = 'published'`,
+        WHERE pr.username = $1 AND p.slug = $2 AND p.status = 'published' AND p.hidden_at IS NULL`,
       [username, slug],
     );
     return (rows[0] ?? null) as PublicPost | null;
@@ -165,7 +165,7 @@ export async function handlePublicProfile(
                 left(markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
                 published_at AS "publishedAt", updated_at AS "updatedAt", ${TAGS_AGG}
            FROM posts p
-          WHERE author_id = $1 AND status = 'published' AND id < $2
+          WHERE author_id = $1 AND status = 'published' AND hidden_at IS NULL AND id < $2
           -- v7 ids are time-ordered, so this IS newest-first. No created_at
           -- index exists, and none is needed. Served by posts_author_published_key.
           ORDER BY id DESC
@@ -245,7 +245,7 @@ export async function handlePublicRecent(
               p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
          FROM posts p
          JOIN profiles pr ON pr.user_id = p.author_id
-        WHERE p.status = 'published'
+        WHERE p.status = 'published' AND p.hidden_at IS NULL
         ORDER BY p.id DESC
         LIMIT $1`,
       [limit],
@@ -274,7 +274,7 @@ export async function handlePublicDiscover(
                 p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
            FROM posts p
            JOIN profiles pr ON pr.user_id = p.author_id
-          WHERE p.status = 'published' AND p.id < $1
+          WHERE p.status = 'published' AND p.hidden_at IS NULL AND p.id < $1
           ORDER BY p.id DESC
           LIMIT ${PAGE_SIZE + 1}`,
         [cursor],
@@ -354,7 +354,7 @@ export async function handlePublicTag(
         `SELECT t.slug, t.label FROM tags t
           WHERE t.slug = $1
             AND EXISTS (SELECT 1 FROM post_tags pt JOIN posts p ON p.id = pt.post_id
-                         WHERE pt.tag_id = t.id AND p.status = 'published')`,
+                         WHERE pt.tag_id = t.id AND p.status = 'published' AND p.hidden_at IS NULL)`,
         [slug],
       );
       const tag = tagRows[0] ?? { slug, label: slug };
@@ -371,7 +371,7 @@ export async function handlePublicTag(
            JOIN posts p     ON p.id = ptx.post_id
            JOIN profiles pr ON pr.user_id = p.author_id
            JOIN tags te     ON te.id = ptx.tag_id
-          WHERE te.slug = $1 AND p.status = 'published' AND p.id < $2
+          WHERE te.slug = $1 AND p.status = 'published' AND p.hidden_at IS NULL AND p.id < $2
           ORDER BY p.id DESC
           LIMIT ${PAGE_SIZE + 1}`,
         [slug, cursor],
@@ -413,7 +413,7 @@ export async function handlePublicTags(
          FROM tags t
          JOIN post_tags pt ON pt.tag_id = t.id
          JOIN posts p      ON p.id = pt.post_id
-        WHERE p.status = 'published'
+        WHERE p.status = 'published' AND p.hidden_at IS NULL
         GROUP BY t.slug, t.label
         ORDER BY count DESC, t.slug ASC
         LIMIT ${TAGS_INDEX_MAX}`,

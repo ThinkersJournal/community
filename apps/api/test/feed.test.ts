@@ -78,6 +78,14 @@ async function attachTag(postId: string, tId: string): Promise<void> {
   await waitOnExecutionContext(ctx);
 }
 
+/** Auto-hide a post directly (M4 Task 7 — feed hidden-content filtering). */
+async function hidePost(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
 function getFeed(actor: Actor, cursor?: string): Promise<Response> {
   const q = cursor === undefined ? "" : `?cursor=${cursor}`;
   return fetchWorker(new Request(`https://api.test/feed${q}`, { headers: { Cookie: actor.cookie } }));
@@ -169,6 +177,22 @@ describe("GET /feed", () => {
     };
     expect(body.posts.some((p) => p.title === "blocked-author-post")).toBe(false);
     expect(body.posts.some((p) => p.title === "ok-author-post")).toBe(true);
+  });
+
+  it("filters out a followed author's auto-HIDDEN post while a non-hidden one still shows (M4 Task 7)", async () => {
+    const filterViewer = await createVerifiedActor();
+    const followee = await createVerifiedActor();
+    await seedFollow(filterViewer.userId, followee.userId);
+
+    const hidden = await seedPost(followee.userId, "feed-hidden-post", "published");
+    await seedPost(followee.userId, "feed-visible-post", "published");
+    await hidePost(hidden);
+
+    const body = (await getFeed(filterViewer).then((r) => r.json())) as {
+      posts: { title: string }[];
+    };
+    expect(body.posts.some((p) => p.title === "feed-hidden-post")).toBe(false);
+    expect(body.posts.some((p) => p.title === "feed-visible-post")).toBe(true);
   });
 
   // ⚠️ PAGE-BOUNDARY COVERAGE — the keyset `+1`-sentinel/`nextCursor` path is

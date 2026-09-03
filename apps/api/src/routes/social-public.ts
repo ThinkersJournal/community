@@ -154,7 +154,7 @@ export async function handlePublicAuthors(
            FROM (
              SELECT DISTINCT ON (author_id) author_id, id AS latest_post_id
                FROM posts
-              WHERE status = 'published'
+              WHERE status = 'published' AND hidden_at IS NULL
               ORDER BY author_id, id DESC
            ) latest
            JOIN profiles pr ON pr.user_id = latest.author_id

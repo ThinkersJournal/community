@@ -70,9 +70,53 @@ async function seedAuthorWithNPosts(term: string, n: number): Promise<string[]> 
   return titles;
 }
 
+/**
+ * Seed ONE author with two published posts sharing `term`; hide one. Returns the
+ * two titles so the test can assert the visible one is found and the hidden one
+ * is not (M4 Task 7 — hidden content must not leak through search).
+ */
+async function seedVisibleAndHidden(term: string): Promise<{ visible: string; hidden: string }> {
+  const ctx = createExecutionContext();
+  const visible = `${term} visible one`;
+  const hidden = `${term} hidden one`;
+  await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `INSERT INTO users (email, password_hash) VALUES ($1,'x') RETURNING id`,
+      [`s-${crypto.randomUUID()}@t.test`]);
+    const id = rows[0]!.id;
+    created.push(id);
+    await c.query(
+      `INSERT INTO profiles (user_id, username, display_name, bio)
+       VALUES ($1,$2,'Hidden Search Author','bio text')`,
+      [id, `hsa_${crypto.randomUUID().slice(0, 8)}`]);
+    await c.query(
+      `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+       VALUES ($1,$2,$3,'body','published',now())`,
+      [id, visible, `sl-${crypto.randomUUID()}`]);
+    const { rows: h } = await c.query<{ id: string }>(
+      `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+       VALUES ($1,$2,$3,'body','published',now()) RETURNING id`,
+      [id, hidden, `sl-${crypto.randomUUID()}`]);
+    await c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [h[0]!.id]);
+  });
+  await waitOnExecutionContext(ctx);
+  return { visible, hidden };
+}
+
 const U = "https://api.test";
 
 describe("GET /public/search", () => {
+  it("excludes an auto-HIDDEN post from search while a non-hidden one is still found (M4 Task 7)", async () => {
+    const term = "zzhiddensearchterm";
+    const { visible, hidden } = await seedVisibleAndHidden(term);
+    const r = await fetchWorker(`${U}/public/search?q=${term}&type=posts`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { results: { title: string }[] };
+    const titles = body.results.map((p) => p.title);
+    expect(titles).toContain(visible);
+    expect(titles).not.toContain(hidden);
+  });
+
   it("finds a published post by a partial+typo query, no session needed", async () => {
     await seedAuthorWithPost("Quantum Chromodynamics Primer");
     const r = await fetchWorker(`${U}/public/search?q=${encodeURIComponent("chromodynamcs")}&type=posts`);
