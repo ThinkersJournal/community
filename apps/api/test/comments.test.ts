@@ -108,6 +108,22 @@ async function insertBlock(blockerId: string, blockedId: string): Promise<void> 
   await waitOnExecutionContext(ctx);
 }
 
+/** Auto-hide a post directly (M4 Task 7), mirroring reactions.test.ts. */
+async function hidePost(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
+/** Auto-hide a comment directly (M4 Task 7), mirroring reactions.test.ts. */
+async function hideComment(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE comments SET hidden_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
 async function commentRow(id: string): Promise<{ path: string; depth: number } | null> {
   const ctx = createExecutionContext();
   const row = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
@@ -289,6 +305,43 @@ describe("block enforcement (M4)", () => {
     const p = await insertPost(poster.userId, "published");
     const response = await createComment(commenter, { postId: p, markdownSource: "x" });
     expect(response.status).toBe(201);
+  });
+});
+
+// ⚠️ BUDGET: every case below mints its OWN fresh onboardedActor()s (never
+// `reader`/`author`/`editor`/`modAuthor`/`deleter`), each doing a handful of
+// `createComment` calls well under COMMENT_LIMITER's 10/60s window.
+describe("auto-hidden target enforcement (M4)", () => {
+  it("404s NOT_FOUND commenting on an auto-HIDDEN post (parity with nonexistent), while a non-hidden post still 201s", async () => {
+    const poster = await onboardedActor();
+    const commenter = await onboardedActor();
+    const hidden = await insertPost(poster.userId, "published");
+    await hidePost(hidden);
+    const dead = await createComment(commenter, { postId: hidden, markdownSource: "x" });
+    expect(dead.status).toBe(404);
+    expect(((await dead.json()) as { code: string }).code).toBe("NOT_FOUND");
+    // Control: a non-hidden post is still commentable.
+    const visible = await insertPost(poster.userId, "published");
+    expect((await createComment(commenter, { postId: visible, markdownSource: "x" })).status).toBe(201);
+  });
+
+  it("404s COMMENT_NOT_FOUND replying under an auto-HIDDEN parent comment, while a non-hidden parent still 201s", async () => {
+    const poster = await onboardedActor();
+    const parentAuthor = await onboardedActor();
+    const replier = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const top = await createComment(parentAuthor, { postId: p, markdownSource: "top" });
+    const { id: parentId } = (await top.json()) as { id: string };
+    await hideComment(parentId);
+    const dead = await createComment(replier, { postId: p, parentId, markdownSource: "re" });
+    expect(dead.status).toBe(404);
+    expect(((await dead.json()) as { code: string }).code).toBe("COMMENT_NOT_FOUND");
+    // Control: a non-hidden parent on the same post still accepts a reply.
+    const top2 = await createComment(parentAuthor, { postId: p, markdownSource: "top2" });
+    const { id: parent2 } = (await top2.json()) as { id: string };
+    expect(
+      (await createComment(replier, { postId: p, parentId: parent2, markdownSource: "re2" })).status,
+    ).toBe(201);
   });
 });
 

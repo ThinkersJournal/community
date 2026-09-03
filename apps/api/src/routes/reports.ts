@@ -37,7 +37,19 @@ export async function handleCreateReport(
   }
   const parsed = ReportInput.safeParse(body);
   if (!parsed.success) {
-    return errorResponse("INVALID_REPORT_TARGET", 400);
+    // INVALID_REPORT_TARGET means the ONE thing it says: not exactly one of
+    // postId/commentId — the schema's `.refine()`, which emits a single `custom`
+    // issue with this message (and only runs once the object shape parses, so it
+    // never coexists with field issues). Every other parse failure (bad reason
+    // enum, non-uuid id) is a generic INVALID_INPUT with `fields`, mirroring
+    // blocks.ts / comments.ts / reactions.ts.
+    const isTargetRefine = parsed.error.issues.some(
+      (i) => i.code === "custom" && i.message === "exactly one of postId/commentId",
+    );
+    if (isTargetRefine) return errorResponse("INVALID_REPORT_TARGET", 400);
+    return errorResponse("INVALID_INPUT", 400, {
+      fields: parsed.error.issues.map((i) => i.path.join(".")),
+    });
   }
   const { postId, commentId, reason } = parsed.data;
 

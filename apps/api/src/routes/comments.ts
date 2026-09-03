@@ -63,9 +63,12 @@ export async function handleCreateComment(
   try {
     outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       // Draft parity: an unpublished post 404s exactly like a nonexistent one.
+      // An auto-hidden post (moderation review) is also not a valid target, so
+      // `hidden_at IS NULL` gives it the SAME NOT_FOUND — never a comment row on
+      // hidden content, never a notify() to its author (mirrors reactions.ts).
       // authorId is also the top-level notify recipient (post_comment).
       const post = await c.query<{ status: string; authorId: string }>(
-        `SELECT status, author_id AS "authorId" FROM posts WHERE id = $1`,
+        `SELECT status, author_id AS "authorId" FROM posts WHERE id = $1 AND hidden_at IS NULL`,
         [postId],
       );
       if (post.rows[0]?.status !== "published") {
@@ -79,11 +82,12 @@ export async function handleCreateComment(
       if (parentId !== undefined) {
         const parent = await c.query<{ path: string; depth: number; deleted: boolean; authorId: string }>(
           `SELECT path, depth, (deleted_at IS NOT NULL) AS deleted, author_id AS "authorId"
-             FROM comments WHERE id = $1 AND post_id = $2`,
+             FROM comments WHERE id = $1 AND post_id = $2 AND hidden_at IS NULL`,
           [parentId, postId],
         );
         const row = parent.rows[0];
-        // Cross-post parents 404 identically to nonexistent ones (no probe signal).
+        // Cross-post AND auto-hidden parents 404 identically to nonexistent ones
+        // (no probe signal; mirrors reactions.ts's hidden-comment handling).
         if (row === undefined) return { error: errorResponse("COMMENT_NOT_FOUND", 404) };
         if (row.deleted) return { error: errorResponse("COMMENT_DELETED", 409) };
         if (row.depth >= MAX_DEPTH) return { error: errorResponse("COMMENT_DEPTH_EXCEEDED", 409) };

@@ -108,6 +108,15 @@ describe("POST /reports", () => {
     const response = await report(alice, { postId: crypto.randomUUID(), reason: "spam" });
     expect(response.status).toBe(404);
   });
+
+  it("400s INVALID_INPUT (not INVALID_REPORT_TARGET) for a bad reason on a valid target", async () => {
+    const postId = await createPublished(author);
+    const response = await report(alice, { postId, reason: "not-a-reason" });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { code: string; fields?: string[] };
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.fields).toContain("reason");
+  });
 });
 
 describe("auto-hide (>=3 distinct reporters within 24h)", () => {
