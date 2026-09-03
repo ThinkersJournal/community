@@ -36,7 +36,7 @@
  * succeeds as a no-op (`rowCount` 0) and pushes nothing; only a genuinely NEW
  * row (`rowCount` 1) pushes.
  */
-import { isBlockedBy } from "../moderation/is-blocked";
+import { isBlockedEitherWay } from "../moderation/is-blocked";
 
 import type { NotificationKind } from "@thinkersjournal/shared";
 import type { Client } from "pg";
@@ -83,16 +83,13 @@ export async function notify(
   try {
     // Block suppression (M4 Task 6 / design doc §7): a block between the two
     // parties, in EITHER direction, suppresses the notification entirely — no
-    // row, no push. Reuses the same `isBlockedBy` predicate the follow/comment/
-    // reaction handlers use, on the SAME client passed in. Runs inside this
-    // try so a check against a broken client (e.g. a mock that only implements
-    // `query` and always throws) is swallowed by the same "never throws"
-    // discipline as the insert below.
+    // row, no push. `isBlockedEitherWay` checks both directions in ONE query
+    // (vs. two sequential directional `isBlockedBy` calls), on the SAME client
+    // passed in. Runs inside this try so a check against a broken client (e.g. a
+    // mock that only implements `query` and always throws) is swallowed by the
+    // same "never throws" discipline as the insert below.
     const pgClient = client as unknown as Client;
-    if (
-      (await isBlockedBy(pgClient, ev.recipientId, ev.actorId)) ||
-      (await isBlockedBy(pgClient, ev.actorId, ev.recipientId))
-    ) {
+    if (await isBlockedEitherWay(pgClient, ev.recipientId, ev.actorId)) {
       return;
     }
 

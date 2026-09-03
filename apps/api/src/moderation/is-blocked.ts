@@ -21,3 +21,18 @@ export async function isBlockedBy(c: Client, targetId: string, actorId: string):
   );
   return rows[0]?.blocked ?? false;
 }
+
+/**
+ * DIRECTION-AGNOSTIC block predicate: "is there a block between these two users,
+ * either way round?" Used by the notification seam, where a block in EITHER
+ * direction suppresses the notification (design doc §7). Collapses what would
+ * otherwise be two directional `isBlockedBy` calls into ONE round trip.
+ * Argument order does not matter here — the OR is symmetric.
+ */
+export async function isBlockedEitherWay(c: Client, userA: string, userB: string): Promise<boolean> {
+  const { rows } = await c.query<{ blocked: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM blocks WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)) AS blocked`,
+    [userA, userB],
+  );
+  return rows[0]?.blocked ?? false;
+}

@@ -3,10 +3,11 @@
  * construction: `INSERT ... ON CONFLICT DO NOTHING` against the migration
  * 0012 `reports_reporter_post_unique` / `reports_reporter_comment_unique`
  * constraints, so a repeat report of the same target by the same reporter is
- * a benign no-op, never an error (mirrors follows.ts's follow edge). Every
- * successful insert (new or duplicate) then runs the auto-hide check
+ * a benign no-op, never an error (mirrors follows.ts's follow edge). Only a
+ * genuinely NEW report row (insert `rowCount` > 0) then runs the auto-hide check
  * (src/moderation/auto-hide.ts) — a target drawing >=3 distinct reporters
- * within 24h is hidden pending review.
+ * within 24h is hidden pending review. A duplicate (0 rows) cannot change the
+ * distinct-reporter count, so re-running the check would be redundant DB load.
  */
 import { runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
@@ -67,14 +68,20 @@ export async function handleCreateReport(
       );
       if (rows[0]?.exists !== true) return errorResponse("NOT_FOUND", 404);
 
-      await c.query(
+      const { rowCount } = await c.query(
         `INSERT INTO reports (reporter_id, post_id, comment_id, reason)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT DO NOTHING`,
         [userId, postId ?? null, commentId ?? null, reason],
       );
 
-      await maybeAutoHide(c, postId !== undefined ? { postId } : { commentId: commentId! });
+      // Only a genuinely new report can move the distinct-reporter count; a
+      // duplicate (ON CONFLICT no-op, rowCount 0) leaves it unchanged, so the
+      // auto-hide check would be redundant DB load. Behavior-preserving: the
+      // 3rd distinct reporter's insert already ran the check.
+      if (rowCount && rowCount > 0) {
+        await maybeAutoHide(c, postId !== undefined ? { postId } : { commentId: commentId! });
+      }
       return null;
     });
   } catch (err) {
