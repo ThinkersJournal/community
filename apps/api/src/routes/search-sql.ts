@@ -23,6 +23,7 @@ export const POSTS_SQL = `
     FROM posts p
     JOIN profiles pr ON pr.user_id = p.author_id
    WHERE p.status = 'published'
+     AND p.hidden_at IS NULL
      AND lower($1) <% lower(p.title || ' ' || coalesce(p.markdown_source, ''))
    ORDER BY word_similarity(lower($1), lower(p.title || ' ' || coalesce(p.markdown_source, ''))) DESC,
             p.id DESC

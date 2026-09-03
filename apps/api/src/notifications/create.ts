@@ -21,7 +21,10 @@
  * ⚠️ NEVER THROWS — same rule as cache/purge.ts: neither the INSERT failing nor
  * the push failing may fail or roll back the write that triggered it. Self-events
  * are suppressed here (return before the insert — no row, no push) and forbidden
- * by the DB CHECK (defense in depth).
+ * by the DB CHECK (defense in depth). A BLOCK between recipient and actor, in
+ * EITHER direction, is suppressed the same way (M4 Task 6 / design doc §7) —
+ * the `isBlockedBy` check runs inside the same try as the insert, so a client
+ * that fails on that query is swallowed exactly like an insert failure.
  *
  * ⚠️ NO PUSH ON A FAILED INSERT, AND NONE ON A NO-OP INSERT EITHER. If the row
  * never persisted there is nothing to notify about (a phantom nudge). And the
@@ -33,7 +36,10 @@
  * succeeds as a no-op (`rowCount` 0) and pushes nothing; only a genuinely NEW
  * row (`rowCount` 1) pushes.
  */
+import { isBlockedBy } from "../moderation/is-blocked";
+
 import type { NotificationKind } from "@thinkersjournal/shared";
+import type { Client } from "pg";
 
 interface NotifyClient {
   query(sql: string, params: unknown[]): Promise<{ rowCount: number | null }>;
@@ -75,6 +81,21 @@ export async function notify(
   if (ev.recipientId === ev.actorId) return; // no self-notification
   let rowCount: number | null;
   try {
+    // Block suppression (M4 Task 6 / design doc §7): a block between the two
+    // parties, in EITHER direction, suppresses the notification entirely — no
+    // row, no push. Reuses the same `isBlockedBy` predicate the follow/comment/
+    // reaction handlers use, on the SAME client passed in. Runs inside this
+    // try so a check against a broken client (e.g. a mock that only implements
+    // `query` and always throws) is swallowed by the same "never throws"
+    // discipline as the insert below.
+    const pgClient = client as unknown as Client;
+    if (
+      (await isBlockedBy(pgClient, ev.recipientId, ev.actorId)) ||
+      (await isBlockedBy(pgClient, ev.actorId, ev.recipientId))
+    ) {
+      return;
+    }
+
     ({ rowCount } = await client.query(
       `INSERT INTO notifications
          (recipient_id, actor_id, kind, post_id, comment_id, reaction_kind)

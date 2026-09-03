@@ -25,6 +25,18 @@ async function seedFollow(followerId: string, followeeId: string): Promise<void>
   await waitOnExecutionContext(ctx);
 }
 
+/** Insert a `blocks` row directly (M4 Task 6 — feed filtering, not the block route itself). */
+async function seedBlock(blockerId: string, blockedId: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [
+      blockerId,
+      blockedId,
+    ]),
+  );
+  await waitOnExecutionContext(ctx);
+}
+
 /** Insert a post directly (status controls visibility) and return its id. */
 async function seedPost(authorId: string, title: string, status: "draft" | "published"): Promise<string> {
   const ctx = createExecutionContext();
@@ -63,6 +75,14 @@ async function attachTag(postId: string, tId: string): Promise<void> {
   const ctx = createExecutionContext();
   await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
     c.query(`INSERT INTO post_tags (post_id, tag_id) VALUES ($1,$2)`, [postId, tId]));
+  await waitOnExecutionContext(ctx);
+}
+
+/** Auto-hide a post directly (M4 Task 7 — feed hidden-content filtering). */
+async function hidePost(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [id]));
   await waitOnExecutionContext(ctx);
 }
 
@@ -139,6 +159,40 @@ describe("GET /feed", () => {
   it("400s on a malformed cursor", async () => {
     const response = await getFeed(viewer, "not-a-uuid");
     expect(response.status).toBe(400);
+  });
+
+  it("filters out a BLOCKED followee's post while a non-blocked followee's post still shows (M4 Task 6)", async () => {
+    const filterViewer = await createVerifiedActor();
+    const blockedFollowee = await createVerifiedActor();
+    const okFollowee = await createVerifiedActor();
+    await seedFollow(filterViewer.userId, blockedFollowee.userId);
+    await seedFollow(filterViewer.userId, okFollowee.userId);
+    await seedBlock(filterViewer.userId, blockedFollowee.userId);
+
+    await seedPost(blockedFollowee.userId, "blocked-author-post", "published");
+    await seedPost(okFollowee.userId, "ok-author-post", "published");
+
+    const body = (await getFeed(filterViewer).then((r) => r.json())) as {
+      posts: { title: string }[];
+    };
+    expect(body.posts.some((p) => p.title === "blocked-author-post")).toBe(false);
+    expect(body.posts.some((p) => p.title === "ok-author-post")).toBe(true);
+  });
+
+  it("filters out a followed author's auto-HIDDEN post while a non-hidden one still shows (M4 Task 7)", async () => {
+    const filterViewer = await createVerifiedActor();
+    const followee = await createVerifiedActor();
+    await seedFollow(filterViewer.userId, followee.userId);
+
+    const hidden = await seedPost(followee.userId, "feed-hidden-post", "published");
+    await seedPost(followee.userId, "feed-visible-post", "published");
+    await hidePost(hidden);
+
+    const body = (await getFeed(filterViewer).then((r) => r.json())) as {
+      posts: { title: string }[];
+    };
+    expect(body.posts.some((p) => p.title === "feed-hidden-post")).toBe(false);
+    expect(body.posts.some((p) => p.title === "feed-visible-post")).toBe(true);
   });
 
   // ⚠️ PAGE-BOUNDARY COVERAGE — the keyset `+1`-sentinel/`nextCursor` path is

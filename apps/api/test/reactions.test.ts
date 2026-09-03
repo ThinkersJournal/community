@@ -108,6 +108,31 @@ function unreact(
   );
 }
 
+/** Auto-hide a post directly (M4 Task 7). */
+async function hidePost(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
+/** Auto-hide a comment directly (M4 Task 7). */
+async function hideComment(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE comments SET hidden_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
+/** Insert a `blocks` row directly (Task 4's own route is not exercised here). */
+async function insertBlock(blockerId: string, blockedId: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1, $2)", [blockerId, blockedId]),
+  );
+  await waitOnExecutionContext(ctx);
+}
+
 async function reactionCount(where: { postId?: string; commentId?: string }, kind: string): Promise<number> {
   const ctx = createExecutionContext();
   const n = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
@@ -185,6 +210,79 @@ describe("POST /reactions", () => {
     expect((await react(unverified, { postId, kind: "agree" })).status).toBe(403);
     const noExtraStep = await createVerifiedActor();
     expect((await react(noExtraStep, { postId, kind: "agree" })).status).toBe(201);
+  });
+});
+
+describe("block enforcement (M4)", () => {
+  it("403s BLOCKED reacting to a post whose author has blocked the actor", async () => {
+    const poster = await onboardedActor();
+    const reactor = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    await insertBlock(poster.userId, reactor.userId);
+    const response = await react(reactor, { postId: p, kind: "agree" });
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { code: string }).code).toBe("BLOCKED");
+  });
+
+  it("403s BLOCKED reacting to a comment whose author has blocked the actor", async () => {
+    const poster = await onboardedActor();
+    const commentAuthor = await onboardedActor();
+    const reactor = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const c = await insertComment(p, commentAuthor.userId);
+    await insertBlock(commentAuthor.userId, reactor.userId);
+    const response = await react(reactor, { commentId: c.id, kind: "agree" });
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { code: string }).code).toBe("BLOCKED");
+  });
+
+  it("a NON-blocked reactor still succeeds (guard against over-blocking)", async () => {
+    const poster = await onboardedActor();
+    const reactor = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const response = await react(reactor, { postId: p, kind: "agree" });
+    expect(response.status).toBe(201);
+  });
+});
+
+describe("auto-hide filtering (M4 Task 7)", () => {
+  it("404s reacting to an auto-HIDDEN post (parity with nonexistent), while a non-hidden post still 201s", async () => {
+    const poster = await onboardedActor();
+    const hidden = await insertPost(poster.userId, "published");
+    await hidePost(hidden);
+    expect((await react(reader, { postId: hidden, kind: "agree" })).status).toBe(404);
+    // Control: a non-hidden post is still reactable.
+    const visible = await insertPost(poster.userId, "published");
+    expect((await react(reader, { postId: visible, kind: "agree" })).status).toBe(201);
+  });
+
+  it("404s COMMENT_NOT_FOUND reacting to an auto-HIDDEN comment, while a non-hidden comment still 201s", async () => {
+    const poster = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const hidden = await insertComment(p, poster.userId);
+    await hideComment(hidden.id);
+    const dead = await react(reader, { commentId: hidden.id, kind: "agree" });
+    expect(dead.status).toBe(404);
+    expect(((await dead.json()) as { code: string }).code).toBe("COMMENT_NOT_FOUND");
+    // Control: a non-hidden comment on the same post is still reactable.
+    const visible = await insertComment(p, poster.userId);
+    expect((await react(reader, { commentId: visible.id, kind: "agree" })).status).toBe(201);
+  });
+
+  it("404s reacting to a comment whose POST is auto-hidden", async () => {
+    const poster = await onboardedActor();
+    const p = await insertPost(poster.userId, "published");
+    const c = await insertComment(p, poster.userId);
+    await hidePost(p);
+    const dead = await react(reader, { commentId: c.id, kind: "agree" });
+    expect(dead.status).toBe(404);
+    expect(((await dead.json()) as { code: string }).code).toBe("COMMENT_NOT_FOUND");
+  });
+
+  it("404s public reaction counts for an auto-HIDDEN post (M4 Task 7)", async () => {
+    const p = await insertPost(author.userId, "published");
+    await hidePost(p);
+    expect((await getPublicReactions(p)).status).toBe(404);
   });
 });
 

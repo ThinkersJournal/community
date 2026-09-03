@@ -489,7 +489,7 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
       // public.ts's `withClient` import; deterministic for this code and, like
       // every pin here, breaks loudly if the handler is edited.
       handlerSource:
-        "async function handlePublicTags(_request, env, ctx) { const tags = await (0,__vite_ssr_import_1__.withClient)(env.HYPERDRIVE_FRESH, ctx, async (c) => { const { rows } = await c.query(`SELECT t.slug, t.label, count(*)::int AS count FROM tags t JOIN post_tags pt ON pt.tag_id = t.id JOIN posts p ON p.id = pt.post_id WHERE p.status = 'published' GROUP BY t.slug, t.label ORDER BY count DESC, t.slug ASC LIMIT ${TAGS_INDEX_MAX}`); return rows; }); return json({ tags }); }",
+        "async function handlePublicTags(_request, env, ctx) { const tags = await (0,__vite_ssr_import_1__.withClient)(env.HYPERDRIVE_FRESH, ctx, async (c) => { const { rows } = await c.query(`SELECT t.slug, t.label, count(*)::int AS count FROM tags t JOIN post_tags pt ON pt.tag_id = t.id JOIN posts p ON p.id = pt.post_id WHERE p.status = 'published' AND p.hidden_at IS NULL GROUP BY t.slug, t.label ORDER BY count DESC, t.slug ASC LIMIT ${TAGS_INDEX_MAX}`); return rows; }); return json({ tags }); }",
     },
   ],
 ]);

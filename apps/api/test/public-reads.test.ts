@@ -71,6 +71,20 @@ async function onboardedActor(): Promise<Actor> {
   return createVerifiedActor();
 }
 
+/**
+ * Auto-hide a published post directly (M4 Task 7). The report route sets
+ * `hidden_at` at the auto-hide threshold; a public read must then treat the post
+ * as nonexistent, exactly like a draft. Setting the column directly keeps this
+ * from depending on the report route's threshold machinery.
+ */
+async function hidePost(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [id]),
+  );
+  await waitOnExecutionContext(ctx);
+}
+
 let actor: Actor;
 
 beforeAll(async () => {
@@ -134,6 +148,30 @@ describe("GET /public/posts", () => {
     expect(authed.status).toBe(404);
   });
 
+  it("404s an auto-HIDDEN post, while a non-hidden one still 200s (M4 Task 7)", async () => {
+    const hidden = await create(actor, {
+      title: "Hidden By Report",
+      markdownSource: "x",
+      status: "published",
+    });
+    await hidePost(hidden.id);
+    const gone = await fetchWorker(
+      new Request(`https://api.test/public/posts?username=${actor.username}&slug=${hidden.slug}`),
+    );
+    expect(gone.status).toBe(404);
+
+    // Control: a sibling published post that was NOT hidden is still served.
+    const visible = await create(actor, {
+      title: "Still Visible",
+      markdownSource: "x",
+      status: "published",
+    });
+    const ok = await fetchWorker(
+      new Request(`https://api.test/public/posts?username=${actor.username}&slug=${visible.slug}`),
+    );
+    expect(ok.status).toBe(200);
+  });
+
   it("404s a missing username or slug", async () => {
     expect(
       (await fetchWorker(new Request("https://api.test/public/posts?username=nobody&slug=x")))
@@ -193,6 +231,19 @@ describe("GET /public/profile", () => {
     expect(profile.posts.map((p) => p.title)).toEqual(["Live"]);
   });
 
+  it("excludes an auto-HIDDEN post while a non-hidden one remains (M4 Task 7)", async () => {
+    const author = await onboardedActor();
+    const hidden = await create(author, { title: "Hidden", markdownSource: "x", status: "published" });
+    await create(author, { title: "Visible", markdownSource: "x", status: "published" });
+    await hidePost(hidden.id);
+    const profile = (await (
+      await fetchWorker(new Request(`https://api.test/public/profile?username=${author.username}`))
+    ).json()) as PublicProfile;
+    const titles = profile.posts.map((p) => p.title);
+    expect(titles).toContain("Visible");
+    expect(titles).not.toContain("Hidden");
+  });
+
   it("404s an unknown username", async () => {
     expect(
       (await fetchWorker(new Request("https://api.test/public/profile?username=nobody"))).status,
@@ -250,6 +301,18 @@ describe("GET /public/recent", () => {
       await fetchWorker(new Request("https://api.test/public/recent"))
     ).json()) as { posts: { id: string }[] };
     expect(body.posts.some((p) => p.id === id)).toBe(false);
+  });
+
+  it("excludes an auto-HIDDEN post while a non-hidden one is present (M4 Task 7)", async () => {
+    const author = await onboardedActor();
+    const visible = await create(author, { title: "Recent Visible", markdownSource: "x", status: "published" });
+    const hidden = await create(author, { title: "Recent Hidden", markdownSource: "x", status: "published" });
+    await hidePost(hidden.id);
+    const body = (await (
+      await fetchWorker(new Request("https://api.test/public/recent"))
+    ).json()) as { posts: { id: string }[] };
+    expect(body.posts.some((p) => p.id === visible.id)).toBe(true);
+    expect(body.posts.some((p) => p.id === hidden.id)).toBe(false);
   });
 
   it("honors a limit", async () => {

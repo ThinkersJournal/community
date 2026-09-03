@@ -17,6 +17,7 @@
  */
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
+import { handleBlock, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
 import { handleCsrf } from "./routes/csrf";
@@ -50,6 +51,7 @@ import {
   handlePublicReactions,
   handleRemoveReaction,
 } from "./routes/reactions";
+import { handleCreateReport } from "./routes/reports";
 import { handleResendVerification } from "./routes/resend-verification";
 import { handlePublicSearch } from "./routes/search";
 import { handleSignup } from "./routes/signup";
@@ -165,6 +167,18 @@ export const ROUTES: readonly RouteDef[] = [
   // decision 5). See src/routes/reactions.ts's header.
   { method: "POST", pattern: "/reactions", handler: handleAddReaction },
   { method: "DELETE", pattern: "/reactions", handler: handleRemoveReaction },
+
+  // Moderation report (M4) — a verified member flags a post/comment for
+  // review; a target drawing >=3 distinct reporters within 24h is auto-hidden.
+  // See src/routes/reports.ts and src/moderation/auto-hide.ts.
+  { method: "POST", pattern: "/reports", handler: handleCreateReport },
+
+  // Block / unblock (M4) — interaction-control writes only; the follow/
+  // comment/react/feed/notify ENFORCEMENT is a later M4 task. See
+  // src/routes/blocks.ts. Same literal-vs-dynamic shape as /follows above
+  // (different methods, no shadow risk).
+  { method: "POST", pattern: "/blocks", handler: handleBlock },
+  { method: "DELETE", pattern: "/blocks/:blockedId", handler: handleUnblock },
 
   // Per-viewer home feed (M2.1) — no-store, never edge-cached.
   { method: "GET", pattern: "/feed", handler: handleFeed },

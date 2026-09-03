@@ -44,10 +44,12 @@ export async function handlePublicComments(
 
   const page = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const post = await c.query<{ status: string }>(
-      "SELECT status FROM posts WHERE id = $1",
+      "SELECT status FROM posts WHERE id = $1 AND hidden_at IS NULL",
       [postId],
     );
-    // Draft parity — indistinguishable from nonexistent.
+    // Draft parity — indistinguishable from nonexistent. An auto-hidden post
+    // (hidden_at set) is excluded by the query above, so it falls through here
+    // too: its comment thread is served no more than the post itself is.
     if (post.rows[0]?.status !== "published") return null;
 
     const { rows } = await c.query<DbRow>(
@@ -58,7 +60,10 @@ export async function handlePublicComments(
               pr.user_id AS "authorUserId", pr.username, pr.display_name AS "displayName"
          FROM comments c
          JOIN profiles pr ON pr.user_id = c.author_id
-        WHERE c.post_id = $1 AND c.path > $2
+        -- An auto-hidden comment (hidden_at set) is EXCLUDED entirely — not shown
+        -- as a tombstone the way a deleted one is. Its descendants lose their
+        -- anchor, but a globally-hidden subtree is exactly what auto-hide intends.
+        WHERE c.post_id = $1 AND c.hidden_at IS NULL AND c.path > $2
         ORDER BY c.path
         LIMIT ${PAGE_SIZE + 1}`,
       [postId, cursor],

@@ -61,6 +61,22 @@ async function insertComment(
   return { ...row, depth };
 }
 
+/** Auto-hide a comment directly (M4 Task 7). */
+async function hideComment(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE comments SET hidden_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
+/** Auto-hide a post directly (M4 Task 7). */
+async function hidePost(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
 function getComments(postId: string, cursor?: string): Promise<Response> {
   const q = new URLSearchParams({ postId });
   if (cursor !== undefined) q.set("cursor", cursor);
@@ -108,6 +124,25 @@ describe("GET /public/comments", () => {
     await insertComment(p, author.userId, undefined, true);
     const page = (await (await getComments(p)).json()) as CommentsPage;
     expect(page.comments[0]).toMatchObject({ deleted: true, bodyMarkdown: "", author: null });
+  });
+
+  it("EXCLUDES an auto-HIDDEN comment (not a tombstone) while a non-hidden sibling remains (M4 Task 7)", async () => {
+    const p = await insertPost(author.userId, "published");
+    const visible = await insertComment(p, author.userId);
+    const hidden = await insertComment(p, author.userId);
+    await hideComment(hidden.id);
+    const page = (await (await getComments(p)).json()) as CommentsPage;
+    const ids = page.comments.map((c) => c.id);
+    expect(ids).toContain(visible.id);
+    // A hidden comment is GONE — not rendered as a tombstone the way a deleted one is.
+    expect(ids).not.toContain(hidden.id);
+  });
+
+  it("404s comments for an auto-HIDDEN post (parity with draft/nonexistent) (M4 Task 7)", async () => {
+    const hiddenPost = await insertPost(author.userId, "published");
+    await insertComment(hiddenPost, author.userId);
+    await hidePost(hiddenPost);
+    expect((await getComments(hiddenPost)).status).toBe(404);
   });
 
   it("404s a draft post and a nonexistent post identically (parity)", async () => {
