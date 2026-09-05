@@ -26,8 +26,10 @@ legal decision:
   attorney must bless first. The policies cannot be finalized before this is.
 - `[[JURISDICTION]]` — governing law / venue (US state).
 - `[[CONTACT_ADDRESS]]`, `[[CONTACT_EMAIL]]` — service + general contact.
-- `[[DMCA_AGENT_*]]` — the registered DMCA Designated Agent's name/address/email
-  (see the DMCA policy; requires U.S. Copyright Office registration).
+- ✅ `[[DMCA_AGENT_*]]` — **FILLED 2026-09-05.** The registered DMCA Designated
+  Agent (name/address/email) is set in `dmca-policy.md`; the U.S. Copyright Office
+  registration is active. (The Copyright Office **registration number** is deliberately
+  NOT published in the policy — it isn't required in the notice-and-takedown text.)
 - `[[EFFECTIVE_DATE]]` — set at finalization.
 
 ## Grounding

@@ -26,10 +26,10 @@ notice to our Designated Agent that includes all of the following (§512(c)(3)):
 6. A statement, **under penalty of perjury**, that the information is accurate and
    that you are the owner or authorized to act on the owner's behalf.
 
-**Designated Agent:**
-[[DMCA_AGENT_NAME]]
-[[DMCA_AGENT_ADDRESS]]
-[[DMCA_AGENT_EMAIL]]
+**Designated Agent:**  
+Eric Evans  
+7600 E Las Palmas Drive, Prescott Valley, Arizona 86314  
+ciresnave@gmail.com
 
 ⚠️ **Misrepresentation.** Under §512(f), knowingly materially misrepresenting that
 material is infringing can subject you to liability for damages. Do not send a
