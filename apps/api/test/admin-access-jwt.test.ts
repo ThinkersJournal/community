@@ -117,4 +117,32 @@ describe("verifyAccessJwt", () => {
     await verifyAccessJwt(await makeJwt(), TEAM, AUD);
     expect((globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(1);
   });
+
+  // ⚠️ THE LOCKOUT REGRESSION TEST. A momentary network blip during the JWKS
+  // fetch must cost exactly ONE failed request — not an hour of total admin
+  // lockout. Under the bug, `loadKeys` writes the module-level `cache`
+  // unconditionally, even when the fetch threw and the key map is empty. That
+  // empty set then satisfies the TTL check on every subsequent call for a
+  // full `JWKS_TTL_MS` (1h), so a token that is perfectly valid — signed by a
+  // real key the IdP is serving again one line later — is rejected anyway,
+  // because the (empty, stale) cache is trusted instead of being refreshed.
+  it("recovers on the very next call after a transient JWKS fetch failure (does not cache an empty key set)", async () => {
+    const jwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+    const token = await makeJwt();
+
+    // Step 1: the fetch fails outright (simulates a transient network blip).
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new Error("simulated transient network failure");
+    }));
+    expect(await verifyAccessJwt(token, TEAM, AUD)).toBeNull();
+
+    // Step 2: the IdP is healthy again on the very next call. An otherwise
+    // identical, genuinely valid token must now succeed — under the bug it
+    // does not, because step 1 cached the empty key set for the next hour.
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ keys: [{ ...jwk, kid: KID, alg: "RS256", use: "sig" }] }), {
+        status: 200, headers: { "content-type": "application/json" },
+      })));
+    expect(await verifyAccessJwt(token, TEAM, AUD)).toEqual({ email: "mod@example.com", sub: "user-sub-1" });
+  });
 });

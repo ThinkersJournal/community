@@ -83,7 +83,13 @@ async function loadKeys(teamDomain: string): Promise<Map<string, CryptoKey>> {
   } catch (err) {
     console.error("access jwks fetch failed", { err });
   }
-  cache = { teamDomain, fetchedAt: Date.now(), keys };
+  // ⚠️ Only cache a load that genuinely succeeded (a 2xx response that yielded
+  // at least one importable key). Caching an empty set on a transient fetch
+  // failure would lock out every admin for the full JWKS_TTL_MS (1h) — the
+  // very next request must be free to retry instead of trusting a bad cache.
+  if (keys.size > 0) {
+    cache = { teamDomain, fetchedAt: Date.now(), keys };
+  }
   return keys;
 }
 
