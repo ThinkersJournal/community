@@ -376,7 +376,7 @@ SELECT 'post' AS kind, pr.target_id, p.title AS excerpt, p.hidden_at,
                       AND ma.action LIKE 'content\\_%'
                       AND ma.created_at > pr.newest_report_at)
 UNION ALL
-SELECT 'comment' AS kind, cr.target_id, left(c.body_markdown, 120), c.hidden_at,
+SELECT 'comment' AS kind, cr.target_id, left(c.body_markdown, 120) AS excerpt, c.hidden_at,
        cr.report_count, cr.severity_rank, cr.oldest_report_at
   FROM comment_reports cr JOIN comments c ON c.id = cr.target_id
  WHERE NOT EXISTS (SELECT 1 FROM moderation_actions ma
