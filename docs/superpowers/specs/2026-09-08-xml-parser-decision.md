@@ -117,16 +117,60 @@ const BILLION = `<?xml version="1.0"?>
 <!DOCTYPE lolz [ ${ENT.join("\n ")} ]>
 <lolz><reportId>&lol5;</reportId></lolz>`;
 
+const BENIGN = `<?xml version="1.0"?><r><reportId>TJ-12345</reportId></r>`;
+
+const run = (cfg, xml) => {
+  const t0 = Date.now();
+  try {
+    return { out: JSON.stringify(new XMLParser(cfg).parse(xml)), ms: Date.now() - t0 };
+  } catch (e) {
+    return { out: `THREW: ${e.message}`, ms: Date.now() - t0 };
+  }
+};
+
 // ⚠️ Run BOTH arms. Without the un-hardened arm, "no expansion" is
 // indistinguishable from "the input was rejected for an unrelated reason" —
 // and it is the arm that revealed the hardening to be inert.
-for (const cfg of [{}, { processEntities: false }]) {
-  // parse XXE, BILLION, and a benign document; compare across arms
+for (const [label, cfg] of Object.entries({
+  "DEFAULT (un-hardened CONTROL)": {},
+  "HARDENED (processEntities:false)": { processEntities: false },
+})) {
+  console.log(`\n=== ${label} ===`);
+  const x = run(cfg, XXE);
+  console.log(`  XXE           : ${x.out.includes("CANARY-4f3a9b") ? "CANARY LEAKED" : "canary NOT present"} (${x.ms}ms) ${x.out.slice(0, 120)}`);
+  const b = run(cfg, BILLION);
+  console.log(`  billion-laughs: ${b.out.length > 50000 ? "EXPANDED" : "no expansion"} (${b.ms}ms) ${b.out.slice(0, 120)}`);
+  const g = run(cfg, BENIGN);
+  console.log(`  BENIGN control: ${g.out.includes("TJ-12345") ? "parses OK" : "BENIGN BROKE"} ${g.out.slice(0, 120)}`);
 }
 ```
 
-Deep-nesting and size probes: `"<a>".repeat(d) + "x" + "</a>".repeat(d)` for depth, and
-`` `<r>${"<i>v</i>".repeat(n)}</r>` `` for width.
+The **BENIGN** arm matters as much as the un-hardened one: without it, "canary not present" would
+be indistinguishable from "the parser rejected everything," and both probes would read as safe
+against a parser that simply does not work.
+
+### Depth and size probes
+
+```js
+const p = new XMLParser();
+const timed = (name, xml) => {
+  const t0 = Date.now();
+  try {
+    const out = p.parse(xml);
+    console.log(`${name} OK ${Date.now() - t0}ms in=${(xml.length / 1024).toFixed(0)}KB out~${JSON.stringify(out).length}B`);
+  } catch (e) {
+    console.log(`${name} THREW ${Date.now() - t0}ms ${e.message}`);
+  }
+};
+
+for (const d of [1000, 10000, 50000, 200000]) {
+  timed(`nested depth ${d}`, "<a>".repeat(d) + "x" + "</a>".repeat(d));
+}
+for (const n of [10000, 100000, 500000]) {
+  timed(`${n} siblings`, `<r>${"<i>v</i>".repeat(n)}</r>`);
+}
+timed("5MB single text node", `<r><t>${"x".repeat(5 * 1024 * 1024)}</t></r>`);
+```
 
 ## 8. What this procedure is really a record of
 
