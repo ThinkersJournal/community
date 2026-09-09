@@ -367,6 +367,18 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /__test/last-verify-token",
     build: () => new Request("https://api.test/__test/last-verify-token"),
   },
+  // GET /admin/whoami (M4 2a) is a GET, so it is not in MUTATING and LAYER 1's
+  // automatic origin-less probe never reaches it — but it DOES have a real
+  // error path (requireAdmin's ADMIN_REQUIRED, src/admin/require-admin.ts), so
+  // it belongs here, not in ERROR_FREE. No Access header is its simplest
+  // reachable 401; test/admin-route.test.ts owns the rest of the gate's
+  // behaviour (invalid JWT, valid JWT, and the member-session non-authority
+  // case).
+  {
+    name: "401 admin whoami with no Access header",
+    route: "GET /admin/whoami",
+    build: () => new Request("https://api.test/admin/whoami"),
+  },
 ];
 
 /**

@@ -31,6 +31,7 @@ export type ApiErrorCode =
   | "LOGIN_REQUIRED"         // 401 — this route needs a session to proceed
   | "INVALID_CREDENTIALS"    // 401 — login only; deliberately not enumerable
   // --- authorization -------------------------------------------------------
+  | "ADMIN_REQUIRED"         // 401 — no valid Cloudflare Access identity (M4 2a)
   | "FORBIDDEN"              // 403 — origin/CSRF/Turnstile rejection
   | "EMAIL_NOT_VERIFIED"     // 403 — the soft gate
   | "ALREADY_VERIFIED"       // 409 — resend-verification on a verified account (T10)

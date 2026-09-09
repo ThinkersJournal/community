@@ -163,7 +163,7 @@ describe("moderation_actions (0013)", () => {
 
 - [ ] **Step 2: Run it and verify it FAILS**
 
-Run: `cd apps/api && ./node_modules/.bin/vitest run --project node test/moderation-actions-schema.db.test.ts`
+Run: `pnpm --filter @thinkersjournal/api exec vitest run --project node test/moderation-actions-schema.db.test.ts`
 Expected: FAIL — `relation "moderation_actions" does not exist`.
 
 - [ ] **Step 3: Write the migration**
@@ -231,7 +231,7 @@ DROP TABLE IF EXISTS moderation_actions;
 
 - [ ] **Step 4: Apply and verify the test PASSES**
 
-Run: `cd apps/api && node scripts/migrate.mjs test up && ./node_modules/.bin/vitest run --project node test/moderation-actions-schema.db.test.ts`
+Run: `pnpm --filter @thinkersjournal/api run migrate:test && pnpm --filter @thinkersjournal/api exec vitest run --project node test/moderation-actions-schema.db.test.ts`
 Expected: PASS, all 7 assertions — including both AC-2 rejection cases and the INSERT control.
 
 - [ ] **Step 5: Add 0013 to the migration round-trip**
@@ -240,7 +240,7 @@ In `apps/api/test/migrations.db.test.ts`, alongside the existing `blocks`/`repor
 
 - [ ] **Step 6: Run the whole node project**
 
-Run: `cd apps/api && ./node_modules/.bin/vitest run --project node`
+Run: `pnpm --filter @thinkersjournal/api exec vitest run --project node`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -338,7 +338,7 @@ describe("recordModerationAction", () => {
 
 - [ ] **Step 2: Run it and verify it FAILS**
 
-Run: `cd apps/api && ./node_modules/.bin/vitest run --project node test/moderation-actions.db.test.ts`
+Run: `pnpm --filter @thinkersjournal/api exec vitest run --project node test/moderation-actions.db.test.ts`
 Expected: FAIL — cannot resolve `../src/moderation/actions`.
 
 - [ ] **Step 3: Implement**
@@ -413,7 +413,7 @@ export async function recordModerationAction(
 
 - [ ] **Step 4: Run and verify it PASSES**
 
-Run: `cd apps/api && ./node_modules/.bin/vitest run --project node test/moderation-actions.db.test.ts`
+Run: `pnpm --filter @thinkersjournal/api exec vitest run --project node test/moderation-actions.db.test.ts`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
@@ -552,7 +552,7 @@ describe("verifyAccessJwt", () => {
 
 - [ ] **Step 3: Run it and verify it FAILS**
 
-Run: `cd apps/api && ./node_modules/.bin/vitest run --project pool test/admin-access-jwt.test.ts`
+Run: `pnpm --filter @thinkersjournal/api exec vitest run --project pool test/admin-access-jwt.test.ts`
 Expected: FAIL — cannot resolve `../src/admin/access-jwt`.
 
 - [ ] **Step 4: Implement**
@@ -591,7 +591,7 @@ export function __resetJwksCacheForTests(): void {
   cache = null;
 }
 
-function b64urlToBytes(s: string): Uint8Array | null {
+function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> | null {
   try {
     const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
     const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
@@ -645,7 +645,11 @@ async function loadKeys(teamDomain: string): Promise<Map<string, CryptoKey>> {
   } catch (err) {
     console.error("access jwks fetch failed", { err });
   }
-  cache = { teamDomain, fetchedAt: Date.now(), keys };
+  // ⚠️ Only cache a load that genuinely succeeded. Caching an empty set on a
+  // transient fetch failure locks out every admin for the full TTL (1h).
+  if (keys.size > 0) {
+    cache = { teamDomain, fetchedAt: Date.now(), keys };
+  }
   return keys;
 }
 
@@ -698,7 +702,7 @@ export async function verifyAccessJwt(
 
 - [ ] **Step 5: Run and verify it PASSES**
 
-Run: `cd apps/api && ./node_modules/.bin/vitest run --project pool test/admin-access-jwt.test.ts`
+Run: `pnpm --filter @thinkersjournal/api exec vitest run --project pool test/admin-access-jwt.test.ts`
 Expected: PASS (9 tests).
 
 - [ ] **Step 6: Commit**
@@ -734,7 +738,7 @@ In `packages/shared/src/errors.ts`, in the `--- authorization ---` group:
 
 - [ ] **Step 2: Regenerate Worker types**
 
-Run: `cd apps/api && ./node_modules/.bin/wrangler types ./src/worker-configuration.d.ts`
+Run: `pnpm --filter @thinkersjournal/api exec wrangler types ./src/worker-configuration.d.ts`
 Then add the two config values to the `Env` interface if the generator did not (they are supplied via `.dev.vars`/`--var`, not `wrangler.jsonc`, exactly like `TEST_ROUTES`):
 
 ```ts
@@ -828,7 +832,7 @@ describe("GET /admin/whoami", () => {
 
 - [ ] **Step 4: Run it and verify it FAILS**
 
-Run: `cd apps/api && ./node_modules/.bin/vitest run --project pool test/admin-route.test.ts`
+Run: `pnpm --filter @thinkersjournal/api exec vitest run --project pool test/admin-route.test.ts`
 Expected: FAIL — the route is not registered, so all four get the generic 404 envelope.
 
 - [ ] **Step 5: Implement the gate**
@@ -909,12 +913,12 @@ and add the entry to the `ROUTES` array:
 
 - [ ] **Step 7: Run and verify it PASSES**
 
-Run: `cd apps/api && ./node_modules/.bin/vitest run --project pool test/admin-route.test.ts`
+Run: `pnpm --filter @thinkersjournal/api exec vitest run --project pool test/admin-route.test.ts`
 Expected: PASS (4 tests).
 
 - [ ] **Step 8: Run the FULL suite — this task touches shared types and the route table**
 
-Run: `cd apps/api && ./node_modules/.bin/vitest run` and `cd apps/api && npm run typecheck`
+Run: `pnpm --filter @thinkersjournal/api exec vitest run` and `pnpm --filter @thinkersjournal/api run typecheck`
 Expected: PASS. `test/route-protection.test.ts` and `test/error-envelope.test.ts` both import `ROUTES`; a new route must satisfy both. `GET /admin/whoami` is a GET (so `PIPELINE_EXEMPT` does not apply) and returns a proper `{code}` envelope on failure (so no error-envelope allowlist entry is needed). **If either fails, fix the route — do not add an allowlist entry to quiet it.**
 
 - [ ] **Step 9: Commit**
