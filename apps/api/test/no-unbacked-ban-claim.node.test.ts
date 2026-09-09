@@ -124,29 +124,35 @@ function allMigrations(): string {
 /**
  * Does any migration add a status-bearing column TO `users`?
  *
- * ⚠️ Deliberately narrow: it requires the column name to appear on a line that
- * also names `users`, so an unrelated table gaining a `disabled_at` does not
- * silently satisfy the ban claim. A comment mentioning the column does not
- * count — the line must be a CREATE/ALTER.
+ * ⚠️ STATEMENT-SCOPED AND CASE-INSENSITIVE, and that direction is deliberate.
+ * A MISS here produces a FALSE RED *after* module 2c lands — the guard would
+ * tell the lane their claim is unbacked exactly when they had just backed it,
+ * which is how a detector gets muted and then deleted as flaky. So the reader
+ * is permissive about FORM (line breaks, casing, quoted identifiers) and strict
+ * only about WHAT it reads: a CREATE/ALTER statement on `users`.
+ *
+ * Comments are stripped first, because `0013` mentions `users.suspended_until`
+ * in prose and a comment must never satisfy a schema claim.
+ *
+ * Adopted from a Codacy finding on this file, which observed that the original
+ * per-line reader missed a column declared on a different line from its
+ * `ALTER TABLE`.
  */
 function schemaCanExpressABan(sql: string): string[] {
+  // Strip line comments; a mention is not a column.
+  const code = sql
+    .split("\n")
+    .map((l) => l.replace(/--.*$/, ""))
+    .join("\n");
+
+  // Whole statements, so a column may sit on any line of its own statement.
   const found: string[] = [];
-  for (const line of sql.split("\n")) {
-    const bare = line.trim();
-    if (bare.startsWith("--")) continue; // a comment is not a column
-    if (!/\busers\b/i.test(line)) continue;
-    if (!/\b(create table|alter table)\b/i.test(line)) continue;
+  for (const stmt of code.split(";")) {
+    // Matches `users` and "users" alike — the quote characters sit outside
+    // the word, so a quoted identifier still matches.
+    if (!/\b(create|alter)\s+table\b[\s\S]*?\busers\b/i.test(stmt)) continue;
     for (const col of STATUS_COLUMNS) {
-      if (line.includes(col)) found.push(col);
-    }
-  }
-  // ALTER TABLE users ADD COLUMN <x> puts the column on the same line; a
-  // multi-line CREATE TABLE puts it on a later one, so also scan the users
-  // CREATE body.
-  const create = sql.match(/CREATE TABLE users \(([\s\S]*?)\n\);/i);
-  if (create) {
-    for (const col of STATUS_COLUMNS) {
-      if (create[1].includes(col)) found.push(col);
+      if (stmt.toLowerCase().includes(col)) found.push(col);
     }
   }
   return [...new Set(found)];
@@ -165,7 +171,7 @@ describe("no document asserts an enforced ban the code cannot deliver", () => {
         `this test is reading the wrong document. Repoint it; do not delete it.`,
     ).toMatch(/security_epoch/);
 
-    const claimPresent = spec.includes(CLAIM);
+    const claimPresent = spec.toLowerCase().includes(CLAIM.toLowerCase());
 
     const sql = allMigrations();
     const columns = schemaCanExpressABan(sql);
@@ -177,7 +183,10 @@ describe("no document asserts an enforced ban the code cannot deliver", () => {
       "control: src/routes/login.ts no longer queries `users` — repoint this test",
     ).toMatch(/FROM users/i);
 
-    const enforceable = columns.length > 0 && columns.some((c) => login.includes(c));
+    const loginLower = login.toLowerCase();
+    const enforceable =
+      columns.length > 0 &&
+      columns.some((c) => loginLower.includes(c.toLowerCase()));
 
     // ⚠️ THE ONLY REFUSED STATE IS THE CONJUNCTION: the spec claims an enforced
     // ban AND nothing can enforce one. Fixing EITHER side makes this green.
@@ -202,5 +211,61 @@ describe("no document asserts an enforced ban the code cannot deliver", () => {
         `while the defect remains. It guards a known disagreement; it is not a ` +
         `general falsehood detector, and it must not be read as one.`,
     ).toBe(true);
+  });
+
+  /**
+   * ⚠️ THE READER'S OWN TWO-SIDED TEST, and it exists because of the failure
+   * DIRECTION. A miss here reads as "no enforcement" and keeps the guard RED
+   * *after* module 2c lands — telling the lane their claim is unbacked exactly
+   * when they had just backed it. That is how a detector gets muted and then
+   * deleted as flaky, so the reader is exercised against the awkward forms
+   * directly rather than trusted.
+   *
+   * ⚠️ Deliberately a UNIT test over SQL strings, NOT a forced migration file.
+   * `test/global-setup.ts` applies `migrations/` to the SHARED test database, so
+   * a throwaway migration mutates state that outlives the run and breaks the
+   * next person's suite. Measured the hard way: an earlier forced 2c simulation
+   * left `users.suspended_until` and a `pgmigrations` row behind, and the next
+   * run aborted with "Not run migration ... is preceding already run migration"
+   * before executing a single test.
+   */
+  it("the schema reader survives multi-line, quoted and upper-case DDL", () => {
+    const positives: Array<[string, string]> = [
+      ["single line", "ALTER TABLE users ADD COLUMN suspended_until timestamptz;"],
+      ["multi-line", 'ALTER TABLE users\n  ADD COLUMN suspended_until timestamptz;'],
+      ["quoted identifier", 'ALTER TABLE "users" ADD COLUMN disabled_at timestamptz;'],
+      ["upper case", "ALTER TABLE USERS ADD COLUMN SUSPENDED_UNTIL TIMESTAMPTZ;"],
+      [
+        "inside a CREATE body",
+        "CREATE TABLE users (\n  id uuid PRIMARY KEY,\n  disabled_at timestamptz\n);",
+      ],
+    ];
+    for (const [label, sql] of positives) {
+      expect(
+        schemaCanExpressABan(sql).length,
+        `the reader missed a status column in the ${label} form — this produces a ` +
+          `FALSE RED after module 2c lands, which is the failure direction that ` +
+          `gets guards deleted`,
+      ).toBeGreaterThan(0);
+    }
+
+    const negatives: Array<[string, string]> = [
+      [
+        "a comment is not a column",
+        "-- truthful after users.suspended_until moves on\nCREATE TABLE moderation_actions (id uuid);",
+      ],
+      [
+        "another table's column does not back a ban on users",
+        "ALTER TABLE sessions ADD COLUMN disabled_at timestamptz;",
+      ],
+      ["no DDL at all", "SELECT suspended_until FROM users;"],
+    ];
+    for (const [label, sql] of negatives) {
+      expect(
+        schemaCanExpressABan(sql),
+        `the reader accepted ${label} — it would then report enforcement that does ` +
+          `not exist, which is the silent direction`,
+      ).toEqual([]);
+    }
   });
 });
