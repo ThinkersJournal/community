@@ -50,4 +50,71 @@ describe("recordModerationAction", () => {
     expect(rows[0]!.post_id).toBeNull();
     expect(rows[0]!.internal_note).toBeNull();
   });
+
+  // ⚠️ FULL COLUMN COVERAGE. Every one of the 10 writable columns gets its own
+  // DISTINCT, DISTINGUISHABLE value here (distinct uuids for the three uuid
+  // columns — reusing one across post_id/comment_id/subject_user_id would let
+  // a transposition among THEM stay invisible) and every one is read back and
+  // asserted. `moderation_actions` is append-only (migration 0013's trigger
+  // refuses UPDATE and DELETE), so a wrong value written by a future
+  // transposition in `recordModerationAction`'s INSERT can never be corrected
+  // — this test exists so that transposition fails CI instead of shipping.
+  it("round-trips ALL TEN columns with distinct values, catching a column transposition", async () => {
+    const postId = crypto.randomUUID();
+    const commentId = crypto.randomUUID();
+    const subjectUserId = crypto.randomUUID();
+    // action & violationCategory: valid, DISTINCT values from migration
+    // 0013's CHECK lists — chosen so neither string could be mistaken for
+    // the other if the INSERT's column order slipped.
+    const action = "user_ban" as const;
+    const violationCategory = "harassment" as const;
+    const actionExpiresAt = new Date(Date.now() + 30 * 24 * 3600 * 1000);
+    const actorAdmin = "full-coverage-actor@example.com";
+    const subjectLabel = "full-coverage-subject-label";
+    const reason = "full-coverage-reason-text";
+    const internalNote = "full-coverage-internal-note-text";
+
+    const id = await recordModerationAction(client, {
+      actorAdmin,
+      action,
+      postId,
+      commentId,
+      subjectUserId,
+      subjectLabel,
+      violationCategory,
+      actionExpiresAt,
+      reason,
+      internalNote,
+    });
+
+    const { rows } = await client.query<{
+      actor_admin: string;
+      action: string;
+      post_id: string;
+      comment_id: string;
+      subject_user_id: string;
+      subject_label: string;
+      violation_category: string;
+      action_expires_at: Date;
+      reason: string;
+      internal_note: string;
+    }>(
+      `SELECT actor_admin, action, post_id, comment_id, subject_user_id, subject_label,
+              violation_category, action_expires_at, reason, internal_note
+         FROM moderation_actions WHERE id = $1`,
+      [id],
+    );
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.actor_admin).toBe(actorAdmin);
+    expect(row.action).toBe(action);
+    expect(row.post_id).toBe(postId);
+    expect(row.comment_id).toBe(commentId);
+    expect(row.subject_user_id).toBe(subjectUserId);
+    expect(row.subject_label).toBe(subjectLabel);
+    expect(row.violation_category).toBe(violationCategory);
+    expect(row.action_expires_at.getTime()).toBeCloseTo(actionExpiresAt.getTime(), -3);
+    expect(row.reason).toBe(reason);
+    expect(row.internal_note).toBe(internalNote);
+  });
 });

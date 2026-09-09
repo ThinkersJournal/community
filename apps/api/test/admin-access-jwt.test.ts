@@ -74,11 +74,42 @@ describe("verifyAccessJwt", () => {
     expect(await verifyAccessJwt("", TEAM, AUD)).toBeNull();
   });
 
-  it("⚠️ rejects alg=none — the classic JWT bypass", async () => {
+  // NOTE: this token's signature is the empty string, so it is rejected by the
+  // SIGNATURE check regardless of whether `alg` is pinned — it cannot
+  // distinguish "alg pinned" from "alg not pinned". It is kept because an
+  // empty/malformed signature is a real case worth covering, but the alg pin
+  // itself is proven by the test below, which gives this exact header a
+  // genuinely valid RS256 signature.
+  it("rejects a token with an empty signature (alg=none, unsigned)", async () => {
     const now = Math.floor(Date.now() / 1000);
     const header = b64urlJson({ alg: "none", kid: KID, typ: "JWT" });
     const payload = b64urlJson({ iss: `https://${TEAM}`, aud: [AUD], sub: "s", email: "e@x", exp: now + 600 });
     expect(await verifyAccessJwt(`${header}.${payload}.`, TEAM, AUD)).toBeNull();
+  });
+
+  // ⚠️ THE DISCRIMINATING alg=none TEST. The header claims `alg: "none"` but
+  // carries the real `kid`, and the payload is signed for real, over this
+  // EXACT `header.payload` string, with the test's RSA private key —
+  // `crypto.subtle.sign("RSASSA-PKCS1-v1_5", ...)`, the same primitive
+  // `verifyAccessJwt` hardcodes regardless of the token's own `alg` claim.
+  // So the signature GENUINELY VERIFIES and every other claim (iss/aud/exp/
+  // sub/email) is valid too. The alg pin is therefore the ONLY thing that can
+  // reject this token: with it present, `header.alg !== "RS256"` rejects
+  // before the signature is ever checked; without it, the kid resolves, the
+  // RSA signature over these exact bytes verifies, and the caller would get
+  // back a live identity. Unlike the empty-signature case above, this token
+  // WOULD be accepted if the alg pin were removed — that is what makes it
+  // load-bearing for the pin specifically, not for signature checking.
+  it("⚠️ rejects alg=none even with a genuinely valid RSA signature over that header — the alg pin, not signature failure, must do the rejecting", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const header = b64urlJson({ alg: "none", kid: KID, typ: "JWT" });
+    const payload = b64urlJson({
+      iss: `https://${TEAM}`, aud: [AUD], sub: "user-sub-1", email: "mod@example.com", exp: now + 600,
+    });
+    const data = new TextEncoder().encode(`${header}.${payload}`);
+    const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", keyPair.privateKey, data);
+    const token = `${header}.${payload}.${b64url(new Uint8Array(sig))}`;
+    expect(await verifyAccessJwt(token, TEAM, AUD)).toBeNull();
   });
 
   it("caches the JWKS rather than refetching per call", async () => {
