@@ -379,6 +379,17 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /admin/whoami",
     build: () => new Request("https://api.test/admin/whoami"),
   },
+  // GET /admin/queue (M4 2b-i) — same Access-gate shape as GET /admin/whoami
+  // above: a GET, so LAYER 1's automatic origin-less probe never reaches it,
+  // but requireAdmin gives it a real 401 path, so it belongs here rather than
+  // in ERROR_FREE. test/admin-queue-route.test.ts owns the rest of the gate's
+  // behaviour (invalid JWT, valid JWT, and the member-session non-authority
+  // case).
+  {
+    name: "401 admin queue with no Access header",
+    route: "GET /admin/queue",
+    build: () => new Request("https://api.test/admin/queue"),
+  },
 ];
 
 /**

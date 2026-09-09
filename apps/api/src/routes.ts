@@ -17,7 +17,7 @@
  */
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
-import { handleAdminWhoami } from "./routes/admin";
+import { handleAdminQueue, handleAdminWhoami } from "./routes/admin";
 import { handleBlock, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
@@ -264,6 +264,13 @@ export const ROUTES: readonly RouteDef[] = [
   // member-session pipeline above — a member session confers no admin
   // authority. See src/routes/admin.ts.
   { method: "GET", pattern: "/admin/whoami", handler: handleAdminWhoami },
+
+  // The moderation review queue (M4 2b-i) — same Access trust domain as
+  // /admin/whoami above. Deliberately reads HIDDEN rows (see
+  // src/moderation/queue.ts's header); the ONLY thing that makes that safe is
+  // that this route is reachable exclusively through requireAdmin.
+  // test/admin-queue-route.test.ts asserts that property directly.
+  { method: "GET", pattern: "/admin/queue", handler: handleAdminQueue },
 
   // TEST-ONLY. `handleTestRoute` returns null when `TEST_ROUTES` is unset (i.e.
   // in production), and we fall through to the SAME notFoundResponse() every
