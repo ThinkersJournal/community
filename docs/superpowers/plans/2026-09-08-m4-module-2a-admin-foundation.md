@@ -591,7 +591,7 @@ export function __resetJwksCacheForTests(): void {
   cache = null;
 }
 
-function b64urlToBytes(s: string): Uint8Array | null {
+function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> | null {
   try {
     const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
     const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
