@@ -4,8 +4,22 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * ⚠️ DETECTOR FOR ISSUE #35 — the authoritative design spec claims an enforced
- * ban; the login path cannot enforce one.
+ * ⚠️ NO DOCUMENT MAY ASSERT AN ENFORCED BAN THE CODE CANNOT DELIVER.
+ *
+ * ⚠️⚠️ GREEN HERE DOES NOT MEAN BAN WORKS. IT DOES NOT WORK.
+ * This file measures ONE thing: whether an authoritative document CLAIMS an
+ * enforced ban while nothing can enforce one. Green means the claim and the
+ * code agree — which is satisfied by CORRECTING THE CLAIM, and that is how it
+ * was made green. **The enforcement gap itself is issue #35 and is still open.**
+ *
+ * ⚠️ IF YOU ARE HERE BECAUSE YOU ARE SHIPPING THE CSAM TERMINATION HOOK, OR
+ * ANYTHING ELSE THAT NEEDS A USER TO STAY OUT: THE PRIMITIVE DOES NOT EXIST
+ * YET. Read #35, not this file's exit code.
+ *
+ * The file was first written as `ban-claim-is-enforceable` — a name that would
+ * have read as "ban is enforceable" the moment it went green, which is the same
+ * defect it exists to catch, manufactured by its own remedy. It is named for
+ * WHAT GREEN MEANS instead.
  *
  * `docs/superpowers/specs/2026-07-13-community-platform-design.md` says of
  * itself: *"This spec is the **authoritative** decisions; that doc is the why."*
@@ -138,8 +152,8 @@ function schemaCanExpressABan(sql: string): string[] {
   return [...new Set(found)];
 }
 
-describe("the authoritative spec's ban claim must be enforceable", () => {
-  it("either the spec stops claiming an enforced ban, or login can refuse one", () => {
+describe("no document asserts an enforced ban the code cannot deliver", () => {
+  it("if a spec claims an enforced ban, the login path must be able to refuse one", () => {
     const spec = readSpec();
 
     // Non-vacuity: we must still be reading the section that makes the claim.

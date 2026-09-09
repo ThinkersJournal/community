@@ -64,7 +64,16 @@ A public **social publishing platform for thinkers** (starting with programmers)
 
 **Data model (Postgres).** UUIDv7 PKs; `citext`/`pg_trgm`/`tsvector`+GIN. `users` (sensitive) split from `profiles` (public). `posts` hold clean `markdown_source` with `{{ref:TOKEN}}` placeholders + generated `search_vector` + denormalized counters. **References first-class** (`references` + `post_references` + envelope-encrypted `source_connections`), with **private-resource rows keyed by owning connection** (never shared cross-author). Comments = materialized-path tree. Reactions = dual-nullable-FK with `CHECK`. Media bytes only as R2 keys; snapshots bounded.
 
-**Auth & sessions.** Own opaque cookie + KV session (`{user_id, roles, security_epoch, csrf}`). **`UserSecurityDO` per user** holds a monotonic `security_epoch`, checked on security-sensitive mutations only → strongly-consistent ban/logout-everywhere while 95%+ of traffic rides cheap KV. Argon2id (OWASP params). CSRF = Origin check + double-submit token. Email verification = hashed token, 24 h TTL, `fetch()` to Postmark, Turnstile + `ratelimit` binding. OAuth "connect a source" = AES-256-GCM envelope-encrypted tokens (root key in a Workers Secret, `key_version` for rotation), decrypted in-memory only at fetch-live.
+**Auth & sessions.** Own opaque cookie + KV session (`{user_id, roles, security_epoch, csrf}`). **`UserSecurityDO` per user** holds a monotonic `security_epoch`, checked on security-sensitive mutations only → strongly-consistent ~~ban/~~logout-everywhere while 95%+ of traffic rides cheap KV. Argon2id (OWASP params). CSRF = Origin check + double-submit token. Email verification = hashed token, 24 h TTL, `fetch()` to Postmark, Turnstile + `ratelimit` binding. OAuth "connect a source" = AES-256-GCM envelope-encrypted tokens (root key in a Workers Secret, `key_version` for rotation), decrypted in-memory only at fetch-live.
+
+> ⚠️ **CORRECTION (2026-09-09) — a factual claim about what the mechanism achieves. NOT a change to any decision.**
+> The struck word above is the only edit. The original read *"strongly-consistent **ban**/logout-everywhere"*; it is kept visible rather than rewritten, because this is the decisions record and the decision was never wrong.
+>
+> **Decision #14's `warn → suspend → ban` ladder STANDS and is unaffected.** What was false is the assertion that the `security_epoch` *delivers* a ban.
+>
+> **The epoch invalidates EXISTING sessions. It does nothing about NEW ones.** Measured at `fef5934`: `users` is `(id, email, password_hash, email_verified_at, created_at)` — no status column — and `apps/api/src/routes/login.ts` authenticates with `SELECT id, password_hash FROM users WHERE email = $1`. A banned user re-authenticates, receives a fresh session carrying the *current* epoch, and the comparison in `apps/api/src/auth/pipeline.ts` passes. **Logout-everywhere is true; ban is not.** The two shared one predicate, and only one of them was earned.
+>
+> **The enforcement gap is issue #35** (status column + refusal at login, module 2c). ⚠️ **It is still OPEN — this correction fixes the CLAIM, not the capability.** `apps/api/test/no-unbacked-ban-claim.node.test.ts` now fails if any spec re-asserts an enforced ban while the login path cannot deliver one.
 
 **Feed / search.** Pull-on-read chronological, keyset cursor, covering indexes; feed fetched client-side over an SSR skeleton; KV caches followee lists + fragments. Postgres FTS via the cache-disabled binding.
 
