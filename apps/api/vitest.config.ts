@@ -172,6 +172,12 @@ export default defineConfig({
                 PURGE_SECRET: "dev-purge-secret-not-for-production",
                 // A SECRET (src/notifications/unsub-token.ts). Dummy HMAC key for tests.
                 UNSUBSCRIBE_SIGNING_KEY: "test-unsub-signing-key",
+                // Cloudflare Access config for the admin gate (M4 2a). NOT
+                // secrets — the team domain and AUD tag are public identifiers —
+                // but supplied here for the same reason as the others: the suite
+                // must be CI-safe without .dev.vars existing.
+                CF_ACCESS_TEAM_DOMAIN: "testteam.cloudflareaccess.com",
+                CF_ACCESS_AUD: "test-aud-tag",
               },
             },
           }),
