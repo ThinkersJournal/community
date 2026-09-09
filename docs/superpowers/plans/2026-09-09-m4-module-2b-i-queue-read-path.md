@@ -168,11 +168,16 @@ beforeAll(async () => {
 afterAll(async () => { await client.end(); });
 
 // Every fixture hangs off a user; ON DELETE CASCADE removes posts, comments and
-// reports with it. moderation_actions has NO FK (module 2a, deliberately), so
-// its rows are cleaned explicitly.
+// reports with it.
+//
+// ⚠️ moderation_actions rows are NOT cleaned, and CANNOT BE: migration 0013's
+// trigger rejects every UPDATE and DELETE on that table. It is append-only by
+// construction, which is the point. Orphan action rows are harmless here --
+// the queue JOINs posts/comments, so once the fixture post is cascade-deleted
+// no query can surface them. (Measured: 98 orphan rows, 4 live posts, the
+// suite green on repeated runs.)
 afterEach(async () => {
   if (madeUsers.length > 0) {
-    await client.query(`DELETE FROM moderation_actions WHERE actor_admin = 'queue-test'`);
     await client.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [madeUsers]);
     madeUsers.length = 0;
   }
