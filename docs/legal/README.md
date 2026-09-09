@@ -26,10 +26,23 @@ legal decision:
   attorney must bless first. The policies cannot be finalized before this is.
 - `[[JURISDICTION]]` — governing law / venue (US state).
 - `[[CONTACT_ADDRESS]]`, `[[CONTACT_EMAIL]]` — service + general contact.
-- ✅ `[[DMCA_AGENT_*]]` — **FILLED 2026-09-05.** The registered DMCA Designated
-  Agent (name/address/email) is set in `dmca-policy.md`; the U.S. Copyright Office
-  registration is active. (The Copyright Office **registration number** is deliberately
-  NOT published in the policy — it isn't required in the notice-and-takedown text.)
+- ✅ `[[DMCA_AGENT_*]]` — **FILLED, and corrected 2026-09-08 against the actual
+  registration record.** The U.S. Copyright Office registration is **active**:
+  **DMCA-1079944**, service provider *Thinker's Journal*, designated agent Eric Evans.
+  `dmca-policy.md` now mirrors that record exactly — name, organization, address,
+  phone, and email.
+  - ⚠️ **The published email was wrong until this correction.** The policy carried
+    `ciresnave@gmail.com`; the registration is `ciresnave@yahoo.com`. **A policy that
+    publishes a different address than the one on file defeats the purpose of a
+    designated agent** — a notice sent to the published address would not reach the
+    registered one — so these two must never be allowed to drift apart again. If the
+    contact ever changes, the Copyright Office record and this file change *together*.
+  - The **registration number is recorded here for renewal tracking only** (the
+    registration must be renewed every three years) and is deliberately **not published
+    in the policy** — §512(c)(3) does not require it in the notice-and-takedown text.
+  - ⚠️ **This does NOT settle `[[LEGAL_ENTITY]]`.** "Thinker's Journal" is the *service
+    provider name on the DMCA registration*, which is not the same thing as the
+    operating entity's legal name; that still waits on the 501(c)(3) question below.
 - `[[EFFECTIVE_DATE]]` — set at finalization.
 
 ## Grounding

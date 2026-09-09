@@ -26,10 +26,15 @@ notice to our Designated Agent that includes all of the following (§512(c)(3)):
 6. A statement, **under penalty of perjury**, that the information is accurate and
    that you are the owner or authorized to act on the owner's behalf.
 
+**Service Provider:** Thinker's Journal
+
 **Designated Agent:**  
 Eric Evans  
-7600 E Las Palmas Drive, Prescott Valley, Arizona 86314  
-ciresnave@gmail.com
+ThinkersJournal.com  
+7600 East Las Palmas Drive  
+Prescott Valley, AZ 86314  
+Phone: 707-410-7339  
+Email: ciresnave@yahoo.com
 
 ⚠️ **Misrepresentation.** Under §512(f), knowingly materially misrepresenting that
 material is infringing can subject you to liability for damages. Do not send a
