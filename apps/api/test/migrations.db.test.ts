@@ -156,6 +156,9 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "reports")).toBe(true);
       expect(await columnExists(client, "posts", "hidden_at")).toBe(true);
       expect(await columnExists(client, "comments", "hidden_at")).toBe(true);
+      // 0013_moderation_actions.sql — proves the newest migration is
+      // reversible too, not just the ones that predate it.
+      expect(await tableExists(client, "moderation_actions")).toBe(true);
     });
 
     await migrate("down");
@@ -166,6 +169,7 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "media")).toBe(false);
       expect(await tableExists(client, "blocks")).toBe(false);
       expect(await tableExists(client, "reports")).toBe(false);
+      expect(await tableExists(client, "moderation_actions")).toBe(false);
     });
 
     // THE ISOLATION PROPERTY, pinned. The stack is torn down above — in OUR
@@ -190,6 +194,7 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "reports")).toBe(true);
       expect(await columnExists(client, "posts", "hidden_at")).toBe(true);
       expect(await columnExists(client, "comments", "hidden_at")).toBe(true);
+      expect(await tableExists(client, "moderation_actions")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });
