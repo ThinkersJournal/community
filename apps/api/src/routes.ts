@@ -17,6 +17,7 @@
  */
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
+import { handleAdminWhoami } from "./routes/admin";
 import { handleBlock, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
@@ -257,6 +258,12 @@ export const ROUTES: readonly RouteDef[] = [
   // WebP -> content-addressed R2 -> row. Takes RAW image bytes as the body, not
   // multipart — see src/routes/media.ts's header.
   { method: "POST", pattern: "/media", handler: handleUploadMedia },
+
+  // The Access-gated admin surface (M4 2a). Authenticates via Cloudflare
+  // Access (src/admin/require-admin.ts), a DIFFERENT trust domain from the
+  // member-session pipeline above — a member session confers no admin
+  // authority. See src/routes/admin.ts.
+  { method: "GET", pattern: "/admin/whoami", handler: handleAdminWhoami },
 
   // TEST-ONLY. `handleTestRoute` returns null when `TEST_ROUTES` is unset (i.e.
   // in production), and we fall through to the SAME notFoundResponse() every

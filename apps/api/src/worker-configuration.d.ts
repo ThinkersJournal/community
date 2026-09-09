@@ -24,6 +24,12 @@ interface __BaseEnv_Env {
 	PREVIEW_ORIGIN?: string;
 	PURGE_SECRET: string;
 	UNSUBSCRIBE_SIGNING_KEY: string;
+	// Cloudflare Access config for the admin gate (M4 2a) — supplied via
+	// `.dev.vars`/`--var`, not `wrangler.jsonc`, exactly like TEST_ROUTES.
+	// `wrangler types` does not know about these (they are not declared in
+	// `.dev.vars` in this checkout), so they are added by hand here.
+	CF_ACCESS_TEAM_DOMAIN: string;
+	CF_ACCESS_AUD: string;
 	USER_SECURITY: DurableObjectNamespace<import("./index").UserSecurityDO>;
 	NOTIFY: DurableObjectNamespace<import("./index").NotifyDO>;
 	POST_LIVE: DurableObjectNamespace<import("./index").PostLiveDO>;
