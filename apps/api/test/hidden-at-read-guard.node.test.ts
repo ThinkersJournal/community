@@ -33,7 +33,7 @@ import { describe, expect, it } from "vitest";
  * — see test/hyperdrive-binding-inventory.node.test.ts's header. This runs in
  * the Node project (vitest.config.ts) and touches NO database.
  *
- * SCOPE: `apps/api/src/routes/*.ts` ONLY (a stated, deliberate boundary). SQL
+ * SCOPE: every `.ts` file under `apps/api/src/routes`, RECURSIVELY. SQL
  * that lives outside routes — the notification email-drain joins
  * (src/notifications/), block/auto-hide helpers (src/moderation/), background
  * jobs (src/jobs/) — is not scanned here. The notification LIST join DOES live
@@ -166,7 +166,18 @@ function extractLiterals(source: string, fileName: string): string[] {
   return out;
 }
 
-const norm = (s: string): string => s.replace(/\s+/g, " ").trim();
+/**
+ * Strip SQL comments BEFORE whitespace normalization — ORDER IS LOAD-BEARING.
+ * A `--` comment runs to end of line, so it can only be removed while the
+ * newlines still exist; once `norm()` has collapsed them, a `--` would appear
+ * mid-line and its true extent is unrecoverable. Removing both comment forms
+ * closes the "hide the table reference behind a comment" evasion that the
+ * `readRefs` scan would otherwise miss.
+ */
+const stripSqlComments = (s: string): string =>
+  s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+
+const norm = (s: string): string => stripSqlComments(s).replace(/\s+/g, " ").trim();
 
 /** A `FROM`/`JOIN`/`USING` reference to posts/comments, with its table alias. */
 interface TableRef {
@@ -182,8 +193,12 @@ interface TableRef {
  * the alternation — so writes to the target table are silently (correctly) skipped.
  */
 function readRefs(normalized: string): TableRef[] {
+  // ⚠️ `(?:ONLY\s+)?` and `\(?\s*` close two documented evasions: `FROM ONLY
+  // posts` and `FROM (posts)` are both READ references that slipped past the
+  // original alternation. Capture-group numbers are unchanged (all the added
+  // groups are non-capturing), so the destructuring below still holds.
   const re =
-    /(?:\b([A-Za-z_]+)\s+)?\b(FROM|JOIN|USING)\s+(posts|comments)\b(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?/gi;
+    /(?:\b([A-Za-z_]+)\s+)?\b(FROM|JOIN|USING)\s+(?:ONLY\s+)?\(?\s*(posts|comments)\b(?:\s*\)\s*)?(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?/gi;
   const refs: TableRef[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(normalized)) !== null) {
@@ -208,10 +223,16 @@ function readRefs(normalized: string): TableRef[] {
  * anyway; such queries must qualify).
  */
 function filterSatisfied(normalized: string, ref: TableRef, singleHiddenTable: boolean): boolean {
-  if (ref.alias !== null && new RegExp(`${ref.alias}\\.hidden_at\\s+IS\\s+NULL`, "i").test(normalized)) {
+  // ⚠️ `includes()` on lowercased text, NOT a RegExp built from a variable.
+  // `normalized` has already had every whitespace run collapsed to ONE space,
+  // so the old `\s+` could only ever match a single space — the string check is
+  // EQUIVALENT here, and it removes the non-literal-RegExp (ReDoS) surface
+  // entirely rather than arguing the input happens to be trusted.
+  const lower = normalized.toLowerCase();
+  if (ref.alias !== null && lower.includes(`${ref.alias.toLowerCase()}.hidden_at is null`)) {
     return true;
   }
-  if (new RegExp(`${ref.table}\\.hidden_at\\s+IS\\s+NULL`, "i").test(normalized)) {
+  if (lower.includes(`${ref.table}.hidden_at is null`)) {
     return true;
   }
   if (singleHiddenTable && /(?<![.\w])hidden_at\s+IS\s+NULL/i.test(normalized)) {
@@ -243,7 +264,17 @@ interface ScanResult {
 }
 
 function scan(): ScanResult {
-  const files = readdirSync(ROUTES_DIR).filter((f) => f.endsWith(".ts")).sort();
+  // ⚠️ RECURSIVE, DELIBERATELY. A non-recursive scan registers a route in a
+  // subdirectory as an ABSENCE rather than a failure — and for this guard an
+  // absence is INDISTINGUISHABLE FROM COMPLIANCE, so the blind spot would read
+  // as a pass forever. `routes/` is flat today (measured: every entry a file,
+  // zero directories), which makes this a LATENT hazard closed before it lands
+  // rather than a live gap — the first route added in a subfolder is now
+  // covered instead of silently unguarded.
+  const files = readdirSync(ROUTES_DIR, { recursive: true })
+    .map((f) => String(f))
+    .filter((f) => f.endsWith(".ts"))
+    .sort();
   const violations: Violation[] = [];
   const usedEntries = new Set<AllowEntry>();
   let filteredReadCount = 0;
