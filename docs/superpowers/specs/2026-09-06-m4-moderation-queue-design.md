@@ -96,9 +96,16 @@ CREATE TABLE moderation_actions (
                    'content_restore','content_keep_hidden','content_remove',
                    'user_warn','user_suspend','user_ban','user_terminate',
                    'appeal_granted','appeal_denied')),
-  post_id        uuid REFERENCES posts(id)    ON DELETE SET NULL,
-  comment_id     uuid REFERENCES comments(id) ON DELETE SET NULL,
-  subject_user_id uuid REFERENCES users(id)   ON DELETE SET NULL,
+  -- ⚠️ BARE uuids, DELIBERATELY NO FOREIGN KEYS — see the note below.
+  post_id        uuid,
+  comment_id     uuid,
+  subject_user_id uuid,
+  -- Denormalized identity, captured at action time. The log must stay readable
+  -- after its subject is deleted, and a bare uuid is not readable.
+  subject_label  text,                   -- e.g. the handle at the time of action
+  violation_category text CHECK (violation_category IN
+                   ('spam','harassment','hate','sexual','violence','ip_infringement','other')),
+  action_expires_at timestamptz,         -- a suspension's intended end, recorded ON the action
   reason         text NOT NULL,          -- the statement of reasons (DSA); shown to the user
   internal_note  text,                   -- never shown to the user
   created_at     timestamptz NOT NULL DEFAULT now()
@@ -106,6 +113,7 @@ CREATE TABLE moderation_actions (
 CREATE INDEX moderation_actions_post_idx    ON moderation_actions (post_id, created_at)    WHERE post_id IS NOT NULL;
 CREATE INDEX moderation_actions_comment_idx ON moderation_actions (comment_id, created_at) WHERE comment_id IS NOT NULL;
 CREATE INDEX moderation_actions_subject_idx ON moderation_actions (subject_user_id, created_at);
+CREATE INDEX moderation_actions_category_idx ON moderation_actions (violation_category, created_at);
 
 -- APPEND-ONLY, enforced in the DB: the app role has DML, so discipline alone is not a guard.
 CREATE FUNCTION moderation_actions_immutable() RETURNS trigger AS $$
@@ -115,11 +123,43 @@ CREATE TRIGGER moderation_actions_no_update BEFORE UPDATE OR DELETE ON moderatio
   FOR EACH ROW EXECUTE FUNCTION moderation_actions_immutable();
 ```
 
-⚠️ FKs are `ON DELETE SET NULL`, **not CASCADE** — deleting a post must never erase the record
-that it was moderated. `actor_admin` is text (the Access identity), not a FK, because
-moderators are Access principals and need not be platform users.
+### ⚠️ Why this table has NO foreign keys — a defect found in review
+
+An earlier draft declared `post_id`/`comment_id`/`subject_user_id` as FKs with
+`ON DELETE SET NULL`. **That design was broken.** `ON DELETE SET NULL` performs an **UPDATE**
+on `moderation_actions`, which the immutability trigger above refuses — so deleting any post or
+user would have **failed outright**, making content and accounts undeletable and breaking GDPR
+erasure. The trigger and the FKs were mutually exclusive and the draft shipped both.
+
+The tempting fix is to carve an exception into the trigger for FK-nulling updates. **Rejected:
+an exception in a guard is a permanent hole shaped like the first thing that needed one.**
+Instead the FKs are removed entirely. An **append-only log must outlive its subjects** — that is
+the entire point of an audit record — so referential actions on it are not merely inconvenient,
+they are semantically wrong. Removing them **deletes the mutation path** rather than weakening
+the guard, and the trigger stays absolute.
+
+The cost is no referential integrity on the log, which is accepted: a dangling `post_id` after a
+post is deleted is *correct* for an audit record, and `subject_label` preserves human readability
+that a bare uuid loses. `actor_admin` is text for the same reason — moderators are Access
+principals and need not be platform users.
+
+⚠️ **Flagged, not asserted:** retaining a deleted user's uuid in the log is a
+retention-vs-erasure question (DSA statement-of-reasons retention pulls one way, GDPR erasure the
+other). It is a legal judgement, not an engineering one, and belongs in the attorney pass.
+
+`violation_category` exists because DSA Art. 15/24 transparency reporting needs **categorical
+counts**, and a free-text `reason` alone would force text-mining to produce them.
+`action_expires_at` records a suspension's intended duration **on the action**, so the log stays
+truthful after `users.suspended_until` has moved on — an audit log must record what was *done*,
+never depend on current state to explain itself.
 
 ### 3.2 Account status on `users`
+
+⚠️ **This gap is filed separately as issue #35** — a defect described only inside a design doc
+for future work is discoverable solely by someone reading that doc for an unrelated reason. It is
+*latent*, not exploitable today (no suspend feature exists to bypass), but it becomes live the
+instant anything assumes suspension works — **including the CSAM termination hook, which shares
+this primitive.**
 
 One primitive serving **both** the ladder and the CSAM pipeline's termination hook:
 
@@ -199,6 +239,14 @@ with `moderation_actions` as the single source of truth for "handled":
 This is deliberately derived rather than a denormalized `status` column: it cannot drift out of
 sync with the audit log, and a *new* report arriving after a decision correctly reopens the item.
 
+⚠️ **DO NOT DENORMALIZE THIS INTO A `status` COLUMN.** The rationale is recorded here so that a
+future performance argument has to argue against a stated reason rather than a silence. A status
+column is a *second* copy of a fact the audit log already holds, and the failure mode is silent:
+the column and the log disagree, the queue shows the column, and the log — the thing that has to
+be true for appeals and for DSA statements of reasons — is the copy nobody is looking at. If
+volume ever makes the derivation genuinely too slow, the answer is an index or a materialized
+view derived *from* the log, never a hand-maintained duplicate of it.
+
 ### 4.2 Ranking
 
 `reports` has no index supporting a global queue ordering (only partial
@@ -224,9 +272,34 @@ Exactly three content outcomes, each writing one `moderation_actions` row with a
 |---|---|
 | **Restore** | `hidden_at = NULL` — **the first un-hide path in the codebase**. Author notified. |
 | **Keep hidden** | `hidden_at` stays set; author notified with the statement of reasons. |
-| **Remove** | Tombstone, not a hard delete (mirrors the `comments.deleted_at` tombstone at `0004_engagement.sql:22`), preserving the audit trail. |
+| **Remove** | `hidden_at` set permanently **plus** a `content_remove` action in the log. No new column — see below. |
 
 Account actions are **not** available from this screen (decision #3).
+
+### ⚠️ Why "Remove" is not a `deleted_at` tombstone — corrected in review
+
+An earlier draft said removal was a tombstone "mirroring the `comments.deleted_at` tombstone."
+**Measured, and that was wrong on the facts:** `comments` has `deleted_at`
+(`0004_engagement.sql:22`) but **`posts` does not** — the only `ALTER TABLE posts` in the whole
+migration set is `0012`'s `hidden_at` — and author post-deletion is a **real hard
+`DELETE FROM posts`** (`routes/posts.ts:456`), documented there as explicitly *not* a tombstone.
+There was no posts tombstone to mirror.
+
+The obvious repair — add `posts.deleted_at` — is **rejected**, and the reason generalizes:
+
+> ⚠️ **A fix that adds a SECOND instance of the thing a guard protects ONE instance of widens the
+> hole while looking like a repair.**
+
+The `hidden-at-read-guard` structural test enforces exactly one visibility predicate:
+`hidden_at IS NULL`. Introducing `deleted_at` on `posts` would create a second predicate that
+**every public read must independently remember**, unguarded — silently widening the very leak
+surface the guard exists to close.
+
+So removal reuses the predicate that is already guarded: `hidden_at` set permanently, with the
+`content_remove` action in the log carrying the distinction between "hidden pending review" and
+"removed, final." The state machine lives in the audit log, not in a second column. Evidence is
+preserved for appeals and DSA; a true purge remains a separate, deliberate operation, and CSAM
+keeps its own preservation path.
 
 ⚠️ **Automation never decides.** The Guidelines state moderation "is human-reviewed; automated
 signals only *prioritize* review, they do not decide it." Auto-hide is provisional and
@@ -307,11 +380,23 @@ A public, unauthenticated `POST /dsa-notice` accepting a notice with the reporte
 hashed token → confirmation email → the reporter clicks → `email_verified_at` set → **only then**
 does the notice enter the review queue. An unconfirmed notice is inert and reaped.
 
-⚠️ **A DSA notice NEVER counts toward the auto-hide threshold.** Auto-hide requires 3 *distinct
-verified members*; an email-validated anonymous notice is a far weaker signal, and counting them
-would let three throwaway addresses hide any post on the site. DSA notices are **queue input for
-human review only** — they never hide anything automatically. This is the single most important
-safety property of this section.
+### ⚠️ ACCEPTANCE CONDITION AC-1 — binding, not descriptive
+
+> **A DSA notice NEVER counts toward the auto-hide threshold.** Auto-hide requires 3 *distinct
+> verified members*. An email-validated anonymous notice is a far weaker signal, and counting one
+> would let **three throwaway addresses hide any post on the site**. DSA notices are queue input
+> for human review only; they never hide anything automatically.
+>
+> **The implementing PR does not merge without a test that fails when this is violated** — a test
+> that seeds three verified DSA notices against one post and asserts `hidden_at IS NULL`, shown to
+> **fail** against an implementation that counts them.
+
+This is stated as an **acceptance condition on the implementation PR**, not as a line in the test
+plan below, and the distinction is deliberate. **A test plan is a proposal: it has no artifact and
+no clock.** This portfolio has already watched a normative clause cite conformance vectors that
+had been "optional hardening" weeks earlier and were never written — the citation survived, the
+tests never existed, and nothing failed to reveal it. Written here as a merge condition, **the
+document is what refuses**, rather than a reviewer having to remember.
 
 **Anti-abuse:** Turnstile on the form, a new `DSA_LIMITER` rate-limit binding, and the
 email-confirmation step itself (which costs an attacker a working inbox per notice).
@@ -331,10 +416,13 @@ sessions are the wrong trust domain for moderator authority.
 
 The Access principal's email is what lands in `moderation_actions.actor_admin` (decision #4).
 
-⚠️ **OPEN ITEM — the one thing this design does not settle:** whether the surface is served by
-the **web** Worker (Astro SSR, where Access naturally fronts a hostname) or as **API-only**
-endpoints. Recommendation: **web**. This is with the PM, is shared with the CSAM operator
-surface, and affects only where pages are rendered — no data-model consequence.
+✅ **RULED (portfolio PM, 2026-09-08): API-FIRST, with a thin server-rendered admin on top.
+No SPA.** This closes the design's last open item. It was the PM's call to make rather than the
+founder's — it carries no product or legal consequence, and holding it for him would have
+converted a technical decision into a founder one.
+
+The same ruling settles the **CSAM operator surface**, which sits on this identical foundation —
+which is precisely why 2a is built once, first, and shared.
 
 ---
 
@@ -355,7 +443,9 @@ Mirrors the repo's existing patterns (`*.db.test.ts` in the Node project for sch
 - **Ban/suspend enforcement** — a suspended user is refused at login *and* on mutations, and
   their live sessions die (epoch bump).
 - **DSA** — an unconfirmed notice is inert and never queued; a confirmed one queues; and
-  **three DSA notices do NOT auto-hide a post** (the §8 safety property, tested explicitly).
+  **three DSA notices do NOT auto-hide a post**. ⚠️ That last one is **AC-1 (§8/§12), a merge
+  condition, not a test-plan aspiration** — it must be shown to FAIL against an implementation
+  that counts them, or it proves nothing.
 - **Access gate** — admin endpoints reject a request with no/invalid Access JWT, and a valid
   *member session* grants no admin authority.
 - **Structural guard** — new admin routes reading `posts`/`comments` carry justified allowlist
@@ -365,10 +455,25 @@ Mirrors the repo's existing patterns (`*.db.test.ts` in the Node project for sch
 
 ## 11. Open items
 
-1. **Admin surface home: web vs API-only** (§9) — with the PM; recommendation web.
+1. ~~Admin surface home~~ — **CLOSED** (§9): API-first + thin server-rendered admin, no SPA.
+   Ruled by the portfolio PM 2026-09-08.
 2. **Proposed defaults awaiting the founder's review**, all flagged inline above: suspension
-   durations (24h/7d/30d, default 7d); ladder history expiry (12 months); appeal window
-   (30 days); "remove" = tombstone rather than hard delete.
+   durations (24h/7d/30d, default 7d); ladder history stops escalating after 12 months (the log
+   retains everything permanently); appeal window (30 days).
 3. **`[[APPEAL_CHANNEL]]`** in `docs/legal/community-guidelines.md` should be updated to name the
    in-app appeals form once built.
 4. **Slice sequencing** — 2a first (shared with the CSAM operator surface), then 2b, then 2c.
+5. **Legal, not engineering:** retaining a deleted user's uuid in the append-only log — DSA
+   statement-of-reasons retention versus GDPR erasure (§3.1). Flagged for the attorney pass.
+
+## 12. Binding acceptance conditions
+
+Collected so the implementation PR is checked against a list rather than a reader's memory.
+
+| # | Condition | Why it is binding rather than a test-plan line |
+|---|---|---|
+| **AC-1** | A DSA notice never counts toward auto-hide (§8) | Three throwaway addresses could otherwise hide any post |
+| **AC-2** | The append-only trigger is proven to **reject** an UPDATE *and* a DELETE | A guard never shown to fire is a claim, not a guard |
+| **AC-3** | A disabled/suspended unverified account **survives** `reapUnverifiedAccounts` | Otherwise a banned user, and the evidence, is silently deleted after 7 days (issue #35) |
+| **AC-4** | A suspended user is refused at **login** as well as on mutations | Killing live sessions alone does not stop re-entry (issue #35) |
+| **AC-5** | No second visibility predicate is introduced on `posts`/`comments` | The structural guard enforces `hidden_at` only; a second column widens the leak surface unguarded (§4.3) |
