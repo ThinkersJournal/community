@@ -136,6 +136,11 @@ describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)", (
       ageDays: 30,
       suspendedUntil: new Date(Date.now() + 864e5),
     });
+    const lapsed = await seed({
+      verified: false,
+      ageDays: 30,
+      suspendedUntil: new Date(Date.now() - 864e5), // suspension ALREADY EXPIRED
+    });
     const ordinary = await seed({ verified: false, ageDays: 30 });
 
     const ctx = createExecutionContext();
@@ -149,6 +154,13 @@ describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)", (
     expect(
       await present(suspended.id),
       "a suspended account was deleted by the reaper — the ban and its evidence are gone",
+    ).toBe(true);
+    // ⚠️ A LAPSED suspension still protects the row. This is the fixture that
+    // discriminates: a guard wrongly unified with Task 2's `isBarred`
+    // (`suspended_until < now()`) would reap this one and spare the others.
+    expect(
+      await present(lapsed.id),
+      "an expired suspension stopped protecting the row — the guard was unified with isBarred, which is Task 2's question, not the reaper's",
     ).toBe(true);
     // CONTROL, in the same reap: without it, "survived" is indistinguishable
     // from "the reaper deleted nothing at all".
