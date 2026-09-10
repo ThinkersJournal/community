@@ -42,7 +42,8 @@ enforceable = (a status column exists in migrations)
 | `apps/api/src/auth/account-status.ts` | **Create.** One predicate: is this row barred right now? |
 | `apps/api/src/routes/login.ts` | **Modify.** Select the columns; refuse a barred account. |
 | `apps/api/src/auth/reap-unverified.ts` | **Modify.** Exclude barred rows from the delete. |
-| `apps/api/test/user-account-status-schema.db.test.ts` | **Create.** Schema + the reaper guard (**AC-3**). |
+| `apps/api/test/user-account-status-schema.db.test.ts` | **Create.** The 0015 column shape, and nothing else. |
+| `apps/api/test/reap-unverified.test.ts` | **Modify.** The reaper guard (**AC-3**) — drives the real `reapUnverifiedAccounts`. |
 | `apps/api/test/login-barred.test.ts` | **Create.** Login refusal (**AC-4**). |
 | `apps/api/test/migrations.db.test.ts` | **Modify.** 0015 in the round-trip. |
 
@@ -50,73 +51,48 @@ enforceable = (a status column exists in migrations)
 
 ## Task 1: Migration 0015 + the reaper guard
 
-**Files:** create `0015_user_account_status.sql`; create `test/user-account-status-schema.db.test.ts`; modify `src/auth/reap-unverified.ts`, `test/migrations.db.test.ts`.
+**Files:** create `migrations/0015_user_account_status.sql`; create `test/user-account-status-schema.db.test.ts`; modify `src/auth/reap-unverified.ts`, `test/reap-unverified.test.ts`, `test/migrations.db.test.ts`.
 
 **Interfaces:** Produces `users.suspended_until`, `users.disabled_at`, `users.disabled_reason`.
 
-- [ ] **Step 1: Write the failing test**
+⚠️ **AC-3 IS PINNED AGAINST THE REAL `reapUnverifiedAccounts`, NEVER A COPY OF ITS SQL.** An
+earlier draft of this task gave the test its own `runReapPredicate()` helper holding a
+hand-written duplicate of the reaper's `DELETE`. That test would have passed **whether or not
+`src/auth/reap-unverified.ts` ever gained the guard** — it would have validated its own string.
+The guard therefore lives in `test/reap-unverified.test.ts` (the **pool** project), which already
+imports the production function and drives it against the real Hyperdrive binding. The
+`.db.test.ts` below keeps only what it is actually the right instrument for: the shape of the
+schema.
+
+- [ ] **Step 1: Write the failing schema test**
 
 Create `apps/api/test/user-account-status-schema.db.test.ts`:
 
 ```ts
-import { randomUUID } from "node:crypto";
-
 import { Client } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+/**
+ * Migration 0015 — the SHAPE of the three account-status columns.
+ *
+ * Scope is deliberately narrow: this file asks `information_schema` what the
+ * migration produced. It does NOT test the reaper. The reaper's AC-3 guard is
+ * pinned in test/reap-unverified.test.ts, which drives the real
+ * `reapUnverifiedAccounts` — a predicate re-typed into a test file proves
+ * only that the test file's own string works.
+ */
 
 const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://postgres:postgres@localhost:5432/thinkersjournal_test";
 
 let client: Client;
-const made: string[] = [];
 
 beforeAll(async () => {
   client = new Client({ connectionString: TEST_DATABASE_URL });
   await client.connect();
 });
 afterAll(async () => { await client.end(); });
-afterEach(async () => {
-  if (made.length > 0) {
-    await client.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [made]);
-    made.length = 0;
-  }
-});
-
-/** An UNVERIFIED account older than the reaper's 7-day window. */
-async function mkStaleUnverified(status: Record<string, unknown> = {}): Promise<string> {
-  const id = randomUUID();
-  await client.query(
-    `INSERT INTO users (id, email, password_hash, email_verified_at, created_at,
-                        suspended_until, disabled_at, disabled_reason)
-     VALUES ($1, $2, 'h', NULL, now() - interval '30 days', $3, $4, $5)`,
-    [id, `${id}@status.test`,
-     status["suspended_until"] ?? null, status["disabled_at"] ?? null, status["disabled_reason"] ?? null],
-  );
-  made.push(id);
-  return id;
-}
-
-const exists = async (id: string): Promise<boolean> => {
-  const { rows } = await client.query(`SELECT 1 FROM users WHERE id = $1`, [id]);
-  return rows.length === 1;
-};
-
-/** The reaper's predicate, as the implementation must have it after this task. */
-async function runReapPredicate(): Promise<void> {
-  await client.query(
-    `DELETE FROM users
-      WHERE id IN (
-        SELECT id FROM users
-         WHERE email_verified_at IS NULL
-           AND created_at < now() - interval '7 days'
-           AND disabled_at IS NULL
-           AND suspended_until IS NULL
-         ORDER BY created_at
-         LIMIT 500
-      )`,
-  );
-}
 
 describe("users account status (0015)", () => {
   it("adds three nullable columns", async () => {
@@ -126,33 +102,13 @@ describe("users account status (0015)", () => {
           AND column_name IN ('suspended_until','disabled_at','disabled_reason')`,
     );
     expect(rows).toHaveLength(3);
+    // Nullable is the point: NULL is "not barred", and it must be the state of
+    // every account that already exists when this migration runs.
     for (const r of rows) expect(r.is_nullable, `${r.column_name}`).toBe("YES");
     const byName = new Map(rows.map((r) => [r.column_name, r.data_type]));
     expect(byName.get("suspended_until")).toBe("timestamp with time zone");
     expect(byName.get("disabled_at")).toBe("timestamp with time zone");
     expect(byName.get("disabled_reason")).toBe("text");
-  });
-
-  // ⚠️ AC-3 (binding, design §12). Without this, a banned account that never
-  // verified its email is DELETED after 7 days -- the user AND the evidence.
-  it("⚠️ AC-3: a DISABLED unverified account SURVIVES the reaper", async () => {
-    const id = await mkStaleUnverified({ disabled_at: new Date(), disabled_reason: "csam" });
-    await runReapPredicate();
-    expect(await exists(id), "a disabled account was deleted by the reaper — the ban and its evidence are gone").toBe(true);
-  });
-
-  it("⚠️ AC-3: a SUSPENDED unverified account SURVIVES the reaper", async () => {
-    const id = await mkStaleUnverified({ suspended_until: new Date(Date.now() + 864e5) });
-    await runReapPredicate();
-    expect(await exists(id)).toBe(true);
-  });
-
-  it("CONTROL: an ordinary stale unverified account is STILL reaped", async () => {
-    // Without this, "survives" would be indistinguishable from "the reaper
-    // stopped working", and both AC-3 tests would pass against a no-op.
-    const id = await mkStaleUnverified();
-    await runReapPredicate();
-    expect(await exists(id), "the reaper deleted nothing — the guard above proves nothing").toBe(false);
   });
 });
 ```
@@ -160,7 +116,7 @@ describe("users account status (0015)", () => {
 - [ ] **Step 2: Run it — expect FAIL**
 
 `pnpm --filter @thinkersjournal/api exec vitest run --project node test/user-account-status-schema.db.test.ts`
-Expected: FAIL — `column "suspended_until" of relation "users" does not exist`.
+Expected: FAIL — `expected [] to have a length of 3`.
 
 - [ ] **Step 3: Write the migration**
 
@@ -193,7 +149,117 @@ ALTER TABLE users DROP COLUMN IF EXISTS disabled_at;
 ALTER TABLE users DROP COLUMN IF EXISTS suspended_until;
 ```
 
-- [ ] **Step 4: Guard the reaper**
+- [ ] **Step 4: Add 0015 to the migration round-trip**
+
+In `test/migrations.db.test.ts`, add `columnExists(client, "users", "disabled_at")` to all three
+checkpoints — `true` / `false` / `true`.
+
+- [ ] **Step 5: Apply the migration; the schema test goes green**
+
+```bash
+pnpm --filter @thinkersjournal/api run migrate:test
+pnpm --filter @thinkersjournal/api exec vitest run --project node test/user-account-status-schema.db.test.ts test/migrations.db.test.ts
+```
+Expected: PASS.
+
+- [ ] **Step 6: Write the AC-3 guard test — against the REAL reaper**
+
+The columns now exist and the reaper is **still unguarded**, which is exactly the state in which
+this test must first be run. In `apps/api/test/reap-unverified.test.ts`:
+
+**6a.** Widen `seed()` to carry an optional account status. Replace its options type and its
+`INSERT` (the rest of the helper is unchanged):
+
+```ts
+async function seed(opts: {
+  verified: boolean;
+  ageDays: number;
+  disabledAt?: Date;
+  suspendedUntil?: Date;
+}): Promise<{ id: string; username: string }> {
+  const unique = crypto.randomUUID().replace(/-/g, "");
+  const username = `reap${unique.slice(0, 20)}`;
+  const id = await ctxRun(async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `INSERT INTO users (email, password_hash, email_verified_at, created_at,
+                          disabled_at, suspended_until)
+       VALUES ($1, 'x', $2, now() - ($3 || ' days')::interval, $4, $5)
+       RETURNING id`,
+      [
+        `reap-${unique}@example.com`,
+        opts.verified ? new Date() : null,
+        String(opts.ageDays),
+        opts.disabledAt ?? null,
+        opts.suspendedUntil ?? null,
+      ],
+    );
+    const userId = rows[0]!.id;
+    await c.query(`INSERT INTO profiles (user_id, username) VALUES ($1, $2)`, [userId, username]);
+    return userId;
+  });
+  createdUserIds.push(id);
+  return { id, username };
+}
+```
+
+**6b.** Append this `describe` to the same file, after the existing `describe("reapUnverifiedAccounts", …)`:
+
+```ts
+/**
+ * ⚠️ AC-3 (issue #35, design §12). A barred account that never verified its
+ * email is unverified AND stale, so the reaper's ordinary predicate matches it
+ * exactly. Deleting it takes the user AND THE EVIDENCE -- the record an appeal,
+ * a DSA statement of reasons, or a preservation obligation is about.
+ *
+ * All three fixtures are reaped in ONE invocation, so the control is not a
+ * separate run that could differ: if the reaper had simply stopped working,
+ * the third assertion fails and the two guards prove nothing.
+ */
+describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)", () => {
+  it("spares disabled and suspended accounts while still reaping an ordinary one", async () => {
+    const disabled = await seed({ verified: false, ageDays: 30, disabledAt: new Date() });
+    const suspended = await seed({
+      verified: false,
+      ageDays: 30,
+      suspendedUntil: new Date(Date.now() + 864e5),
+    });
+    const ordinary = await seed({ verified: false, ageDays: 30 });
+
+    const ctx = createExecutionContext();
+    await reapUnverifiedAccounts(env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(
+      await present(disabled.id),
+      "a disabled account was deleted by the reaper — the ban and its evidence are gone",
+    ).toBe(true);
+    expect(
+      await present(suspended.id),
+      "a suspended account was deleted by the reaper — the ban and its evidence are gone",
+    ).toBe(true);
+    // CONTROL, in the same reap: without it, "survived" is indistinguishable
+    // from "the reaper deleted nothing at all".
+    expect(
+      await present(ordinary.id),
+      "the reaper deleted nothing — the two guards above prove nothing",
+    ).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 7: Run it — expect FAIL, and CHECK THE FAILURE IS THE RIGHT ONE**
+
+```bash
+pnpm --filter @thinkersjournal/api exec vitest run --project pool test/reap-unverified.test.ts
+```
+Expected: FAIL on the **first** assertion — *"a disabled account was deleted by the reaper"*.
+
+⚠️ **If it fails on the third assertion instead** (`the reaper deleted nothing`), the reaper is
+not running at all and this red says nothing about the guard — stop and find out why before
+writing Step 8. ⚠️ **If it PASSES**, the fixtures are not reaching the reaper's predicate (wrong
+`ageDays`, a stray `email_verified_at`) — a green here would make Step 8 unfalsifiable.
+
+- [ ] **Step 8: Guard the reaper**
 
 In `apps/api/src/auth/reap-unverified.ts`, add two terms to the inner `SELECT`:
 
@@ -208,23 +274,28 @@ and above the query, this comment:
       // ⚠️ A BARRED ACCOUNT IS NEVER REAPED, even unverified and stale. A ban
       // whose subject was never verified would otherwise be deleted after 7
       // days -- taking the user AND THE EVIDENCE with it. See issue #35 and
-      // AC-3; test/user-account-status-schema.db.test.ts pins it.
+      // AC-3; test/reap-unverified.test.ts pins it against this function.
 ```
 
-- [ ] **Step 5: Add 0015 to the migration round-trip**
+⚠️ **`suspended_until IS NULL`, not `suspended_until < now()`** — a *lapsed* suspension still
+means this account has been moderated, and its history is worth more than a reclaimed handle.
+This is deliberately **stricter than `isBarred` in Task 2**, where an expired suspension must let
+the user log in again. The two predicates answer different questions; do not unify them.
 
-In `test/migrations.db.test.ts`, add `columnExists(client, "users", "disabled_at")` to all three checkpoints — `true` / `false` / `true`.
+- [ ] **Step 9: Run — expect PASS**
 
-- [ ] **Step 6: Apply and verify**
+```bash
+pnpm --filter @thinkersjournal/api exec vitest run --project pool test/reap-unverified.test.ts
+pnpm --filter @thinkersjournal/api exec vitest run --project node
+```
+Expected: PASS — including the pre-existing reaper tests, which must be unaffected.
 
-`pnpm --filter @thinkersjournal/api run migrate:test && pnpm --filter @thinkersjournal/api exec vitest run --project node`
-Expected: PASS, including the control proving the reaper still reaps.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add apps/api/migrations/0015_user_account_status.sql apps/api/src/auth/reap-unverified.ts \
-        apps/api/test/user-account-status-schema.db.test.ts apps/api/test/migrations.db.test.ts
+        apps/api/test/user-account-status-schema.db.test.ts apps/api/test/reap-unverified.test.ts \
+        apps/api/test/migrations.db.test.ts
 git commit -m "feat(m4): account-status columns; the reaper never deletes a barred account"
 ```
 
@@ -364,7 +435,7 @@ This slice ships **no writer**, so there is nothing here to enforce it against �
 
 ## Self-Review
 
-**Spec coverage:** §3.2 (three columns, soft-disable, reaper guard) → Task 1. §5 login refusal → Task 2. **AC-3** → Task 1 with a control proving the reaper still reaps. **AC-4** → Task 2 with a control proving the harness can log someone in.
+**Spec coverage:** §3.2 (three columns, soft-disable, reaper guard) → Task 1. §5 login refusal → Task 2. **AC-3** → Task 1, pinned against the real `reapUnverifiedAccounts` in the pool project, with a control reaped in the SAME invocation proving the reaper still reaps. **AC-4** → Task 2 with a control proving the harness can log someone in.
 
 **Placeholders:** none.
 
@@ -375,7 +446,7 @@ This slice ships **no writer**, so there is nothing here to enforce it against �
 | block | how |
 |---|---|
 | migration `0015` | executed against the live schema in a rolled-back transaction |
-| the guarded reaper predicate | executed; **AC-3 proven** — disabled survives `1`, suspended survives `1`, ordinary reaped `0` (the control) |
+| the guarded reaper predicate | executed against the live schema — disabled survives `1`, suspended survives `1`, ordinary reaped `0` (the control). ⚠️ **This validated the SQL, not the shipped function.** It was run as a stand-alone statement, and the first draft then handed that same statement to the test as `runReapPredicate()` — which would have made AC-3 pass with `reap-unverified.ts` untouched. Task 1 Step 6 now drives the real `reapUnverifiedAccounts`, and Step 7 requires the red to arrive on the guard's own assertion. |
 | `isBarred` | extracted from this file, `tsc --noEmit` **exit 0**, and all four states checked: clean `false`, disabled `true`, suspension-in-future `true`, **suspension-expired `false`** |
 
 Four defects in previous modules came from plan code handed over as "use this verbatim" without being run, and the last hid in a *test fixture* rather than the implementation — which is why the fixtures and the reaper predicate were executed here too, not just the module under test.
