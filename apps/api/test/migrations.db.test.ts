@@ -80,6 +80,14 @@ async function columnExists(client: Client, table: string, column: string): Prom
   return rows.length === 1;
 }
 
+async function indexExists(client: Client, indexName: string): Promise<boolean> {
+  const { rows } = await client.query<{ n: string }>(
+    `SELECT count(*) AS n FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1`,
+    [indexName],
+  );
+  return Number(rows[0]!.n) > 0;
+}
+
 // globalSetup migrates the SHARED DB; this one is ours to set up. Idempotent
 // (node-pg-migrate's `pgmigrations` table), so this is a no-op after run 1.
 beforeAll(async () => {
@@ -159,6 +167,8 @@ describe("0001 users + profiles migration", () => {
       // 0013_moderation_actions.sql — proves the newest migration is
       // reversible too, not just the ones that predate it.
       expect(await tableExists(client, "moderation_actions")).toBe(true);
+      // 0014_reports_created_idx.sql — the moderation queue's ordering index.
+      expect(await indexExists(client, "reports_created_idx")).toBe(true);
     });
 
     await migrate("down");
@@ -170,6 +180,7 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "blocks")).toBe(false);
       expect(await tableExists(client, "reports")).toBe(false);
       expect(await tableExists(client, "moderation_actions")).toBe(false);
+      expect(await indexExists(client, "reports_created_idx")).toBe(false);
     });
 
     // THE ISOLATION PROPERTY, pinned. The stack is torn down above — in OUR
@@ -195,6 +206,7 @@ describe("0001 users + profiles migration", () => {
       expect(await columnExists(client, "posts", "hidden_at")).toBe(true);
       expect(await columnExists(client, "comments", "hidden_at")).toBe(true);
       expect(await tableExists(client, "moderation_actions")).toBe(true);
+      expect(await indexExists(client, "reports_created_idx")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });
