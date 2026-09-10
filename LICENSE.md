@@ -29,9 +29,16 @@ Dual-licensed under **either** of:
 
 at your option. SPDX: `MIT OR Apache-2.0`.
 
-Covers both Workers (`apps/api`, `apps/web`) in full — routes, components, layouts, styles,
-client scripts, Durable Objects, database migrations, build tooling and tests — together
-with the repository's engineering documentation under `docs/`.
+Covers the work in both Workers (`apps/api`, `apps/web`) — routes, components, layouts,
+styles, client scripts, Durable Objects, database migrations, build tooling and tests —
+together with the repository's engineering documentation under `docs/`.
+
+⚠️ **Except the generated Workers type definitions, which are not ours to license.**
+`apps/api/src/worker-configuration.d.ts` and `apps/web/worker-configuration.d.ts` are emitted
+by `wrangler types` and carry **Copyright (c) Cloudflare** and **Copyright (c) Microsoft
+Corporation**, licensed **Apache-2.0 only**. They are checked in so the build reproduces
+without a `wrangler` run; they remain under their own terms, and the dual grant above does
+**not** reach them. Relicensing them under MIT would be asserting a grant nobody here holds.
 
 ## 2. User Content — not ours to license, and not covered by this file
 
