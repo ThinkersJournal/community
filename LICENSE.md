@@ -31,7 +31,8 @@ at your option. SPDX: `MIT OR Apache-2.0`.
 
 Covers the work in both Workers (`apps/api`, `apps/web`) — routes, components, layouts,
 styles, client scripts, Durable Objects, database migrations, build tooling and tests —
-together with the repository's engineering documentation under `docs/`.
+together with the repository's engineering documentation under `docs/` — **except
+`docs/legal/`, which Section 2 routes to Section 3 and which this grant does not reach.**
 
 ⚠️ **Except the generated Workers type definitions, which are not ours to license.**
 `apps/api/src/worker-configuration.d.ts` and `apps/web/worker-configuration.d.ts` are emitted
@@ -56,7 +57,10 @@ software must not be read as one — this is the single most likely misreading o
 here rather than left to inference.
 
 The legal policy drafts under `docs/legal/` are governance documents for this service, not
-templates offered for reuse; they are Section 3 material.
+templates offered for reuse; they are Section 3 material. ⚠️ **Section 1's `docs/` grant
+excludes them, and says so — if either sentence is ever edited, edit both.** A licence that
+grants and reserves the same path leaves a reader no way to tell which clause governs, and
+ambiguity is the entire cost of this document.
 
 ## 3. Site copy and brand — all rights reserved
 
