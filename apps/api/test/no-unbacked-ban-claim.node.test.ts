@@ -150,7 +150,7 @@ function allMigrations(): string {
  * Does any migration add a status-bearing column TO `users`?
  *
  * ⚠️ STATEMENT-SCOPED AND CASE-INSENSITIVE, and that direction is deliberate.
- * A MISS here produces a FALSE RED *after* module 2c lands — the guard would
+ * A MISS here produces a FALSE RED *after* issue #35 lands — the guard would
  * tell the lane their claim is unbacked exactly when they had just backed it,
  * which is how a detector gets muted and then deleted as flaky. So the reader
  * is permissive about FORM (line breaks, casing, quoted identifiers) and strict
@@ -229,7 +229,7 @@ describe("no document asserts an enforced ban the code cannot deliver", () => {
         `banned user logging back in, because nothing in the login query can ` +
         `express that the account is barred.\n\n` +
         `This is issue #35. Resolve it EITHER WAY and this test goes green:\n` +
-        `  - land the status column and make login refuse on it (module 2c), or\n` +
+        `  - land the status column and make login refuse on it (issue #35), or\n` +
         `  - correct the spec to describe what the epoch actually achieves.\n\n` +
         `⚠️ KNOWN LIMIT, stated rather than hidden: this test keys on ONE phrase. ` +
         `Rewording the claim to a DIFFERENT false sentence makes it go green ` +
@@ -267,6 +267,12 @@ describe("no document asserts an enforced ban the code cannot deliver", () => {
     // (see src/routes/login.ts's ORDER comment) — without stripping, THAT
     // string alone kept this ratchet green with the real call deleted,
     // which is the second thing measured while proving this can fail.
+    //
+    // The two `.replace` calls below can only DELETE characters — neither can
+    // insert the token `isBarred(row)` into the string. So stripping can
+    // produce a false RED (over-eager stripping removes a real call along
+    // with a comment) but it cannot manufacture the token and therefore
+    // cannot produce a false GREEN.
     const loginCodeOnly = login
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/\/\/.*$/gm, "");
@@ -292,14 +298,25 @@ describe("no document asserts an enforced ban the code cannot deliver", () => {
         `LITERAL call \`isBarred(row)\`. Renaming the function, the local ` +
         `variable, or switching to a differently-named predicate makes this ` +
         `go red for a reason that is not a regression — update the pattern ` +
-        `in that case, don't delete the test.`,
+        `in that case, don't delete the test.\n\n` +
+        `⚠️ AND THIS CHECK IS LEXICAL, NOT SEMANTIC: it proves the token ` +
+        `\`isBarred(row)\` is present in comment-stripped source, nothing ` +
+        `more. It would stay GREEN on \`if (isBarred(row)) { /* no-op */ }\`, ` +
+        `on a negated \`if (!isBarred(row))\`, or on the call sitting in a ` +
+        `helper nothing ever invokes — none of those actually refuse a ` +
+        `barred login. Those variants ARE covered, just not by this test: ` +
+        `\`test/login-barred.test.ts\` asserts the real HTTP response (401, ` +
+        `same body as a wrong password) for a disabled/suspended account, ` +
+        `which is the only place the SEMANTICS are actually checked. This ` +
+        `ratchet's job is narrower — catch the call being DELETED — and it ` +
+        `leans on that other file for everything past deletion.`,
     ).toBe(true);
   });
 
   /**
    * ⚠️ THE READER'S OWN TWO-SIDED TEST, and it exists because of the failure
    * DIRECTION. A miss here reads as "no enforcement" and keeps the guard RED
-   * *after* module 2c lands — telling the lane their claim is unbacked exactly
+   * *after* issue #35 lands — telling the lane their claim is unbacked exactly
    * when they had just backed it. That is how a detector gets muted and then
    * deleted as flaky, so the reader is exercised against the awkward forms
    * directly rather than trusted.
@@ -327,7 +344,7 @@ describe("no document asserts an enforced ban the code cannot deliver", () => {
       expect(
         schemaCanExpressABan(sql).length,
         `the reader missed a status column in the ${label} form — this produces a ` +
-          `FALSE RED after module 2c lands, which is the failure direction that ` +
+          `FALSE RED after issue #35 lands, which is the failure direction that ` +
           `gets guards deleted`,
       ).toBeGreaterThan(0);
     }

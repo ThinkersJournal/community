@@ -91,7 +91,7 @@ interface Authed {
 
 /**
  * Mint a real session for `userId`, stamped with the user's CURRENT epoch read
- * from the Durable Object — exactly what `POST /auth/login` does (step 7 of
+ * from the Durable Object — exactly what `POST /auth/login` does (step 8 of
  * src/routes/login.ts). Stamping the real epoch (rather than a hardcoded
  * number) is what makes the revocation tests below meaningful: the session
  * starts valid, and only `bumpEpoch()` makes it stale.

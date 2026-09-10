@@ -148,7 +148,7 @@ describe("⚠️ login route bars disabled/suspended accounts in a WINDOW: after
   });
 
   it(
-    "the password-verification statement (step 5) comes BEFORE the barring check (step 5.5)",
+    "the password-verification statement (step 5) comes BEFORE the barring check (step 6)",
     () => {
       const passwordCheck = findStatementInHandleLogin(source, (s) =>
         s.includes("!passwordOk"),

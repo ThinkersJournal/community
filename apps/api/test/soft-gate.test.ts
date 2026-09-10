@@ -99,7 +99,7 @@ interface Authed {
  * DO starts at 0). Since Task 16 the pipeline compares this stamp against the
  * DO on every mutation, so a made-up epoch is a REVOKED session: every case
  * below would 401 before reaching the gate. This mirrors what `POST
- * /auth/login` stamps (src/routes/login.ts, step 7).
+ * /auth/login` stamps (src/routes/login.ts, step 8).
  */
 async function sessionTokenFor(userId: string): Promise<Authed> {
   const data: SessionData = {
