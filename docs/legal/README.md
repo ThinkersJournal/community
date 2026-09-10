@@ -40,6 +40,20 @@ legal decision:
   - The **registration number is recorded here for renewal tracking only** (the
     registration must be renewed every three years) and is deliberately **not published
     in the policy** — §512(c)(3) does not require it in the notice-and-takedown text.
+  - ⚠️ **The phone number is published for DMCA notice-and-takedown ONLY.** CireSnave
+    authorised it with the constraint attached, and **the constraint travels with the
+    permission**: *"Obviously, don't put it in as a primary contact number for the site
+    but for things like DMCA where there are legal reasons for people to \*need\* to
+    contact me, I'm fine with it."* It is a personal line. It must not appear in a
+    footer, a contact page, an `/about`, or structured data. If the site needs a contact
+    number, that is a **different number and a different decision** — not this one
+    reused. Enforced by `apps/api/test/dmca-phone-only-on-dmca-page.node.test.ts`, which
+    reads the number *from this policy* and fails if any other file in the repository
+    carries it.
+  - ⚠️ **A registration is only as good as the inbox behind it.** The address published
+    here must be one the agent actually reads. If `ciresnave@yahoo.com` ever stops being
+    monitored, that is **a re-filing with the Copyright Office**, not an edit to this
+    file — the two must never diverge (see above).
   - ⚠️ **This does NOT settle `[[LEGAL_ENTITY]]`.** "Thinker's Journal" is the *service
     provider name on the DMCA registration*, which is not the same thing as the
     operating entity's legal name; that still waits on the 501(c)(3) question below.
