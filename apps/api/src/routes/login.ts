@@ -70,6 +70,7 @@
  */
 import { LoginInput } from "@thinkersjournal/shared";
 
+import { isBarred } from "../auth/account-status";
 import { checkOrigin } from "../auth/csrf";
 import { base64urlEncode } from "../auth/encoding";
 import { hashPassword, needsRehash, verifyPassword } from "../auth/password";
@@ -118,6 +119,8 @@ export const DUMMY_HASH =
 interface UserRow {
   id: string;
   password_hash: string;
+  suspended_until: Date | null;
+  disabled_at: Date | null;
 }
 
 function json(body: unknown, status: number, headers: HeadersInit = {}): Response {
@@ -223,7 +226,7 @@ export async function handleLogin(
   // `users.email` is citext, so this match is case-insensitive.
   const row = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query(
-      "SELECT id, password_hash FROM users WHERE email = $1",
+      "SELECT id, password_hash, suspended_until, disabled_at FROM users WHERE email = $1",
       [email],
     );
     return (rows[0] ?? null) as UserRow | null;
@@ -240,6 +243,14 @@ export async function handleLogin(
 
   const passwordOk = await verifyPassword(password, row.password_hash);
   if (!passwordOk) {
+    return unauthorized();
+  }
+
+  // ⚠️ AFTER the password check, not before. Refusing earlier would make a
+  // barred account answer faster than a wrong password and turn this route
+  // into an account-state oracle — the same enumeration leak the DUMMY_HASH
+  // verify above exists to prevent.
+  if (isBarred(row)) {
     return unauthorized();
   }
 
