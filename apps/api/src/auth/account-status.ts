@@ -8,6 +8,10 @@
  * `disabled_at` is permanent (ban, or CSAM termination). `suspended_until` is
  * temporary and EXPIRES ON ITS OWN — a suspension whose time has passed bars
  * nothing, which is what makes it a suspension rather than a ban.
+ *
+ * ⚠️ Strict `>`, not `>=`, below: at the INSTANT `suspended_until` equals
+ * `now`, the suspension has finished and the user is free — the boundary
+ * itself belongs to freedom, not to the bar.
  */
 export interface AccountStatusRow {
   readonly suspended_until: Date | null;

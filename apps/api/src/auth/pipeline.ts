@@ -48,6 +48,21 @@ function emailNotVerifiedResponse(): Response {
  * Hyperdrive never invalidates on write, so a cached read here would keep
  * denying (or granting) access based on a stale `email_verified_at` for up
  * to 60s after `GET /verify-email` runs — a real security bug.
+ *
+ * ⚠️ RESIDUAL RISK (issue #35, not fixed here): design spec
+ * `2026-09-06-m4-moderation-queue-design.md:174` binds BOTH login and this
+ * mutating pipeline to refuse a barred user. This branch does login only —
+ * the pipeline half is deliberately out of scope, a later module's work.
+ * The intended cover in the meantime is `security_epoch`: bumping it kills
+ * every live session. But nothing bumps it today — the only way to SET
+ * `disabled_at`/`suspended_until`/`disabled_reason` right now is a human
+ * running raw SQL, and that human will not also bump an epoch. So a
+ * manually-disabled user is barred from RE-ENTRY (login refuses them) but
+ * keeps acting on whatever session they already hold, indefinitely, until it
+ * expires on its own. This `SELECT` already reads `users` by `session.userId`
+ * on every mutating request — widening it to also select
+ * `suspended_until`/`disabled_at` and refusing here is the near-free place to
+ * close this gap when that work is scheduled.
  */
 export async function requireVerifiedEmail(
   env: Env,

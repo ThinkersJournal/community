@@ -18,6 +18,13 @@ import { withClient } from "../src/db/client";
  *
  * Runs in the POOL project (real workerd) against the real Hyperdrive/Postgres
  * binding, same shape as test/email-drain.test.ts.
+ *
+ * ⚠️ ONE RESIDUE CLASS THE REAPER ITSELF CANNOT CLEAN UP: the AC-3 describe
+ * block below seeds fixtures that are barred by construction, so if its
+ * `afterEach` ever fails to run (timeout, hard kill) those rows persist in
+ * the shared test database and — unlike every other fixture in this file —
+ * the reaper will never delete them either. A stale `reap...@example.com`
+ * row with `disabled_at`/`suspended_until` set came from here.
  */
 
 const ALLOWED_ORIGIN = "http://localhost:8787";
