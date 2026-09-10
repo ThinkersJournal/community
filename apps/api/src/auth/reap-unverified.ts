@@ -42,12 +42,18 @@ export async function reapUnverifiedAccounts(
   ctx: ExecutionContext,
 ): Promise<number> {
   const n = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    // ⚠️ A BARRED ACCOUNT IS NEVER REAPED, even unverified and stale. A ban
+    // whose subject was never verified would otherwise be deleted after 7
+    // days -- taking the user AND THE EVIDENCE with it. See issue #35 and
+    // AC-3; test/reap-unverified.test.ts pins it against this function.
     const { rowCount } = await c.query(
       `DELETE FROM users
         WHERE id IN (
           SELECT id FROM users
            WHERE email_verified_at IS NULL
              AND created_at < now() - interval '7 days'
+             AND disabled_at IS NULL
+             AND suspended_until IS NULL
            ORDER BY created_at
            LIMIT $1
         )`,
