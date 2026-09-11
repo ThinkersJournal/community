@@ -198,9 +198,39 @@ describe("GET /public/posts", () => {
 describe("GET /public/profile", () => {
   it("paginates newest-first by keyset", async () => {
     const author = await onboardedActor();
-    for (let i = 0; i < 25; i++) {
-      await create(author, { title: `Post ${i}`, markdownSource: "x", status: "published" });
-    }
+    // Seed 25 PUBLISHED posts in ONE statement rather than 25 sequential HTTP
+    // round trips through `create()` (issue #46). The round-trip form is a
+    // full worker request each time — auth, CSRF, a DB write — and while it
+    // passes running alone, 25 of them serialized was enough to intermittently
+    // exceed the pool project's 20s testTimeout under full-suite contention
+    // against the one Docker Postgres every project shares. A straight INSERT
+    // removes the round trips instead of accommodating them with a bigger
+    // timeout (already raised once, 5s -> 20s).
+    //
+    // ⚠️ THE TRAP: the assertions below need `id` strictly increasing in title
+    // order (Post 0 oldest -> Post 24 newest), because the handler's keyset
+    // page orders `ORDER BY id DESC` and pins `first.posts[0].title ===
+    // "Post 24"`. uuidv7() is time-ordered, but a bare
+    // `uuidv7() FROM generate_series(...)` runs inside a single millisecond —
+    // whether the 25 ids come out monotonic then depends on the uuidv7
+    // implementation's intra-millisecond tie-breaking, NOT on anything this
+    // test controls. That would swap one flake (timeout) for a subtler one
+    // (occasional misordering). `uuidv7(make_interval(secs => i - 25))` gives
+    // each row a distinct, strictly increasing timestamp input by
+    // construction, so the ordering does not depend on that implementation
+    // detail. Do not "simplify" this back to a bare `uuidv7()`.
+    const seedCtx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, seedCtx, (c) =>
+      c.query(
+        `INSERT INTO posts (id, author_id, title, slug, markdown_source, status, published_at)
+         SELECT uuidv7(make_interval(secs => i - 25)), $1,
+                'Post ' || i::text, 'post-' || i::text, 'x', 'published', now()
+           FROM generate_series(0, 24) AS i`,
+        [author.userId],
+      ),
+    );
+    await waitOnExecutionContext(seedCtx);
+
     const first = (await (
       await fetchWorker(new Request(`https://api.test/public/profile?username=${author.username}`))
     ).json()) as PublicProfile;
