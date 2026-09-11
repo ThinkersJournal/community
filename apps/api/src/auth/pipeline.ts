@@ -62,7 +62,14 @@ function emailNotVerifiedResponse(): Response {
  * expires on its own. This `SELECT` already reads `users` by `session.userId`
  * on every mutating request — widening it to also select
  * `suspended_until`/`disabled_at` and refusing here is the near-free place to
- * close this gap when that work is scheduled.
+ * close this gap.
+ *
+ * ⚠️ TRACKED AS ISSUE #50, which carries the fix and its acceptance criteria.
+ * This paragraph used to end "when that work is scheduled" — and nothing
+ * scheduled it. A deferral written only in a code comment has no scheduler:
+ * it is visible to whoever next opens this function and to no board, no
+ * tracker and no query. If #50 is closed without this SELECT widening, this
+ * comment is wrong and should be deleted, not left standing.
  */
 export async function requireVerifiedEmail(
   env: Env,
