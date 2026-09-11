@@ -16,7 +16,7 @@
 
 - **PostgreSQL 18 on Neon via two Hyperdrive bindings** — `HYPERDRIVE_FRESH` (cache-disabled) and `HYPERDRIVE_CACHED`. Postgres dialect only; this is not SQLite and not D1.
 - ⚠️ **AC-5, binding:** *"No second visibility predicate is introduced on `posts`/`comments`."* `hidden_at IS NULL` is the only one. Adding `deleted_at` to `posts` — or any second column a public read must independently remember — widens the leak surface the structural guard exists to close. **Removal reuses `hidden_at`; the distinction between "hidden pending review" and "removed, final" lives in the audit log, not in a second column.**
-- ⚠️ **Any route that reads or writes `posts`/`comments` trips `test/hidden-at-read-guard.node.test.ts` and needs an allowlist entry with a written justification.** That is the guard working, not an obstacle to route around.
+- ⚠️ **A route under `src/routes/**` that READS `posts`/`comments` trips `test/hidden-at-read-guard.node.test.ts` and needs an allowlist entry with a written justification.** That is the guard working, not an obstacle to route around. ⚠️ **But do not over-read its coverage** — measured, it scans `src/routes/**` only, examines `FROM`/`JOIN`/`USING` references rather than UPDATE targets, and matches literal table names rather than interpolations. **A file outside that tree is not "cleared" by it; it is simply unseen.** Adding a speculative allowlist entry is worse than none: the suite has a stale-exemption check that fails on an entry matching nothing.
 - ⚠️ **Automation never decides.** Auto-hide is provisional and reversible; only a human writes a `content_*` action.
 - **`moderation_actions` is append-only** — migration 0013 carries a `BEFORE UPDATE OR DELETE` trigger that raises. `recordModerationAction` exposes an INSERT and nothing else. To correct a row, append another.
 - **Moderation notices never use the `notifications` table.** It demands a human actor, forbids self-addressing, is suppressed by blocks and is silenceable by prefs. Notices go as direct email on the `"outbound"` stream, exactly like `sendVerificationEmail`. Users cannot opt out of being told they were actioned.
@@ -43,21 +43,23 @@ Recorded here so an implementer does not re-derive them, and so a reviewer can r
 |---|---|
 | `apps/api/src/moderation/decide.ts` | **Create.** The transactional decision applier: visibility effect + audit row, atomically. Takes a caller's `Client`, opens no connection of its own — matching `actions.ts`, `auto-hide.ts`, `is-blocked.ts`. |
 | `apps/api/src/moderation/notify-author.ts` | **Create.** The author notice on the `"outbound"` stream. Never throws. |
-| `apps/api/src/routes/admin.ts` | **Modify.** `handleAdminDecision` — Access gate, body validation, call `applyDecision`, schedule the notice. |
+| `apps/api/src/routes/admin.ts` | **Modify.** `handleAdminDecision` — ⚠️ **inline `checkOrigin` FIRST** (the CSRF defense; admin routes do not run the mutating pipeline), then the Access gate, body validation, `applyDecision`, and the notice. |
 | `apps/api/src/routes.ts` | **Modify.** Register `POST /admin/decision`. |
 | `packages/shared/src/posts.ts` | **Modify.** `AuthoredPost` gains `hiddenAt: string \| null`. |
 | `apps/api/src/routes/posts.ts` | **Modify.** The author's own read selects `hidden_at`. |
 | `apps/web/src/pages/new-post.astro` | **Modify.** "Hidden pending review" banner with the appeal link. |
-| `apps/api/test/hidden-at-read-guard.node.test.ts` | **Modify.** Allowlist entry for the decision route's write, with justification. |
+| `apps/api/test/hidden-at-read-guard.node.test.ts` | ⚠️ **UNCHANGED — do NOT add an allowlist entry.** See Task 1 Step 6: an entry for `decide.ts` matches nothing and trips the suite's stale-exemption check. |
 | `apps/api/test/admin-decision-route.test.ts` | **Create.** The three decisions, the gate, the audit row, the transaction. |
 | `apps/api/test/moderation-notify.test.ts` | **Create.** The notice's stream and never-throws property. |
-| `apps/api/test/error-envelope.test.ts` | **Modify.** The new route in the `ROUTES` inventory. |
+| `apps/api/test/error-envelope.test.ts` | **UNCHANGED.** It auto-probes every mutating route from the `ROUTES` inventory, so registering the route is the whole change. Verify, don't edit. |
 
 ---
 
 ## Task 1: `POST /admin/decision` — the three content decisions
 
-**Files:** create `src/moderation/decide.ts`, `test/admin-decision-route.test.ts`; modify `src/routes/admin.ts`, `src/routes.ts`, `test/hidden-at-read-guard.node.test.ts`, `test/error-envelope.test.ts`.
+**Files:** create `src/moderation/decide.ts`, `test/admin-decision-route.test.ts`; modify `src/routes/admin.ts`, `src/routes.ts`, `test/route-protection.test.ts` (the `PIPELINE_EXEMPT` entry).
+
+⚠️ **`test/hidden-at-read-guard.node.test.ts` and `test/error-envelope.test.ts` are NOT modified** — see Steps 6 and 7. Editing either is a defect, not a completion: the guard has a stale-exemption check that an entry for `decide.ts` would trip.
 
 **Interfaces:**
 
@@ -417,8 +419,11 @@ In `apps/api/src/routes.ts`, import `handleAdminDecision` alongside the existing
 
 ```ts
   // The three content decisions (M4 2b-ii, spec §4.3) — same Access trust
-  // domain as /admin/queue. WRITES `hidden_at` on posts/comments, which is why
-  // test/hidden-at-read-guard.node.test.ts carries an allowlist entry for it.
+  // domain as /admin/queue. ⚠️ THE FIRST NON-GET ADMIN ROUTE: it does NOT run
+  // runMutatingPipeline (that authenticates a member session; an admin is an
+  // Access principal), so it is listed in PIPELINE_EXEMPT and defends itself
+  // with an inline checkOrigin — see handleAdminDecision and the note in
+  // src/admin/require-admin.ts on why an Access assertion alone is not enough.
   { method: "POST", pattern: "/admin/decision", handler: handleAdminDecision },
 ```
 
@@ -440,7 +445,9 @@ In `apps/api/src/routes.ts`, import `handleAdminDecision` alongside the existing
 
 ⚠️ **Adding to this set is a security decision, not a way to quiet a failing test.** The set's own header says so. The entry asserts two things: that the route *cannot* use the pipeline, **and** that it defends itself some other way. The second half is Step 4's `checkOrigin` — if that is ever removed, this exemption becomes a lie and the route becomes CSRF-able.
 
-⚠️ **NO `hidden-at-read-guard` ALLOWLIST ENTRY IS NEEDED, and adding one BREAKS that suite.** Measured: the guard scans `apps/api/src/routes/**` only (`ROUTES_DIR`, `hidden-at-read-guard.node.test.ts:43`), and `decide.ts` lives in `src/moderation/` — outside that tree, exactly like `queue.ts`, whose own test records the same boundary. The guard also carries a **stale-exemption check**: an allowlist entry that matches no current query fails the suite. So an entry for `decide.ts` would fail *"every allowlist entry still matches a real unfiltered query"* before any implementation defect existed. **Do not add one.** Safety here comes from `requireAdmin` plus `checkOrigin`, not from that guard.
+⚠️ **NO `hidden-at-read-guard` ALLOWLIST ENTRY IS NEEDED, and adding one BREAKS that suite.** The guard carries a **stale-exemption check** — an allowlist entry matching no current query fails it — so an entry for `decide.ts` fails *"every allowlist entry still matches a real unfiltered query"* **before any implementation defect exists**. Measured: adding one produced `1 failed | 3 passed`; with none, `4 passed`. **Do not add one.**
+
+⚠️ **And be precise about WHY, because the obvious reason is not the operative one.** `decide.ts` does live in `src/moderation/`, outside the `src/routes/**` tree the guard scans (`ROUTES_DIR`, `hidden-at-read-guard.node.test.ts:43`) — the same boundary `queue.ts` sits on, which `admin-queue-route.test.ts` already documents. **But that is not what makes this query invisible.** Measured by placing this exact `UPDATE` inside `src/routes/`: the guard still reports zero violations, because the table is a **template interpolation** (`${table}`, never the literal `posts`/`comments`) and the UPDATE *target* is outside what the scanner examines at all. **So do not reason "it is in src/moderation, therefore it is safe" — a future author who moves this file would inherit a false sense of coverage.** Safety here comes from `requireAdmin` plus the inline `checkOrigin`, and from review. Not from that guard.
 
 - [ ] **Step 7: Add the route to the error-envelope inventory**
 
@@ -474,8 +481,7 @@ If any mutation leaves its test green, stop and report DONE_WITH_CONCERNS.
 
 ```bash
 git add apps/api/src/moderation/decide.ts apps/api/src/routes/admin.ts apps/api/src/routes.ts \
-        apps/api/test/admin-decision-route.test.ts apps/api/test/hidden-at-read-guard.node.test.ts \
-        apps/api/test/error-envelope.test.ts
+        apps/api/test/admin-decision-route.test.ts apps/api/test/route-protection.test.ts
 git commit -F - <<'MSG'
 feat(m4): the three content decisions, applied atomically with their audit row
 
@@ -789,7 +795,9 @@ MSG
 
 ## Self-Review
 
-**Spec coverage:** §4.3 three decisions → Task 1. §4.4 author-facing hidden state → Task 3. §7 prefs-bypassing notice → Task 2. AC-5 (no second visibility predicate) → the Global Constraints, `decide.ts`'s header, and the guard allowlist entry, with a mutation in Task 1 Step 9.4 proving the guard sees the new write.
+**Spec coverage:** §4.3 three decisions → Task 1. §4.4 author-facing hidden state → Task 3. §7 prefs-bypassing notice → Task 2.
+
+**AC-5 (no second visibility predicate) → held by construction, and NOT by an automated guard.** `hidden_at` is the only visibility column anywhere in this plan; nothing adds a second. ⚠️ **Be precise about what backstops it: nothing automated does.** The `hidden-at-read-guard` cannot see `decide.ts` at all — it scans `src/routes/**` and this file is in `src/moderation/`, and even placed inside that tree its query would be invisible, because the table is a template interpolation (`${table}`) rather than a literal and the UPDATE *target* is outside what the scanner examines. So AC-5 here rests on review and on `decide.ts`'s header, which is why that header states the reasoning rather than merely asserting the rule. **An earlier draft of this sentence claimed a guard entry and a mutation proving "the guard sees the new write" — both were false, and the claim survived two rounds of edits to the steps it described.**
 
 **Placeholders:** none. Three places deliberately say "read the existing file and follow its pattern" (the Access-header harness, the Postmark stub, the editor's notice markup) — those are pattern-matching against real files named by path, not unresolved values.
 
@@ -819,4 +827,10 @@ The first draft of this plan went to an auditor before any implementer saw it. *
 
 ⚠️ **And a sixth, found while fixing the fifth: my correction for #2 committed #2's own error.** The `checkOrigin` block I added to fix the CSRF hole returned `errorResponse("FORBIDDEN_ORIGIN", 403)` — and `FORBIDDEN_ORIGIN` is not in the closed union either. The auditor had predicted exactly this: *"rework on security-relevant test infrastructure is where a fix for one round's finding tends to introduce the next round's."* **Caught by re-checking the new code against the same vocabulary that produced the original finding, rather than assuming a fix inherits correctness from the finding it answers.**
 
-⚠️ **The transferable part: four of the five were invisible to reading and obvious to executing.** The plan's prose was internally coherent in every case — the code simply did not compile, or the guard did not scan where the prose assumed. **A plan that ships code is two artifacts, and the second one is only gated by running it.**
+**The re-audit then caught a seventh, and it is the same class as the sixth:** the corrected Step 6 said *"do not add an allowlist entry"* while the **File Structure table and Task 1's own Files: line still said to modify that file** — and the auditor proved that following the table reproduces the original defect exactly (`1 failed | 3 passed`). The Self-Review section likewise still claimed AC-5 was backstopped by "the guard allowlist entry" and a mutation that no longer existed.
+
+**And a FOURTH instance, which I found by grepping my own fix rather than by reading:** the `routes.ts` registration block still carried the comment *"test/hidden-at-read-guard.node.test.ts carries an allowlist entry for it"* — inside a code block an implementer pastes **verbatim into production source**, so the stale claim would have shipped as a comment in `routes.ts` asserting an exemption that must never exist.
+
+⚠️ **A FIX THAT UPDATES THE STEP AND NOT ITS SUMMARY HAS NOT LANDED.** A plan states the same thing in several places — a file table, a task preamble, a step, a self-review — and a reader entering at any of them acts on what they find there. This is the third instance of the class in one workstream: stale step-number cross-references after a renumbering, a ratchet blinded by prose added elsewhere in the same fix wave, and now a corrected step contradicted by its own summary row.
+
+⚠️ **The transferable part: four of the five original defects were invisible to reading and obvious to executing.** The plan's prose was internally coherent in every case — the code simply did not compile, or the guard did not scan where the prose assumed. **A plan that ships code is two artifacts, and the second one is only gated by running it.**
