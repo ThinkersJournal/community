@@ -6,15 +6,28 @@ import { describe, expect, it } from "vitest";
 /**
  * ⚠️ NO DOCUMENT MAY ASSERT AN ENFORCED BAN THE CODE CANNOT DELIVER.
  *
- * ⚠️⚠️ GREEN HERE DOES NOT MEAN BAN WORKS. IT DOES NOT WORK.
+ * ⚠️⚠️ GREEN HERE MEANS LOGIN CAN REFUSE A BARRED ACCOUNT — NOT THAT A BAN
+ * WORKS END TO END.
  * This file measures ONE thing: whether an authoritative document CLAIMS an
- * enforced ban while nothing can enforce one. Green means the claim and the
- * code agree — which is satisfied by CORRECTING THE CLAIM, and that is how it
- * was made green. **The enforcement gap itself is issue #35 and is still open.**
+ * enforced ban while nothing can enforce one. It used to go green ONLY by
+ * CORRECTING THE CLAIM, because no code could back it. **As of issue #35
+ * (this branch), it can also go green because the capability landed**:
+ * migration 0015 added `suspended_until`/`disabled_at`/`disabled_reason` to
+ * `users`, and `src/routes/login.ts` refuses a barred row via `isBarred`.
+ * The conjunction assertion below cannot by itself distinguish those two
+ * "green"s — that is what the positive ratchet a few lines down is for.
+ * **What remains open: nothing yet WRITES these columns (a human running raw
+ * SQL is the only mechanism today), and the mutating-pipeline half of the
+ * spec's binding (`2026-09-06-m4-moderation-queue-design.md:174`) is a later
+ * module's scope.**
  *
  * ⚠️ IF YOU ARE HERE BECAUSE YOU ARE SHIPPING THE CSAM TERMINATION HOOK, OR
- * ANYTHING ELSE THAT NEEDS A USER TO STAY OUT: THE PRIMITIVE DOES NOT EXIST
- * YET. Read #35, not this file's exit code.
+ * ANYTHING ELSE THAT NEEDS A USER TO STAY OUT: THE PRIMITIVE NOW EXISTS
+ * (issue #35 — `isBarred`, consulted by `src/routes/login.ts`), so your
+ * blocked dependency is unblocked. It still has NO WRITER — nothing sets
+ * `disabled_at`/`suspended_until`/`disabled_reason` except a human running
+ * raw SQL — so your hook needs to actually SET the column. Read #35 for what
+ * is and is not done; do not trust this file's exit code alone for that.
  *
  * The file was first written as `ban-claim-is-enforceable` — a name that would
  * have read as "ban is enforceable" the moment it went green, which is the same
@@ -26,13 +39,19 @@ import { describe, expect, it } from "vitest";
  * It carries no DRAFT marker and no temporal marker. At §"Auth & sessions" it
  * states the `security_epoch` gives **"strongly-consistent ban/logout-everywhere"**.
  *
- * ⚠️ THE EPOCH KILLS EXISTING SESSIONS AND DOES NOTHING ABOUT NEW ONES.
- * `users` has five columns — id, email, password_hash, email_verified_at,
- * created_at — and `src/routes/login.ts` authenticates with
- * `SELECT id, password_hash FROM users WHERE email = $1`. A banned user logs
- * straight back in and receives a fresh session carrying the CURRENT epoch, so
- * the epoch comparison in `src/auth/pipeline.ts` passes. The ban survives
- * exactly until the next login.
+ * ⚠️ THE EPOCH KILLS EXISTING SESSIONS AND DOES NOTHING ABOUT NEW ONES — THAT
+ * is why login needs its own check. Before issue #35, `users` had five
+ * columns — id, email, password_hash, email_verified_at, created_at — and
+ * `src/routes/login.ts` authenticated with
+ * `SELECT id, password_hash FROM users WHERE email = $1`. A banned user
+ * logged straight back in and received a fresh session carrying the CURRENT
+ * epoch, so the epoch comparison in `src/auth/pipeline.ts` passed. The ban
+ * survived exactly until the next login.
+ *
+ * As of this branch, `users` also carries `suspended_until` / `disabled_at` /
+ * `disabled_reason` (migration 0015), and `src/routes/login.ts` selects them
+ * and refuses via `isBarred` AFTER the password verify (timing-attack
+ * defense — see `test/login-bar-after-verify.node.test.ts`).
  *
  * # Why this test exists rather than a note in the issue
  *
@@ -51,11 +70,17 @@ import { describe, expect, it } from "vitest";
  * It is a DEFERRAL DETECTOR and it is supposed to stop failing. It goes green
  * the moment EITHER side is made true:
  *
- *   - module 2c lands the status column AND login refuses on it, or
+ *   - issue #35 lands the status column AND login refuses on it, or
  *   - the spec is corrected to describe what the epoch actually achieves.
  *
+ * Both landed: the spec was corrected in #41, and this slice (#35) landed
+ * the column and the refusal — see the positive ratchet below for what keeps
+ * this file meaningful now that the conjunction assertion is permanently
+ * vacuous (the corrected spec means `claimPresent` is now always `false`).
  * Both are correct outcomes. What must not happen is the pair drifting apart
- * silently again, which is the only state this test refuses.
+ * silently again, which is the only state the conjunction assertion refuses;
+ * the ratchet refuses the OTHER direction — the capability regressing with
+ * nobody re-reading the spec to notice.
  *
  * ⚠️ WHY A `.node.test.ts` (no DB): it reads this repo's own source and docs.
  * workerd's filesystem is virtual, so a pool test cannot read them — same
@@ -125,7 +150,7 @@ function allMigrations(): string {
  * Does any migration add a status-bearing column TO `users`?
  *
  * ⚠️ STATEMENT-SCOPED AND CASE-INSENSITIVE, and that direction is deliberate.
- * A MISS here produces a FALSE RED *after* module 2c lands — the guard would
+ * A MISS here produces a FALSE RED *after* issue #35 lands — the guard would
  * tell the lane their claim is unbacked exactly when they had just backed it,
  * which is how a detector gets muted and then deleted as flaky. So the reader
  * is permissive about FORM (line breaks, casing, quoted identifiers) and strict
@@ -204,19 +229,94 @@ describe("no document asserts an enforced ban the code cannot deliver", () => {
         `banned user logging back in, because nothing in the login query can ` +
         `express that the account is barred.\n\n` +
         `This is issue #35. Resolve it EITHER WAY and this test goes green:\n` +
-        `  - land the status column and make login refuse on it (module 2c), or\n` +
+        `  - land the status column and make login refuse on it (issue #35), or\n` +
         `  - correct the spec to describe what the epoch actually achieves.\n\n` +
         `⚠️ KNOWN LIMIT, stated rather than hidden: this test keys on ONE phrase. ` +
         `Rewording the claim to a DIFFERENT false sentence makes it go green ` +
         `while the defect remains. It guards a known disagreement; it is not a ` +
         `general falsehood detector, and it must not be read as one.`,
     ).toBe(true);
+
+    // ⚠️ POSITIVE RATCHET — why this second assertion exists ALONGSIDE the one
+    // above rather than replacing it: PR #41 struck the word "ban" from the
+    // spec's claim (see `CLAIM`'s own comment), so `claimPresent` is now
+    // `false` and the conjunction `!(claimPresent && !enforceable)` reduces to
+    // `!(false && …)` — TRUE UNCONDITIONALLY, regardless of `enforceable`.
+    // That assertion has been vacuous since #41 and would stay green even if
+    // `isBarred` and every status column on `users` were deleted outright.
+    // It still guards its OWN direction — a spec re-asserting an unbacked
+    // claim — so it stays. This assertion guards the OTHER direction: the
+    // capability silently regressing while the claim (now absent, the normal
+    // state) never comes back to trip the first one.
+    //
+    // ⚠️ DELIBERATELY NOT REUSING `enforceable` FOR THIS RATCHET, and the
+    // reason is itself a finding from proving this assertion can fail:
+    // `enforceable` is a bare substring search over the WHOLE login.ts text,
+    // so it stays `true` on nothing more than the LOOKUP query SELECTing a
+    // status column — which it must, for `isBarred` to have data — even with
+    // the `if (isBarred(row))` call deleted outright. Measured directly:
+    // removing only that call and leaving the SELECT + UserRow interface in
+    // place kept `enforceable` `true` and this whole file green. So this
+    // ratchet checks for the actual CALL, not the column name's mere
+    // presence in the file.
+    //
+    // ⚠️ AND comments must be stripped first — same reasoning as
+    // `schemaCanExpressABan` above (a mention is not a column; here, a
+    // mention in a docblock is not a call). This file's own load-bearing
+    // order docblock in login.ts's header names `isBarred(row)` in prose
+    // (see src/routes/login.ts's ORDER comment) — without stripping, THAT
+    // string alone kept this ratchet green with the real call deleted,
+    // which is the second thing measured while proving this can fail.
+    //
+    // The two `.replace` calls below can only DELETE characters — neither can
+    // insert the token `isBarred(row)` into the string. So stripping can
+    // produce a false RED (over-eager stripping removes a real call along
+    // with a comment) but it cannot manufacture the token and therefore
+    // cannot produce a false GREEN.
+    const loginCodeOnly = login
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    const loginConsultsBarring = /\bisBarred\s*\(\s*row\s*\)/.test(
+      loginCodeOnly,
+    );
+    expect(
+      loginConsultsBarring,
+      `THE BAN-ENFORCEMENT CAPABILITY REGRESSED: login.ts no longer calls ` +
+        `\`isBarred(row)\`.\n\n` +
+        `  users: status-bearing columns found in migrations: ` +
+        `${columns.length > 0 ? JSON.stringify(columns) : "NONE"}\n` +
+        `  login: SELECTs one of them: ${enforceable}\n` +
+        `  login: actually CALLS isBarred(row) on it: ${loginConsultsBarring}\n\n` +
+        `This is issue #35's capability: src/auth/account-status.ts's ` +
+        `\`isBarred\`, called by src/routes/login.ts AFTER the password ` +
+        `verify (test/login-bar-after-verify.node.test.ts pins that ` +
+        `placement). If this assertion is red, either the isBarred(row) call ` +
+        `was removed from handleLogin, or the row it is called on was ` +
+        `renamed out from under it — restore the barring check rather than ` +
+        `silencing this test.\n\n` +
+        `⚠️ KNOWN LIMIT, stated rather than hidden: this checks for the ` +
+        `LITERAL call \`isBarred(row)\`. Renaming the function, the local ` +
+        `variable, or switching to a differently-named predicate makes this ` +
+        `go red for a reason that is not a regression — update the pattern ` +
+        `in that case, don't delete the test.\n\n` +
+        `⚠️ AND THIS CHECK IS LEXICAL, NOT SEMANTIC: it proves the token ` +
+        `\`isBarred(row)\` is present in comment-stripped source, nothing ` +
+        `more. It would stay GREEN on \`if (isBarred(row)) { /* no-op */ }\`, ` +
+        `on a negated \`if (!isBarred(row))\`, or on the call sitting in a ` +
+        `helper nothing ever invokes — none of those actually refuse a ` +
+        `barred login. Those variants ARE covered, just not by this test: ` +
+        `\`test/login-barred.test.ts\` asserts the real HTTP response (401, ` +
+        `same body as a wrong password) for a disabled/suspended account, ` +
+        `which is the only place the SEMANTICS are actually checked. This ` +
+        `ratchet's job is narrower — catch the call being DELETED — and it ` +
+        `leans on that other file for everything past deletion.`,
+    ).toBe(true);
   });
 
   /**
    * ⚠️ THE READER'S OWN TWO-SIDED TEST, and it exists because of the failure
    * DIRECTION. A miss here reads as "no enforcement" and keeps the guard RED
-   * *after* module 2c lands — telling the lane their claim is unbacked exactly
+   * *after* issue #35 lands — telling the lane their claim is unbacked exactly
    * when they had just backed it. That is how a detector gets muted and then
    * deleted as flaky, so the reader is exercised against the awkward forms
    * directly rather than trusted.
@@ -244,7 +344,7 @@ describe("no document asserts an enforced ban the code cannot deliver", () => {
       expect(
         schemaCanExpressABan(sql).length,
         `the reader missed a status column in the ${label} form — this produces a ` +
-          `FALSE RED after module 2c lands, which is the failure direction that ` +
+          `FALSE RED after issue #35 lands, which is the failure direction that ` +
           `gets guards deleted`,
       ).toBeGreaterThan(0);
     }

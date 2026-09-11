@@ -18,6 +18,13 @@ import { withClient } from "../src/db/client";
  *
  * Runs in the POOL project (real workerd) against the real Hyperdrive/Postgres
  * binding, same shape as test/email-drain.test.ts.
+ *
+ * ⚠️ ONE RESIDUE CLASS THE REAPER ITSELF CANNOT CLEAN UP: the AC-3 describe
+ * block below seeds fixtures that are barred by construction, so if its
+ * `afterEach` ever fails to run (timeout, hard kill) those rows persist in
+ * the shared test database and — unlike every other fixture in this file —
+ * the reaper will never delete them either. A stale `reap...@example.com`
+ * row with `disabled_at`/`suspended_until` set came from here.
  */
 
 const ALLOWED_ORIGIN = "http://localhost:8787";
@@ -37,15 +44,27 @@ const createdUserIds: string[] = [];
  * the handle is claimed at the same time as the account), backdated to
  * `ageDays` old via an explicit `created_at`.
  */
-async function seed(opts: { verified: boolean; ageDays: number }): Promise<{ id: string; username: string }> {
+async function seed(opts: {
+  verified: boolean;
+  ageDays: number;
+  disabledAt?: Date;
+  suspendedUntil?: Date;
+}): Promise<{ id: string; username: string }> {
   const unique = crypto.randomUUID().replace(/-/g, "");
   const username = `reap${unique.slice(0, 20)}`;
   const id = await ctxRun(async (c) => {
     const { rows } = await c.query<{ id: string }>(
-      `INSERT INTO users (email, password_hash, email_verified_at, created_at)
-       VALUES ($1, 'x', $2, now() - ($3 || ' days')::interval)
+      `INSERT INTO users (email, password_hash, email_verified_at, created_at,
+                          disabled_at, suspended_until)
+       VALUES ($1, 'x', $2, now() - ($3 || ' days')::interval, $4, $5)
        RETURNING id`,
-      [`reap-${unique}@example.com`, opts.verified ? new Date() : null, String(opts.ageDays)],
+      [
+        `reap-${unique}@example.com`,
+        opts.verified ? new Date() : null,
+        String(opts.ageDays),
+        opts.disabledAt ?? null,
+        opts.suspendedUntil ?? null,
+      ],
     );
     const userId = rows[0]!.id;
     await c.query(`INSERT INTO profiles (user_id, username) VALUES ($1, $2)`, [userId, username]);
@@ -103,6 +122,59 @@ describe("reapUnverifiedAccounts", () => {
     // per-test-isolated). What this pins is that OUR fixture was counted.
     expect(n).toBeGreaterThanOrEqual(1);
     expect(await present(oldUnverified.id)).toBe(false);
+  });
+});
+
+/**
+ * ⚠️ AC-3 (issue #35, design §12). A barred account that never verified its
+ * email is unverified AND stale, so the reaper's ordinary predicate matches it
+ * exactly. Deleting it takes the user AND THE EVIDENCE -- the record an appeal,
+ * a DSA statement of reasons, or a preservation obligation is about.
+ *
+ * All three fixtures are reaped in ONE invocation, so the control is not a
+ * separate run that could differ: if the reaper had simply stopped working,
+ * the third assertion fails and the two guards prove nothing.
+ */
+describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)", () => {
+  it("spares disabled and suspended accounts while still reaping an ordinary one", async () => {
+    const disabled = await seed({ verified: false, ageDays: 30, disabledAt: new Date() });
+    const suspended = await seed({
+      verified: false,
+      ageDays: 30,
+      suspendedUntil: new Date(Date.now() + 864e5),
+    });
+    const lapsed = await seed({
+      verified: false,
+      ageDays: 30,
+      suspendedUntil: new Date(Date.now() - 864e5), // suspension ALREADY EXPIRED
+    });
+    const ordinary = await seed({ verified: false, ageDays: 30 });
+
+    const ctx = createExecutionContext();
+    await reapUnverifiedAccounts(env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(
+      await present(disabled.id),
+      "a disabled account was deleted by the reaper — the ban and its evidence are gone",
+    ).toBe(true);
+    expect(
+      await present(suspended.id),
+      "a suspended account was deleted by the reaper — the ban and its evidence are gone",
+    ).toBe(true);
+    // ⚠️ A LAPSED suspension still protects the row. This is the fixture that
+    // discriminates: a guard wrongly unified with Task 2's `isBarred`
+    // (`suspended_until < now()`) would reap this one and spare the others.
+    expect(
+      await present(lapsed.id),
+      "an expired suspension stopped protecting the row — the guard was unified with isBarred, which is Task 2's question, not the reaper's",
+    ).toBe(true);
+    // CONTROL, in the same reap: without it, "survived" is indistinguishable
+    // from "the reaper deleted nothing at all".
+    expect(
+      await present(ordinary.id),
+      "the reaper deleted nothing — the two guards above prove nothing",
+    ).toBe(false);
   });
 });
 

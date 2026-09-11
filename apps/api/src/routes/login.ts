@@ -9,12 +9,27 @@
  *   3. rate limit          — bounds every step below, including the Argon2id
  *                            verify, which is deliberately expensive and
  *                            therefore a DoS lever if unbounded.
- *   4. lookup (FRESH)      — `SELECT id, password_hash`.
+ *   4. lookup (FRESH)      — `SELECT id, password_hash, suspended_until,
+ *                            disabled_at`.
  *   5. verify              — generic 401 on ANY failure (see below).
- *   6. rehash-on-upgrade   — ONLY after a successful verify.
- *   7. security epoch      — read fresh from the DO, stamped into the session.
- *   8. session             — opaque KV token.
- *   9. 200 + Set-Cookie.
+ *   6. barring refusal     — `isBarred(row)` (issue #35), generic 401.
+ *                            PLACEMENT IS LOAD-BEARING: after the verify,
+ *                            before the rehash. Refusing any earlier would
+ *                            let a barred account skip the expensive
+ *                            Argon2id verify and answer measurably faster
+ *                            than a wrong password — an account-state timing
+ *                            oracle, the same class of leak the DUMMY_HASH
+ *                            verify below exists to close on the
+ *                            no-such-user path. Refusing any later risks a
+ *                            rehash write and a session for an account that
+ *                            must not get one. Pinned by
+ *                            test/login-bar-after-verify.node.test.ts, an AST
+ *                            guard with both a lower bound (after verify) and
+ *                            an upper bound (before rehash).
+ *   7. rehash-on-upgrade   — ONLY after a successful verify.
+ *   8. security epoch      — read fresh from the DO, stamped into the session.
+ *   9. session             — opaque KV token.
+ *   10. 200 + Set-Cookie.
  *
  * ⚠️ CHECKORIGIN RECONCILIATION: the task brief's step list for this route
  * does not mention an origin check, but the Global Constraints require an
@@ -70,6 +85,7 @@
  */
 import { LoginInput } from "@thinkersjournal/shared";
 
+import { isBarred } from "../auth/account-status";
 import { checkOrigin } from "../auth/csrf";
 import { base64urlEncode } from "../auth/encoding";
 import { hashPassword, needsRehash, verifyPassword } from "../auth/password";
@@ -118,6 +134,8 @@ export const DUMMY_HASH =
 interface UserRow {
   id: string;
   password_hash: string;
+  suspended_until: Date | null;
+  disabled_at: Date | null;
 }
 
 function json(body: unknown, status: number, headers: HeadersInit = {}): Response {
@@ -223,7 +241,7 @@ export async function handleLogin(
   // `users.email` is citext, so this match is case-insensitive.
   const row = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query(
-      "SELECT id, password_hash FROM users WHERE email = $1",
+      "SELECT id, password_hash, suspended_until, disabled_at FROM users WHERE email = $1",
       [email],
     );
     return (rows[0] ?? null) as UserRow | null;
@@ -243,7 +261,17 @@ export async function handleLogin(
     return unauthorized();
   }
 
-  // ---- 6. Rehash-on-upgrade — ONLY after a successful verify -----------------
+  // ---- 6. Barring refusal (issue #35) ----------------------------------------
+  // ⚠️ AFTER the password check, not before. Refusing earlier would make a
+  // barred account answer faster than a wrong password and turn this route
+  // into an account-state oracle — the same enumeration leak the DUMMY_HASH
+  // verify above exists to prevent. See the file header for the full
+  // load-bearing-order rationale and the AST guard that pins this window.
+  if (isBarred(row)) {
+    return unauthorized();
+  }
+
+  // ---- 7. Rehash-on-upgrade — ONLY after a successful verify -----------------
   // A stronger baseline than what this hash was produced with: re-hash the
   // password we JUST verified (plaintext still in hand) with the CURRENT
   // params, so the row silently upgrades on the user's next successful login
@@ -271,12 +299,12 @@ export async function handleLogin(
     }
   }
 
-  // ---- 7. Security epoch ------------------------------------------------------
+  // ---- 8. Security epoch ------------------------------------------------------
   // Read fresh from the DO so the session carries the CURRENT epoch, not a
   // value that might already be stale (e.g. a concurrent "log out everywhere").
   const securityEpoch = await env.USER_SECURITY.getByName(row.id).getEpoch();
 
-  // ---- 8. Session ---------------------------------------------------------
+  // ---- 9. Session ---------------------------------------------------------
   const { cookie } = await createSession(env, {
     userId: row.id,
     // Login never grants roles — a session's roles come from the account's
@@ -292,6 +320,6 @@ export async function handleLogin(
     createdAt: Date.now(),
   });
 
-  // ---- 9. 200 + Set-Cookie ------------------------------------------------
+  // ---- 10. 200 + Set-Cookie ------------------------------------------------
   return json({ userId: row.id }, 200, { "Set-Cookie": cookie });
 }
