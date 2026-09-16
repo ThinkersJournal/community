@@ -8,6 +8,7 @@
 import { checkOrigin } from "../auth/csrf";
 import { errorResponse } from "../http/errors";
 import { applyDecision, type DecisionKind } from "../moderation/decide";
+import { sendModerationNotice } from "../moderation/notify-author";
 import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { listOpenQueue } from "../moderation/queue";
@@ -123,6 +124,13 @@ export async function handleAdminDecision(
   );
 
   if (result === null) return errorResponse("NOT_FOUND", 404);
+
+  // ⚠️ AFTER the commit and OUTSIDE the response path. The decision is already
+  // durable; a Postmark outage must not turn a successful moderation action
+  // into a 500. See R5.
+  ctx.waitUntil(
+    sendModerationNotice(env, result.authorEmail, decision as DecisionKind, reason.trim()),
+  );
 
   return new Response(JSON.stringify({ actionId: result.actionId }), {
     status: 200,

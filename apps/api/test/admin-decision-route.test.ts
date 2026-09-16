@@ -17,6 +17,7 @@ const b64url = (b: Uint8Array): string =>
 const b64urlJson = (o: unknown): string => b64url(new TextEncoder().encode(JSON.stringify(o)));
 
 let keyPair: CryptoKeyPair;
+let sentEmails: Array<Record<string, unknown>> = [];
 
 async function makeJwt(claims: Record<string, unknown> = {}): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
@@ -93,12 +94,19 @@ async function seedReport(postId: string): Promise<void> {
   });
 }
 
-async function seedHiddenPost(): Promise<{ postId: string; hiddenAt: Date }> {
+async function seedHiddenPost(): Promise<{ postId: string; hiddenAt: Date; authorEmail: string }> {
   const userId = await seedUser();
+  const authorEmail = await ctxRun(async (c) => {
+    const { rows } = await c.query<{ email: string }>(
+      `SELECT email FROM users WHERE id = $1`,
+      [userId],
+    );
+    return rows[0]!.email;
+  });
   const hiddenAt = new Date();
   const postId = await seedPost(userId, hiddenAt);
   await seedReport(postId);
-  return { postId, hiddenAt };
+  return { postId, hiddenAt, authorEmail };
 }
 
 async function seedReportedButVisiblePost(): Promise<{ postId: string }> {
@@ -170,14 +178,26 @@ async function decideRaw(opts: { headers?: Record<string, string>; body?: unknow
 }
 
 beforeEach(async () => {
+  sentEmails = [];
   keyPair = (await crypto.subtle.generateKey(
     { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
     true, ["sign", "verify"])) as CryptoKeyPair;
   const jwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
   __resetJwksCacheForTests();
-  vi.stubGlobal("fetch", vi.fn(async () =>
-    new Response(JSON.stringify({ keys: [{ ...jwk, kid: KID, alg: "RS256", use: "sig" }] }),
-      { status: 200, headers: { "content-type": "application/json" } })));
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "https://api.postmarkapp.com/email") {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      sentEmails.push(body);
+      return new Response(JSON.stringify({ ErrorCode: 0, Message: "OK", MessageID: "test" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    // Default: return JWKS for Access JWT verification
+    return new Response(JSON.stringify({ keys: [{ ...jwk, kid: KID, alg: "RS256", use: "sig" }] }),
+      { status: 200, headers: { "content-type": "application/json" } });
+  }));
 });
 
 afterEach(() => {
@@ -295,5 +315,37 @@ describe("POST /admin/decision", () => {
     });
     expect(res.status).toBe(400);
     expect(await actionCount()).toBe(before);
+  });
+
+  it("a decision emails the AUTHOR once, on the outbound stream, with the reason", async () => {
+    const { postId, authorEmail } = await seedHiddenPost();
+    await decide({
+      subject: "post",
+      subjectId: postId,
+      decision: "remove",
+      reason: "Repeat infringement.",
+    });
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({ To: authorEmail, MessageStream: "outbound" });
+    expect(String(sentEmails[0]!["TextBody"])).toContain("Repeat infringement.");
+  });
+
+  it("a decision on a missing subject sends NO email", async () => {
+    await decide({
+      subject: "post",
+      subjectId: crypto.randomUUID(),
+      decision: "remove",
+      reason: "x",
+    });
+    expect(sentEmails).toHaveLength(0);
+  });
+
+  it("a cross-origin decision sends NO email", async () => {
+    const { postId } = await seedHiddenPost();
+    await decideRaw({
+      headers: { ...await adminHeaders(), Origin: "https://evil.test" },
+      body: { subject: "post", subjectId: postId, decision: "remove", reason: "x" },
+    });
+    expect(sentEmails).toHaveLength(0);
   });
 });
