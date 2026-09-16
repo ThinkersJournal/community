@@ -3,44 +3,6 @@ import { env } from "cloudflare:test";
 
 import { sendModerationNotice } from "../src/moderation/notify-author";
 
-/** Capture Postmark sends for assertions */
-let sentEmails: Array<Record<string, unknown>> = [];
-
-/**
- * Helper to capture a Postmark send: stubs fetch, runs a fn that calls sendModerationNotice,
- * and returns the parsed JSON body sent to Postmark.
- */
-async function captureSend(
-  fn: () => Promise<void>,
-): Promise<Record<string, unknown>> {
-  sentEmails = [];
-
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === "https://api.postmarkapp.com/email") {
-        // Can't capture body here easily, so we'll use the module-level sentEmails instead
-      }
-      return new Response(
-        JSON.stringify({ ErrorCode: 0, Message: "OK", MessageID: "test" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }),
-  );
-
-  await fn();
-
-  // For this function, we need to intercept the fetch more carefully
-  vi.unstubAllGlobals();
-
-  if (sentEmails.length === 0) {
-    throw new Error("No email was sent");
-  }
-
-  return sentEmails[0]!;
-}
-
 /**
  * Helper to capture sends with full request body inspection
  */
@@ -90,10 +52,6 @@ async function withFailingPostmark(
   }
 }
 
-beforeEach(() => {
-  sentEmails = [];
-});
-
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -126,6 +84,14 @@ describe("sendModerationNotice", () => {
       sendModerationNotice(env, "a@b.test", "remove", "Mistaken."),
     );
     expect(restore.Subject).not.toBe(remove.Subject);
+  });
+
+  it("HTML-escapes the reason in the HTML body", async () => {
+    const sent = await captureSendFull(() =>
+      sendModerationNotice(env, "a@b.test", "remove", "<script>x</script> & co"),
+    );
+    expect(String(sent.HtmlBody)).toContain("&lt;script&gt;x&lt;/script&gt; &amp; co");
+    expect(String(sent.HtmlBody)).not.toContain("<script>");
   });
 
   // ⚠️ A decision that succeeded in the database must not report failure
