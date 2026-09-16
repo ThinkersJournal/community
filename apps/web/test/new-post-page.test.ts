@@ -326,26 +326,60 @@ describe("⚠️ tags — no-JS, comma-separated (Task 6)", () => {
   });
 });
 
-describe("⚠️ hidden-pending-review banner — M4 author-facing hidden state (Task 3)", () => {
-  it("declares hiddenAt with a null default", () => {
+describe("⚠️ hidden-pending-review banner — M4 author-facing hidden state (Task 3) — lexical check: proves the banner is conditional and wired, not that it renders", () => {
+  it("(a) declares hiddenAt with a null default", () => {
     expect(code).toMatch(/let\s+hiddenAt\s*:\s*string\s*\|\s*null\s*=\s*null/);
   });
 
-  it("assigns hiddenAt from existing.data.hiddenAt", () => {
+  it("(b) assigns hiddenAt from existing.data.hiddenAt on GET", () => {
     expect(code).toContain("hiddenAt = existing.data.hiddenAt");
   });
 
-  it("shows the hidden-pending-review banner when hiddenAt is set — guarded by hiddenAt && condition", () => {
+  it("(c) shows the hidden-pending-review banner when hiddenAt is set — guarded by hiddenAt && condition", () => {
     // Lexical check: the markup sits inside a {hiddenAt && (...)} guard.
     // Using the s flag to match across newlines.
     expect(code).toMatch(/\{hiddenAt\s*&&\s*\([^{]*id=["']hidden-pending-review["'][^}]*\)/s);
   });
 
-  it("includes the banner text 'Hidden pending review'", () => {
+  it("(d) includes the banner text 'Hidden pending review'", () => {
     expect(rawSource).toContain("Hidden pending review");
   });
 
-  it("⚠️ NO /appeal link — spec §6 not yet implemented (issue #53)", () => {
+  it("(e) ⚠️ preserves hiddenAt on POST re-render (Preview/failed save) — the POST block exists and assigns only hiddenAt", () => {
+    // Find the POST block that preserves hiddenAt on Preview/failed saves.
+    const postBlockStart = code.indexOf('if (postId !== null && Astro.request.method === "POST")');
+    expect(postBlockStart).not.toBe(-1); // Block must exist
+    const postBlockEnd = code.indexOf("\n}", postBlockStart);
+    expect(postBlockEnd).not.toBe(-1);
+    const postBlock = code.slice(postBlockStart, postBlockEnd + 2);
+
+    // Must assign hiddenAt
+    expect(postBlock).toContain("hiddenAt = current.data.hiddenAt");
+    // Must NOT reload form fields that would wipe unsaved edits
+    expect(postBlock).not.toContain("title =");
+    expect(postBlock).not.toContain("markdownSource =");
+    expect(postBlock).not.toContain("tagsValue =");
+  });
+
+  it("(f) ⚠️ the POST block assigns ONLY hiddenAt, not title/body/tags", () => {
+    // Same block as (e), but focused on the negative assertions
+    const postBlockStart = code.indexOf('if (postId !== null && Astro.request.method === "POST")');
+    const postBlockEnd = code.indexOf("\n}", postBlockStart);
+    const postBlock = code.slice(postBlockStart, postBlockEnd + 2);
+
+    // Count assignments to ensure only hiddenAt is assigned
+    const titleAssign = (postBlock.match(/title\s*=/g) ?? []).length;
+    const markdownAssign = (postBlock.match(/markdownSource\s*=/g) ?? []).length;
+    const tagsAssign = (postBlock.match(/tagsValue\s*=/g) ?? []).length;
+    const hiddenAtAssign = (postBlock.match(/hiddenAt\s*=/g) ?? []).length;
+
+    expect(titleAssign).toBe(0);
+    expect(markdownAssign).toBe(0);
+    expect(tagsAssign).toBe(0);
+    expect(hiddenAtAssign).toBeGreaterThan(0);
+  });
+
+  it("(g) ⚠️ NO /appeal link — spec §6 not yet implemented (issue #53)", () => {
     expect(code).not.toContain('href="/appeal"');
   });
 });

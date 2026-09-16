@@ -121,19 +121,21 @@ async function authorOf(id: string): Promise<string> {
   return (await postRow(id)).author_id;
 }
 
-async function seedHiddenPostOwnedBy(actor: Actor): Promise<{ id: string }> {
+async function seedHiddenPostOwnedBy(actor: Actor): Promise<{ id: string; hiddenAtExpected: string }> {
   const ctx = createExecutionContext();
+  // Use a fixed timestamp so tests can verify the exact value (not just that it exists)
+  const hiddenAtExpected = "2026-01-02T03:04:05.000Z";
   const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<{ id: string }>(
       `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at, hidden_at)
-       VALUES ($1, $2, $3, $4, $5, $6, now())
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [actor.userId, "hidden test", `hidden-test-${crypto.randomUUID().slice(0, 8)}`, "test", "published", new Date()],
+      [actor.userId, "hidden test", `hidden-test-${crypto.randomUUID().slice(0, 8)}`, "test", "published", new Date(), hiddenAtExpected],
     );
     return rows[0]!.id;
   });
   await waitOnExecutionContext(ctx);
-  return { id };
+  return { id, hiddenAtExpected };
 }
 
 async function seedVisiblePostOwnedBy(actor: Actor): Promise<{ id: string }> {
@@ -354,10 +356,9 @@ describe("GET /posts/:id (the author's own draft)", () => {
   it("the author's own read exposes hiddenAt", async () => {
     // ⚠️ Today a hidden post 404s publicly and the author sees no difference
     // beyond "my post disappeared". This is the field that fixes that.
-    const { id } = await seedHiddenPostOwnedBy(actor);
+    const { id, hiddenAtExpected } = await seedHiddenPostOwnedBy(actor);
     const body = await getOwnPost(actor, id);
-    expect(body.hiddenAt).toBeDefined();
-    expect(typeof body.hiddenAt).toBe("string");
+    expect(body.hiddenAt).toBe(hiddenAtExpected);
   });
 
   // CONTROL: without this, the field could be hardcoded or every post could read as hidden.

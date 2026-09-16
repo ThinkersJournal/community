@@ -310,6 +310,21 @@ if (postId !== null && Astro.request.method === "GET") {
   }
 }
 
+// ⚠️ A POST re-render (Preview, a failed save) keeps the author's UNSAVED text
+// from the form, so it must NOT reload title/body/tags here — that would wipe
+// their edits. But hidden state is not a form field, so without this the
+// "Hidden pending review" banner vanishes mid-edit on a post that is still
+// hidden (M4 spec §4.4). On a non-200, leave hiddenAt null: the POST branch has
+// already reported its own outcome, so this read must not 404 the page.
+if (postId !== null && Astro.request.method === "POST") {
+  const current = await apiFetch<AuthoredPost>(`/posts/${encodeURIComponent(postId)}`, {
+    request: Astro.request,
+  });
+  if (current.status === 200 && current.data !== null) {
+    hiddenAt = current.data.hiddenAt;
+  }
+}
+
 const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
 ---
 
