@@ -364,6 +364,7 @@ describe("⚠️ hidden-pending-review banner — M4 author-facing hidden state 
   it("(f) ⚠️ the POST block assigns ONLY hiddenAt, not title/body/tags", () => {
     // Same block as (e), but focused on the negative assertions
     const postBlockStart = code.indexOf('if (postId !== null && Astro.request.method === "POST")');
+    expect(postBlockStart, "the POST re-render block is missing").not.toBe(-1);
     const postBlockEnd = code.indexOf("\n}", postBlockStart);
     const postBlock = code.slice(postBlockStart, postBlockEnd + 2);
 
