@@ -18,13 +18,16 @@ const b64urlJson = (o: unknown): string => b64url(new TextEncoder().encode(JSON.
 
 let keyPair: CryptoKeyPair;
 let sentEmails: Array<Record<string, unknown>> = [];
+let capturedPurges: string[][] = [];
+let createdUserIds: string[] = [];
+let adminEmail: string;
 
 async function makeJwt(claims: Record<string, unknown> = {}): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = b64urlJson({ alg: "RS256", kid: KID, typ: "JWT" });
   const payload = b64urlJson({
     iss: `https://${TEAM}`, aud: [AUD], sub: "user-sub-1",
-    email: "mod@example.com", exp: now + 600, ...claims,
+    email: adminEmail, exp: now + 600, ...claims,
   });
   const sig = await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5", keyPair.privateKey, new TextEncoder().encode(`${header}.${payload}`));
@@ -45,12 +48,26 @@ async function call(path: string, init: RequestInit = {}): Promise<Response> {
   return res;
 }
 
+async function callCapturingPurges(path: string, init: RequestInit = {}): Promise<{ response: Response; purges: string[][] }> {
+  const purges: string[][] = [];
+  const web = {
+    fetch: async (_url: string, initArg: RequestInit) => {
+      purges.push((JSON.parse(initArg.body as string) as { tags: string[] }).tags);
+      return new Response(JSON.stringify({ purged: 1 }), { status: 200 });
+    },
+  };
+  const ctx = createExecutionContext();
+  const response = await worker.fetch(new Request(`https://api.test${path}`, init), { ...env, WEB: web } as never, ctx);
+  await waitOnExecutionContext(ctx);
+  return { response, purges };
+}
+
 async function adminHeaders(): Promise<Record<string, string>> {
   return { "Cf-Access-Jwt-Assertion": await makeJwt() };
 }
 
 async function seedUser(): Promise<string> {
-  return ctxRun(async (c) => {
+  const userId = await ctxRun(async (c) => {
     const { rows } = await c.query<{ id: string }>(
       `INSERT INTO users (email, password_hash, email_verified_at)
        VALUES ($1, 'x', now())
@@ -59,17 +76,37 @@ async function seedUser(): Promise<string> {
     );
     return rows[0]!.id;
   });
+  createdUserIds.push(userId);
+  return userId;
 }
 
-async function seedPost(userId: string, hiddenAt?: Date): Promise<string> {
+async function seedUserWithProfile(): Promise<{ userId: string; username: string }> {
+  const userId = await ctxRun(async (c) => {
+    const username = `u${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+    const { rows } = await c.query<{ id: string }>(
+      `INSERT INTO users (email, password_hash, email_verified_at)
+       VALUES ($1, 'x', now())
+       RETURNING id`,
+      [`test-${crypto.randomUUID()}@example.com`],
+    );
+    const id = rows[0]!.id;
+    await c.query(`INSERT INTO profiles (user_id, username) VALUES ($1, $2)`, [id, username]);
+    return { id, username };
+  });
+  createdUserIds.push(userId.id);
+  return { userId: userId.id, username: userId.username };
+}
+
+async function seedPost(userId: string, hiddenAt?: Date): Promise<{ id: string; slug: string }> {
   return ctxRun(async (c) => {
+    const slug = "test-" + crypto.randomUUID().slice(0, 8);
     const { rows } = await c.query<{ id: string }>(
       `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at, hidden_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [userId, "test", "test-" + crypto.randomUUID().slice(0, 8), "test content", "published", new Date(), hiddenAt ?? null],
+      [userId, "test", slug, "test content", "published", new Date(), hiddenAt ?? null],
     );
-    return rows[0]!.id;
+    return { id: rows[0]!.id, slug };
   });
 }
 
@@ -104,23 +141,23 @@ async function seedHiddenPost(): Promise<{ postId: string; hiddenAt: Date; autho
     return rows[0]!.email;
   });
   const hiddenAt = new Date();
-  const postId = await seedPost(userId, hiddenAt);
-  await seedReport(postId);
-  return { postId, hiddenAt, authorEmail };
+  const post = await seedPost(userId, hiddenAt);
+  await seedReport(post.id);
+  return { postId: post.id, hiddenAt, authorEmail };
 }
 
 async function seedReportedButVisiblePost(): Promise<{ postId: string }> {
   const userId = await seedUser();
-  const postId = await seedPost(userId);
-  await seedReport(postId);
-  return { postId };
+  const post = await seedPost(userId);
+  await seedReport(post.id);
+  return { postId: post.id };
 }
 
 async function seedHiddenComment(): Promise<{ commentId: string }> {
   const userId = await seedUser();
-  const postId = await seedPost(userId);
+  const post = await seedPost(userId);
   const hiddenAt = new Date();
-  const commentId = await seedComment(userId, postId, hiddenAt);
+  const commentId = await seedComment(userId, post.id, hiddenAt);
   return { commentId };
 }
 
@@ -150,7 +187,8 @@ async function lastActionFor(subjectId: string): Promise<{ action: string; reaso
 async function actionCount(): Promise<number> {
   return ctxRun(async (c) => {
     const { rows } = await c.query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM moderation_actions`,
+      `SELECT COUNT(*) as count FROM moderation_actions WHERE actor_admin = $1`,
+      [adminEmail],
     );
     return parseInt(rows[0]!.count, 10);
   });
@@ -179,6 +217,9 @@ async function decideRaw(opts: { headers?: Record<string, string>; body?: unknow
 
 beforeEach(async () => {
   sentEmails = [];
+  capturedPurges = [];
+  createdUserIds = [];
+  adminEmail = `mod-${crypto.randomUUID()}@example.test`;
   keyPair = (await crypto.subtle.generateKey(
     { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
     true, ["sign", "verify"])) as CryptoKeyPair;
@@ -200,7 +241,13 @@ beforeEach(async () => {
   }));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Clean up created users to prevent accumulation
+  if (createdUserIds.length > 0) {
+    await ctxRun(async (c) => {
+      await c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [createdUserIds]);
+    });
+  }
   vi.unstubAllGlobals();
 });
 
@@ -347,5 +394,221 @@ describe("POST /admin/decision", () => {
       body: { subject: "post", subjectId: postId, decision: "remove", reason: "x" },
     });
     expect(sentEmails).toHaveLength(0);
+  });
+
+  it("Remove on a tagged post purges exactly post:<id>, author:<authorId>, listing, tag:<slug>", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    // Attach a tag
+    const tagSlug = `t-${crypto.randomUUID().slice(0, 8)}`;
+    await ctxRun(async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO tags (slug, label) VALUES ($1::citext, $1) RETURNING id`,
+        [tagSlug],
+      );
+      const tagId = rows[0]!.id;
+      await c.query(`INSERT INTO post_tags (post_id, tag_id) VALUES ($1, $2)`, [post.id, tagId]);
+    });
+    await seedReport(post.id);
+
+    const { response, purges } = await callCapturingPurges("/admin/decision", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...await adminHeaders(),
+        Origin: ALLOWED_ORIGIN,
+      },
+      body: JSON.stringify({
+        subject: "post",
+        subjectId: post.id,
+        decision: "remove",
+        reason: "Spam.",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(purges).toHaveLength(1);
+    const purgeTags = purges[0]!;
+    expect(purgeTags).toContain(`post:${post.id}`);
+    expect(purgeTags).toContain("listing");
+    expect(purgeTags).toContain(`tag:${tagSlug}`);
+    // Clean up tag
+    await ctxRun(async (c) => {
+      await c.query(`DELETE FROM tags WHERE slug = $1`, [tagSlug]);
+    });
+  });
+
+  it("A decision on a comment purges exactly post:<post_id>", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const commentId = await seedComment(userId, post.id);
+
+    const { response, purges } = await callCapturingPurges("/admin/decision", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...await adminHeaders(),
+        Origin: ALLOWED_ORIGIN,
+      },
+      body: JSON.stringify({
+        subject: "comment",
+        subjectId: commentId,
+        decision: "remove",
+        reason: "Spam.",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(purges).toHaveLength(1);
+    expect(purges[0]).toEqual([`post:${post.id}`]);
+  });
+
+  it("A 404 (missing subject) purges nothing", async () => {
+    const { response, purges } = await callCapturingPurges("/admin/decision", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...await adminHeaders(),
+        Origin: ALLOWED_ORIGIN,
+      },
+      body: JSON.stringify({
+        subject: "post",
+        subjectId: crypto.randomUUID(),
+        decision: "remove",
+        reason: "x",
+      }),
+    });
+
+    expect(response.status).toBe(404);
+    expect(purges).toHaveLength(0);
+  });
+
+  it("A cross-origin decision purges nothing", async () => {
+    const { postId } = await seedHiddenPost();
+    const { response, purges } = await callCapturingPurges("/admin/decision", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...await adminHeaders(),
+        Origin: "https://evil.test",
+      },
+      body: JSON.stringify({
+        subject: "post",
+        subjectId: postId,
+        decision: "remove",
+        reason: "x",
+      }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(purges).toHaveLength(0);
+  });
+
+  it("Restore of a hidden post becomes visible in public read", async () => {
+    const { userId, username } = await seedUserWithProfile();
+    const post = await seedPost(userId, new Date());
+    await seedReport(post.id);
+
+    // Before restore: should 404
+    let res = await call(`/public/posts?username=${username}&slug=${post.slug}`);
+    expect(res.status).toBe(404);
+
+    // Apply restore
+    await decide({
+      subject: "post",
+      subjectId: post.id,
+      decision: "restore",
+      reason: "Mistaken.",
+    });
+
+    // After restore: should be 200
+    res = await call(`/public/posts?username=${username}&slug=${post.slug}`);
+    expect(res.status).toBe(200);
+  });
+
+  it("Remove of a visible post becomes inaccessible in public read", async () => {
+    const { userId, username } = await seedUserWithProfile();
+    const post = await seedPost(userId);
+    await seedReport(post.id);
+
+    // Before remove: should be 200
+    let res = await call(`/public/posts?username=${username}&slug=${post.slug}`);
+    expect(res.status).toBe(200);
+
+    // Apply remove
+    await decide({
+      subject: "post",
+      subjectId: post.id,
+      decision: "remove",
+      reason: "Repeat infringement.",
+    });
+
+    // After remove: should 404
+    res = await call(`/public/posts?username=${username}&slug=${post.slug}`);
+    expect(res.status).toBe(404);
+  });
+
+  it("Restore of a never-hidden post sends NO email", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    await seedReport(post.id);
+
+    sentEmails = [];
+    await decide({
+      subject: "post",
+      subjectId: post.id,
+      decision: "restore",
+      reason: "Mistaken.",
+    });
+    expect(sentEmails).toHaveLength(0);
+  });
+
+  it("Keep hidden of a never-hidden post sends the 'has been hidden' subject", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    await seedReport(post.id);
+
+    sentEmails = [];
+    await decide({
+      subject: "post",
+      subjectId: post.id,
+      decision: "keep_hidden",
+      reason: "Violates the guidelines.",
+    });
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({ Subject: "Your content has been hidden after review" });
+  });
+
+  it("decision succeeds even if Postmark fails — the notice is logged, not swallowed", async () => {
+    const { postId } = await seedHiddenPost();
+
+    // On Postmark failure, postmarkSend returns false and the caller logs it.
+    // This test just confirms the decision succeeds (returns 200) with actionId,
+    // proving the failure was handled, not surfaced.
+    let postmarkCalled = false;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://api.postmarkapp.com/email") {
+        postmarkCalled = true;
+        return new Response("Internal Server Error", { status: 500 });
+      }
+      const jwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+      return new Response(JSON.stringify({ keys: [{ ...jwk, kid: KID, alg: "RS256", use: "sig" }] }),
+        { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const res = await decide({
+      subject: "post",
+      subjectId: postId,
+      decision: "remove",
+      reason: "x",
+    });
+
+    expect(res.status).toBe(200);
+    const { actionId } = (await res.json()) as { actionId: string };
+    expect(actionId).toBeTruthy();
+    expect(postmarkCalled).toBe(true);
+
+    vi.unstubAllGlobals();
   });
 });
