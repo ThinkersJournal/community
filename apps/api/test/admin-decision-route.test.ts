@@ -410,33 +410,37 @@ describe("POST /admin/decision", () => {
       const tagId = rows[0]!.id;
       await c.query(`INSERT INTO post_tags (post_id, tag_id) VALUES ($1, $2)`, [post.id, tagId]);
     });
-    await seedReport(post.id);
 
-    const { response, purges } = await callCapturingPurges("/admin/decision", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...await adminHeaders(),
-        Origin: ALLOWED_ORIGIN,
-      },
-      body: JSON.stringify({
-        subject: "post",
-        subjectId: post.id,
-        decision: "remove",
-        reason: "Spam.",
-      }),
-    });
+    try {
+      await seedReport(post.id);
 
-    expect(response.status).toBe(200);
-    expect(purges).toHaveLength(1);
-    const purgeTags = purges[0]!;
-    expect(purgeTags).toContain(`post:${post.id}`);
-    expect(purgeTags).toContain("listing");
-    expect(purgeTags).toContain(`tag:${tagSlug}`);
-    // Clean up tag
-    await ctxRun(async (c) => {
-      await c.query(`DELETE FROM tags WHERE slug = $1`, [tagSlug]);
-    });
+      const { response, purges } = await callCapturingPurges("/admin/decision", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...await adminHeaders(),
+          Origin: ALLOWED_ORIGIN,
+        },
+        body: JSON.stringify({
+          subject: "post",
+          subjectId: post.id,
+          decision: "remove",
+          reason: "Spam.",
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(purges).toHaveLength(1);
+      // Exactly these four. Dropping the author tag would leave the author's
+      // profile page serving the removed post, and toContain could not see it.
+      expect([...purges[0]!].sort()).toEqual(
+        [`post:${post.id}`, `author:${userId}`, "listing", `tag:${tagSlug}`].sort(),
+      );
+    } finally {
+      await ctxRun(async (c) => {
+        await c.query(`DELETE FROM tags WHERE slug = $1`, [tagSlug]);
+      });
+    }
   });
 
   it("A decision on a comment purges exactly post:<post_id>", async () => {
@@ -562,6 +566,30 @@ describe("POST /admin/decision", () => {
       reason: "Mistaken.",
     });
     expect(sentEmails).toHaveLength(0);
+  });
+
+  it("Restore of a HIDDEN post emails 'has been restored'", async () => {
+    const { postId, authorEmail } = await seedHiddenPost();
+
+    sentEmails = [];
+    await decide({ subject: "post", subjectId: postId, decision: "restore", reason: "Reviewed; no violation." });
+
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({ To: authorEmail, Subject: "Your content has been restored" });
+  });
+
+  it("Keep hidden of a never-hidden COMMENT sends 'has been hidden' and names the parent post", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const commentId = await seedComment(userId, post.id);
+
+    sentEmails = [];
+    await decide({ subject: "comment", subjectId: commentId, decision: "keep_hidden", reason: "Harassment." });
+
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({ Subject: "Your content has been hidden after review" });
+    // seedPost titles every post "test".
+    expect(String(sentEmails[0]!["TextBody"])).toContain('This is about your comment on "test".');
   });
 
   it("Keep hidden of a never-hidden post sends the 'has been hidden' subject", async () => {
