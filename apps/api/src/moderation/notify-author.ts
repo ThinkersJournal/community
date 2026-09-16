@@ -18,21 +18,41 @@ import { postmarkSend } from "../auth/postmark";
 import { escapeHtml } from "../auth/email-verify";
 import type { DecisionKind } from "./decide";
 
+export interface ModerationNotice {
+  readonly decision: DecisionKind;
+  readonly wasHidden: boolean;
+  readonly subject: "post" | "comment";
+  readonly postTitle: string;
+  readonly reason: string;
+}
+
 interface Copy {
   readonly subject: string;
   readonly lead: string;
 }
 
-const COPY: Readonly<Record<DecisionKind, Copy>> = {
-  restore: {
+const COPY: Readonly<Record<`${DecisionKind}:${boolean}`, Copy>> = {
+  "restore:true": {
     subject: "Your content has been restored",
-    lead: "We reviewed a report about your content and restored it. It is visible again.",
+    lead: "We reviewed your content and restored it. It is visible again.",
   },
-  keep_hidden: {
+  "restore:false": {
+    subject: "",
+    lead: "",
+  },
+  "keep_hidden:true": {
     subject: "Your content remains hidden after review",
     lead: "We reviewed your content and it remains hidden because it does not meet our Community Guidelines.",
   },
-  remove: {
+  "keep_hidden:false": {
+    subject: "Your content has been hidden after review",
+    lead: "We reviewed a report about your content and have hidden it because it does not meet our Community Guidelines.",
+  },
+  "remove:true": {
+    subject: "Your content has been removed",
+    lead: "We reviewed your content and removed it because it does not meet our Community Guidelines.",
+  },
+  "remove:false": {
     subject: "Your content has been removed",
     lead: "We reviewed your content and removed it because it does not meet our Community Guidelines.",
   },
@@ -46,18 +66,25 @@ const COPY: Readonly<Record<DecisionKind, Copy>> = {
 export async function sendModerationNotice(
   env: Env,
   to: string,
-  decision: DecisionKind,
-  reason: string,
-): Promise<void> {
-  const { subject, lead } = COPY[decision];
+  notice: ModerationNotice,
+): Promise<boolean> {
+  // A dismissal (restore of a never-hidden post) sends nothing.
+  if (notice.decision === "restore" && !notice.wasHidden) {
+    return true;
+  }
 
-  await postmarkSend(env, {
+  const { subject, lead } = COPY[`${notice.decision}:${notice.wasHidden}`];
+  const contentLine =
+    notice.subject === "post"
+      ? `This is about your post "${notice.postTitle}".`
+      : `This is about your comment on "${notice.postTitle}".`;
+
+  return await postmarkSend(env, {
     from: "noreply@thinkersjournal.com",
     to,
     subject,
-    textBody: `${lead}\n\nReason given by the reviewer:\n\n${reason}\n`,
-    htmlBody:
-      `<p>${escapeHtml(lead)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(reason)}</p>`,
+    textBody: `${lead}\n\n${contentLine}\n\nReason given by the reviewer:\n\n${notice.reason}\n`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>`,
     stream: "outbound",
   });
 }
