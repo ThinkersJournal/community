@@ -18,11 +18,13 @@
  */
 import type { Client } from "pg";
 
+import { loadPostTagSlugs, type PurgeTarget } from "./purge-target";
+
 export const AUTO_HIDE_REPORTER_THRESHOLD = 3;
 
 export type ReportTarget = { postId: string } | { commentId: string };
 
-export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<void> {
+export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<PurgeTarget | null> {
   const isPost = "postId" in target;
   const column = isPost ? "post_id" : "comment_id";
   const table = isPost ? "posts" : "comments";
@@ -34,7 +36,24 @@ export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<vo
     [id],
   );
   const distinctReporters = Number(rows[0]?.n ?? "0");
-  if (distinctReporters < AUTO_HIDE_REPORTER_THRESHOLD) return;
+  if (distinctReporters < AUTO_HIDE_REPORTER_THRESHOLD) return null;
 
-  await c.query(`UPDATE ${table} SET hidden_at = now() WHERE id = $1 AND hidden_at IS NULL`, [id]);
+  if (isPost) {
+    const { rows: postRows } = await c.query<{ id: string; author_id: string }>(
+      `UPDATE posts SET hidden_at = now() WHERE id = $1 AND hidden_at IS NULL RETURNING id, author_id`,
+      [id],
+    );
+    const row = postRows[0];
+    if (row === undefined) return null; // already hidden
+    const tagSlugs = await loadPostTagSlugs(c, row.id);
+    return { kind: "post", postId: row.id, authorId: row.author_id, tagSlugs };
+  } else {
+    const { rows: commentRows } = await c.query<{ id: string; post_id: string }>(
+      `UPDATE comments SET hidden_at = now() WHERE id = $1 AND hidden_at IS NULL RETURNING id, post_id`,
+      [id],
+    );
+    const row = commentRows[0];
+    if (row === undefined) return null; // already hidden
+    return { kind: "comment", postId: row.post_id };
+  }
 }

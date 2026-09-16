@@ -11,10 +11,12 @@
  */
 import { runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
+import { purgeTags } from "../cache/purge";
 import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
 import { maybeAutoHide } from "../moderation/auto-hide";
+import { purgeTagsFor, type PurgeTarget } from "../moderation/purge-target";
 
 import { ReportInput } from "@thinkersjournal/shared";
 
@@ -55,6 +57,7 @@ export async function handleCreateReport(
   const { postId, commentId, reason } = parsed.data;
 
   let error: Response | null = null;
+  let hidden: PurgeTarget | null | undefined;
   try {
     error = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       // Verify the target exists before writing — mirrors reactions.ts's
@@ -80,7 +83,7 @@ export async function handleCreateReport(
       // auto-hide check would be redundant DB load. Behavior-preserving: the
       // 3rd distinct reporter's insert already ran the check.
       if (rowCount && rowCount > 0) {
-        await maybeAutoHide(c, postId !== undefined ? { postId } : { commentId: commentId! });
+        hidden = await maybeAutoHide(c, postId !== undefined ? { postId } : { commentId: commentId! });
       }
       return null;
     });
@@ -91,5 +94,14 @@ export async function handleCreateReport(
     throw err;
   }
   if (error !== null) return error;
+
+  // ⚠️ PURGE AFTER THE HIDE (issue #54). The UPDATE above has committed; without
+  // this, the auto-hidden post or comment keeps being served from the edge
+  // cache for up to 25 hours. Awaited, and purgeTags never throws — a failed
+  // invalidation must not turn a recorded report into an error.
+  if (hidden !== undefined && hidden !== null) {
+    await purgeTags(env, purgeTagsFor(hidden));
+  }
+
   return new Response(null, { status: 201 });
 }

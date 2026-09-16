@@ -16,6 +16,23 @@ async function fetchWorker(request: Request): Promise<Response> {
   return response;
 }
 
+/** Drive the Worker with a stubbed WEB binding, capturing every purge call. */
+async function fetchCapturingPurges(
+  request: Request,
+): Promise<{ response: Response; purges: string[][] }> {
+  const purges: string[][] = [];
+  const web = {
+    fetch: async (_url: string, init: RequestInit) => {
+      purges.push((JSON.parse(init.body as string) as { tags: string[] }).tags);
+      return new Response(JSON.stringify({ purged: 1 }), { status: 200 });
+    },
+  };
+  const ctx = createExecutionContext();
+  const response = await worker.fetch(request, { ...env, WEB: web } as never, ctx);
+  await waitOnExecutionContext(ctx);
+  return { response, purges };
+}
+
 function report(actor: Actor, body: Record<string, unknown>): Promise<Response> {
   return fetchWorker(
     new Request("https://api.test/reports", {
@@ -148,5 +165,231 @@ describe("auto-hide (>=3 distinct reporters within 24h)", () => {
     expect((await report(r1, { postId, reason: "spam" })).status).toBe(201);
     expect((await report(r2, { postId, reason: "spam" })).status).toBe(201);
     expect(await postHiddenAt(postId)).toBeNull();
+  });
+
+  it("the 3rd distinct reporter on a post purges exactly that post's tags", async () => {
+    const postId = await createPublished(author, { tags: ["Rust"] });
+    const r1 = await createVerifiedActor();
+    const r2 = await createVerifiedActor();
+    const r3 = await createVerifiedActor();
+
+    // First two reporters: no purge
+    const resp1 = await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r1.cookie,
+          "X-CSRF-Token": r1.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, reason: "spam" }),
+      }),
+    );
+    expect(resp1.response.status).toBe(201);
+    expect(resp1.purges).toHaveLength(0);
+
+    const resp2 = await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r2.cookie,
+          "X-CSRF-Token": r2.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, reason: "spam" }),
+      }),
+    );
+    expect(resp2.response.status).toBe(201);
+    expect(resp2.purges).toHaveLength(0);
+
+    // Third reporter: purges post, author, listing, and tag
+    const resp3 = await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r3.cookie,
+          "X-CSRF-Token": r3.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, reason: "spam" }),
+      }),
+    );
+    expect(resp3.response.status).toBe(201);
+    expect(resp3.purges).toHaveLength(1);
+    expect(resp3.purges[0]).toContain(`post:${postId}`);
+    expect(resp3.purges[0]).toContain(`author:${author.userId}`);
+    expect(resp3.purges[0]).toContain("listing");
+    expect(resp3.purges[0]).toContain("tag:rust");
+    expect(resp3.purges[0]).toHaveLength(4);
+  });
+
+  it("a 4th report on the already-hidden post purges nothing", async () => {
+    const postId = await createPublished(author);
+    const r1 = await createVerifiedActor();
+    const r2 = await createVerifiedActor();
+    const r3 = await createVerifiedActor();
+    const r4 = await createVerifiedActor();
+
+    await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r1.cookie,
+          "X-CSRF-Token": r1.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, reason: "spam" }),
+      }),
+    );
+    await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r2.cookie,
+          "X-CSRF-Token": r2.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, reason: "spam" }),
+      }),
+    );
+    await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r3.cookie,
+          "X-CSRF-Token": r3.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, reason: "spam" }),
+      }),
+    );
+
+    // Fourth report: no purge (already hidden)
+    const resp4 = await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r4.cookie,
+          "X-CSRF-Token": r4.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, reason: "spam" }),
+      }),
+    );
+    expect(resp4.response.status).toBe(201);
+    expect(resp4.purges).toHaveLength(0);
+  });
+
+  it("a comment's 3rd distinct reporter purges exactly post:<post_id>", async () => {
+    const postId = await createPublished(author);
+    // Create a comment on the post
+    const commentResp = await fetchWorker(
+      new Request("https://api.test/comments", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: author.cookie,
+          "X-CSRF-Token": author.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, markdownSource: "test comment" }),
+      }),
+    );
+    const commentId = ((await commentResp.json()) as { id: string }).id;
+
+    const r1 = await createVerifiedActor();
+    const r2 = await createVerifiedActor();
+    const r3 = await createVerifiedActor();
+
+    // First two reporters: no purge
+    const resp1 = await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r1.cookie,
+          "X-CSRF-Token": r1.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ commentId, reason: "spam" }),
+      }),
+    );
+    expect(resp1.response.status).toBe(201);
+    expect(resp1.purges).toHaveLength(0);
+
+    const resp2 = await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r2.cookie,
+          "X-CSRF-Token": r2.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ commentId, reason: "spam" }),
+      }),
+    );
+    expect(resp2.response.status).toBe(201);
+    expect(resp2.purges).toHaveLength(0);
+
+    // Third reporter: purges post
+    const resp3 = await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r3.cookie,
+          "X-CSRF-Token": r3.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ commentId, reason: "spam" }),
+      }),
+    );
+    expect(resp3.response.status).toBe(201);
+    expect(resp3.purges).toHaveLength(1);
+    expect(resp3.purges[0]).toEqual([`post:${postId}`]);
+  });
+
+  it("two reporters only → no purge at all", async () => {
+    const postId = await createPublished(author);
+    const r1 = await createVerifiedActor();
+    const r2 = await createVerifiedActor();
+
+    const resp1 = await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r1.cookie,
+          "X-CSRF-Token": r1.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, reason: "spam" }),
+      }),
+    );
+    expect(resp1.response.status).toBe(201);
+    expect(resp1.purges).toHaveLength(0);
+
+    const resp2 = await fetchCapturingPurges(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: r2.cookie,
+          "X-CSRF-Token": r2.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, reason: "spam" }),
+      }),
+    );
+    expect(resp2.response.status).toBe(201);
+    expect(resp2.purges).toHaveLength(0);
   });
 });
