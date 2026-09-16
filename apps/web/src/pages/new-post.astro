@@ -287,6 +287,7 @@ if (Astro.request.method === "POST") {
 // Load an existing post for editing. AFTER the POST branch so a just-created
 // post's id is honoured, and only for a GET — a POST already has the text
 // (from the form, for every intent including preview).
+let hiddenAt: string | null = null;
 if (postId !== null && Astro.request.method === "GET") {
   const existing = await apiFetch<AuthoredPost>(`/posts/${encodeURIComponent(postId)}`, {
     request: Astro.request,
@@ -295,6 +296,7 @@ if (postId !== null && Astro.request.method === "GET") {
     title = existing.data.title;
     markdownSource = existing.data.markdownSource;
     tagsValue = existing.data.tags.map((t) => t.label).join(", ");
+    hiddenAt = existing.data.hiddenAt;
     // The one-shot flag the draft-save redirect above appends. Read here
     // rather than persisted anywhere: reloading this exact URL keeps showing
     // it (harmless — it is still true that the draft was saved), but
@@ -320,6 +322,15 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     {outcome === "unverified" && <p id="unverified">Please verify your email address before posting.</p>}
     {outcome === "unauthenticated" && <p id="session-expired">Your session has expired. Please log in again.</p>}
     {outcome === "error" && <p id="error">{message}</p>}
+
+    {/* ⚠️ NO APPEAL LINK YET — /appeal does not exist (spec §6). Tracked as issue #53,
+        which must close before real moderators are given Cloudflare Access. */}
+    {hiddenAt && (
+      <p id="hidden-pending-review" role="status">
+        <strong>Hidden pending review.</strong> This post is not visible to others while a
+        report about it is reviewed.
+      </p>
+    )}
 
     {
       csrfToken === null ? (
@@ -433,4 +444,7 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
   .danger-zone summary::-webkit-details-marker{display:none}
   .delete-confirm{display:flex;flex-direction:column;gap:10px;margin-top:12px;
     padding:16px;border:1px solid var(--line);border-radius:8px}
+  #hidden-pending-review{
+    border-left:3px solid var(--color-warning, #b45309);
+    padding-left:0.75rem}
 </style>

@@ -325,3 +325,27 @@ describe("⚠️ tags — no-JS, comma-separated (Task 6)", () => {
     expect(code).toMatch(/\.slice\(\s*0,\s*5\s*\)/);
   });
 });
+
+describe("⚠️ hidden-pending-review banner — M4 author-facing hidden state (Task 3)", () => {
+  it("declares hiddenAt with a null default", () => {
+    expect(code).toMatch(/let\s+hiddenAt\s*:\s*string\s*\|\s*null\s*=\s*null/);
+  });
+
+  it("assigns hiddenAt from existing.data.hiddenAt", () => {
+    expect(code).toContain("hiddenAt = existing.data.hiddenAt");
+  });
+
+  it("shows the hidden-pending-review banner when hiddenAt is set — guarded by hiddenAt && condition", () => {
+    // Lexical check: the markup sits inside a {hiddenAt && (...)} guard.
+    // Using the s flag to match across newlines.
+    expect(code).toMatch(/\{hiddenAt\s*&&\s*\([^{]*id=["']hidden-pending-review["'][^}]*\)/s);
+  });
+
+  it("includes the banner text 'Hidden pending review'", () => {
+    expect(rawSource).toContain("Hidden pending review");
+  });
+
+  it("⚠️ NO /appeal link — spec §6 not yet implemented (issue #53)", () => {
+    expect(code).not.toContain('href="/appeal"');
+  });
+});

@@ -95,6 +95,8 @@ export interface AuthoredPost {
   status: PostStatusValue;
   publishedAt: string | null;
   updatedAt: string;
+  /** Non-null while hidden pending review (M4 §4.4). The author sees this; the public read never returns a hidden post at all. */
+  hiddenAt: string | null;
   tags: TagRef[];
 }
 

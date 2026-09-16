@@ -121,6 +121,34 @@ async function authorOf(id: string): Promise<string> {
   return (await postRow(id)).author_id;
 }
 
+async function seedHiddenPostOwnedBy(actor: Actor): Promise<{ id: string }> {
+  const ctx = createExecutionContext();
+  const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at, hidden_at)
+       VALUES ($1, $2, $3, $4, $5, $6, now())
+       RETURNING id`,
+      [actor.userId, "hidden test", `hidden-test-${crypto.randomUUID().slice(0, 8)}`, "test", "published", new Date()],
+    );
+    return rows[0]!.id;
+  });
+  await waitOnExecutionContext(ctx);
+  return { id };
+}
+
+async function seedVisiblePostOwnedBy(actor: Actor): Promise<{ id: string }> {
+  const response = await create(actor, { title: "Visible test", markdownSource: "test" });
+  return response;
+}
+
+async function getOwnPost(actor: Actor, id: string): Promise<{ hiddenAt: string | null }> {
+  const response = await getPost(actor, id);
+  if (response.status !== 200) {
+    throw new Error(`getPost failed: ${response.status}`);
+  }
+  return (await response.json()) as { hiddenAt: string | null };
+}
+
 let actor: Actor;
 
 beforeAll(async () => {
@@ -321,6 +349,21 @@ describe("GET /posts/:id (the author's own draft)", () => {
   it("401s with no session", async () => {
     const { id } = await create(actor, { title: "Draft", markdownSource: "secret" });
     expect((await fetchWorker(new Request(`https://api.test/posts/${id}`))).status).toBe(401);
+  });
+
+  it("the author's own read exposes hiddenAt", async () => {
+    // ⚠️ Today a hidden post 404s publicly and the author sees no difference
+    // beyond "my post disappeared". This is the field that fixes that.
+    const { id } = await seedHiddenPostOwnedBy(actor);
+    const body = await getOwnPost(actor, id);
+    expect(body.hiddenAt).toBeDefined();
+    expect(typeof body.hiddenAt).toBe("string");
+  });
+
+  // CONTROL: without this, the field could be hardcoded or every post could read as hidden.
+  it("CONTROL: a visible post reads hiddenAt null", async () => {
+    const { id } = await seedVisiblePostOwnedBy(actor);
+    expect((await getOwnPost(actor, id)).hiddenAt).toBeNull();
   });
 });
 

@@ -510,7 +510,7 @@ export async function handleGetPost(
     post = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const { rows } = await c.query(
         `SELECT p.id, p.title, p.slug, p.markdown_source AS "markdownSource", p.status,
-                p.published_at AS "publishedAt", p.updated_at AS "updatedAt",
+                p.published_at AS "publishedAt", p.updated_at AS "updatedAt", p.hidden_at AS "hiddenAt",
                 COALESCE((SELECT json_agg(json_build_object('slug', t.slug, 'label', t.label) ORDER BY t.slug)
                             FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = p.id),
                          '[]'::json) AS tags
