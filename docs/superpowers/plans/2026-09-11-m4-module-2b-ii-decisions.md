@@ -837,15 +837,18 @@ The first draft of this plan went to an auditor before any implementer saw it. *
 
 ## As built — deviations from this plan
 
-The plan's original text showed the appeal link and other author-facing elements. The shipped code does not include the appeal link (issue #53 must close first). The shipped implementation includes the following additional work items:
+⚠️ **The task text above is the plan as approved, not the code as shipped.** Where they differ, the code and this list win.
 
-- no appeal link (#53) — must close before real moderators are given Cloudflare Access
-- purge on decision, reusing #63's helper (PurgeTarget + loadPostTagSlugs)
-- notice text chosen by prior state (wasHidden), and no email for a dismissal (restore of never-hidden post)
-- banner wording updated from "Hidden pending review" to "This post is hidden. It is not visible to others following a moderation review or a report about it."
-- per-test audit count and cleanup — tracking by admin email and deleting created users in afterEach
-- public-read tests for Restore and Remove visibility changes
-- input guards (non-object body, UUID check) in handleAdminDecision
-- keep_hidden's action row asserted in tests
-- POST-path banner read on preview/failed save
-- source-scan web tests (#60) — using comment-stripped code to verify banner presence
+- **No appeal link.** The plan's notice and banner include one; the shipped code has none, because `/appeal` does not exist (issue #53, a launch blocker).
+- **Task 1 Step 9, mutation 3 was replaced.** As written, it dereferenced an undefined row and failed on a TypeError — the wrong reason. The proof actually run writes a stray audit row and COMMITs in the not-found branch; the "writes NO action row" test fails on its count.
+- **Input guards the plan did not have:** a non-object JSON body (`null`) and a non-UUID `subjectId` both return 400 `INVALID_INPUT`.
+- **`keep_hidden`'s audit row is asserted**, not only its `hidden_at`.
+- **The banner also renders on the POST path** (Preview and failed save), not only on GET.
+- **The web banner tests read the source text**, because the web package has no render harness (issue #60).
+- **Every decision purges the edge cache**, reusing #63's `purge-target.ts`. Without it, a Remove stays served from cache for up to 25 hours.
+- **The notice text depends on visibility before the decision** (`RETURNING old.hidden_at`). A Keep hidden of never-hidden content says "has been hidden". A Restore of never-hidden content is a dismissal and sends no email.
+- **The notice names the content:** the post's title, or "your comment on" the parent post's title.
+- **A failed notice send is logged** with its `actionId`.
+- **The banner reads "This post is hidden."** instead of "Hidden pending review", because after a final Keep hidden or Remove "pending" is false.
+- **The decision route test counts audit rows for its own per-test admin email, and deletes the users it creates.** Leftover rows from the unfiltered version pushed another test's post off its 50-item page.
+- **Public-read tests** assert Restore and Remove through `GET /public/posts`.

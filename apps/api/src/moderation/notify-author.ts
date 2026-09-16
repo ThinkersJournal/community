@@ -31,14 +31,17 @@ interface Copy {
   readonly lead: string;
 }
 
-const COPY: Readonly<Record<`${DecisionKind}:${boolean}`, Copy>> = {
+/**
+ * Every (decision, visibility-before) pair that sends a notice. A Restore of
+ * content that was never hidden is a dismissal and sends nothing, so it has
+ * no copy — and the type says so, rather than an empty placeholder entry.
+ */
+type NoticeKey = Exclude<`${DecisionKind}:${boolean}`, "restore:false">;
+
+const COPY: Readonly<Record<NoticeKey, Copy>> = {
   "restore:true": {
     subject: "Your content has been restored",
     lead: "We reviewed your content and restored it. It is visible again.",
-  },
-  "restore:false": {
-    subject: "",
-    lead: "",
   },
   "keep_hidden:true": {
     subject: "Your content remains hidden after review",
@@ -61,19 +64,22 @@ const COPY: Readonly<Record<`${DecisionKind}:${boolean}`, Copy>> = {
 // ⚠️ NO APPEAL LINK YET. A DSA statement of reasons must tell the user how to
 // challenge the decision, but the in-app appeal form (spec §6) is not built and
 // /appeal does not exist — a dead link is worse than none. Tracked as issue #53,
-// which must close before real moderators are given Cloudflare Access.
+// which must close before any web route forwards `Cf-Access-Jwt-Assertion` to
+// the api (the 2b-iii admin UI), or before launch, whichever comes first.
 
 export async function sendModerationNotice(
   env: Env,
   to: string,
   notice: ModerationNotice,
 ): Promise<boolean> {
-  // A dismissal (restore of a never-hidden post) sends nothing.
-  if (notice.decision === "restore" && !notice.wasHidden) {
-    return true;
-  }
+  // ⚠️ A Restore of content that was never hidden is a DISMISSAL: nothing was
+  // done to the author, so nothing is sent. This is the ONLY place the rule
+  // lives — the route calls this unconditionally. A second copy of the rule in
+  // the caller would make each copy impossible to test on its own.
+  if (notice.decision === "restore" && !notice.wasHidden) return true;
 
-  const { subject, lead } = COPY[`${notice.decision}:${notice.wasHidden}`];
+  // The early return above removed the one pair COPY has no entry for.
+  const { subject, lead } = COPY[`${notice.decision}:${notice.wasHidden}` as NoticeKey];
   const contentLine =
     notice.subject === "post"
       ? `This is about your post "${notice.postTitle}".`

@@ -248,6 +248,7 @@ afterEach(async () => {
       await c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [createdUserIds]);
     });
   }
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -579,17 +580,13 @@ describe("POST /admin/decision", () => {
     expect(sentEmails[0]).toMatchObject({ Subject: "Your content has been hidden after review" });
   });
 
-  it("decision succeeds even if Postmark fails — the notice is logged, not swallowed", async () => {
+  it("a failed notice send is logged with the action id, and the decision still succeeds", async () => {
     const { postId } = await seedHiddenPost();
-
-    // On Postmark failure, postmarkSend returns false and the caller logs it.
-    // This test just confirms the decision succeeds (returns 200) with actionId,
-    // proving the failure was handled, not surfaced.
-    let postmarkCalled = false;
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "https://api.postmarkapp.com/email") {
-        postmarkCalled = true;
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    let postmarkCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "https://api.postmarkapp.com/email") {
+        postmarkCalls++;
         return new Response("Internal Server Error", { status: 500 });
       }
       const jwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
@@ -597,18 +594,13 @@ describe("POST /admin/decision", () => {
         { status: 200, headers: { "content-type": "application/json" } });
     }));
 
-    const res = await decide({
-      subject: "post",
-      subjectId: postId,
-      decision: "remove",
-      reason: "x",
-    });
+    const res = await decide({ subject: "post", subjectId: postId, decision: "remove", reason: "x" });
 
     expect(res.status).toBe(200);
     const { actionId } = (await res.json()) as { actionId: string };
-    expect(actionId).toBeTruthy();
-    expect(postmarkCalled).toBe(true);
-
-    vi.unstubAllGlobals();
+    expect(postmarkCalls).toBe(1);
+    // postmarkSend logs its own line too; pick out the route's by its message.
+    const noticeLogs = errorLog.mock.calls.filter((args) => args[0] === "moderation notice not sent");
+    expect(noticeLogs).toEqual([["moderation notice not sent", { actionId }]]);
   });
 });

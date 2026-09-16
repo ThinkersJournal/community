@@ -45,7 +45,7 @@ export interface DecisionResult {
   /** The post's title — for a comment, its parent post's title. Identifies the content in the notice. */
   readonly postTitle: string;
   /** Canonical ids for the cache purge (purgeTagsFor). */
-  readonly purge: import("./purge-target").PurgeTarget;
+  readonly purge: PurgeTarget;
 }
 
 const ACTION_FOR: Readonly<Record<DecisionKind, ModerationActionKind>> = {

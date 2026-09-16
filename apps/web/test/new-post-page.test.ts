@@ -342,9 +342,11 @@ describe("⚠️ hidden-pending-review banner — M4 author-facing hidden state 
   });
 
   it("(d) includes the banner text with updated wording", () => {
-    expect(code).toContain("This post is hidden");
-    expect(code).toContain("moderation");
-    expect(code).toContain("report about it");
+    // The whole sentence, whitespace-tolerant (the source wraps it). "moderation"
+    // alone would match elsewhere in the page and could not fail.
+    expect(code).toMatch(
+      /<strong>This post is hidden\.<\/strong>\s+It is not visible to others following a moderation\s+review or a report about it\./,
+    );
   });
 
   it("(e) ⚠️ preserves hiddenAt on POST re-render (Preview/failed save) — the POST block exists and assigns only hiddenAt", () => {

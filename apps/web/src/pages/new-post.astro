@@ -339,7 +339,8 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     {outcome === "error" && <p id="error">{message}</p>}
 
     {/* ⚠️ NO APPEAL LINK YET — /appeal does not exist (spec §6). Tracked as issue #53,
-        which must close before real moderators are given Cloudflare Access. */}
+        which must close before any web route forwards Cf-Access-Jwt-Assertion to
+        the api (the 2b-iii admin UI), or before launch, whichever comes first. */}
     {hiddenAt && (
       <p id="hidden-pending-review" role="status">
         <strong>This post is hidden.</strong> It is not visible to others following a moderation
