@@ -9,6 +9,8 @@ import { checkOrigin } from "../auth/csrf";
 import { errorResponse } from "../http/errors";
 import { applyDecision, type DecisionKind } from "../moderation/decide";
 import { sendModerationNotice } from "../moderation/notify-author";
+import { purgeTags } from "../cache/purge";
+import { purgeTagsFor } from "../moderation/purge-target";
 import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { listOpenQueue } from "../moderation/queue";
@@ -125,12 +127,32 @@ export async function handleAdminDecision(
 
   if (result === null) return errorResponse("NOT_FOUND", 404);
 
+  // ⚠️ PURGE AFTER THE COMMIT. Without this a Remove leaves the content served
+  // from the edge cache for up to 25 hours (PUBLIC_MAX_AGE + PUBLIC_SWR).
+  // Canonical ids come from RETURNING. Awaited; purgeTags never throws. The
+  // 404 and the cross-origin 403 above return before this, so they purge nothing.
+  await purgeTags(env, purgeTagsFor(result.purge));
+
   // ⚠️ AFTER the commit and OUTSIDE the response path. The decision is already
   // durable; a Postmark outage must not turn a successful moderation action
-  // into a 500. See R5.
-  ctx.waitUntil(
-    sendModerationNotice(env, result.authorEmail, decision as DecisionKind, reason.trim()),
-  );
+  // into a 500. See R5. Skip dismissals (restore + never-hidden): they are not
+  // actions against the author.
+  if (!(decision === "restore" && !result.wasHidden)) {
+    ctx.waitUntil(
+      sendModerationNotice(env, result.authorEmail, {
+        decision: decision as DecisionKind,
+        wasHidden: result.wasHidden,
+        subject,
+        postTitle: result.postTitle,
+        reason: reason.trim(),
+      }).then((sent) => {
+        if (!sent) {
+          // A lost notice must be findable and re-sendable (R5).
+          console.error("moderation notice not sent", { actionId: result.actionId });
+        }
+      }),
+    );
+  }
 
   return new Response(JSON.stringify({ actionId: result.actionId }), {
     status: 200,

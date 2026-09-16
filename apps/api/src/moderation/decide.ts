@@ -18,6 +18,7 @@ import type { Client } from "pg";
 
 import { BEGIN_BOUNDED_TX } from "../db/client";
 import { recordModerationAction, type ModerationActionKind, type ViolationCategory } from "./actions";
+import { loadPostTagSlugs, type PurgeTarget } from "./purge-target";
 
 export type DecisionKind = "restore" | "keep_hidden" | "remove";
 
@@ -37,8 +38,14 @@ export interface DecisionResult {
   readonly actionId: string;
   /** Whose content it was — Task 2 emails them. */
   readonly authorEmail: string;
+  /** Visibility BEFORE the decision (RETURNING old.hidden_at). Picks the notice text. */
+  readonly wasHidden: boolean;
   /** Visibility AFTER the decision. */
   readonly hidden: boolean;
+  /** The post's title — for a comment, its parent post's title. Identifies the content in the notice. */
+  readonly postTitle: string;
+  /** Canonical ids for the cache purge (purgeTagsFor). */
+  readonly purge: import("./purge-target").PurgeTarget;
 }
 
 const ACTION_FOR: Readonly<Record<DecisionKind, ModerationActionKind>> = {
@@ -48,7 +55,7 @@ const ACTION_FOR: Readonly<Record<DecisionKind, ModerationActionKind>> = {
 };
 
 /**
- * ⚠️ `COALESCE(hidden_at, now())` for keep_hidden and remove, NOT `now()`.
+ * ⚠️ `COALESCE(t.hidden_at, now())` for keep_hidden and remove, NOT `now()`.
  * An already-hidden item keeps its ORIGINAL hide timestamp, which is evidence of
  * when it was hidden; restamping destroys that and the destruction is invisible.
  * An item that reached review WITHOUT being auto-hidden (auto-hide is
@@ -57,30 +64,46 @@ const ACTION_FOR: Readonly<Record<DecisionKind, ModerationActionKind>> = {
  */
 const HIDDEN_AT_SQL: Readonly<Record<DecisionKind, string>> = {
   restore: "NULL",
-  keep_hidden: "COALESCE(hidden_at, now())",
-  remove: "COALESCE(hidden_at, now())",
+  keep_hidden: "COALESCE(t.hidden_at, now())",
+  remove: "COALESCE(t.hidden_at, now())",
 };
 
 export async function applyDecision(
   c: Client,
   input: DecisionInput,
 ): Promise<DecisionResult | null> {
-  const table = input.subject === "post" ? "posts" : "comments";
-
   await c.query(BEGIN_BOUNDED_TX);
   try {
-    // The subject id is a bound parameter; `table` and the hidden_at expression
-    // are chosen from the two closed maps above and are never caller text.
-    const { rows } = await c.query<{ author_id: string; hidden_at: Date | null; email: string }>(
-      `UPDATE ${table} AS t
-          SET hidden_at = ${HIDDEN_AT_SQL[input.decision]}
-        FROM users u
-       WHERE t.id = $1 AND u.id = t.author_id
-       RETURNING t.author_id, t.hidden_at, u.email`,
-      [input.subjectId],
-    );
+    let row:
+      | { id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean; post_id?: string }
+      | undefined;
 
-    const row = rows[0];
+    if (input.subject === "post") {
+      const { rows } = await c.query<{ id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean }>(
+        `UPDATE posts AS t
+            SET hidden_at = ${HIDDEN_AT_SQL[input.decision]}
+          FROM users u
+         WHERE t.id = $1 AND u.id = t.author_id
+         RETURNING t.id, t.author_id, u.email, t.title,
+                   (old.hidden_at IS NOT NULL) AS was_hidden,
+                   (t.hidden_at IS NOT NULL) AS hidden`,
+        [input.subjectId],
+      );
+      row = rows[0];
+    } else {
+      const { rows } = await c.query<{ id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean; post_id: string }>(
+        `UPDATE comments AS t
+            SET hidden_at = ${HIDDEN_AT_SQL[input.decision]}
+          FROM users u, posts p
+         WHERE t.id = $1 AND u.id = t.author_id AND p.id = t.post_id
+         RETURNING t.id, t.author_id, t.post_id, u.email, p.title,
+                   (old.hidden_at IS NOT NULL) AS was_hidden,
+                   (t.hidden_at IS NOT NULL) AS hidden`,
+        [input.subjectId],
+      );
+      row = rows[0];
+    }
+
     if (row === undefined) {
       // No such subject: commit nothing, and append NO action row. An audit
       // entry for content that does not exist is a lie in the log.
@@ -97,16 +120,28 @@ export async function applyDecision(
       actorAdmin: input.actorAdmin,
       action: ACTION_FOR[input.decision],
       reason: input.reason,
-      postId: input.subject === "post" ? input.subjectId : undefined,
-      commentId: input.subject === "comment" ? input.subjectId : undefined,
+      postId: input.subject === "post" ? row.id : undefined,
+      commentId: input.subject === "comment" ? row.id : undefined,
       subjectUserId: row.author_id,
       subjectLabel: row.email,
       violationCategory: input.violationCategory,
       internalNote: input.internalNote,
     });
 
+    const purge: PurgeTarget =
+      input.subject === "post"
+        ? { kind: "post", postId: row.id, authorId: row.author_id, tagSlugs: await loadPostTagSlugs(c, row.id) }
+        : { kind: "comment", postId: row.post_id! };
+
     await c.query("COMMIT");
-    return { actionId, authorEmail: row.email, hidden: row.hidden_at !== null };
+    return {
+      actionId,
+      authorEmail: row.email,
+      wasHidden: row.was_hidden,
+      hidden: row.hidden,
+      postTitle: row.title,
+      purge,
+    };
   } catch (err) {
     // ⚠️ THE ROLLBACK GETS ITS OWN try/catch SO IT CANNOT REPLACE THE ROOT
     // ERROR. If the connection is dead, ROLLBACK throws too and `throw err`
