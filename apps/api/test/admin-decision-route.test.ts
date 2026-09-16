@@ -199,6 +199,7 @@ describe("POST /admin/decision", () => {
     const { postId, hiddenAt } = await seedHiddenPost();
     await decide({ subject: "post", subjectId: postId, decision: "keep_hidden", reason: "Violates the guidelines." });
     expect(await hiddenAtOf("posts", postId)).toEqual(hiddenAt);
+    expect(await lastActionFor(postId)).toMatchObject({ action: "content_keep_hidden" });
   });
 
   it("keep_hidden HIDES a reported item that was never auto-hidden", async () => {
@@ -270,5 +271,29 @@ describe("POST /admin/decision", () => {
   it("CONTROL: a well-formed decision from an admin succeeds", async () => {
     const { postId } = await seedHiddenPost();
     expect((await decide({ subject: "post", subjectId: postId, decision: "restore", reason: "ok" })).status).toBe(200);
+  });
+
+  it("400s a request whose body is the literal JSON null", async () => {
+    const res = await call("/admin/decision", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...await adminHeaders(),
+        Origin: ALLOWED_ORIGIN,
+      },
+      body: "null",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("400s a well-formed decision whose subjectId is not a UUID", async () => {
+    const { postId } = await seedHiddenPost();
+    const before = await actionCount();
+    const res = await decideRaw({
+      headers: { ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+      body: { subject: "post", subjectId: "not-a-uuid", decision: "remove", reason: "x" },
+    });
+    expect(res.status).toBe(400);
+    expect(await actionCount()).toBe(before);
   });
 });

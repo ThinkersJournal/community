@@ -12,6 +12,8 @@ import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { listOpenQueue } from "../moderation/queue";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function handleAdminWhoami(request: Request, env: Env): Promise<Response> {
   const admin = await requireAdmin(request, env);
   if (admin instanceof Response) return admin;
@@ -84,6 +86,10 @@ export async function handleAdminDecision(
     return errorResponse("INVALID_JSON", 400);
   }
 
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return errorResponse("INVALID_INPUT", 400);
+  }
+
   const b = body as Record<string, unknown>;
   const subject = b["subject"];
   const subjectId = b["subjectId"];
@@ -92,7 +98,7 @@ export async function handleAdminDecision(
 
   if (
     (subject !== "post" && subject !== "comment") ||
-    typeof subjectId !== "string" || subjectId === "" ||
+    typeof subjectId !== "string" || !UUID_RE.test(subjectId) ||
     typeof decision !== "string" || !DECISIONS.includes(decision as DecisionKind) ||
     // The statement of reasons is DSA-required and is shown to the author:
     // whitespace is not a reason.
