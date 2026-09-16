@@ -342,8 +342,8 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
         which must close before real moderators are given Cloudflare Access. */}
     {hiddenAt && (
       <p id="hidden-pending-review" role="status">
-        <strong>Hidden pending review.</strong> This post is not visible to others while a
-        report about it is reviewed.
+        <strong>This post is hidden.</strong> It is not visible to others following a moderation
+        review or a report about it.
       </p>
     )}
 

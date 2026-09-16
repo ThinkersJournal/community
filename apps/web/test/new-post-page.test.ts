@@ -341,8 +341,10 @@ describe("⚠️ hidden-pending-review banner — M4 author-facing hidden state 
     expect(code).toMatch(/\{hiddenAt\s*&&\s*\([^{]*id=["']hidden-pending-review["'][^}]*\)/s);
   });
 
-  it("(d) includes the banner text 'Hidden pending review'", () => {
-    expect(rawSource).toContain("Hidden pending review");
+  it("(d) includes the banner text with updated wording", () => {
+    expect(code).toContain("This post is hidden");
+    expect(code).toContain("moderation");
+    expect(code).toContain("report about it");
   });
 
   it("(e) ⚠️ preserves hiddenAt on POST re-render (Preview/failed save) — the POST block exists and assigns only hiddenAt", () => {
