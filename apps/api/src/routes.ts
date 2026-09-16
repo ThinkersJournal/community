@@ -17,7 +17,7 @@
  */
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
-import { handleAdminQueue, handleAdminWhoami } from "./routes/admin";
+import { handleAdminDecision, handleAdminQueue, handleAdminWhoami } from "./routes/admin";
 import { handleBlock, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
@@ -271,6 +271,14 @@ export const ROUTES: readonly RouteDef[] = [
   // that this route is reachable exclusively through requireAdmin.
   // test/admin-queue-route.test.ts asserts that property directly.
   { method: "GET", pattern: "/admin/queue", handler: handleAdminQueue },
+
+  // The three content decisions (M4 2b-ii, spec §4.3) — same Access trust
+  // domain as /admin/queue. ⚠️ THE FIRST NON-GET ADMIN ROUTE: it does NOT run
+  // runMutatingPipeline (that authenticates a member session; an admin is an
+  // Access principal), so it is listed in PIPELINE_EXEMPT and defends itself
+  // with an inline checkOrigin — see handleAdminDecision and the note in
+  // src/admin/require-admin.ts on why an Access assertion alone is not enough.
+  { method: "POST", pattern: "/admin/decision", handler: handleAdminDecision },
 
   // TEST-ONLY. `handleTestRoute` returns null when `TEST_ROUTES` is unset (i.e.
   // in production), and we fall through to the SAME notFoundResponse() every

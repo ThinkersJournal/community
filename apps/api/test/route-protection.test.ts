@@ -99,6 +99,15 @@ const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // orphan-media reclaimer (src/media/reap-orphan-media.ts). Same reasoning,
   // same inline `checkOrigin`.
   "POST /__test/reap-orphan-media",
+  // The Access-gated moderation decision (M4 2b-ii). Cannot use
+  // `runMutatingPipeline`: that authenticates a MEMBER SESSION, and an admin is
+  // an Access principal — a different trust domain, and a member session confers
+  // no admin authority. It defends itself instead with an inline `checkOrigin`
+  // (see handleAdminDecision), which is required because Cloudflare injects the
+  // Access assertion from the CF_Authorization COOKIE: without it, a cross-site
+  // form post from a logged-in moderator's browser would carry a valid
+  // assertion and drive a real content decision.
+  "POST /admin/decision",
 ]);
 
 /**
