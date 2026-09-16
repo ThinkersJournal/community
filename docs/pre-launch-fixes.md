@@ -134,3 +134,29 @@ which resolves once the media custom domain is attached at DNS launch. Not a
 CSP block, not unfinished, not a bug (`apps/api/src/routes/media.ts:64,225`
 hardcode the CDN origin; `apps/web/src/lib/csp.ts:58` allows it). No action
 beyond the DNS step.
+
+## 6. No appeal link in moderation notice   `#53 — Fix before launch`
+
+**What:** The moderation notice sent to authors when their content is actioned includes a promise to appeal the decision, but the `/appeal` route does not exist and the appeal form is not built.
+
+**Evidence:** `apps/api/src/moderation/notify-author.ts:54-55` (comment says `#53`); spec §6 defers the in-app appeal form to a later slice.
+
+**Root cause:** The DSA requires a statement of reasons showing users how to challenge a decision. The notice was shipped with placeholder link text, but the route was not built in time.
+
+**Disposition — must close before launch:** The appeal link must not ship as dead. Either (a) land a stub page (`GET /appeal`) and link it, or (b) remove the link from the notice (currently done — issue #53 is open and the code comments it). The shipping code does NOT include the appeal link. **#53 must close before any web route forwards `Cf-Access-Jwt-Assertion` to real moderators** (i.e., before the 2b-iii admin UI ships).
+
+---
+
+## 7. Restore can be undone by a new report   `#55 — Defer to post-launch`
+
+**What:** When a post is restored (hidden_at = NULL), a new report against it auto-hides it again via the auto-hide threshold. A moderator's restore decision can be immediately reversed by a single new report, making the decision meaningless.
+
+**Evidence:** `apps/api/src/moderation/auto-hide.ts` (auto-hide runs on every report, threshold-based); `spec` (auto-hide is provisional and reversible, but a moderation decision is final).
+
+**Root cause:** The queue reads HIDDEN rows and decides their fate. A Restore decides to show the content again. But auto-hide is threshold-based and runs on EVERY report — so if one new report arrives after the restore, the item re-hides without moderator action.
+
+**Disposition — defer to post-launch:** The fix is to make auto-hide check whether the item has a recent moderation decision (within a grace window, e.g. 24h). Only auto-hide items that have never been reviewed, or whose last decision is older than the grace period. This requires:
+- A `last_moderation_decision_at` column on `posts` and `comments` (or reading it from `moderation_actions` on each report).
+- Logic in `auto-hide.ts` to skip items with recent decisions.
+
+This is correctness work but not launch-blocking, since real moderators are not enabled until #53 closes and the admin UI ships.

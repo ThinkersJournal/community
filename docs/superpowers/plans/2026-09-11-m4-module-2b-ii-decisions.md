@@ -834,3 +834,18 @@ The first draft of this plan went to an auditor before any implementer saw it. *
 ⚠️ **A FIX THAT UPDATES THE STEP AND NOT ITS SUMMARY HAS NOT LANDED.** A plan states the same thing in several places — a file table, a task preamble, a step, a self-review — and a reader entering at any of them acts on what they find there. This is the third instance of the class in one workstream: stale step-number cross-references after a renumbering, a ratchet blinded by prose added elsewhere in the same fix wave, and now a corrected step contradicted by its own summary row.
 
 ⚠️ **The transferable part: four of the five original defects were invisible to reading and obvious to executing.** The plan's prose was internally coherent in every case — the code simply did not compile, or the guard did not scan where the prose assumed. **A plan that ships code is two artifacts, and the second one is only gated by running it.**
+
+## As built — deviations from this plan
+
+The plan's original text showed the appeal link and other author-facing elements. The shipped code does not include the appeal link (issue #53 must close first). The shipped implementation includes the following additional work items:
+
+- no appeal link (#53) — must close before real moderators are given Cloudflare Access
+- purge on decision, reusing #63's helper (PurgeTarget + loadPostTagSlugs)
+- notice text chosen by prior state (wasHidden), and no email for a dismissal (restore of never-hidden post)
+- banner wording updated from "Hidden pending review" to "This post is hidden. It is not visible to others following a moderation review or a report about it."
+- per-test audit count and cleanup — tracking by admin email and deleting created users in afterEach
+- public-read tests for Restore and Remove visibility changes
+- input guards (non-object body, UUID check) in handleAdminDecision
+- keep_hidden's action row asserted in tests
+- POST-path banner read on preview/failed save
+- source-scan web tests (#60) — using comment-stripped code to verify banner presence
