@@ -1,6 +1,7 @@
 {
   "name": "@thinkersjournal/api",
   "private": true,
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json && tsc --noEmit -p test/tsconfig.node.json",
