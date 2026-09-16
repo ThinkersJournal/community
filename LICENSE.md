@@ -45,10 +45,22 @@ without a `wrangler` run; they remain under their own terms, and the dual grant 
 
 ⚠️ **The posts, comments, reactions and uploaded media that people publish on the running
 service are NOT licensed by this file, because they are not ours to license.** Authors keep
-ownership of what they write and upload. The platform holds only the operating licence they
-grant when they accept the [Terms of Service](docs/legal/terms-of-service.md) — a licence to
-host, store, reproduce and display that content **for the purpose of operating the Service**,
-which ends when they delete the content or their account (see ToS §3).
+ownership of what they write and upload.
+
+The platform holds only the licence authors grant when they accept the
+[Terms of Service](docs/legal/terms-of-service.md). ⚠️ **That grant is defined in ToS §3 and
+nowhere else — read it there.** This file deliberately does **not** restate its scope or its
+duration: a summary of a legal clause is a claim with a half-life, the ToS will be edited
+again, and a reader who relies on the summary would be relying on the wrong document.
+
+⚠️ **An earlier draft of this paragraph did restate it, and understated it twice** — it omitted
+that the grant covers *transform*, *distribute*, and the purposes *secure* and *promote* as well
+as *operate*, and it said the licence simply "ends when they delete", where ToS §3 carves out
+content others have shared or referenced, and backup/retention and legal-compliance copies.
+**Both errors ran in the reassuring direction — they told authors they had granted less and kept
+more than they had.** That is the direction that survives review, because nobody complains about
+being told they gave away less; and `LICENSE.md` is the file people read while the ToS is the one
+that governs. Pointing rather than paraphrasing is what stops it happening again.
 
 Nothing in the MIT or Apache grant above reaches User Content. **Running this code gives you
 no rights whatsoever in anybody's posts**, and the presence of an open-source licence on the
