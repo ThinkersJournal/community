@@ -287,6 +287,7 @@ if (Astro.request.method === "POST") {
 // Load an existing post for editing. AFTER the POST branch so a just-created
 // post's id is honoured, and only for a GET — a POST already has the text
 // (from the form, for every intent including preview).
+let hiddenAt: string | null = null;
 if (postId !== null && Astro.request.method === "GET") {
   const existing = await apiFetch<AuthoredPost>(`/posts/${encodeURIComponent(postId)}`, {
     request: Astro.request,
@@ -295,6 +296,7 @@ if (postId !== null && Astro.request.method === "GET") {
     title = existing.data.title;
     markdownSource = existing.data.markdownSource;
     tagsValue = existing.data.tags.map((t) => t.label).join(", ");
+    hiddenAt = existing.data.hiddenAt;
     // The one-shot flag the draft-save redirect above appends. Read here
     // rather than persisted anywhere: reloading this exact URL keeps showing
     // it (harmless — it is still true that the draft was saved), but
@@ -305,6 +307,21 @@ if (postId !== null && Astro.request.method === "GET") {
   } else {
     // 404 covers "not yours" too — the api never distinguishes them.
     return new Response(null, { status: 404 });
+  }
+}
+
+// ⚠️ A POST re-render (Preview, a failed save) keeps the author's UNSAVED text
+// from the form, so it must NOT reload title/body/tags here — that would wipe
+// their edits. But hidden state is not a form field, so without this the
+// "Hidden pending review" banner vanishes mid-edit on a post that is still
+// hidden (M4 spec §4.4). On a non-200, leave hiddenAt null: the POST branch has
+// already reported its own outcome, so this read must not 404 the page.
+if (postId !== null && Astro.request.method === "POST") {
+  const current = await apiFetch<AuthoredPost>(`/posts/${encodeURIComponent(postId)}`, {
+    request: Astro.request,
+  });
+  if (current.status === 200 && current.data !== null) {
+    hiddenAt = current.data.hiddenAt;
   }
 }
 
@@ -320,6 +337,16 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     {outcome === "unverified" && <p id="unverified">Please verify your email address before posting.</p>}
     {outcome === "unauthenticated" && <p id="session-expired">Your session has expired. Please log in again.</p>}
     {outcome === "error" && <p id="error">{message}</p>}
+
+    {/* ⚠️ NO APPEAL LINK YET — /appeal does not exist (spec §6). Tracked as issue #53,
+        which must close before any web route forwards Cf-Access-Jwt-Assertion to
+        the api (the 2b-iii admin UI), or before launch, whichever comes first. */}
+    {hiddenAt && (
+      <p id="hidden-pending-review" role="status">
+        <strong>This post is hidden.</strong> It is not visible to others following a moderation
+        review or a report about it.
+      </p>
+    )}
 
     {
       csrfToken === null ? (
@@ -433,4 +460,7 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
   .danger-zone summary::-webkit-details-marker{display:none}
   .delete-confirm{display:flex;flex-direction:column;gap:10px;margin-top:12px;
     padding:16px;border:1px solid var(--line);border-radius:8px}
+  #hidden-pending-review{
+    border-left:3px solid var(--color-warning, #b45309);
+    padding-left:0.75rem}
 </style>

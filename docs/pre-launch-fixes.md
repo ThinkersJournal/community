@@ -134,3 +134,41 @@ which resolves once the media custom domain is attached at DNS launch. Not a
 CSP block, not unfinished, not a bug (`apps/api/src/routes/media.ts:64,225`
 hardcode the CDN origin; `apps/web/src/lib/csp.ts:58` allows it). No action
 beyond the DNS step.
+
+## 6. Moderation notice has no appeal route   `#53 — Fix before launch`
+
+**What:** The notice an author receives after a moderation decision
+(`apps/api/src/moderation/notify-author.ts`) gives the decision and the
+reviewer's reason, but does not tell them how to challenge it. A DSA statement
+of reasons must. The in-app appeal form (spec §6) is not built and `/appeal`
+does not exist, so the notice deliberately carries **no** link: a dead link is
+worse than none. The author's hidden-post banner
+(`apps/web/src/pages/new-post.astro`) has no appeal link for the same reason.
+
+**Why nothing is exposed yet:** `POST /admin/decision` sits behind the
+Cloudflare Access gate, and no web route forwards `Cf-Access-Jwt-Assertion` to
+the api (0 hits in `apps/web/src` at `0054cf7`).
+
+**Disposition — fix before launch:** build the appeal route and link it from
+the notice and the banner. Must close before any web route forwards
+`Cf-Access-Jwt-Assertion` to the api (the 2b-iii admin UI), or before launch,
+whichever comes first.
+
+---
+
+## 7. A moderator's Restore can be undone by one new report   `#55 — Fix before launch`
+
+**What:** `apps/api/src/moderation/auto-hide.ts` counts **every** report from
+the last 24h against the auto-hide threshold, including the reports a moderator
+has just ruled on. After a moderator Restores a post, one more report from any
+verified account re-hides it for the rest of that window. That is a brigading
+lever against a human decision, and it contradicts the rule that automation
+only prioritises review and never decides.
+
+**Why it is new:** before M4 2b-ii nothing un-hid content, so the count never
+mattered.
+
+**Disposition — fix before launch, in its own PR (portfolio PM ruling,
+2026-09-16):** count only reports newer than the target's latest `content_*`
+moderation action. Test: Restore, add one new report, assert `hidden_at` stays
+NULL. Full detail on the issue.
