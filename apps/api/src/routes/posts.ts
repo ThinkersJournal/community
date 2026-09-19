@@ -503,7 +503,11 @@ export async function handleDeletePost(
 
 /**
  * `POST /posts/:id/hide` — the author hides their OWN post (#61 follow-up).
- * Idempotent: hiding an already-hidden post (by anything) is a no-op success.
+ * Idempotent ONLY across repeated author-hides; a post already hidden for a
+ * DIFFERENT reason (auto-hide pending review, or a moderator decision)
+ * refuses rather than silently absorbing the call — see
+ * src/moderation/author-hide.ts's header for why a no-op here would be worse
+ * than an error.
  */
 export async function handleHidePost(
   request: Request,
@@ -515,27 +519,39 @@ export async function handleHidePost(
   if (result instanceof Response) return result;
   const authorId = result.session.userId;
 
-  let hide: Awaited<ReturnType<typeof hidePost>>;
+  let outcome: Awaited<ReturnType<typeof hidePost>>;
   try {
-    hide = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => hidePost(c, params.id!, authorId));
+    outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => hidePost(c, params.id!, authorId));
   } catch (err) {
     if (isInvalidTextRepresentation(err)) return notFound();
     throw err;
   }
-  if (hide === null) return notFound();
 
-  // ⚠️ ONLY WHEN IT ACTUALLY CHANGED — same "a no-op purges/moves nothing"
-  // discipline as handleDeletePost's 404 case, generalized: an idempotent
-  // re-hide of already-hidden content has nothing new to purge or move.
-  if (hide.changed) {
-    await purgeTags(env, purgeTagsFor({ kind: "post", postId: params.id!, authorId: hide.authorId, tagSlugs: hide.tagSlugs }));
-    await applyMediaVisibilityChange(env, ctx, { subject: "post", subjectId: params.id!, hidden: true });
+  switch (outcome.kind) {
+    case "not_found":
+      return notFound();
+    case "under_moderation":
+      return errorResponse("POST_UNDER_MODERATION", 403, {
+        message: "This post is already hidden pending review or by moderator decision, and cannot be hidden here.",
+      });
+    case "hidden": {
+      // ⚠️ ONLY WHEN IT ACTUALLY CHANGED — same "a no-op purges/moves
+      // nothing" discipline as handleDeletePost's 404 case, generalized: an
+      // idempotent re-hide of already-(self-)hidden content has nothing new
+      // to purge or move.
+      if (outcome.changed) {
+        await purgeTags(
+          env,
+          purgeTagsFor({ kind: "post", postId: params.id!, authorId: outcome.result.authorId, tagSlugs: outcome.result.tagSlugs }),
+        );
+        await applyMediaVisibilityChange(env, ctx, { subject: "post", subjectId: params.id!, hidden: true });
+      }
+      return new Response(JSON.stringify({ hidden: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
   }
-
-  return new Response(JSON.stringify({ hidden: true }), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
 }
 
 /**
@@ -563,12 +579,12 @@ export async function handleUnhidePost(
   switch (outcome.kind) {
     case "not_found":
       return notFound();
-    case "not_reversible":
+    case "under_moderation":
       // The post exists and IS this caller's — confirmed by the ownership
       // predicate inside unhidePost — so, unlike the general "never 403"
       // rule (which guards against confirming a STRANGER's guess), telling
       // the confirmed owner they cannot lift THIS hide leaks nothing new.
-      return errorResponse("HIDE_NOT_REVERSIBLE", 403, {
+      return errorResponse("POST_UNDER_MODERATION", 403, {
         message: "This post was hidden by a moderator or is pending review, and cannot be unhidden here.",
       });
     case "already_visible":

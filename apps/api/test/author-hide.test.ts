@@ -144,6 +144,31 @@ describe("POST /posts/:id/hide", () => {
     expect(await hiddenAtOf(postId)).toBeNull();
   });
 
+  it("refuses (403 POST_UNDER_MODERATION), not silently no-ops, when a moderator already controls the post", async () => {
+    const author = await createVerifiedActor();
+    const postId = await seedPost(author);
+    await moderatorKeepHidden(postId);
+    const before = await hiddenAtOf(postId);
+
+    const res = await hide(author, postId);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "POST_UNDER_MODERATION" });
+    // Neither the timestamp nor the log gained a phantom author_hide entry —
+    // this must be a REFUSAL, never something recorded as if it took effect.
+    expect(await hiddenAtOf(postId)).toEqual(before);
+    expect(await actionsFor(postId)).toEqual(["content_keep_hidden"]);
+  });
+
+  it("refuses (403 POST_UNDER_MODERATION) for a still-pending auto-hide, same as a moderator decision", async () => {
+    const author = await createVerifiedActor();
+    const postId = await seedPost(author);
+    await autoHide(postId);
+
+    const res = await hide(author, postId);
+    expect(res.status).toBe(403);
+    expect(await actionsFor(postId)).toEqual([]); // no phantom record
+  });
+
   it("moves unshared media to the restricted bucket, and the author can still fetch it", async () => {
     const author = await createVerifiedActor();
     const sha = randomSha();
@@ -198,18 +223,18 @@ describe("POST /posts/:id/unhide", () => {
     expect(await hiddenAtOf(postId)).not.toBeNull();
   });
 
-  it("403s HIDE_NOT_REVERSIBLE for an auto-hidden post with no decision yet", async () => {
+  it("403s POST_UNDER_MODERATION for an auto-hidden post with no decision yet", async () => {
     const author = await createVerifiedActor();
     const postId = await seedPost(author);
     await autoHide(postId);
 
     const res = await unhide(author, postId);
     expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ code: "HIDE_NOT_REVERSIBLE" });
+    expect(await res.json()).toMatchObject({ code: "POST_UNDER_MODERATION" });
     expect(await hiddenAtOf(postId)).not.toBeNull();
   });
 
-  it("403s HIDE_NOT_REVERSIBLE for a moderator's keep_hidden decision", async () => {
+  it("403s POST_UNDER_MODERATION for a moderator's keep_hidden decision", async () => {
     const author = await createVerifiedActor();
     const postId = await seedPost(author);
     await moderatorKeepHidden(postId);
@@ -217,5 +242,30 @@ describe("POST /posts/:id/unhide", () => {
     const res = await unhide(author, postId);
     expect(res.status).toBe(403);
     expect(await hiddenAtOf(postId)).not.toBeNull();
+  });
+
+  it("a legal hold on the media key survives an author unhide — the POST becomes visible again, the HELD KEY does not move back", async () => {
+    const author = await createVerifiedActor();
+    const sha = randomSha();
+    const postId = await seedPost(author, markdownWith(sha));
+    await env.MEDIA.put(keyFor(sha), "bytes");
+    await hide(author, postId);
+    expect(await env.MEDIA_RESTRICTED.head(keyFor(sha))).not.toBeNull();
+
+    // A legal hold on this exact key, imposed independently of this post
+    // (content-addressing: the same bytes could equally be shared with a
+    // DIFFERENT, legally-held post — src/moderation/legal-hold.ts is keyed
+    // on the object, never a post).
+    await ctxRun((c) =>
+      c.query(`INSERT INTO media_legal_holds (r2_key, imposed_by, category) VALUES ($1, 'a@example.test', 'csam')`, [
+        keyFor(sha),
+      ]),
+    );
+
+    const res = await unhide(author, postId);
+    expect(res.status).toBe(200);
+    expect(await hiddenAtOf(postId)).toBeNull(); // the POST is visible again
+    expect(await env.MEDIA.head(keyFor(sha))).toBeNull(); // the KEY never moved back
+    expect(await env.MEDIA_RESTRICTED.head(keyFor(sha))).not.toBeNull();
   });
 });
