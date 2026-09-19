@@ -123,6 +123,19 @@ const ALLOWLIST: readonly AllowEntry[] = [
       "notification list is deferred by design (M4), and a filter on a LEFT JOIN would drop " +
       "the whole notification row, losing the notification itself.",
   },
+  {
+    file: "media-restricted.ts",
+    match: "SELECT 1 FROM posts WHERE id = $1 AND author_id = $2",
+    why:
+      "authorOwns — #61's restricted-media route. Scoped to author_id = the requester's OWN " +
+      "session user, same reasoning as posts.ts's handleGetPost: the author of hidden/removed " +
+      "content must still be able to reach its media (CireSnave's ruling on #26); not a public read.",
+  },
+  {
+    file: "media-restricted.ts",
+    match: "SELECT 1 FROM comments WHERE id = $1 AND author_id = $2",
+    why: "authorOwns — the comment-subject half of the same #61 author-ownership check above.",
+  },
 ];
 
 /**

@@ -17,7 +17,14 @@
  */
 import { notFoundResponse } from "./http/errors";
 import { handleTestRoute } from "./routes/__test";
-import { handleAdminDecision, handleAdminQueue, handleAdminWhoami } from "./routes/admin";
+import {
+  handleAdminDecision,
+  handleAdminQueue,
+  handleAdminWhoami,
+  handleApproveMediaAccess,
+  handleBackfillHiddenMedia,
+  handleRequestMediaAccess,
+} from "./routes/admin";
 import { handleBlock, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
@@ -28,6 +35,7 @@ import { handleHealthDb } from "./routes/health-db";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleUploadMedia } from "./routes/media";
+import { handleGetRestrictedMedia } from "./routes/media-restricted";
 import { handleMarkSeen } from "./notifications/seen";
 import {
   handleListNotifications,
@@ -259,6 +267,13 @@ export const ROUTES: readonly RouteDef[] = [
   // multipart — see src/routes/media.ts's header.
   { method: "POST", pattern: "/media", handler: handleUploadMedia },
 
+  // #61 — media that the visibility hook moved out of the public bucket.
+  // Session-and-Access-authed inline (neither trust domain alone is right: the
+  // AUTHOR of hidden content reaches this via a member session, an admin via
+  // Access) — see src/routes/media-restricted.ts's header for the full
+  // authorization story, including the legal-hold two-person-grant path.
+  { method: "GET", pattern: "/media/restricted/:sha256", handler: handleGetRestrictedMedia },
+
   // The Access-gated admin surface (M4 2a). Authenticates via Cloudflare
   // Access (src/admin/require-admin.ts), a DIFFERENT trust domain from the
   // member-session pipeline above — a member session confers no admin
@@ -279,6 +294,19 @@ export const ROUTES: readonly RouteDef[] = [
   // with an inline checkOrigin — see handleAdminDecision and the note in
   // src/admin/require-admin.ts on why an Access assertion alone is not enough.
   { method: "POST", pattern: "/admin/decision", handler: handleAdminDecision },
+
+  // #61 — the two-person grant for legally-held media. Same Access trust
+  // domain and same inline-checkOrigin shape as /admin/decision above: an
+  // admin REQUESTS, a DIFFERENT admin APPROVES (handleApproveMediaAccess /
+  // approveMediaAccess refuse a self-approval), and only the approved grant
+  // lets /media/restricted/:sha256 serve a held object.
+  { method: "POST", pattern: "/admin/media-access-requests", handler: handleRequestMediaAccess },
+  { method: "POST", pattern: "/admin/media-access-requests/:id/approve", handler: handleApproveMediaAccess },
+
+  // #61 — the one-off backfill for media already public despite belonging to
+  // already-hidden content. Same Access trust domain/shape as the routes
+  // above. Run once after this PR's deploy; safe to re-run (idempotent).
+  { method: "POST", pattern: "/admin/backfill-hidden-media", handler: handleBackfillHiddenMedia },
 
   // TEST-ONLY. `handleTestRoute` returns null when `TEST_ROUTES` is unset (i.e.
   // in production), and we fall through to the SAME notFoundResponse() every
