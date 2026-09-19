@@ -11,12 +11,12 @@
     "typecheck": "astro check"
   },
   "dependencies": {
-    "@astrojs/cloudflare": "14.3.2",
+    "@astrojs/cloudflare": "14.1.3",
     "@fontsource-variable/fraunces": "^5.3.0",
     "@fontsource-variable/inter": "^5.3.0",
     "@thinkersjournal/markdown": "workspace:*",
     "@thinkersjournal/shared": "workspace:*",
-    "astro": "7.3.3"
+    "astro": "7.2.8"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.9",
