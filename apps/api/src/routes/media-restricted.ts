@@ -104,14 +104,21 @@ export async function handleGetRestrictedMedia(
       return rows[0] ?? null;
     });
 
+    // ⚠️ CASE-INSENSITIVE, TRIMMED — Access emails are not case-normalized
+    // anywhere upstream, so "Alice@x" approving "alice@x" is the SAME hand,
+    // not two. Every identity comparison on this path (here, the DB CHECK in
+    // 0016, and `approveMediaAccess`'s write-time guard) must agree on this
+    // normalization or one of them becomes the exploitable gap.
+    const normalize = (s: string): string => s.trim().toLowerCase();
     const now = Date.now();
     const usable =
       grant !== null &&
       grant.approved_by !== null &&
-      grant.approved_by !== grant.requested_by && // TWO DISTINCT hands, always
+      normalize(grant.approved_by) !== normalize(grant.requested_by) && // TWO DISTINCT hands, always
       grant.expires_at !== null &&
       grant.expires_at.getTime() > now &&
-      (admin.email === grant.requested_by || admin.email === grant.approved_by); // only the two parties
+      (normalize(admin.email) === normalize(grant.requested_by) ||
+        normalize(admin.email) === normalize(grant.approved_by)); // only the two parties
 
     if (!usable) return notFound();
 

@@ -5,6 +5,7 @@ import worker from "../src/index";
 import { __resetJwksCacheForTests } from "../src/admin/access-jwt";
 import { withClient } from "../src/db/client";
 import { createUnverifiedActor, createVerifiedActor } from "./actor";
+import { requestMediaAccess, approveMediaAccess } from "../src/moderation/media-access-requests";
 
 import type { Actor } from "./actor";
 
@@ -227,14 +228,15 @@ describe("GET /media/restricted/:sha256 — legal hold", () => {
     expect(res.status).toBe(404);
   });
 
-  it("404s a self-approved grant (the row can't even exist via the API, but the read path re-checks anyway)", async () => {
+  it("the DB itself refuses a self-approved row — the 0016 CHECK constraint, not just the read-side re-check", async () => {
     const sha = randomSha();
-    await holdKey(sha);
-    const grantId = await grant(sha, "a@example.test", "a@example.test");
-    const res = await call(`/media/restricted/${sha}?grantId=${grantId}`, {
-      "Cf-Access-Jwt-Assertion": await makeJwt("a@example.test"),
-    });
-    expect(res.status).toBe(404);
+    await expect(grant(sha, "a@example.test", "a@example.test")).rejects.toThrow(/violates check constraint/);
+  });
+
+  it("the DB CHECK also refuses a CASE-VARIANT self-approval ('Alice@x' approving 'alice@x' is the same hand)", async () => {
+    const sha = randomSha();
+    await expect(grant(sha, "Alice@example.test", "alice@example.test")).rejects.toThrow(/violates check constraint/);
+    await expect(grant(sha, "alice@example.test", " Alice@Example.Test ")).rejects.toThrow(/violates check constraint/);
   });
 
   it("404s a THIRD admin using someone else's approved grant", async () => {
@@ -266,5 +268,15 @@ describe("GET /media/restricted/:sha256 — legal hold", () => {
       "Cf-Access-Jwt-Assertion": await makeJwt("b@example.test"),
     });
     expect(res.status).toBe(200);
+  });
+
+  it("approveMediaAccess itself refuses a CASE-VARIANT self-approval (write-time guard, not just the DB CHECK)", async () => {
+    const sha = randomSha();
+    await holdKey(sha);
+    const requestId = await ctxRun((c) =>
+      requestMediaAccess(c, { r2Key: keyFor(sha), requestedBy: "Alice@Example.Test", reason: "review" }),
+    );
+    const approved = await ctxRun((c) => approveMediaAccess(c, requestId, "  alice@example.test  "));
+    expect(approved).toBe(false);
   });
 });

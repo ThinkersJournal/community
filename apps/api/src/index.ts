@@ -3,6 +3,7 @@ import { recordDbProbe } from "./health/probe";
 import { notFoundResponse } from "./http/errors";
 import { reapOrphanMedia } from "./media/reap-orphan-media";
 import { processPendingMoves } from "./media/moves";
+import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media";
 import { runEmailDrain } from "./notifications/email-drain";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
@@ -30,14 +31,19 @@ export default {
    * reclaimer (content-deletion + media-reclamation, Task 4), and `20 4 * * *`
    * is the #61 media-move retry (src/media/moves.ts's processPendingMoves,
    * for a public<->restricted move a prior attempt left pending or failed) —
-   * three EXPLICIT branches, all checked BEFORE the email-drain dispatch
-   * below, because that dispatch otherwise treats every non-`0 14` cron as the
-   * INSTANT drain. The other two patterns are the email outbox drains
+   * three EXPLICIT, EXCLUSIVE branches, all checked BEFORE the email-drain
+   * dispatch below, because that dispatch otherwise treats every non-`0 14`
+   * cron as the INSTANT drain. The two-minute pattern below is special: it
+   * ALSO drives the #61 backfill batch (src/media/backfill-hidden-media.ts's
+   * runOneBatch) — that branch does NOT `return`, so it runs ALONGSIDE the
+   * instant drain below, not instead of it. The remaining two patterns are
+   * the email outbox drains
    * (M2.3c): the daily pattern drains DIGEST-disposition rows, every other
    * pattern drains INSTANT. A THIN dispatcher, like `fetch` above — the reap,
-   * the reclaim, the move retry and the drain themselves live in
-   * src/auth/reap-unverified.ts, src/media/reap-orphan-media.ts,
-   * src/media/moves.ts and src/notifications/email-drain.ts.
+   * the reclaim, the move retry, the backfill batch and the drain themselves
+   * live in src/auth/reap-unverified.ts, src/media/reap-orphan-media.ts,
+   * src/media/moves.ts, src/media/backfill-hidden-media.ts and
+   * src/notifications/email-drain.ts.
    */
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     /*
@@ -60,6 +66,17 @@ export default {
     if (controller.cron === "20 4 * * *") {
       ctx.waitUntil(processPendingMoves(env, ctx));
       return;
+    }
+    /*
+     * #61's one-off backfill rides every two-minute tick, ALONGSIDE (not
+     * instead of) the instant email drain below — see
+     * src/media/backfill-hidden-media.ts's header for why this can't wait for
+     * an admin to run it by hand or for the once-daily move-retry cron above.
+     * A cheap no-op read once the sweep's completed_at is set, so leaving
+     * this on the two-minute cron forever is free.
+     */
+    if (controller.cron === "*/2 * * * *") {
+      ctx.waitUntil(runMediaBackfillBatch(env, ctx));
     }
     const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant";
     ctx.waitUntil(runEmailDrain(env, ctx, disposition));

@@ -10,9 +10,14 @@
  *
  * ⚠️ ORDER PER MOVE: copy to target -> delete from source -> purge the CDN
  * URL. Copying first means a reader never sees the object briefly missing
- * from BOTH buckets; deleting from the public bucket is the step that
- * actually closes the exposure, so it happens before the (cheaper, retriable
- * on its own) cache purge.
+ * from BOTH buckets. The purge is NOT a best-effort afterthought —
+ * `purgeMediaUrls` throws on any failure (a missing/invalid
+ * CACHE_PURGE_TOKEN included), which this function's try/catch turns into
+ * the WHOLE move retrying rather than being marked `done`. That is
+ * deliberate: the object is `cache-control: immutable, max-age=1y`, so an
+ * unconfirmed purge can leave a publicly-hidden object's edge-cached copy
+ * servable for up to a year — the delete-from-public step alone does not
+ * close that.
  *
  * `attemptMove` is called once, inline, right after the visibility write that
  * triggered it (so the common case purges immediately, per CireSnave's
