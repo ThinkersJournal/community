@@ -5,7 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * Migration 0016 (#61) — the SHAPE the visibility/legal-hold machinery reads
  * and writes. Scope is deliberately narrow: this asks `information_schema`
  * and `pg_constraint` what the migration produced. Behaviour is pinned by
- * test/media-visibility-hook.test.ts and test/media-restricted-route.test.ts.
+ * test/admin-decision-route.test.ts's "#61 media visibility" block and
+ * test/media-restricted-route.test.ts.
  */
 
 const TEST_DATABASE_URL =
@@ -67,5 +68,22 @@ describe("media visibility tables (0016)", () => {
         `INSERT INTO moderation_actions (actor_admin, action, reason) VALUES ('test@example.com', 'nonsense', 'r')`,
       ),
     ).rejects.toThrow(/violates check constraint/);
+  });
+
+  it("media_access_requests refuses a same-row self-approval AT THE DB LEVEL, case-insensitively (PM review)", async () => {
+    await expect(
+      client.query(
+        `INSERT INTO media_access_requests (r2_key, requested_by, reason, approved_by, approved_at, expires_at)
+         VALUES ('x', 'Alice@Example.Test', 'r', 'alice@example.test', now(), now() + interval '15 minutes')`,
+      ),
+    ).rejects.toThrow(/violates check constraint/);
+  });
+
+  it("media_backfill_progress is a singleton, seeded by the migration", async () => {
+    const { rows } = await client.query<{ count: string }>(`SELECT count(*)::int AS count FROM media_backfill_progress`);
+    expect(Number(rows[0]!.count)).toBe(1);
+    await expect(
+      client.query(`INSERT INTO media_backfill_progress (id) VALUES (true)`),
+    ).rejects.toThrow(/duplicate key/);
   });
 });

@@ -50,9 +50,14 @@ CREATE INDEX media_moves_key_idx ON media_moves (r2_key, created_at DESC);
 -- Two-person authorization for a legal-hold fetch (CireSnave's ruling: "should
 -- likely require multiple hands authorizing their access"). A grant is usable
 -- only once approved by a SECOND distinct Access identity, within a short
--- window after approval — enforced in src/media/legal-hold.ts, not by a CHECK
--- constraint (the "distinct from requester" and "still within its window"
--- rules both need `now()` / cross-row comparison a CHECK cannot express here).
+-- window after approval. "Still within its window" needs `now()` and is
+-- enforced only in src/moderation/media-access-requests.ts /
+-- src/routes/media-restricted.ts — but "distinct from the requester" is a
+-- same-row fact, so it is ALSO enforced here as a CHECK: belt-and-braces, so
+-- a self-approved row cannot exist even if a future caller skips the
+-- application-level guard. `lower(trim(...))` on both sides — Access emails
+-- are not case-normalized upstream, so "Alice@x" approving "alice@x" must
+-- still count as the SAME hand, not two.
 CREATE TABLE media_access_requests (
   id           uuid PRIMARY KEY DEFAULT uuidv7(),
   r2_key       text NOT NULL,
@@ -61,10 +66,27 @@ CREATE TABLE media_access_requests (
   approved_by  text,          -- Access identity (email); NULL until approved
   approved_at  timestamptz,
   expires_at   timestamptz,   -- set at approval time; NULL until approved
-  created_at   timestamptz NOT NULL DEFAULT now()
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT media_access_requests_distinct_hands
+    CHECK (approved_by IS NULL OR lower(trim(approved_by)) <> lower(trim(requested_by)))
 );
 
 CREATE INDEX media_access_requests_key_idx ON media_access_requests (r2_key, created_at DESC);
+
+-- Progress cursor for the one-off #61 backfill (src/media/backfill-hidden-media.ts).
+-- A SINGLETON row (enforced by the boolean PK, which can only ever be `true`):
+-- the sweep is a single global pass over content that was ALREADY hidden when
+-- this shipped, not a per-something job. Runs from the `*/2 * * * *` cron
+-- until `completed_at` is set (a batch smaller than the page size on BOTH
+-- posts and comments means nothing remains), so exposure closes within
+-- minutes of deploy rather than waiting for the once-daily retry cron.
+CREATE TABLE media_backfill_progress (
+  id               boolean PRIMARY KEY DEFAULT true CHECK (id),
+  last_post_id     uuid,
+  last_comment_id  uuid,
+  completed_at     timestamptz
+);
+INSERT INTO media_backfill_progress DEFAULT VALUES;
 
 -- Every privileged fetch is logged to the EXISTING append-only audit log
 -- (CireSnave's ruling), not a new table. Additive CHECK swap, same pattern as
@@ -86,5 +108,6 @@ ALTER TABLE moderation_actions ADD CONSTRAINT moderation_actions_action_check
     'appeal_granted','appeal_denied'
   ));
 DROP TABLE IF EXISTS media_access_requests;
+DROP TABLE IF EXISTS media_backfill_progress;
 DROP TABLE IF EXISTS media_moves;
 DROP TABLE IF EXISTS media_legal_holds;

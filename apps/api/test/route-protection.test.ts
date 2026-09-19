@@ -220,6 +220,7 @@ const EXPECTED_DISPATCHER_BODY =
   'import { notFoundResponse } from "./http/errors"; ' +
   'import { reapOrphanMedia } from "./media/reap-orphan-media"; ' +
   'import { processPendingMoves } from "./media/moves"; ' +
+  'import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
@@ -250,6 +251,9 @@ const EXPECTED_DISPATCHER_BODY =
   'if (controller.cron === "20 4 * * *") { ' +
   "ctx.waitUntil(processPendingMoves(env, ctx)); " +
   "return; " +
+  "} " +
+  'if (controller.cron === "*/2 * * * *") { ' +
+  "ctx.waitUntil(runMediaBackfillBatch(env, ctx)); " +
   "} " +
   'const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant"; ' +
   "ctx.waitUntil(runEmailDrain(env, ctx, disposition)); " +
