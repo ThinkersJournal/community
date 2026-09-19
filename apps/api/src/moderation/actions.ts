@@ -17,7 +17,11 @@ export type ModerationActionKind =
   | "appeal_granted" | "appeal_denied"
   // #61 — every privileged fetch of restricted/legally-held media, logged to
   // this SAME append-only table rather than a bespoke one (CireSnave's ruling).
-  | "media_access";
+  | "media_access"
+  // #61 follow-up — an author hiding/unhiding their OWN post. See
+  // src/moderation/author-hide.ts's header for why `actor_admin` holds the
+  // author's own email here rather than an Access identity.
+  | "author_hide" | "author_unhide";
 
 export type ViolationCategory =
   | "spam" | "harassment" | "hate" | "sexual" | "violence" | "ip_infringement" | "other";
