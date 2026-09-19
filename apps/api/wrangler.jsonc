@@ -66,7 +66,15 @@
   // public from the `cdn.thinkersjournal.com` R2 CUSTOM DOMAIN — deliberately
   // NOT through a Worker, which would add an invocation per image to buy authz
   // we do not need on a public CDN. Egress $0.
-  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "tj-media" }],
+  // MEDIA_RESTRICTED (#61) — a PRIVATE bucket, no custom domain: media whose
+  // post/comment is no longer publicly visible (hidden/removed/legally held)
+  // lives here instead of the public `tj-media` domain above, reachable only
+  // through the authorized `GET /media/restricted/:sha256` route. See
+  // src/media/visibility-hook.ts and src/routes/media-restricted.ts.
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "tj-media" },
+    { "binding": "MEDIA_RESTRICTED", "bucket_name": "tj-media-restricted" }
+  ],
   // Per-user monotonic "security epoch" counter (logout-all / password-change
   // revocation, Tasks 16-17). New DO namespaces must use `new_sqlite_classes`
   // (KV-backed `new_classes` is blocked for new namespaces as of July 2026);
@@ -203,7 +211,10 @@
   // objects) referenced by no post. See src/media/reap-orphan-media.ts. Its
   // own explicit branch in scheduled(), checked AFTER the unverified-account
   // reaper's above and BEFORE the digest/instant dispatch.
-  "triggers": { "crons": ["*/2 * * * *", "0 14 * * *", "30 3 * * *", "15 4 * * *"] },
+  // 20 4 * * * = the #61 media-move retry (src/media/moves.ts's
+  // processPendingMoves) — after the orphan-media reclaimer (04:15) so the two
+  // never race the same R2 objects, before the digest/instant dispatch.
+  "triggers": { "crons": ["*/2 * * * *", "0 14 * * *", "30 3 * * *", "15 4 * * *", "20 4 * * *"] },
   "observability": {
     "enabled": true
   }

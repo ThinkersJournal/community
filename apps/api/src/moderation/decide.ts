@@ -36,6 +36,8 @@ export interface DecisionInput {
 
 export interface DecisionResult {
   readonly actionId: string;
+  /** The post's or comment's own id — issue #61's media-visibility hook keys on this. */
+  readonly subjectId: string;
   /** Whose content it was — Task 2 emails them. */
   readonly authorEmail: string;
   /** Visibility BEFORE the decision (RETURNING old.hidden_at). Picks the notice text. */
@@ -136,6 +138,7 @@ export async function applyDecision(
     await c.query("COMMIT");
     return {
       actionId,
+      subjectId: row.id,
       authorEmail: row.email,
       wasHidden: row.was_hidden,
       hidden: row.hidden,
