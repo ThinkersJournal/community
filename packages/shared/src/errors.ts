@@ -56,7 +56,9 @@ export type ApiErrorCode =
   | "PAYLOAD_TOO_LARGE"      // 413 — over the streaming size cap (T8)
   | "UNSUPPORTED_MEDIA_TYPE" // 415 — failed the magic-byte allowlist (T7/T8)
   // --- limits --------------------------------------------------------------
-  | "RATE_LIMITED";          // 429
+  | "RATE_LIMITED"           // 429
+  // --- author self-hide (#61 follow-up) -------------------------------------
+  | "HIDE_NOT_REVERSIBLE";   // 403 — the post is hidden for a reason the AUTHOR cannot lift (auto-hide pending review, or a moderator decision)
 
 export interface ApiErrorBody {
   code: ApiErrorCode;

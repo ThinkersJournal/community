@@ -44,7 +44,14 @@ import {
 } from "./routes/notifications";
 import { handleNotificationsWs } from "./routes/notifications-ws";
 import { handleGetNotificationPrefs, handlePutNotificationPrefs } from "./routes/notification-prefs";
-import { handleCreatePost, handleDeletePost, handleGetPost, handleUpdatePost } from "./routes/posts";
+import {
+  handleCreatePost,
+  handleDeletePost,
+  handleGetPost,
+  handleHidePost,
+  handleUnhidePost,
+  handleUpdatePost,
+} from "./routes/posts";
 import { handlerPostsLive } from "./routes/posts-live";
 import {
   handlePublicDiscover,
@@ -132,6 +139,13 @@ export const ROUTES: readonly RouteDef[] = [
   // post_tags/comments/reactions via FK; see src/routes/posts.ts's
   // handleDeletePost header for the tag-read-before-delete ordering.
   { method: "DELETE", pattern: "/posts/:id", handler: handleDeletePost },
+
+  // #61 follow-up — the author's own hide/unhide (community#66's design note,
+  // CireSnave's ruling on #26). Three path segments, so there is no
+  // dynamic-vs-literal shadow risk with `/posts/:id` below (different segment
+  // counts) — unlike `/posts/live`'s note just below, which is a REAL risk.
+  { method: "POST", pattern: "/posts/:id/hide", handler: handleHidePost },
+  { method: "POST", pattern: "/posts/:id/unhide", handler: handleUnhidePost },
 
   // ⚠️ MUST come before `GET /posts/:id` below — `/live` is a literal segment
   // under the SAME first path component, and `findRoute` is first-match-wins

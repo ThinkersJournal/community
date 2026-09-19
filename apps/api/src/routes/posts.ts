@@ -1,11 +1,13 @@
 /**
  * Post authoring routes. The M0 stub is gone; the auth around it is unchanged.
  *
- *   POST  /posts      — create (draft or published)
- *   PATCH /posts/:id  — edit
- *   GET   /posts/:id  — the AUTHOR's own post, drafts included
+ *   POST  /posts             — create (draft or published)
+ *   PATCH /posts/:id         — edit
+ *   GET   /posts/:id         — the AUTHOR's own post, drafts included
+ *   POST  /posts/:id/hide    — the author hides their own post (#61 follow-up)
+ *   POST  /posts/:id/unhide  — the author unhides it, ONLY if they were the ones who hid it
  *
- * All three are AUTHOR-facing. Anonymous reads live in src/routes/public.ts.
+ * All are AUTHOR-facing. Anonymous reads live in src/routes/public.ts.
  *
  * ⚠️ EVERY DB ACCESS HERE USES HYPERDRIVE_FRESH — including the reads. These are
  * permission decisions and read-after-write against the author's own writes, and
@@ -38,6 +40,9 @@ import { purgeTags } from "../cache/purge";
 import { withClient } from "../db/client";
 import { isInvalidTextRepresentation, isUniqueViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
+import { applyMediaVisibilityChange } from "../media/visibility-hook";
+import { hidePost, unhidePost } from "../moderation/author-hide";
+import { purgeTagsFor } from "../moderation/purge-target";
 import { randomSuffix } from "../util/random";
 
 import type { RouteParams } from "../routing";
@@ -494,6 +499,96 @@ export async function handleDeletePost(
     status: 200,
     headers: { "content-type": "application/json" },
   });
+}
+
+/**
+ * `POST /posts/:id/hide` — the author hides their OWN post (#61 follow-up).
+ * Idempotent: hiding an already-hidden post (by anything) is a no-op success.
+ */
+export async function handleHidePost(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  const result = await runMutatingPipeline(request, env, ctx, { requireVerifiedEmail: true });
+  if (result instanceof Response) return result;
+  const authorId = result.session.userId;
+
+  let hide: Awaited<ReturnType<typeof hidePost>>;
+  try {
+    hide = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => hidePost(c, params.id!, authorId));
+  } catch (err) {
+    if (isInvalidTextRepresentation(err)) return notFound();
+    throw err;
+  }
+  if (hide === null) return notFound();
+
+  // ⚠️ ONLY WHEN IT ACTUALLY CHANGED — same "a no-op purges/moves nothing"
+  // discipline as handleDeletePost's 404 case, generalized: an idempotent
+  // re-hide of already-hidden content has nothing new to purge or move.
+  if (hide.changed) {
+    await purgeTags(env, purgeTagsFor({ kind: "post", postId: params.id!, authorId: hide.authorId, tagSlugs: hide.tagSlugs }));
+    await applyMediaVisibilityChange(env, ctx, { subject: "post", subjectId: params.id!, hidden: true });
+  }
+
+  return new Response(JSON.stringify({ hidden: true }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * `POST /posts/:id/unhide` — the author unhides their OWN post, ONLY when
+ * they were the ones who hid it. See src/moderation/author-hide.ts's header.
+ */
+export async function handleUnhidePost(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  const result = await runMutatingPipeline(request, env, ctx, { requireVerifiedEmail: true });
+  if (result instanceof Response) return result;
+  const authorId = result.session.userId;
+
+  let outcome: Awaited<ReturnType<typeof unhidePost>>;
+  try {
+    outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => unhidePost(c, params.id!, authorId));
+  } catch (err) {
+    if (isInvalidTextRepresentation(err)) return notFound();
+    throw err;
+  }
+
+  switch (outcome.kind) {
+    case "not_found":
+      return notFound();
+    case "not_reversible":
+      // The post exists and IS this caller's — confirmed by the ownership
+      // predicate inside unhidePost — so, unlike the general "never 403"
+      // rule (which guards against confirming a STRANGER's guess), telling
+      // the confirmed owner they cannot lift THIS hide leaks nothing new.
+      return errorResponse("HIDE_NOT_REVERSIBLE", 403, {
+        message: "This post was hidden by a moderator or is pending review, and cannot be unhidden here.",
+      });
+    case "already_visible":
+      return new Response(JSON.stringify({ hidden: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    case "unhidden": {
+      const { result: unhidden } = outcome;
+      await purgeTags(
+        env,
+        purgeTagsFor({ kind: "post", postId: params.id!, authorId: unhidden.authorId, tagSlugs: unhidden.tagSlugs }),
+      );
+      await applyMediaVisibilityChange(env, ctx, { subject: "post", subjectId: params.id!, hidden: false });
+      return new Response(JSON.stringify({ hidden: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+  }
 }
 
 export async function handleGetPost(
