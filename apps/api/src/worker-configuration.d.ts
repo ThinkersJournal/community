@@ -6,6 +6,7 @@ interface __BaseEnv_Env {
 	FOLLOWEES: KVNamespace;
 	HEALTH: KVNamespace;
 	MEDIA: R2Bucket;
+	MEDIA_RESTRICTED: R2Bucket;
 	HYPERDRIVE_CACHED: Hyperdrive;
 	HYPERDRIVE_FRESH: Hyperdrive;
 	SIGNUP_LIMITER: RateLimit;
@@ -30,6 +31,12 @@ interface __BaseEnv_Env {
 	// `.dev.vars` in this checkout), so they are added by hand here.
 	CF_ACCESS_TEAM_DOMAIN: string;
 	CF_ACCESS_AUD: string;
+	// #61 — Cloudflare API token scoped to Cache Purge on zone
+	// thinkersjournal.com only, and that zone's id. Same "supplied via
+	// .dev.vars, not wrangler.jsonc" pattern as CF_ACCESS_* above (wrangler
+	// types does not know about these either). See src/cache/purge-url.ts.
+	CACHE_PURGE_TOKEN: string;
+	CACHE_PURGE_ZONE_ID: string;
 	USER_SECURITY: DurableObjectNamespace<import("./index").UserSecurityDO>;
 	NOTIFY: DurableObjectNamespace<import("./index").NotifyDO>;
 	POST_LIVE: DurableObjectNamespace<import("./index").PostLiveDO>;

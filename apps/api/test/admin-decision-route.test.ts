@@ -632,3 +632,154 @@ describe("POST /admin/decision", () => {
     expect(noticeLogs).toEqual([["moderation notice not sent", { actionId }]]);
   });
 });
+
+/** A random 64-hex-char sha256 — the shape mediaKey()/r2KeyForSha256() expect. */
+function randomSha(): string {
+  return crypto.randomUUID().replace(/-/g, "").padEnd(64, "0");
+}
+
+function keyFor(sha: string): string {
+  return `media/post/${sha}.webp`;
+}
+
+function markdownWith(sha: string): string {
+  return `![img](https://cdn.thinkersjournal.com/${keyFor(sha)})`;
+}
+
+describe("POST /admin/decision — #61 media visibility", () => {
+  it("hiding a post with unshared media moves the object to the restricted bucket", async () => {
+    const userId = await seedUser();
+    const sha = randomSha();
+    const post = await ctxRun(async (c) => {
+      const slug = "test-" + crypto.randomUUID().slice(0, 8);
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+         VALUES ($1, 'test', $2, $3, 'published', now()) RETURNING id`,
+        [userId, slug, markdownWith(sha)],
+      );
+      return rows[0]!.id;
+    });
+    await seedReport(post);
+    await env.MEDIA.put(keyFor(sha), "bytes");
+
+    const res = await decide({ subject: "post", subjectId: post, decision: "keep_hidden", reason: "x" });
+    expect(res.status).toBe(200);
+
+    expect(await env.MEDIA.head(keyFor(sha))).toBeNull();
+    expect(await env.MEDIA_RESTRICTED.head(keyFor(sha))).not.toBeNull();
+  });
+
+  it("hiding a post whose media is ALSO referenced by another visible post leaves it public (dedup)", async () => {
+    const userId = await seedUser();
+    const otherUserId = await seedUser();
+    const sha = randomSha();
+    const hiddenPost = await ctxRun(async (c) => {
+      const slug = "test-" + crypto.randomUUID().slice(0, 8);
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+         VALUES ($1, 'test', $2, $3, 'published', now()) RETURNING id`,
+        [userId, slug, markdownWith(sha)],
+      );
+      return rows[0]!.id;
+    });
+    // A second, VISIBLE post shares the identical content-addressed key.
+    await ctxRun(async (c) => {
+      const slug = "test-" + crypto.randomUUID().slice(0, 8);
+      await c.query(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+         VALUES ($1, 'test', $2, $3, 'published', now())`,
+        [otherUserId, slug, markdownWith(sha)],
+      );
+    });
+    await seedReport(hiddenPost);
+    await env.MEDIA.put(keyFor(sha), "bytes");
+
+    const res = await decide({ subject: "post", subjectId: hiddenPost, decision: "keep_hidden", reason: "x" });
+    expect(res.status).toBe(200);
+
+    expect(await env.MEDIA.head(keyFor(sha))).not.toBeNull();
+    expect(await env.MEDIA_RESTRICTED.head(keyFor(sha))).toBeNull();
+  });
+
+  it("a legal hold restricts the key UNCONDITIONALLY, even when another visible post shares it", async () => {
+    const userId = await seedUser();
+    const otherUserId = await seedUser();
+    const sha = randomSha();
+    const hiddenPost = await ctxRun(async (c) => {
+      const slug = "test-" + crypto.randomUUID().slice(0, 8);
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+         VALUES ($1, 'test', $2, $3, 'published', now()) RETURNING id`,
+        [userId, slug, markdownWith(sha)],
+      );
+      return rows[0]!.id;
+    });
+    await ctxRun(async (c) => {
+      const slug = "test-" + crypto.randomUUID().slice(0, 8);
+      await c.query(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+         VALUES ($1, 'test', $2, $3, 'published', now())`,
+        [otherUserId, slug, markdownWith(sha)],
+      );
+    });
+    await seedReport(hiddenPost);
+    await env.MEDIA.put(keyFor(sha), "bytes");
+
+    // `legalHold`/`legalHoldCategory` aren't on `DecisionInput` (they're
+    // admin.ts's own body fields, not part of the decide.ts transaction) —
+    // `decide()` forwards whatever it's given as the JSON body regardless.
+    const legalRes = await decide({
+      subject: "post",
+      subjectId: hiddenPost,
+      decision: "remove",
+      reason: "CSAM report",
+      legalHold: true,
+      legalHoldCategory: "csam",
+    } as unknown as Partial<DecisionInput> & { subject: "post"; subjectId: string; decision: "remove" });
+    expect(legalRes.status).toBe(200);
+
+    expect(await env.MEDIA.head(keyFor(sha))).toBeNull();
+    expect(await env.MEDIA_RESTRICTED.head(keyFor(sha))).not.toBeNull();
+
+    // Restoring the post must NOT lift the hold.
+    const restoreRes = await decide({ subject: "post", subjectId: hiddenPost, decision: "restore", reason: "x" });
+    expect(restoreRes.status).toBe(200);
+    expect(await env.MEDIA.head(keyFor(sha))).toBeNull();
+    expect(await env.MEDIA_RESTRICTED.head(keyFor(sha))).not.toBeNull();
+  });
+
+  it("legalHold is rejected on a restore decision", async () => {
+    const { postId } = await seedHiddenPost();
+    const res = await decide({
+      subject: "post",
+      subjectId: postId,
+      decision: "restore",
+      reason: "x",
+      legalHold: true,
+      legalHoldCategory: "csam",
+    } as unknown as Partial<DecisionInput> & { subject: "post"; subjectId: string; decision: "restore" });
+    expect(res.status).toBe(400);
+  });
+
+  it("restoring an ordinarily-hidden (non-legal) post moves its media back to public", async () => {
+    const userId = await seedUser();
+    const sha = randomSha();
+    const post = await ctxRun(async (c) => {
+      const slug = "test-" + crypto.randomUUID().slice(0, 8);
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+         VALUES ($1, 'test', $2, $3, 'published', now()) RETURNING id`,
+        [userId, slug, markdownWith(sha)],
+      );
+      return rows[0]!.id;
+    });
+    await seedReport(post);
+    await env.MEDIA.put(keyFor(sha), "bytes");
+    await decide({ subject: "post", subjectId: post, decision: "keep_hidden", reason: "x" });
+    expect(await env.MEDIA_RESTRICTED.head(keyFor(sha))).not.toBeNull();
+
+    const res = await decide({ subject: "post", subjectId: post, decision: "restore", reason: "x" });
+    expect(res.status).toBe(200);
+    expect(await env.MEDIA.head(keyFor(sha))).not.toBeNull();
+  });
+});
