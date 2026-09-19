@@ -200,7 +200,14 @@ inbox and is a dev-only affordance, in the same category as `TEST_ROUTES` itself
 
 ## Deploying (Workers Builds)
 
-**Not yet deployed.** This is the provisioning runbook for the first deploy.
+This is the **live deploy runbook** — the Workers Builds projects below are deployed and
+running, so this section describes the deployment as it exists, not a first-deploy
+provisioning plan.
+
+> **Merge rule (migrations).** Workers Builds deploys on merge but **does not run
+> migrations**. So a PR that adds a migration must be migrated on production **before**
+> it merges, and a **destructive** migration goes in a **later PR** than the code that
+> stops using what it removes.
 
 Two **Workers Builds** projects on this one repository, each with its own root directory
 and watch paths so a change to one Worker does not redeploy the other. Both need
@@ -237,9 +244,9 @@ runbook below.
 | Setting | Value |
 | --- | --- |
 | Root directory | `apps/web` |
-| Build command | `pnpm install && pnpm --filter @thinkersjournal/web astro build` |
+| Build command | `pnpm install --frozen-lockfile && pnpm --filter @thinkersjournal/web build` |
 | Deploy command | `npx wrangler deploy` |
-| Watch paths | `apps/web/**`, `packages/shared/**` |
+| Watch paths | `apps/web/**`, `packages/shared/**`, `packages/markdown/**` |
 | Secrets | **`PURGE_SECRET`** (new in M1 — byte-identical to the api's), via `wrangler secret put` |
 | Bindings (M1) | `API` (Service Binding → `thinkersjournal-api`) · Workers Cache (`cache: { enabled: true }` + the Astro cache provider in `astro.config.mjs`) — see the gate on the cache off-switch |
 
