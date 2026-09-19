@@ -56,7 +56,19 @@ export type ApiErrorCode =
   | "PAYLOAD_TOO_LARGE"      // 413 — over the streaming size cap (T8)
   | "UNSUPPORTED_MEDIA_TYPE" // 415 — failed the magic-byte allowlist (T7/T8)
   // --- limits --------------------------------------------------------------
-  | "RATE_LIMITED";          // 429
+  | "RATE_LIMITED"           // 429
+  // --- author self-hide (#61 follow-up) -------------------------------------
+  // 403 — the post's visibility is controlled by moderation (an auto-hide
+  // still pending review, or a moderator's keep_hidden/remove decision), not
+  // by the author. Covers BOTH directions: the author cannot unhide it
+  // themselves, AND the author cannot layer their own hide on top of it
+  // either (that would silently vanish the moment a moderator restores the
+  // post, with no record it was ever asked for). Confirmed ownership by the
+  // time this is returned, so — unlike the general "zero rows -> 404, never
+  // 403" rule, which guards against confirming a STRANGER's guess — telling
+  // the confirmed owner they don't control this post's visibility leaks
+  // nothing new.
+  | "POST_UNDER_MODERATION";
 
 export interface ApiErrorBody {
   code: ApiErrorCode;
