@@ -15,12 +15,16 @@
  * lives ONLY on the editor (new-post.astro), the one page that can still
  * render a hidden post's own state to its author.
  *
- * ⚠️ REDIRECTS TO THE EDITOR ON SUCCESS, NOT BACK TO THIS PAGE. Hiding the
- * post makes THIS EXACT URL 404 for everyone, including the author who just
- * hid it (same "nothing left to reload back to" situation post-delete.ts's
- * redirect-to-profile comment describes) — but unlike delete, hide is
- * reversible, and the editor is the only place that reversal (Unhide) lives,
- * so that is where the author actually needs to land next.
+ * ⚠️ REDIRECTS BACK TO THIS POST'S OWN URL ON SUCCESS (#78 item 2), NOT THE
+ * EDITOR. Before #78, hiding made THIS EXACT URL 404 for everyone including
+ * the author, so the editor was the only page left that could show the
+ * hidden state and offer Unhide. Since #78, `[handle]/[slug].astro` itself
+ * falls back to an authenticated owner view (OwnerPostView.astro) instead of
+ * 404ing for the post's own author — so reloading THIS URL now shows the
+ * hidden banner and the Unhide control directly, one hop closer than the
+ * editor. `data-handle`/`data-slug` carry what's needed to rebuild the URL
+ * (NOT the route's `handle` param, which still carries its `@` prefix — see
+ * post-delete.ts's identical `data-handle` comment).
  *
  * Talks ONLY to same-origin /api/* (the api Worker has no public origin).
  */
@@ -45,6 +49,8 @@ export function initPostVisibilityView(): void {
   if (root === null) return;
   const postId = root.dataset.postId ?? "";
   const authorId = root.dataset.postAuthorId ?? "";
+  const handle = root.dataset.handle ?? "";
+  const slug = root.dataset.slug ?? "";
 
   void me().then((m) => {
     // Owner-only, and only with a usable CSRF token — same gate as
@@ -80,10 +86,10 @@ export function initPostVisibilityView(): void {
       })
         .then((res) => {
           if (res.ok) {
-            // The post's own URL is about to 404 for everyone, including its
-            // author — nothing left to reload back to. The editor is where
-            // the hidden banner, the preview, and Unhide all live.
-            location.href = "/new-post?post=" + encodeURIComponent(postId);
+            // #78 — this post's own URL now falls back to the owner view for
+            // its author instead of 404ing, so reload right back to it: the
+            // hidden banner and Unhide are there.
+            location.href = "/@" + encodeURIComponent(handle) + "/" + encodeURIComponent(slug);
             return;
           }
           hideBtn.disabled = false;

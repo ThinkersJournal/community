@@ -95,15 +95,24 @@ describe("⚠️ anonymous by construction — the leak defense", () => {
   });
 
   it("⚠️ forwards NO browser request to the api — nothing to personalize, nothing to leak", () => {
-    // THE property that makes a cached render safe: the api call omits `request`,
-    // so src/lib/api.ts never forwards the Cookie, so the api cannot resolve a
-    // session, so there is no viewer-specific value in the render. If someone
-    // adds `request: Astro.request` to "personalize" this page, its render
-    // becomes viewer-specific AND cacheable — a mass session leak — and THIS
-    // reddens. (Positive above proved the fetch exists; these negatives are
+    // THE property that makes a cached render safe: the ANONYMOUS `/public/posts`
+    // call omits `request`, so src/lib/api.ts never forwards the Cookie, so the
+    // api cannot resolve a session for THIS branch. If someone adds
+    // `request: Astro.request` to THIS call to "personalize" this page, its
+    // cached render becomes viewer-specific — a mass session leak — and THIS
+    // reddens. (Positive above proved the fetch exists; this negative is
     // therefore not vacuous.)
-    expect(code).not.toContain("Astro.request");
-    expect(code).not.toMatch(/\brequest:/);
+    // ⚠️ Scoped to just this call, not the whole file: #78's owner fallback
+    // legitimately uses `Astro.request` for its OWN, separately-authenticated,
+    // markPrivate `/posts/by-slug` lookup — see this file's header and
+    // test/post-page-owner-fallback.test.ts, which pins THAT branch instead.
+    const anonymousFetchStart = code.indexOf("const response = await apiFetch");
+    expect(anonymousFetchStart).toBeGreaterThan(-1);
+    const anonymousFetchEnd = code.indexOf(");", anonymousFetchStart);
+    expect(anonymousFetchEnd).toBeGreaterThan(-1);
+    const anonymousFetchCall = code.slice(anonymousFetchStart, anonymousFetchEnd);
+    expect(anonymousFetchCall).not.toContain("Astro.request");
+    expect(anonymousFetchCall).not.toMatch(/\brequest:/);
   });
 });
 

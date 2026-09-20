@@ -9,6 +9,10 @@ import { describe, expect, it } from "vitest";
  * ([handle]/[slug].astro), not just the editor. Batch A shipped Hide/Unhide
  * ONLY in new-post.astro, reachable exclusively by a hand-typed
  * `/new-post?post=<id>` URL — CireSnave could not find it. This is the fix.
+ * ⚠️ Still HIDE-ONLY here (see this control's own header for why that's
+ * structural, not a gap) — Unhide lives on the editor AND, since #78, on this
+ * post's own URL via OwnerPostView.astro, which the redirect below now
+ * targets instead of the editor.
  *
  * Source-level pins, matching post-delete.test.ts's convention (this app's
  * vitest is plain Node; these files import `cloudflare:workers` indirectly
@@ -55,8 +59,20 @@ describe("post-visibility-view island", () => {
     expect(island).toMatch(/JSON\.stringify\(\{\s*postId\s*\}\)/);
   });
 
-  it("redirects to the EDITOR on success (this page's own URL is about to 404), not back to itself", () => {
-    expect(island).toMatch(/location\.href\s*=\s*"\/new-post\?post="\s*\+\s*encodeURIComponent\(postId\)/);
+  it("reads the redirect-target handle/slug off the control's data attributes", () => {
+    expect(island).toMatch(/dataset\.handle/);
+    expect(island).toMatch(/dataset\.slug/);
+  });
+
+  it("⚠️ redirects back to the post's OWN URL on success (#78), not the editor", () => {
+    // Before #78 this page hard-404'd for everyone including the author once
+    // hidden, so the editor was the only place left to show the hidden state.
+    // Since #78, [handle]/[slug].astro falls back to an owner view instead of
+    // 404ing for its own author — reloading this exact URL now works.
+    expect(island).toMatch(
+      /location\.href\s*=\s*"\/@"\s*\+\s*encodeURIComponent\(handle\)\s*\+\s*"\/"\s*\+\s*encodeURIComponent\(slug\)/,
+    );
+    expect(island).not.toMatch(/\/new-post\?post=/);
   });
 
   it("uses createElement/textContent only — no innerHTML, no browser dialog", () => {
@@ -76,6 +92,11 @@ describe("[handle]/[slug].astro wires the hide control", () => {
     expect(page).toMatch(/data-post-visibility-view[^>]*hidden|hidden[^>]*data-post-visibility-view/);
     expect(page).toContain("data-post-id={post.id}");
     expect(page).toContain("data-post-author-id={post.authorId}");
+  });
+
+  it("carries the redirect-target handle/slug (#78) — NOT the route param, which still has its @ prefix", () => {
+    expect(page).toContain("data-handle={post.username}");
+    expect(page).toContain("data-slug={post.slug}");
   });
 
   it("mounts initPostVisibilityView() alongside the other page islands", () => {
