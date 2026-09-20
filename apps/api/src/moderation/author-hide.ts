@@ -21,10 +21,30 @@ import { BEGIN_BOUNDED_TX } from "../db/client";
 import { recordModerationAction } from "./actions";
 import { loadPostTagSlugs } from "./purge-target";
 
-/** True only when the post's current hide (if any) is the author's own. */
-const LATEST_ACTION_IS_AUTHOR_HIDE_SQL = `
+/**
+ * True only when the post's current hide (if any) is the author's own.
+ *
+ * ⚠️ FIXED (was a shipped bug): the subquery MUST filter to
+ * visibility-affecting actions before taking the latest one.
+ * `moderation_actions` is deliberately ONE shared log carrying non-visibility
+ * actions too — `media_access` (0016) is the confirmed live case: an ADMIN
+ * viewing a hidden post's restricted media (`routes/media-restricted.ts`'s
+ * ordinary tier) appends a `media_access` row WITH that post's `post_id`.
+ * An unfiltered "latest row of ANY kind" then reads that `media_access` row
+ * as the current answer to "why is this hidden", the `= 'author_hide'`
+ * comparison goes false, and the author is silently and permanently locked
+ * out of unhiding their own post — even though no moderator ever acted.
+ * `moderation/queue.ts`'s own `content\_%` filter is the existing, correct
+ * precedent in this same module area for the same log. See
+ * test/author-hide-media-access-interleaving.test.ts, which reproduces the
+ * exact interleaving (author_hide -> media_access -> unhide) and pins that
+ * unhide still succeeds.
+ */
+const LATEST_VISIBILITY_ACTION_IS_AUTHOR_HIDE_SQL = `
   (SELECT ma.action FROM moderation_actions ma
-    WHERE ma.post_id = t.id ORDER BY ma.created_at DESC LIMIT 1) = 'author_hide'`;
+    WHERE ma.post_id = t.id
+      AND ma.action IN ('author_hide','author_unhide','content_restore','content_keep_hidden','content_remove')
+    ORDER BY ma.created_at DESC LIMIT 1) = 'author_hide'`;
 
 export interface AuthorHideResult {
   readonly hidden: boolean;
@@ -55,7 +75,7 @@ export async function hidePost(c: Client, postId: string, authorId: string): Pro
         -- currently visible OR already hidden by THIS SAME mechanism.
         FROM users u
         WHERE t.id = $1 AND t.author_id = $2 AND u.id = t.author_id
-          AND (t.hidden_at IS NULL OR ${LATEST_ACTION_IS_AUTHOR_HIDE_SQL})
+          AND (t.hidden_at IS NULL OR ${LATEST_VISIBILITY_ACTION_IS_AUTHOR_HIDE_SQL})
         RETURNING t.id, t.author_id, u.email, (old.hidden_at IS NOT NULL) AS was_hidden`,
       [postId, authorId],
     );
@@ -124,7 +144,7 @@ export async function unhidePost(c: Client, postId: string, authorId: string): P
           SET hidden_at = NULL
         FROM users u
         WHERE t.id = $1 AND t.author_id = $2 AND u.id = t.author_id AND t.hidden_at IS NOT NULL
-          AND ${LATEST_ACTION_IS_AUTHOR_HIDE_SQL}
+          AND ${LATEST_VISIBILITY_ACTION_IS_AUTHOR_HIDE_SQL}
         RETURNING t.id, t.author_id, u.email`,
       [postId, authorId],
     );
