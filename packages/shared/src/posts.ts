@@ -86,6 +86,17 @@ export interface PublicProfile {
   nextCursor: string | null;
 }
 
+/**
+ * Who hid a post/comment, from the author's own point of view (#78):
+ *   - `null`         — not hidden.
+ *   - `"author"`      — the AUTHOR hid it; they may unhide it themselves.
+ *   - `"moderation"`  — hidden for a reason the author cannot lift (an
+ *     unresolved auto-hide, or a moderator's decision). NO unhide affordance.
+ * Computed server-side at read time from the moderation log — never a stored
+ * fact of its own. See apps/api/src/moderation/hidden-reason.ts.
+ */
+export type HiddenReason = "author" | "moderation" | null;
+
 /** A post as served to its OWN author (drafts included). */
 export interface AuthoredPost {
   id: string;
@@ -97,7 +108,31 @@ export interface AuthoredPost {
   updatedAt: string;
   /** Non-null while hidden pending review (M4 §4.4). The author sees this; the public read never returns a hidden post at all. */
   hiddenAt: string | null;
+  hiddenReason: HiddenReason;
   tags: TagRef[];
+}
+
+/**
+ * The lightweight listing row for `GET /posts` (#78's "my posts" — every
+ * status, hidden included, scoped to the caller). Deliberately WITHOUT
+ * `markdownSource` — a list is not a reader, and never let that drift back
+ * in for convenience (100k chars x N rows on one response).
+ */
+export interface AuthoredPostSummary {
+  id: string;
+  title: string;
+  slug: string;
+  status: PostStatusValue;
+  publishedAt: string | null;
+  updatedAt: string;
+  hiddenAt: string | null;
+  hiddenReason: HiddenReason;
+}
+
+/** `GET /posts` — one keyset page of the caller's OWN posts, every status. */
+export interface MyPostsPage {
+  posts: AuthoredPostSummary[];
+  nextCursor: string | null;
 }
 
 /** What `GET /public/recent` returns — the source for sitemap.xml + rss.xml. */

@@ -53,6 +53,7 @@ import {
   handleUpdatePost,
 } from "./routes/posts";
 import { handlerPostsLive } from "./routes/posts-live";
+import { handleGetPostBySlug, handleListMyPosts } from "./routes/posts-mine";
 import {
   handlePublicDiscover,
   handlePublicPost,
@@ -130,9 +131,11 @@ export const ROUTES: readonly RouteDef[] = [
   // /posts/:id` is the author's own post (drafts included) and authenticates via
   // `readCurrentSession`; the ANONYMOUS reads are the /public/* routes below.
   //
-  // ⚠️ M0's `GET /posts` stub feed is GONE, not moved. It answered a literal
-  // `{posts: []}`; the real public listing is `GET /public/profile`. A route that
-  // lies is worse than one that does not exist.
+  // ⚠️ M0's `GET /posts` stub feed is GONE, not moved — it answered a literal
+  // `{posts: []}`, and this is NOT that route come back. #78 gives `GET /posts`
+  // real, author-scoped behavior (every status, hidden included — see
+  // routes/posts-mine.ts): the "a route that lies is worse than one that does
+  // not exist" lesson still holds, it's just a different route earning the path.
   { method: "POST", pattern: "/posts", handler: handleCreatePost },
   { method: "PATCH", pattern: "/posts/:id", handler: handleUpdatePost },
   // Owner hard-delete (content-deletion + media-reclamation, Task 1). Cascades
@@ -157,7 +160,23 @@ export const ROUTES: readonly RouteDef[] = [
   // gated: the post is public, its frames are content-free ({type} only), and
   // any viewer of a public post may subscribe. See src/routes/posts-live.ts.
   { method: "GET", pattern: "/posts/live", handler: handlerPostsLive },
+
+  // #78 — the author's own post, by SLUG rather than id (the owner-visible
+  // fallback [handle]/[slug].astro tries on its public 404). ⚠️ MUST come
+  // before `GET /posts/:id` below, same reasoning as `/posts/live` just
+  // above: `by-slug` is one literal path segment under the SAME first
+  // component, and `findRoute` is first-match-wins — registering it after
+  // would let `:id` capture "by-slug" and this route would never be reached.
+  // test/posts-mine.test.ts pins this directly, not just by registration
+  // order. See routes/posts-mine.ts.
+  { method: "GET", pattern: "/posts/by-slug", handler: handleGetPostBySlug },
   { method: "GET", pattern: "/posts/:id", handler: handleGetPost },
+
+  // #78 — every one of the caller's own posts, any status (draft, published,
+  // hidden). Same author-scoped/no-store shape as `GET /posts/:id`, GET so
+  // no dynamic-vs-literal shadow risk with it (different segment count) or
+  // with `POST /posts` above (different method). See routes/posts-mine.ts.
+  { method: "GET", pattern: "/posts", handler: handleListMyPosts },
 
   // The viewer's own profile state (M2.1). The handle is chosen at signup
   // (see routes/signup.ts) — there is no more post-signup "choose a handle"
