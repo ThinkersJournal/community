@@ -43,6 +43,7 @@ import BaseLayout from "../components/BaseLayout.astro";
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
+import { toRestrictedMediaUrls } from "../lib/restricted-media";
 
 // ⚠️ Per-session secrets (the CSRF token below) and unpublished text are
 // rendered here — never let a shared cache hold this. Cookie is NOT in the
@@ -325,6 +326,18 @@ if (postId !== null && Astro.request.method === "POST") {
   }
 }
 
+// ⚠️ HIDDEN-POST IMAGE REWRITE (#61/#73) — MUST run AFTER `hiddenAt` is final
+// (both branches above), never inside the `intent === "preview"` branch
+// itself, which runs BEFORE this post's current hidden state is known on a
+// fresh POST. A hidden post's unshared images no longer resolve at their
+// original `cdn.thinkersjournal.com` URL (src/media/visibility-hook.ts moved
+// them) — CireSnave's ruling on #26 requires the author still see them, so
+// the preview's <img> src is rewritten to the authed restricted-media proxy.
+// A visible post's preview is untouched: its images are still public.
+if (previewHtml !== null && hiddenAt !== null && postId !== null) {
+  previewHtml = toRestrictedMediaUrls(previewHtml, postId);
+}
+
 const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
 ---
 
@@ -391,6 +404,50 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
           </form>
 
           {
+            // ⚠️ EDIT MODE ONLY — never for a brand-new post (postId === null).
+            // Same owner-only/per-viewer reasoning as Delete below: a
+            // not-mine `?post=<id>` 404s before this ever renders.
+            //
+            // Unlike Delete, this IS a client-JS island
+            // (src/scripts/post-visibility.ts) rather than an inline form —
+            // it POSTs to /api/post-hide|post-unhide (JSON hops, matching
+            // every other mutation proxy in this app: follow, react,
+            // comment-delete, post-delete) and reloads on success so the
+            // server re-derives the banner/preview-image state from one
+            // fact (`hiddenAt`) rather than duplicating it client-side.
+            // Server-rendered visible (no owner-detection dance needed,
+            // unlike the [slug].astro delete island: this page is already
+            // per-viewer SSR), so only ONE button shows at a time.
+            //
+            // ⚠️ The CSS guard for this control's `hidden` toggles
+            // (`.visibility-zone [hidden]{display:none}`, in the <style>
+            // block below) deliberately carries NO comment of its own: a
+            // literal "/*" earlier in this file's <script> doc text
+            // ("/_astro/*.js") plus a genuine `/* */` CSS comment later in
+            // <style> lets test/post-visibility.test.ts's naive
+            // stripComments regex pair the two and eat everything between
+            // them — including this control's own script wiring below. Same
+            // reasoning as `.post-delete [hidden]` (post-delete.test.ts),
+            // which has no CSS comment either, for the same reason.
+            postId !== null && (
+              <div
+                class="visibility-zone"
+                data-post-visibility
+                data-post-id={postId}
+                data-csrf-token={csrfToken}
+              >
+                <button type="button" class="btn btn-ghost" data-hide-btn hidden={hiddenAt !== null}>
+                  Hide post
+                </button>
+                <button type="button" class="btn btn-ghost" data-unhide-btn hidden={hiddenAt === null}>
+                  Unhide post
+                </button>
+                <p class="visibility-error" data-visibility-error hidden />
+              </div>
+            )
+          }
+
+          {
             // ⚠️ EDIT MODE ONLY — never for a brand-new post (postId === null),
             // which has nothing to delete yet. The editor is already
             // owner-only + per-viewer (a not-mine `?post=<id>` 404s before
@@ -440,6 +497,10 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     // above, which would otherwise block an inline script outright).
     import { initMediaUpload } from "../scripts/media-upload";
     initMediaUpload();
+
+    // The hide/unhide island (#61/#73) — same import-not-inline reasoning.
+    import { initPostVisibility } from "../scripts/post-visibility";
+    initPostVisibility();
   </script>
 </BaseLayout>
 <style>
@@ -463,4 +524,6 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
   #hidden-pending-review{
     border-left:3px solid var(--color-warning, #b45309);
     padding-left:0.75rem}
+  .visibility-zone{display:flex;align-items:center;gap:10px;margin-top:20px}
+  .visibility-zone [hidden]{display:none}
 </style>
