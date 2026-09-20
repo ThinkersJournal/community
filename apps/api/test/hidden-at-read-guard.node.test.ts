@@ -69,12 +69,25 @@ interface AllowEntry {
 const ALLOWLIST: readonly AllowEntry[] = [
   {
     file: "posts.ts",
-    match: "FROM posts p WHERE p.id = $1 AND p.author_id = $2",
+    match: "FROM posts p WHERE __EXPR__ = $1 AND p.author_id = $2",
     why:
-      "handleGetPost — the AUTHOR's own post, drafts and hidden state INCLUDED. " +
-      "Scoped to p.author_id = session.userId (the authoring editor's read, no-store, " +
-      "never edge-cached). The author must see their own post regardless of published/ " +
-      "hidden status; this is not a public read.",
+      "loadAuthoredPostBy — shared by handleGetPost (by id) and #78's " +
+      "handleGetPostBySlug (posts-mine.ts, by slug) — the AUTHOR's own post, " +
+      "drafts and hidden state INCLUDED. `__EXPR__` is the `p.id`/`p.slug` key " +
+      "column, chosen by the caller (posts.ts:loadAuthoredPostBy). Scoped to " +
+      "p.author_id = session.userId (the authoring editor's read, no-store, " +
+      "never edge-cached). The author must see their own post regardless of " +
+      "published/hidden status; this is not a public read.",
+  },
+  {
+    file: "posts-mine.ts",
+    match: "FROM posts p WHERE p.author_id = $1 AND p.id < $2",
+    why:
+      "handleListMyPosts (#78) — every one of the caller's OWN posts, ANY " +
+      "status, hidden included, deliberately: this IS the listing hidden " +
+      "posts stay reachable through (CireSnave's ruling on #26). Scoped to " +
+      "p.author_id = session.userId, no-store, never edge-cached — same " +
+      "author-owns-it authority as handleGetPost, just paginated.",
   },
   {
     file: "comments.ts",

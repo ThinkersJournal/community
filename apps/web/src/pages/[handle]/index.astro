@@ -47,6 +47,17 @@
  * ⚠️ NO MARKDOWN RENDER HERE — only `markdownExcerpt` (plain text). This page
  * never imports `renderMarkdown`, so shiki is not pulled into this route's reach
  * (it is already reachable via [slug].astro, but this page adds nothing to that).
+ *
+ * ⚠️ #78 item 2 — THE OWNER'S OWN DRAFTS/HIDDEN POSTS. CireSnave's ruling:
+ * "posts hidden by the user should still be visible to the user in their own
+ * list of posts. If they aren't visible there, where would a user go to click
+ * a link to edit that post?" This page's SSR data is `PublicProfile` (PM
+ * review: the author listing must NOT come from that cached anonymous DTO —
+ * it filters to published+visible posts BY DESIGN, and this render is
+ * anonymous by construction, same as the header above). So the owner-only
+ * extra rows hydrate CLIENT-SIDE instead, from `GET /api/my-posts`, in
+ * src/scripts/owner-posts.ts — same reveal-only-for-the-real-owner mechanics
+ * as social.ts and post-delete.ts's islands, for the identical reason.
  */
 import { markdownExcerpt } from "@thinkersjournal/markdown";
 
@@ -205,11 +216,23 @@ const displayDate = (value: string): string => {
         Older posts →
       </a>
     )}
+
+    {/* #78 item 2 — SSR-hidden, owner-only. cursor is deliberately omitted:
+        this section is a convenience surface bounded to the first ~500 posts
+        (see owner-posts.ts), not paginated in step with the public listing
+        above. `data-profile-user-id` is what lets the island confirm the
+        VIEWER, not just any signed-in visitor, is this profile's owner. */}
+    <section class="owner-posts" data-owner-posts data-profile-user-id={profile.userId} data-username={profile.username} hidden>
+      <h2>Your drafts &amp; hidden posts</h2>
+      <ul class="posts" data-owner-posts-list></ul>
+    </section>
   </div>
 
   <script>
+    import { initOwnerPosts } from "../../scripts/owner-posts";
     import { initSocialIsland } from "../../scripts/social";
     initSocialIsland();
+    initOwnerPosts();
   </script>
 </BaseLayout>
 <style>
@@ -221,4 +244,9 @@ const displayDate = (value: string): string => {
   .tags{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0}
   .tags .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}
   .tags .tag:hover{color:var(--head)}
+  .owner-posts{margin-top:36px;padding-top:28px;border-top:1px solid var(--line)}
+  .owner-posts[hidden]{display:none}
+  .owner-post-badge{display:inline-block;font-size:12px;color:var(--color-warning, #b45309);
+    border:1px solid currentColor;border-radius:999px;padding:2px 9px;margin-right:8px}
+  .owner-post-edit{margin-left:4px}
 </style>

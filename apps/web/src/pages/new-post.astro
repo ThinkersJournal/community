@@ -37,7 +37,7 @@
  * hidden field to a real header on the Service-Binding call.
  */
 import { renderMarkdown } from "@thinkersjournal/markdown";
-import type { AuthoredPost } from "@thinkersjournal/shared";
+import type { AuthoredPost, HiddenReason } from "@thinkersjournal/shared";
 
 import BaseLayout from "../components/BaseLayout.astro";
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
@@ -289,6 +289,14 @@ if (Astro.request.method === "POST") {
 // post's id is honoured, and only for a GET — a POST already has the text
 // (from the form, for every intent including preview).
 let hiddenAt: string | null = null;
+// #78 note (a) — the Unhide button's gating condition. hiddenReason is
+// derived server-side (apps/api/src/moderation/hidden-reason.ts) from
+// moderation_actions, the same source of truth author-unhide's own
+// authorization check reads. This is a UI convenience ONLY: POST
+// /posts/:id/unhide re-derives it itself and is the real authority, and
+// returns 403 POST_UNDER_MODERATION if this gate is ever wrong — the
+// reactive error path in post-visibility.ts stays as defense-in-depth.
+let hiddenReason: HiddenReason = null;
 if (postId !== null && Astro.request.method === "GET") {
   const existing = await apiFetch<AuthoredPost>(`/posts/${encodeURIComponent(postId)}`, {
     request: Astro.request,
@@ -298,6 +306,7 @@ if (postId !== null && Astro.request.method === "GET") {
     markdownSource = existing.data.markdownSource;
     tagsValue = existing.data.tags.map((t) => t.label).join(", ");
     hiddenAt = existing.data.hiddenAt;
+    hiddenReason = existing.data.hiddenReason;
     // The one-shot flag the draft-save redirect above appends. Read here
     // rather than persisted anywhere: reloading this exact URL keeps showing
     // it (harmless — it is still true that the draft was saved), but
@@ -323,6 +332,7 @@ if (postId !== null && Astro.request.method === "POST") {
   });
   if (current.status === 200 && current.data !== null) {
     hiddenAt = current.data.hiddenAt;
+    hiddenReason = current.data.hiddenReason;
   }
 }
 
@@ -439,7 +449,17 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
                 <button type="button" class="btn btn-ghost" data-hide-btn hidden={hiddenAt !== null}>
                   Hide post
                 </button>
-                <button type="button" class="btn btn-ghost" data-unhide-btn hidden={hiddenAt === null}>
+                {/* #78 note (a) — gated on hiddenReason === 'author', not just
+                    hiddenAt !== null: a moderator-hidden post has nothing an
+                    Unhide click here could do but 403. UI gate ONLY — see the
+                    hiddenReason comment above; POST_UNDER_MODERATION stays as
+                    defense-in-depth in post-visibility.ts. */}
+                <button
+                  type="button"
+                  class="btn btn-ghost"
+                  data-unhide-btn
+                  hidden={!(hiddenAt !== null && hiddenReason === "author")}
+                >
                   Unhide post
                 </button>
                 <p class="visibility-error" data-visibility-error hidden />

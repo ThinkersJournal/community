@@ -400,6 +400,20 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /media/restricted/:sha256",
     build: () => new Request("https://api.test/media/restricted/not-a-sha256"),
   },
+  // GET /posts/by-slug and GET /posts (#78) — both session-authenticated GETs,
+  // like GET /posts/:id above: LAYER 1 never reaches them, but
+  // readCurrentSession gives each a real 401 path with no session.
+  // test/posts-mine.test.ts owns the rest of their behaviour.
+  {
+    name: "401 posts-by-slug with no session",
+    route: "GET /posts/by-slug",
+    build: () => new Request("https://api.test/posts/by-slug?slug=x"),
+  },
+  {
+    name: "401 my-posts listing with no session",
+    route: "GET /posts",
+    build: () => new Request("https://api.test/posts"),
+  },
 ];
 
 /**

@@ -20,6 +20,7 @@ import type { Client } from "pg";
 import { BEGIN_BOUNDED_TX } from "../db/client";
 import { recordModerationAction } from "./actions";
 import { loadPostTagSlugs } from "./purge-target";
+import { VISIBILITY_ACTION_KINDS_SQL } from "./visibility-actions";
 
 /**
  * True only when the post's current hide (if any) is the author's own.
@@ -39,11 +40,15 @@ import { loadPostTagSlugs } from "./purge-target";
  * test/author-hide-media-access-interleaving.test.ts, which reproduces the
  * exact interleaving (author_hide -> media_access -> unhide) and pins that
  * unhide still succeeds.
+ *
+ * The action list lives in visibility-actions.ts, shared with
+ * hidden-reason.ts's READ of the same fact (#78) — one list, so the gate and
+ * the read can never disagree about what counts as visibility-affecting.
  */
 const LATEST_VISIBILITY_ACTION_IS_AUTHOR_HIDE_SQL = `
   (SELECT ma.action FROM moderation_actions ma
     WHERE ma.post_id = t.id
-      AND ma.action IN ('author_hide','author_unhide','content_restore','content_keep_hidden','content_remove')
+      AND ma.action IN (${VISIBILITY_ACTION_KINDS_SQL})
     ORDER BY ma.created_at DESC LIMIT 1) = 'author_hide'`;
 
 export interface AuthorHideResult {

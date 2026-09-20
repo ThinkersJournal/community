@@ -147,9 +147,13 @@ describe("new-post.astro wires the hide/unhide control", () => {
     expect(page).toContain("data-csrf-token={csrfToken}");
   });
 
-  it("shows exactly one of Hide/Unhide at a time, driven by hiddenAt", () => {
+  it("shows Hide driven by hiddenAt, and Unhide additionally gated on hiddenReason === 'author' (#78 note (a))", () => {
+    // ⚠️ Unhide is NOT simply `hiddenAt === null`'s inverse: a moderator-hidden
+    // post has nothing an Unhide click here could do but 403 — this is a UI
+    // convenience only, POST_UNDER_MODERATION stays as the real authority (see
+    // post-visibility.ts's own defense-in-depth check, pinned below).
     expect(page).toMatch(/data-hide-btn[^}]*hidden=\{hiddenAt !== null\}/);
-    expect(page).toMatch(/data-unhide-btn[^}]*hidden=\{hiddenAt === null\}/);
+    expect(page).toMatch(/data-unhide-btn[\s\S]{0,120}hidden=\{!\(hiddenAt !== null && hiddenReason === "author"\)\}/);
   });
 
   it("guards every hidden descendant against the .btn display:inline-block override (post-delete/nav-bell fix pattern)", () => {

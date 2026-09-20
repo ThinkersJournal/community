@@ -58,4 +58,24 @@ describe("the island module", () => {
     // Negative: the old dead branch (nothing ever set data-self) is gone.
     expect(island).not.toMatch(/dataset\.self/);
   });
+
+  it("⚠️ never wires a click listener on the self-follow branch (PM finding, follow-button-css-origin)", () => {
+    // `btn.hidden = true` alone was NOT enough: `.btn{display:inline-block}`
+    // (global.css, author-origin) beat the UA sheet's `[hidden]{display:none}`,
+    // so this button stayed visibly on-screen and clickable, and its listener
+    // — attached unconditionally, outside the if/else — fired a self-follow
+    // the server had to refuse. The CSS is now fixed globally (see
+    // test/global-css.test.ts), but this pins the OTHER half: the self branch
+    // must never attach the listener at all, so it doesn't depend on nothing
+    // else ever re-exposing `hidden`.
+    const island = stripComments(readFileSync(ISLAND, "utf8"));
+    const selfBranchStart = island.indexOf("id === status.viewerId");
+    expect(selfBranchStart).toBeGreaterThan(-1);
+    // The self branch is a single `else if` arm ending at the next `} else {`.
+    const nextElse = island.indexOf("} else {", selfBranchStart);
+    expect(nextElse).toBeGreaterThan(selfBranchStart);
+    const selfBranchBody = island.slice(selfBranchStart, nextElse);
+    expect(selfBranchBody).toContain("hidden = true");
+    expect(selfBranchBody).not.toContain("addEventListener");
+  });
 });

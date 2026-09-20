@@ -7,6 +7,10 @@
  *   POST  /posts/:id/hide    — the author hides their own post (#61 follow-up)
  *   POST  /posts/:id/unhide  — the author unhides it, ONLY if they were the ones who hid it
  *
+ * `GET /posts` (list) and `GET /posts/by-slug` (#78, owner-visible hidden
+ * content) live in routes/posts-mine.ts, a separate file, but share
+ * `loadAuthoredPostBy` (exported below) with `GET /posts/:id` here.
+ *
  * All are AUTHOR-facing. Anonymous reads live in src/routes/public.ts.
  *
  * ⚠️ EVERY DB ACCESS HERE USES HYPERDRIVE_FRESH — including the reads. These are
@@ -42,6 +46,7 @@ import { isInvalidTextRepresentation, isUniqueViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
 import { applyMediaVisibilityChange } from "../media/visibility-hook";
 import { hidePost, unhidePost } from "../moderation/author-hide";
+import { hiddenReasonCaseSql } from "../moderation/hidden-reason";
 import { purgeTagsFor } from "../moderation/purge-target";
 import { randomSuffix } from "../util/random";
 
@@ -607,6 +612,33 @@ export async function handleUnhidePost(
   }
 }
 
+/**
+ * The one query behind `GET /posts/:id` and `GET /posts/by-slug` (posts-mine.ts)
+ * — same author-scoped row shape, same `hiddenReason` computation, keyed
+ * differently. `by` is a closed choice so a caller cannot accidentally build
+ * an unscoped WHERE clause: exactly one of `id`/`slug`, always AND'd with
+ * `author_id = $2`.
+ */
+export async function loadAuthoredPostBy(
+  c: Client,
+  authorId: string,
+  by: { readonly id: string } | { readonly slug: string },
+): Promise<AuthoredPost | null> {
+  const keyColumn = "id" in by ? "p.id" : "p.slug";
+  const keyValue = "id" in by ? by.id : by.slug;
+  const { rows } = await c.query(
+    `SELECT p.id, p.title, p.slug, p.markdown_source AS "markdownSource", p.status,
+            p.published_at AS "publishedAt", p.updated_at AS "updatedAt", p.hidden_at AS "hiddenAt",
+            ${hiddenReasonCaseSql("p.id", "p.hidden_at")} AS "hiddenReason",
+            COALESCE((SELECT json_agg(json_build_object('slug', t.slug, 'label', t.label) ORDER BY t.slug)
+                        FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = p.id),
+                     '[]'::json) AS tags
+       FROM posts p WHERE ${keyColumn} = $1 AND p.author_id = $2`,
+    [keyValue, authorId],
+  );
+  return (rows[0] as AuthoredPost | undefined) ?? null;
+}
+
 export async function handleGetPost(
   request: Request,
   env: Env,
@@ -618,18 +650,9 @@ export async function handleGetPost(
 
   let post: AuthoredPost | null;
   try {
-    post = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-      const { rows } = await c.query(
-        `SELECT p.id, p.title, p.slug, p.markdown_source AS "markdownSource", p.status,
-                p.published_at AS "publishedAt", p.updated_at AS "updatedAt", p.hidden_at AS "hiddenAt",
-                COALESCE((SELECT json_agg(json_build_object('slug', t.slug, 'label', t.label) ORDER BY t.slug)
-                            FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = p.id),
-                         '[]'::json) AS tags
-           FROM posts p WHERE p.id = $1 AND p.author_id = $2`,
-        [params.id, session.userId],
-      );
-      return (rows[0] ?? null) as AuthoredPost | null;
-    });
+    post = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      loadAuthoredPostBy(c, session.userId, { id: params.id! }),
+    );
   } catch (err) {
     if (isInvalidTextRepresentation(err)) return notFound();
     throw err;

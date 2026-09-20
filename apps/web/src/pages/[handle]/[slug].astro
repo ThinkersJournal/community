@@ -24,10 +24,26 @@
  * /new-post, /internal/purge) still win — Astro prioritizes static segments.
  * ⚠️ And NOTHING here may be renamed to a `_`-prefixed path: Astro's router skips
  * any file OR DIRECTORY starting with `_`, silently (see src/pages/internal/purge.ts).
+ *
+ * ⚠️ #78 — THE OWNER-VISIBLE FALLBACK, AND WHY IT CANNOT TOUCH THE BRANCH ABOVE.
+ * When the anonymous fetch 404s (a hidden/draft/nonexistent post — the api makes
+ * all three the same answer), and ONLY when the request carries a session
+ * cookie, this now tries ONE more authenticated lookup
+ * (`GET /posts/by-slug`, forwarding the cookie) to see whether the CALLER is
+ * that post's own author. If so, it renders a SEPARATE, markPrivate,
+ * NEVER-EDGE-CACHED owner view instead of a hard 404 — a hidden-state banner,
+ * Hide/Unhide, no comments/reactions/JSON-LD (this is a status view for the
+ * author, not the shareable public page). The public branch's own code path —
+ * request/response shape, cacheability, everything — is UNCHANGED; the two
+ * branches share nothing but the file and the early username/slug parse.
+ * test/post-page-owner-fallback.test.ts is the security-critical pin here
+ * (PM review condition 3): the owner branch must be markPrivate, and the
+ * public branch's own cache/behavior must be provably untouched.
  */
 import { markdownExcerpt, renderMarkdown } from "@thinkersjournal/markdown";
 
 import BaseLayout from "../../components/BaseLayout.astro";
+import OwnerPostView from "../../components/OwnerPostView.astro";
 import ReactionChips from "../../components/ReactionChips.astro";
 import { apiFetch } from "../../lib/api";
 import { markPublicCacheable } from "../../lib/cache";
@@ -36,7 +52,7 @@ import { setPublicPageCsp } from "../../lib/csp";
 import { jsonLdScript } from "../../lib/json-ld";
 import { FEED_TITLE } from "../../lib/xml";
 
-import type { CommentsPage, PublicPost } from "@thinkersjournal/shared";
+import type { AuthoredPost, CommentsPage, PublicPost } from "@thinkersjournal/shared";
 
 const { handle, slug } = Astro.params;
 if (handle === undefined || slug === undefined || !handle.startsWith("@")) {
@@ -49,7 +65,19 @@ if (username === "") return new Response(null, { status: 404 });
 const response = await apiFetch<PublicPost>(
   `/public/posts?username=${encodeURIComponent(username)}&slug=${encodeURIComponent(slug)}`,
 );
-if (response.status !== 200 || response.data === null) {
+
+// #78 — the owner-visible fallback. ONLY attempted when the anonymous fetch
+// failed AND a session cookie is present (a truly anonymous 404 — a bogus
+// URL, a crawler — must not pay for a second api round trip it can never use).
+let ownerPost: AuthoredPost | null = null;
+if ((response.status !== 200 || response.data === null) && Astro.request.headers.get("Cookie") !== null) {
+  const mine = await apiFetch<AuthoredPost>(`/posts/by-slug?slug=${encodeURIComponent(slug)}`, {
+    request: Astro.request,
+  });
+  if (mine.status === 200 && mine.data !== null) ownerPost = mine.data;
+}
+
+if ((response.status !== 200 || response.data === null) && ownerPost === null) {
   // A draft and a nonexistent post are the same answer here because the api
   // makes them the same answer (apps/api/src/routes/public.ts).
   // ⚠️ This branch declares no cacheability, so the adapter stamps `no-store` and
@@ -58,256 +86,305 @@ if (response.status !== 200 || response.data === null) {
   // later published must invalidate its own 404) and is not worth it in M1.
   return new Response(null, { status: 404 });
 }
-const post = response.data;
 
-// READ-TIME RENDER. markdown_source is the single source of truth; no HTML is
-// ever stored. This is what makes a sanitizer fix a DEPLOY (plus a
-// PIPELINE_VERSION bump) rather than a backfill of every row.
-const html = await renderMarkdown(post.markdownSource);
-// ⚠️ PLAIN TEXT, DELIBERATELY UNESCAPED (packages/markdown/src/excerpt.ts says so).
-// Escaping is THIS page's job. Every use below is either an Astro `{}` attribute
-// expression (Astro HTML-escapes those) or goes through jsonLdScript. Never
-// hand-roll an attribute around this value and never `set:html` it.
-const description = markdownExcerpt(post.markdownSource);
-const canonical = postUrl(post.username, post.slug);
+const post = response.status === 200 ? response.data : null;
 
-// ⚠️ DEFENSIVE date formatting. `post.publishedAt` is a non-null PG timestamp, so
-// it always parses today — but a malformed value would make `.toISOString()`
-// THROW and 500 this otherwise-cached page. Format only when the Date is valid;
-// otherwise fall back to the raw string (the `datetime` attribute below already
-// carries the raw value verbatim, so nothing is lost).
-const publishedDate = new Date(post.publishedAt);
-const publishedDisplay = Number.isNaN(publishedDate.getTime())
-  ? post.publishedAt
-  : publishedDate.toISOString().slice(0, 10);
+// ──────────────────────────────────────────────────────────────────────────
+// EVERYTHING BELOW THIS LINE, UP TO THE TEMPLATE'S `post !== null` BRANCH,
+// IS THE ORIGINAL PUBLIC-BRANCH LOGIC — UNCHANGED. Guarded on `post !== null`
+// only so the owner-only render below doesn't run it needlessly; every
+// statement inside is byte-identical to before #78.
+// ──────────────────────────────────────────────────────────────────────────
+let html = "";
+let description = "";
+let canonical = "";
+let publishedDisplay = "";
+let commentsCursor: string | null = null;
+let renderedComments: Array<{
+  id: string;
+  depth: number;
+  path: string;
+  deleted: boolean;
+  createdAt: string;
+  edited: boolean;
+  authorId: string | undefined;
+  authorUsername: string;
+  authorName: string | null;
+  html: string;
+}> = [];
+let olderCommentsHref: string | null = null;
+let jsonLd: Record<string, unknown> = {};
 
-// ⚠️ ANONYMOUS, like the post fetch above — no `request`, no Cookie, nothing
-// viewer-specific in this render. Comments are CONTENT: they live in this
-// cached HTML and every comment write purges post:<id> (api routes/comments.ts).
-const commentsCursor = Astro.url.searchParams.get("comments");
-const commentsQ = new URLSearchParams({ postId: post.id });
-if (commentsCursor !== null) commentsQ.set("cursor", commentsCursor);
-const commentsResp = await apiFetch<CommentsPage>(`/public/comments?${commentsQ.toString()}`);
-// Fail-soft: a comments hiccup must not 404 a healthy post page.
-const commentsPage: CommentsPage =
-  commentsResp.status === 200 && commentsResp.data !== null
-    ? commentsResp.data
-    : { comments: [], nextCursor: null };
-// READ-TIME RENDER through the same sanitize-first pipeline as the post body —
-// the ONLY producer of comment HTML. Tombstones render no body at all.
-// FLATTENED for the template: `author` is nullable and JSX can't narrow it off
-// `deleted`, so derive plain fields here (authorId undefined on tombstones →
-// Astro omits the data attribute entirely).
-const renderedComments = await Promise.all(
-  commentsPage.comments.map(async (c) => ({
-    id: c.id,
-    depth: c.depth,
-    // ⚠️ Surfaced as `data-path` on each <li> so the live client (comments-live.ts,
-    // M2.3b) can insert a reconciled comment at its path-ordered position without
-    // re-fetching the whole tree. Server orders by materialized `path`.
-    path: c.path,
-    deleted: c.deleted,
-    createdAt: c.createdAt,
-    edited: c.editedAt !== null,
-    authorId: c.author?.userId,
-    authorUsername: c.author?.username ?? "",
-    authorName: c.author === null ? null : (c.author.displayName ?? c.author.username),
-    html: c.deleted ? "" : await renderMarkdown(c.bodyMarkdown),
-  })),
-);
-const olderCommentsHref =
-  commentsPage.nextCursor === null
-    ? null
-    : `?comments=${encodeURIComponent(commentsPage.nextCursor)}`;
+if (post !== null) {
+  // READ-TIME RENDER. markdown_source is the single source of truth; no HTML is
+  // ever stored. This is what makes a sanitizer fix a DEPLOY (plus a
+  // PIPELINE_VERSION bump) rather than a backfill of every row.
+  html = await renderMarkdown(post.markdownSource);
+  // ⚠️ PLAIN TEXT, DELIBERATELY UNESCAPED (packages/markdown/src/excerpt.ts says so).
+  // Escaping is THIS page's job. Every use below is either an Astro `{}` attribute
+  // expression (Astro HTML-escapes those) or goes through jsonLdScript. Never
+  // hand-roll an attribute around this value and never `set:html` it.
+  description = markdownExcerpt(post.markdownSource);
+  canonical = postUrl(post.username, post.slug);
 
-markPublicCacheable(Astro, [
-  // ⚠️ THESE LITERALS MUST MATCH apps/api/src/cache/purge.ts's CALL SITES EXACTLY
-  // for the tags this page DOES subscribe to — a typo here is INVISIBLE (miniflare
-  // does not simulate Workers Cache) and its only symptom is edits that never
-  // appear for up to 25h. Cross-checked against apps/api/src/routes/posts.ts, and
-  // the api's `GET /public/posts` selects `p.id AS id` + `p.author_id AS
-  // "authorId"`, i.e. the SAME two ids those call sites interpolate.
-  //
-  // `post:<id>`   — this page. Purged on every edit of this post.
-  // `author:<id>` — purged on any of this author's publishes/edits (so e.g. a
-  //                 future display-name change reflows the byline here).
-  //
-  // ⚠️ THE api ALSO purges `"listing"` on every publish/edit — and this page
-  // DELIBERATELY does NOT subscribe to it. A single post's content never changes
-  // when a DIFFERENT author publishes, so subscribing would evict this (possibly
-  // viral) page on every platform-wide write for nothing — the exact defect the
-  // final whole-branch review caught. `"listing"` is reserved for M2's site-wide
-  // feed page, which will be the correct subscriber. Do NOT re-add `"listing"`
-  // here (test/post-page.test.ts is the permanent tripwire).
-  // (`pipeline:v1` is appended by markPublicCacheable itself — not here.)
-  `post:${post.id}`,
-  `author:${post.authorId}`,
-]);
-setPublicPageCsp(Astro);
+  // ⚠️ DEFENSIVE date formatting. `post.publishedAt` is a non-null PG timestamp, so
+  // it always parses today — but a malformed value would make `.toISOString()`
+  // THROW and 500 this otherwise-cached page. Format only when the Date is valid;
+  // otherwise fall back to the raw string (the `datetime` attribute below already
+  // carries the raw value verbatim, so nothing is lost).
+  const publishedDate = new Date(post.publishedAt);
+  publishedDisplay = Number.isNaN(publishedDate.getTime())
+    ? post.publishedAt
+    : publishedDate.toISOString().slice(0, 10);
 
-const jsonLd = {
-  "@context": "https://schema.org",
-  "@type": "BlogPosting",
-  headline: post.title,
-  description,
-  datePublished: post.publishedAt,
-  dateModified: post.updatedAt,
-  author: { "@type": "Person", name: post.displayName ?? post.username, url: profileUrl(post.username) },
-  mainEntityOfPage: { "@type": "WebPage", "@id": canonical },
-};
+  // ⚠️ ANONYMOUS, like the post fetch above — no `request`, no Cookie, nothing
+  // viewer-specific in this render. Comments are CONTENT: they live in this
+  // cached HTML and every comment write purges post:<id> (api routes/comments.ts).
+  commentsCursor = Astro.url.searchParams.get("comments");
+  const commentsQ = new URLSearchParams({ postId: post.id });
+  if (commentsCursor !== null) commentsQ.set("cursor", commentsCursor);
+  const commentsResp = await apiFetch<CommentsPage>(`/public/comments?${commentsQ.toString()}`);
+  // Fail-soft: a comments hiccup must not 404 a healthy post page.
+  const commentsPage: CommentsPage =
+    commentsResp.status === 200 && commentsResp.data !== null
+      ? commentsResp.data
+      : { comments: [], nextCursor: null };
+  // READ-TIME RENDER through the same sanitize-first pipeline as the post body —
+  // the ONLY producer of comment HTML. Tombstones render no body at all.
+  // FLATTENED for the template: `author` is nullable and JSX can't narrow it off
+  // `deleted`, so derive plain fields here (authorId undefined on tombstones →
+  // Astro omits the data attribute entirely).
+  renderedComments = await Promise.all(
+    commentsPage.comments.map(async (c) => ({
+      id: c.id,
+      depth: c.depth,
+      // ⚠️ Surfaced as `data-path` on each <li> so the live client (comments-live.ts,
+      // M2.3b) can insert a reconciled comment at its path-ordered position without
+      // re-fetching the whole tree. Server orders by materialized `path`.
+      path: c.path,
+      deleted: c.deleted,
+      createdAt: c.createdAt,
+      edited: c.editedAt !== null,
+      authorId: c.author?.userId,
+      authorUsername: c.author?.username ?? "",
+      authorName: c.author === null ? null : (c.author.displayName ?? c.author.username),
+      html: c.deleted ? "" : await renderMarkdown(c.bodyMarkdown),
+    })),
+  );
+  olderCommentsHref =
+    commentsPage.nextCursor === null
+      ? null
+      : `?comments=${encodeURIComponent(commentsPage.nextCursor)}`;
+
+  markPublicCacheable(Astro, [
+    // ⚠️ THESE LITERALS MUST MATCH apps/api/src/cache/purge.ts's CALL SITES EXACTLY
+    // for the tags this page DOES subscribe to — a typo here is INVISIBLE (miniflare
+    // does not simulate Workers Cache) and its only symptom is edits that never
+    // appear for up to 25h. Cross-checked against apps/api/src/routes/posts.ts, and
+    // the api's `GET /public/posts` selects `p.id AS id` + `p.author_id AS
+    // "authorId"`, i.e. the SAME two ids those call sites interpolate.
+    //
+    // `post:<id>`   — this page. Purged on every edit of this post.
+    // `author:<id>` — purged on any of this author's publishes/edits (so e.g. a
+    //                 future display-name change reflows the byline here).
+    //
+    // ⚠️ THE api ALSO purges `"listing"` on every publish/edit — and this page
+    // DELIBERATELY does NOT subscribe to it. A single post's content never changes
+    // when a DIFFERENT author publishes, so subscribing would evict this (possibly
+    // viral) page on every platform-wide write for nothing — the exact defect the
+    // final whole-branch review caught. `"listing"` is reserved for M2's site-wide
+    // feed page, which will be the correct subscriber. Do NOT re-add `"listing"`
+    // here (test/post-page.test.ts is the permanent tripwire).
+    // (`pipeline:v1` is appended by markPublicCacheable itself — not here.)
+    `post:${post.id}`,
+    `author:${post.authorId}`,
+  ]);
+  setPublicPageCsp(Astro);
+
+  jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    headline: post.title,
+    description,
+    datePublished: post.publishedAt,
+    dateModified: post.updatedAt,
+    author: { "@type": "Person", name: post.displayName ?? post.username, url: profileUrl(post.username) },
+    mainEntityOfPage: { "@type": "WebPage", "@id": canonical },
+  };
+}
+
+// #78 owner view — markPrivate, the CSRF fetch, and the actual render all
+// live in OwnerPostView.astro now (see that file's header for why), so this
+// page's own frontmatter has nothing further to do for that branch.
 ---
 
-<BaseLayout title={post.title} description={description} canonical={canonical}>
-  <Fragment slot="head">
-    {/* ⚠️ RSS discovery link kept LITERALLY here (not folded into BaseHead) —
-        feed-pages.test.ts greps this file's source for exactly this string. */}
-    <link rel="alternate" type="application/rss+xml" title={FEED_TITLE} href="/rss.xml" />
+{post !== null && (
+  <BaseLayout title={post.title} description={description} canonical={canonical}>
+    <Fragment slot="head">
+      {/* ⚠️ RSS discovery link kept LITERALLY here (not folded into BaseHead) —
+          feed-pages.test.ts greps this file's source for exactly this string. */}
+      <link rel="alternate" type="application/rss+xml" title={FEED_TITLE} href="/rss.xml" />
 
-    {/* Cursor pages are pagination, not distinct content — the profile page's
-        exact pattern: keep them out of the index while still letting a
-        crawler follow through to the comments. */}
-    {commentsCursor !== null && <meta name="robots" content="noindex, follow" />}
+      {/* Cursor pages are pagination, not distinct content — the profile page's
+          exact pattern: keep them out of the index while still letting a
+          crawler follow through to the comments. */}
+      {commentsCursor !== null && <meta name="robots" content="noindex, follow" />}
 
-    <meta property="og:type" content="article" />
-    <meta property="og:title" content={post.title} />
-    <meta property="og:description" content={description} />
-    <meta property="og:url" content={canonical} />
-    <meta property="article:published_time" content={post.publishedAt} />
-    <meta property="article:modified_time" content={post.updatedAt} />
-    <meta property="article:author" content={post.displayName ?? post.username} />
-    <meta name="twitter:card" content="summary_large_image" />
+      <meta property="og:type" content="article" />
+      <meta property="og:title" content={post.title} />
+      <meta property="og:description" content={description} />
+      <meta property="og:url" content={canonical} />
+      <meta property="article:published_time" content={post.publishedAt} />
+      <meta property="article:modified_time" content={post.updatedAt} />
+      <meta property="article:author" content={post.displayName ?? post.username} />
+      <meta name="twitter:card" content="summary_large_image" />
 
-    {/* ⚠️ jsonLdScript, NEVER a bare JSON.stringify: it does not escape `<`, so a
-        title containing `</script>` would close this block and inject markup —
-        a path that bypasses the Markdown sanitizer entirely. A ld+json block is
-        NOT subject to script-src (it is inert data, never executed), so the CSP
-        neither blocks it nor protects it. See src/lib/json-ld.ts.
+      {/* ⚠️ jsonLdScript, NEVER a bare JSON.stringify: it does not escape `<`, so a
+          title containing `</script>` would close this block and inject markup —
+          a path that bypasses the Markdown sanitizer entirely. A ld+json block is
+          NOT subject to script-src (it is inert data, never executed), so the CSP
+          neither blocks it nor protects it. See src/lib/json-ld.ts.
 
-        ⚠️ `is:inline` IS REQUIRED, not decoration. Without it Astro treats a
-        <script> as a module to BUNDLE — which would move this block into an
-        external .js file and destroy the structured data. Astro already infers
-        it here (because of the `type` attribute) and emits a hint saying so;
-        stating it explicitly is what stops that inference being silently
-        withdrawn by a future refactor. It does NOT weaken the CSP: script-src
-        governs EXECUTED script, and a non-JS `type` is inert data. */}
-    <script is:inline type="application/ld+json" set:html={jsonLdScript(jsonLd)} />
-  </Fragment>
+          ⚠️ `is:inline` IS REQUIRED, not decoration. Without it Astro treats a
+          <script> as a module to BUNDLE — which would move this block into an
+          external .js file and destroy the structured data. Astro already infers
+          it here (because of the `type` attribute) and emits a hint saying so;
+          stating it explicitly is what stops that inference being silently
+          withdrawn by a future refactor. It does NOT weaken the CSP: script-src
+          governs EXECUTED script, and a non-JS `type` is inert data. */}
+      <script is:inline type="application/ld+json" set:html={jsonLdScript(jsonLd)} />
+    </Fragment>
 
-  <article class="wrap post">
-    <h1>{post.title}</h1>
-    <p class="meta">
-      {/* ⚠️ encodeURIComponent on the username in the HREF (Astro escapes it as
-          TEXT, but a URL needs percent-encoding): usernames are `[a-z0-9_]` today
-          so this is a no-op, but M2 relaxes the charset. Defense-in-depth. The
-          display text below is intentionally NOT encoded — Astro `{}` handles it. */}
-      <a class="link" href={`/@${encodeURIComponent(post.username)}`}>{post.displayName ?? post.username}</a>
-      · <time datetime={post.publishedAt}>{publishedDisplay}</time>
-    </p>
+    <article class="wrap post">
+      <h1>{post.title}</h1>
+      <p class="meta">
+        {/* ⚠️ encodeURIComponent on the username in the HREF (Astro escapes it as
+            TEXT, but a URL needs percent-encoding): usernames are `[a-z0-9_]` today
+            so this is a no-op, but M2 relaxes the charset. Defense-in-depth. The
+            display text below is intentionally NOT encoded — Astro `{}` handles it. */}
+        <a class="link" href={`/@${encodeURIComponent(post.username)}`}>{post.displayName ?? post.username}</a>
+        · <time datetime={post.publishedAt}>{publishedDisplay}</time>
+      </p>
 
-    {/* THE HIDE CONTROL (#74 audit finding, batch A-2) — SAME SSR-hidden +
-        client-reveal pattern as the delete control just below, and for the
-        same reason: this render is fully anonymous + edge-cached, so there
-        is no viewer-specific value to decide "is this viewer the author"
-        here. HIDE ONLY, never Unhide — this page 404s on a hidden post
-        (`GET /public/posts` filters `hidden_at IS NULL`), so a post this
-        control can ever see is always currently visible; Unhide lives only
-        on the editor. See src/scripts/post-visibility-view.ts's header. */}
-    <div class="post-visibility-view" data-post-visibility-view data-post-id={post.id} data-post-author-id={post.authorId} hidden></div>
+      {/* THE HIDE CONTROL (#74 audit finding, batch A-2) — SAME SSR-hidden +
+          client-reveal pattern as the delete control just below, and for the
+          same reason: this render is fully anonymous + edge-cached, so there
+          is no viewer-specific value to decide "is this viewer the author"
+          here. HIDE ONLY, never Unhide — this page 404s on a hidden post
+          (`GET /public/posts` filters `hidden_at IS NULL`), so a post this
+          control can ever see is always currently visible; Unhide lives on
+          the editor AND (#78) this post's own URL, once OwnerPostView takes
+          over for the author. `data-handle`/`data-slug` are what let the
+          script redirect back to THIS post's own URL on success (#78 item 2)
+          instead of the editor — see src/scripts/post-visibility-view.ts's
+          header. */}
+      <div
+        class="post-visibility-view"
+        data-post-visibility-view
+        data-post-id={post.id}
+        data-post-author-id={post.authorId}
+        data-handle={post.username}
+        data-slug={post.slug}
+        hidden
+      ></div>
 
-    {/* THE DELETE CONTROL — SSR-hidden placeholder, a SEPARATE element from
-        `.comments`'s data-post-id/data-post-author-id (that pair is the
-        comments island's ownership contract; this is the post-delete
-        island's, and a shared element would couple two independent
-        reveal decisions). SSR default is hidden — this render is fully
-        anonymous + edge-cached (see this file's header), so there is no
-        viewer-specific value to decide "is this viewer the author" here.
-        The post-delete island (src/scripts/post-delete.ts) reveals it
-        client-side, ONLY for the signed-in author. `data-handle` carries
-        `post.username` (NOT the `handle` route param, which still carries
-        its `@` prefix) — the island builds `"/@" + handle` for the
-        post-delete redirect, exactly the unprefixed form every other link
-        on this page already uses (see the href just above). */}
-    <div class="post-delete" data-post-delete data-post-id={post.id} data-post-author-id={post.authorId} data-handle={post.username} hidden></div>
+      {/* THE DELETE CONTROL — SSR-hidden placeholder, a SEPARATE element from
+          `.comments`'s data-post-id/data-post-author-id (that pair is the
+          comments island's ownership contract; this is the post-delete
+          island's, and a shared element would couple two independent
+          reveal decisions). SSR default is hidden — this render is fully
+          anonymous + edge-cached (see this file's header), so there is no
+          viewer-specific value to decide "is this viewer the author" here.
+          The post-delete island (src/scripts/post-delete.ts) reveals it
+          client-side, ONLY for the signed-in author. `data-handle` carries
+          `post.username` (NOT the `handle` route param, which still carries
+          its `@` prefix) — the island builds `"/@" + handle` for the
+          post-delete redirect, exactly the unprefixed form every other link
+          on this page already uses (see the href just above). */}
+      <div class="post-delete" data-post-delete data-post-id={post.id} data-post-author-id={post.authorId} data-handle={post.username} hidden></div>
 
-    {/* Freeform tags (M2.4c). encodeURIComponent on the slug in the href — a URL
-        needs percent-encoding; Astro `{}` only HTML-escapes. The label is an
-        Astro `{}` expression (escaped), never set:html. */}
-    {post.tags.length > 0 && (
-      <ul class="tags">
-        {post.tags.map((t) => (
-          <li><a class="tag" href={`/tag/${encodeURIComponent(t.slug)}`}>{t.label}</a></li>
+      {/* Freeform tags (M2.4c). encodeURIComponent on the slug in the href — a URL
+          needs percent-encoding; Astro `{}` only HTML-escapes. The label is an
+          Astro `{}` expression (escaped), never set:html. */}
+      {post.tags.length > 0 && (
+        <ul class="tags">
+          {post.tags.map((t) => (
+            <li><a class="tag" href={`/tag/${encodeURIComponent(t.slug)}`}>{t.label}</a></li>
+          ))}
+        </ul>
+      )}
+      {/* ⚠️ THE ONE PLACE THIS APP EMITS UNESCAPED HTML (alongside the ld+json
+          script above). It is safe for exactly one reason: `html` came out of
+          packages/markdown, whose LAST UNSAFE THING is rehype-sanitize. Never
+          `set:html` anything else here, and never interpolate a user value into
+          this element. */}
+      <div id="post-body" set:html={html} />
+    </article>
+
+    <section class="wrap comments" data-comments data-post-id={post.id} data-post-author-id={post.authorId}>
+      <h2>Comments</h2>
+
+      <ReactionChips postId={post.id} />
+
+      {/* SSR default = the logged-out affordance. The comments island REPLACES
+          this for signed-in viewers (form) / un-onboarded ones (choose-handle
+          link) — progressive enhancement, nav-auth style; the cached HTML is
+          identical for everyone. */}
+      <div data-comment-form-slot>
+        <p><a class="link" href="/login">Log in</a> to join the conversation.</p>
+      </div>
+
+      {renderedComments.length === 0 && <p class="no-comments">No comments yet.</p>}
+      <ol class="comment-list">
+        {renderedComments.map((c) => (
+          <li
+            class={`comment depth-${Math.min(c.depth, 6)}`}
+            data-comment-id={c.id}
+            data-depth={c.depth}
+            data-path={c.path}
+            data-author-id={c.authorId}
+            data-deleted={c.deleted ? "true" : undefined}
+          >
+            {c.deleted ? (
+              <p class="tombstone">[deleted]</p>
+            ) : (
+              <>
+                <p class="meta">
+                  <a class="link" href={`/@${encodeURIComponent(c.authorUsername)}`}>
+                    {c.authorName}
+                  </a>
+                  · <time datetime={c.createdAt}>{c.createdAt.slice(0, 10)}</time>
+                  {c.edited && <span class="edited">(edited)</span>}
+                </p>
+                {/* The third and FINAL set:html sink — renderMarkdown output only,
+                    same safety class as #post-body. Never bind anything else here. */}
+                <div class="comment-body" set:html={c.html} />
+                <ReactionChips commentId={c.id} />
+                <div data-comment-actions></div>
+              </>
+            )}
+          </li>
         ))}
-      </ul>
-    )}
-    {/* ⚠️ THE ONE PLACE THIS APP EMITS UNESCAPED HTML (alongside the ld+json
-        script above). It is safe for exactly one reason: `html` came out of
-        packages/markdown, whose LAST UNSAFE THING is rehype-sanitize. Never
-        `set:html` anything else here, and never interpolate a user value into
-        this element. */}
-    <div id="post-body" set:html={html} />
-  </article>
+      </ol>
+      {olderCommentsHref !== null && <a class="link" href={olderCommentsHref}>Older comments →</a>}
+    </section>
 
-  <section class="wrap comments" data-comments data-post-id={post.id} data-post-author-id={post.authorId}>
-    <h2>Comments</h2>
+    <script>
+      import { initCommentsIsland } from "../../scripts/comments";
+      import { initReactionsIsland } from "../../scripts/reactions";
+      import { initCommentsLive } from "../../scripts/comments-live";
+      import { initPostDelete } from "../../scripts/post-delete";
+      import { initPostVisibilityView } from "../../scripts/post-visibility-view";
+      initCommentsIsland();
+      initReactionsIsland();
+      initCommentsLive();
+      initPostDelete();
+      initPostVisibilityView();
+    </script>
+  </BaseLayout>
+)}
 
-    <ReactionChips postId={post.id} />
-
-    {/* SSR default = the logged-out affordance. The comments island REPLACES
-        this for signed-in viewers (form) / un-onboarded ones (choose-handle
-        link) — progressive enhancement, nav-auth style; the cached HTML is
-        identical for everyone. */}
-    <div data-comment-form-slot>
-      <p><a class="link" href="/login">Log in</a> to join the conversation.</p>
-    </div>
-
-    {renderedComments.length === 0 && <p class="no-comments">No comments yet.</p>}
-    <ol class="comment-list">
-      {renderedComments.map((c) => (
-        <li
-          class={`comment depth-${Math.min(c.depth, 6)}`}
-          data-comment-id={c.id}
-          data-depth={c.depth}
-          data-path={c.path}
-          data-author-id={c.authorId}
-          data-deleted={c.deleted ? "true" : undefined}
-        >
-          {c.deleted ? (
-            <p class="tombstone">[deleted]</p>
-          ) : (
-            <>
-              <p class="meta">
-                <a class="link" href={`/@${encodeURIComponent(c.authorUsername)}`}>
-                  {c.authorName}
-                </a>
-                · <time datetime={c.createdAt}>{c.createdAt.slice(0, 10)}</time>
-                {c.edited && <span class="edited">(edited)</span>}
-              </p>
-              {/* The third and FINAL set:html sink — renderMarkdown output only,
-                  same safety class as #post-body. Never bind anything else here. */}
-              <div class="comment-body" set:html={c.html} />
-              <ReactionChips commentId={c.id} />
-              <div data-comment-actions></div>
-            </>
-          )}
-        </li>
-      ))}
-    </ol>
-    {olderCommentsHref !== null && <a class="link" href={olderCommentsHref}>Older comments →</a>}
-  </section>
-
-  <script>
-    import { initCommentsIsland } from "../../scripts/comments";
-    import { initReactionsIsland } from "../../scripts/reactions";
-    import { initCommentsLive } from "../../scripts/comments-live";
-    import { initPostDelete } from "../../scripts/post-delete";
-    import { initPostVisibilityView } from "../../scripts/post-visibility-view";
-    initCommentsIsland();
-    initReactionsIsland();
-    initCommentsLive();
-    initPostDelete();
-    initPostVisibilityView();
-  </script>
-</BaseLayout>
+{post === null && ownerPost !== null && <OwnerPostView post={ownerPost} />}
 <style>
   .post{padding:clamp(40px,7vw,80px) 0;max-width:min(var(--wrap),760px)}
   .post .meta{color:var(--dim);margin:8px 0 28px}

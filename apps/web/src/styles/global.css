@@ -18,6 +18,20 @@ em{font-family:var(--serif);font-style:italic;color:var(--green-bright)}
 
 .btn{display:inline-block;font-family:var(--sans);font-size:15px;font-weight:600;
   padding:13px 26px;border-radius:999px;transition:transform .15s ease}
+/* ⚠️ FIXED HERE, ONCE, FOR EVERY .btn — not per-page. `.btn{display:inline-block}`
+   is AUTHOR-origin, so it beats the UA sheet's `[hidden]{display:none}`
+   regardless of specificity: CSS resolves origin before specificity, and only
+   falls back to specificity within the same origin. `[handle]/index.astro`'s
+   follow button (`.btn.btn-primary.follow[hidden]`) shipped with no local guard
+   and stayed visibly on-screen with a dead click handler underneath it — PM
+   root-caused this as a CLASS of bug, not a one-off (post-delete.ts and
+   post-visibility-view.ts each independently discovered and locally patched
+   the same defeat before this existed). `.btn[hidden]` is (0,2,0) vs `.btn`'s
+   (0,1,0) — same origin, so specificity now decides, and this wins. Any
+   PER-FILE `.btn...[hidden]` / `.btn ... [hidden]` rules elsewhere are kept:
+   they were each already tested and are harmless now that this exists, and
+   removing them is not required to fix the bug they were written against. */
+.btn[hidden]{display:none}
 .btn:hover{transform:translateY(-2px)}
 .btn-primary{background:var(--green);color:var(--on-green);box-shadow:0 8px 30px -6px var(--green-glow)}
 .btn-ghost{background:transparent;color:var(--text);border:1px solid rgba(255,255,255,.22)}
