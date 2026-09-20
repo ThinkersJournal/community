@@ -135,6 +135,59 @@ describe("PATCH /posts/:id purges on edit", () => {
   });
 });
 
+function hidePostRequest(actor: Actor, postId: string): Request {
+  return new Request(`https://api.test/posts/${postId}/hide`, {
+    method: "POST",
+    headers: { Origin: "http://localhost:8787", Cookie: actor.cookie, "X-CSRF-Token": actor.csrfToken },
+  });
+}
+function unhidePostRequest(actor: Actor, postId: string): Request {
+  return new Request(`https://api.test/posts/${postId}/unhide`, {
+    method: "POST",
+    headers: { Origin: "http://localhost:8787", Cookie: actor.cookie, "X-CSRF-Token": actor.csrfToken },
+  });
+}
+
+describe("POST /posts/:id/hide + /unhide purge the same tags as delete (#78 follow-up)", () => {
+  // ⚠️ NAMED because a PM review pass flagged this as a suspected gap — it
+  // turned out author-hide.ts already routes through the SAME
+  // purge-target.ts helper delete/update use (added for #54's auto-hide
+  // purge fix, #63), so the wiring was already correct. This pins it
+  // directly instead of leaving the guarantee implicit in a shared helper.
+  it("hiding purges post + author + listing + tag:<slug> in ONE call", async () => {
+    const id = await createPublished(actor, { tags: ["Rust"] });
+    const { response, purges } = await fetchCapturingPurges(hidePostRequest(actor, id));
+    expect(response.status).toBe(200);
+    expect(purges).toHaveLength(1);
+    expect(purges[0]).toEqual([`post:${id}`, `author:${actor.userId}`, "listing", "tag:rust"]);
+  });
+
+  it("re-hiding an already-(self-)hidden post purges NOTHING — idempotent, nothing changed", async () => {
+    const id = await createPublished(actor);
+    await fetchCapturingPurges(hidePostRequest(actor, id));
+    const { response, purges } = await fetchCapturingPurges(hidePostRequest(actor, id));
+    expect(response.status).toBe(200);
+    expect(purges).toHaveLength(0);
+  });
+
+  it("unhiding purges post + author + listing in ONE call", async () => {
+    const id = await createPublished(actor);
+    await fetchCapturingPurges(hidePostRequest(actor, id));
+    const { response, purges } = await fetchCapturingPurges(unhidePostRequest(actor, id));
+    expect(response.status).toBe(200);
+    expect(purges).toHaveLength(1);
+    expect(purges[0]).toEqual([`post:${id}`, `author:${actor.userId}`, "listing"]);
+  });
+
+  it("a 404 hide (another author's post) purges NOTHING — same quota-burn guard as edit/delete", async () => {
+    const id = await createPublished(actor);
+    const attacker = await onboardedActor();
+    const { response, purges } = await fetchCapturingPurges(hidePostRequest(attacker, id));
+    expect(response.status).toBe(404);
+    expect(purges).toHaveLength(0);
+  });
+});
+
 function createCommentRequest(actor: Actor, postId: string): Request {
   return new Request("https://api.test/comments", {
     method: "POST",
