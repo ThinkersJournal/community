@@ -204,6 +204,16 @@ const jsonLd = {
       · <time datetime={post.publishedAt}>{publishedDisplay}</time>
     </p>
 
+    {/* THE HIDE CONTROL (#74 audit finding, batch A-2) — SAME SSR-hidden +
+        client-reveal pattern as the delete control just below, and for the
+        same reason: this render is fully anonymous + edge-cached, so there
+        is no viewer-specific value to decide "is this viewer the author"
+        here. HIDE ONLY, never Unhide — this page 404s on a hidden post
+        (`GET /public/posts` filters `hidden_at IS NULL`), so a post this
+        control can ever see is always currently visible; Unhide lives only
+        on the editor. See src/scripts/post-visibility-view.ts's header. */}
+    <div class="post-visibility-view" data-post-visibility-view data-post-id={post.id} data-post-author-id={post.authorId} hidden></div>
+
     {/* THE DELETE CONTROL — SSR-hidden placeholder, a SEPARATE element from
         `.comments`'s data-post-id/data-post-author-id (that pair is the
         comments island's ownership contract; this is the post-delete
@@ -290,10 +300,12 @@ const jsonLd = {
     import { initReactionsIsland } from "../../scripts/reactions";
     import { initCommentsLive } from "../../scripts/comments-live";
     import { initPostDelete } from "../../scripts/post-delete";
+    import { initPostVisibilityView } from "../../scripts/post-visibility-view";
     initCommentsIsland();
     initReactionsIsland();
     initCommentsLive();
     initPostDelete();
+    initPostVisibilityView();
   </script>
 </BaseLayout>
 <style>
@@ -322,6 +334,10 @@ const jsonLd = {
   .post-delete [hidden]{display:none}
   .post-delete-confirm{display:flex;align-items:center;gap:10px;color:var(--dim)}
   .post-delete-error{color:var(--dim);margin:6px 0 0;font-size:.9em}
+  .post-visibility-view{display:flex;align-items:center;gap:10px;margin:-14px 0 8px}
+  .post-visibility-view[hidden]{display:none}
+  .post-visibility-view [hidden]{display:none}
+  .post-visibility-error{color:var(--dim);margin:6px 0 0;font-size:.9em}
   .tags{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0}
   .tags .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}
   .tags .tag:hover{color:var(--head)}
