@@ -153,5 +153,9 @@ export function initOwnerPosts(): void {
   if (list === null) return;
 
   // ⚠️ `.catch()` is load-bearing, not decoration — see `reveal`'s own header.
-  void reveal(root, list, profileUserId, username).catch(() => {});
+  void reveal(root, list, profileUserId, username).catch(() => {
+    // No error UI for this convenience surface — same idiom as
+    // nav-auth.ts's identical network-failure catch. The section simply
+    // stays hidden, same as "you have no hidden posts".
+  });
 }
