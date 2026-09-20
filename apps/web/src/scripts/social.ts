@@ -117,12 +117,23 @@ export function initSocialIsland(): void {
         if (!status.viewerLoggedIn) {
           // Show a Follow button that will route to /login on click.
           renderButton(btn, false);
+          btn.addEventListener("click", () => void toggleFollow(btn));
         } else if (id === status.viewerId) {
-          btn.hidden = true; // no self-follow affordance
+          // No self-follow affordance — and, ⚠️ unlike before, NO listener
+          // either. `btn.hidden = true` alone was not enough: `.btn{display:
+          // inline-block}` (global.css) is author-origin and beat the UA
+          // sheet's `[hidden]{display:none}` (fixed globally, see that
+          // file's `.btn[hidden]` rule), so this button stayed visible AND
+          // clickable, and a click fired a self-follow the server had to
+          // refuse. The CSS fix alone would make it invisible again but
+          // still wired; not attaching the listener at all is the actual
+          // fix for THIS branch, and doesn't depend on some other page never
+          // re-exposing `hidden` some other way.
+          btn.hidden = true;
         } else {
           renderButton(btn, status.following.includes(id));
+          btn.addEventListener("click", () => void toggleFollow(btn));
         }
-        btn.addEventListener("click", () => void toggleFollow(btn));
       }
     });
   }
