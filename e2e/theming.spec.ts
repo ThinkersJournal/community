@@ -25,8 +25,14 @@ test("nav auth slot: logged-out shows Sign in/up; logged-in shows @handle + Sign
   await page.goto("/authors");
   const slot = page.locator("[data-auth-slot]");
   await expect(slot.getByText(`@${handle}`)).toBeVisible();
-  const signOut = slot.getByRole("button", { name: "Sign out" });
+  // ⚠️ `exact: true` — Playwright's accessible-name matching is substring by
+  // default, and "Sign out everywhere" (batch B, #74 audit) now ALSO matches
+  // an un-exact "Sign out", making the locator ambiguous (strict-mode
+  // violation: 2 elements). Assert both buttons exist, each precisely.
+  const signOut = slot.getByRole("button", { name: "Sign out", exact: true });
+  const signOutAll = slot.getByRole("button", { name: "Sign out everywhere", exact: true });
   await expect(signOut).toBeVisible();
+  await expect(signOutAll).toBeVisible();
 
   // Sign out clears the session → back to Sign in
   await signOut.click();

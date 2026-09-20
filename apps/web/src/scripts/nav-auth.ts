@@ -17,6 +17,19 @@ async function signOut(csrfToken: string | null): Promise<void> {
   window.location.href = "/";
 }
 
+/**
+ * Ends EVERY session for this user, not just this one (#74 audit, batch B —
+ * a user who suspects a compromised session had no way to do this at all).
+ * Same fire-and-redirect shape as `signOut`: the api's `/auth/logout-all`
+ * already bumps the security epoch and clears the CALLING session's cookie
+ * in one response, so there is nothing left to reconcile client-side.
+ */
+async function signOutAll(csrfToken: string | null): Promise<void> {
+  if (csrfToken === null) { window.location.href = "/login"; return; }
+  await fetch("/api/logout-all", { method: "POST", headers: { "X-CSRF-Token": csrfToken } });
+  window.location.href = "/";
+}
+
 export function initNavAuth(): void {
   const slot = document.querySelector<HTMLElement>("[data-auth-slot]");
   if (slot === null) return;
@@ -42,6 +55,15 @@ export function initNavAuth(): void {
       out.textContent = "Sign out";
       out.addEventListener("click", () => void signOut(me.csrfToken));
 
+      // #74 audit, batch B — reuses `.signout`'s styling (same muted-text
+      // tier as "Sign out", not a call-to-action button): this is a rare,
+      // security-adjacent action, not a primary nav item.
+      const outAll = document.createElement("button");
+      outAll.type = "button";
+      outAll.className = "signout";
+      outAll.textContent = "Sign out everywhere";
+      outAll.addEventListener("click", () => void signOutAll(me.csrfToken));
+
       // NOT slot.append(a, b, c): worker-configuration.d.ts (wrangler's ambient
       // globals for the HTMLRewriter API) declares its own global `Element`
       // with an `append(content, options?)` overload that merges into DOM's
@@ -50,6 +72,7 @@ export function initNavAuth(): void {
       slot.appendChild(newPost);
       slot.appendChild(profile);
       slot.appendChild(out);
+      slot.appendChild(outAll);
     })
     .catch(() => { /* network failed → keep the SSR anonymous default */ });
 }
