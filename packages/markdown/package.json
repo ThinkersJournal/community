@@ -13,9 +13,9 @@
     "check:workerd": "node scripts/check-workerd.mjs"
   },
   "dependencies": {
-    "@shikijs/langs": "^4.3.1",
-    "@shikijs/rehype": "^4.3.1",
-    "@shikijs/themes": "^4.3.1",
+    "@shikijs/langs": "^4.4.3",
+    "@shikijs/rehype": "^4.4.3",
+    "@shikijs/themes": "^4.4.3",
     "mdast-util-to-string": "^4.0.0",
     "rehype-external-links": "^3.0.0",
     "rehype-sanitize": "6.0.0",
@@ -23,14 +23,14 @@
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "remark-rehype": "11.1.2",
-    "shiki": "4.3.1",
+    "shiki": "4.4.3",
     "unified": "11.0.5",
-    "unist-util-visit": "^5.0.0"
+    "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
-    "@types/hast": "^3.0.4",
+    "@types/hast": "^3.0.5",
     "@types/mdast": "^4.0.4",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.2",
     "rehype-parse": "^9.0.1",
     "vitest": "^4.1.11"
   }
