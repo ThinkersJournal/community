@@ -97,4 +97,25 @@ describe("the owner-posts island", () => {
     const island = stripComments(readFileSync(ISLAND, "utf8"));
     expect(island).toContain("export function initOwnerPosts");
   });
+
+  it("⚠️ the reveal chain is never an unhandled rejection (Codacy finding)", () => {
+    // This island fetches OWNER-ONLY content — a silent unhandled rejection
+    // (a malformed /api/my-posts body, a DOM throw) is indistinguishable from
+    // "you have no hidden posts", the exact confusion this section exists to
+    // end. Positive: initOwnerPosts's call into the reveal chain ends in
+    // .catch(). (`me()`'s own try/catch, pinned separately below, covers the
+    // network leg.)
+    const island = stripComments(readFileSync(ISLAND, "utf8"));
+    expect(island).toMatch(/reveal\([^)]*\)\.catch\(/);
+  });
+
+  it("me() never throws — /api/me network/parse failures resolve to a degraded, non-owner Me", () => {
+    const island = stripComments(readFileSync(ISLAND, "utf8"));
+    const meStart = island.indexOf("async function me()");
+    expect(meStart).toBeGreaterThan(-1);
+    const meEnd = island.indexOf("\n}", meStart);
+    const meBody = island.slice(meStart, meEnd);
+    expect(meBody).toContain("try {");
+    expect(meBody).toContain("catch");
+  });
 });

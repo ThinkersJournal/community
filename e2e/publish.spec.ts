@@ -130,12 +130,36 @@ test("a DRAFT is not publicly reachable", async ({ page }) => {
   await page.click("button[value='draft']");
   await expect(page.locator("#saved")).toBeVisible();
 
-  // The draft's public URL is a 404 — a draft is indistinguishable from a
-  // nonexistent post, even to its own author (apps/api/src/routes/public.ts's
-  // `status = 'published'` is IN the query). Authed or not, the public page
-  // forwards no cookie, so the api answers the same 404 either way.
-  const draftResponse = await page.request.get(`/@${username}/secret-draft`);
-  expect(draftResponse.status()).toBe(404);
+  // ⚠️ #78 CHANGED WHAT "not publicly reachable" MEANS. Before #78, this URL
+  // 404'd for EVERYONE including its own author — apps/api/src/routes/public.ts's
+  // anonymous `GET /public/posts` has `status = 'published'` IN the query, and
+  // the public page forwarded no cookie regardless of who asked. #78 added an
+  // authenticated owner-fallback ([handle]/[slug].astro -> GET /posts/by-slug)
+  // specifically so the post's own author CAN see their own draft here — so the
+  // one assertion this test used to make now conflates two different callers.
+  // Split it into two, PUBLICLY REACHABLE meaning exactly what it always meant
+  // (a stranger, or a crawler, gets nothing) while proving the new owner path
+  // separately, including that it is NEVER edge-cacheable (condition 3 — the
+  // draft's owner-fallback content must never leak to the next, different
+  // visitor the same way #61 originally did).
+  //
+  // `page.request` shares the browser context's cookie jar (see this file's
+  // "AUTHED render is NEVER cacheable" test) — this first fetch IS the
+  // signed-in author, so it is the CORRECT place to prove the owner path, not
+  // evidence of a leak.
+  const authedDraftResponse = await page.request.get(`/@${username}/secret-draft`);
+  expect(authedDraftResponse.status()).toBe(200);
+  expect(authedDraftResponse.headers()["cache-control"]).toBe("private, no-store");
+  expect(authedDraftResponse.headers()["cache-tag"]).toBeUndefined();
+
+  // Logged OUT — a cleared cookie jar. THIS is the actual "publicly reachable"
+  // question, and it must still be a 404: no session, so the anonymous
+  // `GET /public/posts` branch runs (status='published' excludes the draft),
+  // the by-slug owner-fallback never even attempts (no Cookie header), and the
+  // page returns its ordinary not-found response.
+  await page.context().clearCookies();
+  const anonDraftResponse = await page.request.get(`/@${username}/secret-draft`);
+  expect(anonDraftResponse.status()).toBe(404);
 
   // The profile lists the PUBLISHED post but not the draft.
   await page.goto(`/@${username}`);

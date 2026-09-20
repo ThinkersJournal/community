@@ -83,6 +83,67 @@ function statusLabel(post: AuthoredPostSummary): string {
   return "";
 }
 
+/**
+ * ⚠️ The whole reveal is wrapped in one try/catch (Codacy: "unhandled errors
+ * detected in asynchronous function") — this island fetches OWNER-ONLY
+ * content, so a thrown/rejected promise anywhere in the chain (a malformed
+ * `/api/my-posts` JSON body, `list.replaceChildren` throwing on a detached
+ * node) must not become a silent unhandled rejection. Left silent, it is
+ * indistinguishable from "you have no hidden posts" — the exact confusion
+ * this section exists to end. Caught and swallowed deliberately: there is no
+ * error UI for this convenience surface (same as post-delete.ts/social.ts's
+ * `me()` helpers), but it must never crash the page or leave a phantom
+ * unhandled-rejection console error.
+ */
+async function reveal(root: HTMLElement, list: HTMLElement, profileUserId: string, username: string): Promise<void> {
+  const m = await me();
+  // Owner-only — a stranger, or a degraded /api/me response, sees nothing.
+  if (m.userId === null || m.userId !== profileUserId) return;
+
+  const posts = await loadMine();
+  // Only what the public list structurally cannot already show — a
+  // published, currently-visible post is already on the page above.
+  const extra = posts.filter((p) => p.status === "draft" || p.hiddenAt !== null);
+  if (extra.length === 0) return;
+
+  root.hidden = false;
+  list.replaceChildren(
+    ...extra.map((post) => {
+      const li = document.createElement("li");
+      li.className = "post owner-only-post";
+
+      const h2 = document.createElement("h2");
+      const a = document.createElement("a");
+      // Drafts have never been published, so there's no [handle]/[slug]
+      // owner-fallback to send them to yet — that page's anonymous fetch
+      // and this authenticated fallback both key on a real slug, but a
+      // draft's slug is real (assigned at creation, see routes/posts.ts)
+      // and the owner-fallback renders it all the same. Send every row
+      // here, draft or hidden, to that one shared destination.
+      a.href = `/@${encodeURIComponent(username)}/${encodeURIComponent(post.slug)}`;
+      a.textContent = post.title;
+      h2.appendChild(a);
+      li.appendChild(h2);
+
+      const label = statusLabel(post);
+      if (label !== "") {
+        const badge = document.createElement("span");
+        badge.className = "owner-post-badge";
+        badge.textContent = label;
+        li.appendChild(badge);
+      }
+
+      const edit = document.createElement("a");
+      edit.className = "link owner-post-edit";
+      edit.href = `/new-post?post=${encodeURIComponent(post.id)}`;
+      edit.textContent = "Edit";
+      li.appendChild(edit);
+
+      return li;
+    }),
+  );
+}
+
 export function initOwnerPosts(): void {
   const root = document.querySelector<HTMLElement>("[data-owner-posts]");
   if (root === null) return;
@@ -91,52 +152,6 @@ export function initOwnerPosts(): void {
   const list = root.querySelector<HTMLElement>("[data-owner-posts-list]");
   if (list === null) return;
 
-  void me().then((m) => {
-    // Owner-only — a stranger, or a degraded /api/me response, sees nothing.
-    if (m.userId === null || m.userId !== profileUserId) return;
-
-    void loadMine().then((posts) => {
-      // Only what the public list structurally cannot already show — a
-      // published, currently-visible post is already on the page above.
-      const extra = posts.filter((p) => p.status === "draft" || p.hiddenAt !== null);
-      if (extra.length === 0) return;
-
-      root.hidden = false;
-      list.replaceChildren(
-        ...extra.map((post) => {
-          const li = document.createElement("li");
-          li.className = "post owner-only-post";
-
-          const h2 = document.createElement("h2");
-          const a = document.createElement("a");
-          // Drafts have never been published, so there's no [handle]/[slug]
-          // owner-fallback to send them to yet — that page's anonymous fetch
-          // and this authenticated fallback both key on a real slug, but a
-          // draft's slug is real (assigned at creation, see routes/posts.ts)
-          // and the owner-fallback renders it all the same. Send every row
-          // here, draft or hidden, to that one shared destination.
-          a.href = `/@${encodeURIComponent(username)}/${encodeURIComponent(post.slug)}`;
-          a.textContent = post.title;
-          h2.appendChild(a);
-          li.appendChild(h2);
-
-          const label = statusLabel(post);
-          if (label !== "") {
-            const badge = document.createElement("span");
-            badge.className = "owner-post-badge";
-            badge.textContent = label;
-            li.appendChild(badge);
-          }
-
-          const edit = document.createElement("a");
-          edit.className = "link owner-post-edit";
-          edit.href = `/new-post?post=${encodeURIComponent(post.id)}`;
-          edit.textContent = "Edit";
-          li.appendChild(edit);
-
-          return li;
-        }),
-      );
-    });
-  });
+  // ⚠️ `.catch()` is load-bearing, not decoration — see `reveal`'s own header.
+  void reveal(root, list, profileUserId, username).catch(() => {});
 }
