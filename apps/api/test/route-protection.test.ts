@@ -108,6 +108,12 @@ const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // form post from a logged-in moderator's browser would carry a valid
   // assertion and drive a real content decision.
   "POST /admin/decision",
+  // #61's two-person media-access grant — same Access trust domain and same
+  // reasoning as /admin/decision above (Access is a different principal than
+  // a member session; each defends itself with an inline `checkOrigin`).
+  "POST /admin/media-access-requests",
+  "POST /admin/media-access-requests/:id/approve",
+  "POST /admin/backfill-hidden-media",
 ]);
 
 /**
@@ -213,6 +219,8 @@ const EXPECTED_DISPATCHER_BODY =
   'import { recordDbProbe } from "./health/probe"; ' +
   'import { notFoundResponse } from "./http/errors"; ' +
   'import { reapOrphanMedia } from "./media/reap-orphan-media"; ' +
+  'import { processPendingMoves } from "./media/moves"; ' +
+  'import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
@@ -239,6 +247,13 @@ const EXPECTED_DISPATCHER_BODY =
   'if (controller.cron === "15 4 * * *") { ' +
   "ctx.waitUntil(reapOrphanMedia(env, ctx)); " +
   "return; " +
+  "} " +
+  'if (controller.cron === "20 4 * * *") { ' +
+  "ctx.waitUntil(processPendingMoves(env, ctx)); " +
+  "return; " +
+  "} " +
+  'if (controller.cron === "*/2 * * * *") { ' +
+  "ctx.waitUntil(runMediaBackfillBatch(env, ctx)); " +
   "} " +
   'const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant"; ' +
   "ctx.waitUntil(runEmailDrain(env, ctx, disposition)); " +

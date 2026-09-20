@@ -105,7 +105,7 @@ export default defineConfig({
               },
               // Miniflare simulates R2 locally with an in-memory bucket. The
               // name need only match wrangler.jsonc's binding.
-              r2Buckets: ["MEDIA"],
+              r2Buckets: ["MEDIA", "MEDIA_RESTRICTED"],
               // ⚠️ REQUIRED, NOT OPTIONAL — the pool will not START without it.
               // wrangler.jsonc declares `services: [{ binding: "WEB", service:
               // "thinkersjournal-web" }]` (the purge hop), and miniflare
@@ -178,6 +178,11 @@ export default defineConfig({
                 // must be CI-safe without .dev.vars existing.
                 CF_ACCESS_TEAM_DOMAIN: "testteam.cloudflareaccess.com",
                 CF_ACCESS_AUD: "test-aud-tag",
+                // #61 (src/cache/purge-url.ts). Dummy — tests that exercise a
+                // media move stub `fetch` themselves rather than reaching
+                // api.cloudflare.com; this only keeps the binding present.
+                CACHE_PURGE_TOKEN: "test-cache-purge-token",
+                CACHE_PURGE_ZONE_ID: "test-zone-id",
               },
             },
           }),

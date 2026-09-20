@@ -14,8 +14,16 @@ import { purgeTagsFor } from "../moderation/purge-target";
 import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { listOpenQueue } from "../moderation/queue";
+import { applyMediaVisibilityChange } from "../media/visibility-hook";
+import type { LegalHoldCategory } from "../media/legal-hold";
+import { requestMediaAccess, approveMediaAccess } from "../moderation/media-access-requests";
+import { r2KeyForSha256 } from "../media/key-pattern";
+import { backfillHiddenMedia } from "../media/backfill-hidden-media";
+
+import type { RouteParams } from "../routing";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const LEGAL_HOLD_CATEGORIES: readonly LegalHoldCategory[] = ["csam", "dmca", "other"];
 
 export async function handleAdminWhoami(request: Request, env: Env): Promise<Response> {
   const admin = await requireAdmin(request, env);
@@ -98,6 +106,12 @@ export async function handleAdminDecision(
   const subjectId = b["subjectId"];
   const decision = b["decision"];
   const reason = b["reason"];
+  // ⚠️ #61 — a legal hold is a DELIBERATE, EXPLICIT choice at decision time,
+  // never inferred from `violationCategory`: not every "sexual"-category
+  // report is CSAM and not every "ip_infringement" report is a formal DMCA
+  // notice. Only meaningful alongside `keep_hidden`/`remove` — see below.
+  const legalHold = b["legalHold"];
+  const legalHoldCategory = b["legalHoldCategory"];
 
   if (
     (subject !== "post" && subject !== "comment") ||
@@ -105,7 +119,10 @@ export async function handleAdminDecision(
     typeof decision !== "string" || !DECISIONS.includes(decision as DecisionKind) ||
     // The statement of reasons is DSA-required and is shown to the author:
     // whitespace is not a reason.
-    typeof reason !== "string" || reason.trim() === ""
+    typeof reason !== "string" || reason.trim() === "" ||
+    (legalHold !== undefined && typeof legalHold !== "boolean") ||
+    (legalHold === true && decision === "restore") ||
+    (legalHold === true && !LEGAL_HOLD_CATEGORIES.includes(legalHoldCategory as LegalHoldCategory))
   ) {
     // The shape was wrong. ⚠️ `INVALID_BODY` is NOT in this codebase's error
     // vocabulary — `packages/shared/src/errors.ts` defines `ApiErrorCode` as a
@@ -133,6 +150,28 @@ export async function handleAdminDecision(
   // 404 and the cross-origin 403 above return before this, so they purge nothing.
   await purgeTags(env, purgeTagsFor(result.purge));
 
+  // ⚠️ #61 — MEDIA MOVE, AFTER THE COMMIT AND THE PAGE PURGE, AWAITED (not
+  // waitUntil): CireSnave's §5.3 standing rule is that a state-change purge
+  // happens immediately, and a restricted-media move is part of that same
+  // "stop being fetchable now" contract, not a background nicety. Runs for
+  // every non-restore decision that actually changed hidden_at (a dismissal —
+  // e.g. `keep_hidden` on content that was already hidden with no new media —
+  // still runs; applyMediaVisibilityChange no-ops when there is nothing to
+  // move).
+  await applyMediaVisibilityChange(env, ctx, {
+    subject,
+    subjectId: result.subjectId,
+    hidden: result.hidden,
+    legalHold:
+      legalHold === true
+        ? {
+            category: legalHoldCategory as LegalHoldCategory,
+            moderationActionId: result.actionId,
+            imposedBy: admin.email,
+          }
+        : undefined,
+  });
+
   // ⚠️ AFTER the commit and OUTSIDE the response path. The decision is already
   // durable; a Postmark outage must not turn a successful moderation action
   // into a 500. See R5. A dismissal (Restore of never-hidden content) sends
@@ -156,4 +195,77 @@ export async function handleAdminDecision(
     status: 200,
     headers: { "content-type": "application/json" },
   });
+}
+
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * `POST /admin/media-access-requests` — the FIRST of the two hands (#61).
+ * Any Access-verified admin may request; the request alone grants nothing.
+ */
+export async function handleRequestMediaAccess(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("INVALID_JSON", 400);
+  }
+  const b = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const sha256 = b["sha256"];
+  const reason = b["reason"];
+  if (typeof sha256 !== "string" || !SHA256_RE.test(sha256) || typeof reason !== "string" || reason.trim() === "") {
+    return errorResponse("INVALID_INPUT", 400);
+  }
+
+  const id = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    requestMediaAccess(c, { r2Key: r2KeyForSha256(sha256), requestedBy: admin.email, reason: reason.trim() }),
+  );
+  return new Response(JSON.stringify({ id }), { status: 201, headers: { "content-type": "application/json" } });
+}
+
+/**
+ * `POST /admin/media-access-requests/:id/approve` — the SECOND hand. Refuses
+ * a self-approval (`approveMediaAccess`'s `requested_by <> $2`), matching
+ * CireSnave's ruling that legal-hold media access needs "multiple hands".
+ */
+export async function handleApproveMediaAccess(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  const id = params.id;
+  if (typeof id !== "string" || !UUID_RE.test(id)) return errorResponse("NOT_FOUND", 404);
+
+  const approved = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => approveMediaAccess(c, id, admin.email));
+  if (!approved) return errorResponse("NOT_FOUND", 404);
+
+  return new Response(null, { status: 204 });
+}
+
+/**
+ * `POST /admin/backfill-hidden-media` — the one-off #61 backfill
+ * (src/media/backfill-hidden-media.ts). Idempotent; safe to call more than
+ * once (e.g. if the response's counts hit the 500-per-table batch cap and more
+ * remain).
+ */
+export async function handleBackfillHiddenMedia(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  const result = await backfillHiddenMedia(env, ctx);
+  return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
 }

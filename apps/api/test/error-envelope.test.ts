@@ -390,6 +390,16 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /admin/queue",
     build: () => new Request("https://api.test/admin/queue"),
   },
+  // GET /media/restricted/:sha256 (#61) — a GET, so LAYER 1 never reaches it.
+  // A malformed sha256 is its simplest reachable failure (NOT_FOUND, before
+  // any auth check runs — src/routes/media-restricted.ts never distinguishes
+  // "malformed" from "no such object"). test/media-restricted-route.test.ts
+  // owns the rest of the gate's behaviour.
+  {
+    name: "404 restricted media with malformed key",
+    route: "GET /media/restricted/:sha256",
+    build: () => new Request("https://api.test/media/restricted/not-a-sha256"),
+  },
 ];
 
 /**

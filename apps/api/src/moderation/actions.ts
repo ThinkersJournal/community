@@ -14,7 +14,10 @@ import type { Client } from "pg";
 export type ModerationActionKind =
   | "content_restore" | "content_keep_hidden" | "content_remove"
   | "user_warn" | "user_suspend" | "user_ban" | "user_terminate"
-  | "appeal_granted" | "appeal_denied";
+  | "appeal_granted" | "appeal_denied"
+  // #61 — every privileged fetch of restricted/legally-held media, logged to
+  // this SAME append-only table rather than a bespoke one (CireSnave's ruling).
+  | "media_access";
 
 export type ViolationCategory =
   | "spam" | "harassment" | "hate" | "sexual" | "violence" | "ip_infringement" | "other";
