@@ -31,4 +31,26 @@ describe("/api/logout", () => {
     expect(src).toMatch(/origin/i);
     expect(src).toMatch(/X-CSRF-Token/i);
   });
+
+  // ⚠️ ANTI-VACUITY: /auth/logout-all is NOT a substring match of /auth/logout
+  // here (the literal in logout.ts is `"/auth/logout"`, an exact string, not a
+  // prefix build) — this file's OWN existence + its own `/auth/logout-all`
+  // literal (below) is what proves the two proxies are genuinely distinct
+  // hops, not one route with a typo'd sibling.
+  it("targets EXACTLY /auth/logout, never /auth/logout-all", () => {
+    expect(s()).toMatch(/"\/auth\/logout"/);
+  });
+});
+
+describe("/api/logout-all (#74 audit, batch B)", () => {
+  const s = () => strip(readFileSync(join(DIR, "logout-all.ts"), "utf8"));
+  it("is a POST APIRoute, markPrivate, proxies /auth/logout-all, applyCookies, forwards origin+csrf", () => {
+    const src = s();
+    expect(src).toMatch(/export const POST\s*:\s*APIRoute/);
+    expect(src).toMatch(/markPrivate\(/);
+    expect(src).toContain("/auth/logout-all");
+    expect(src).toContain("applyCookies(");
+    expect(src).toMatch(/origin/i);
+    expect(src).toMatch(/X-CSRF-Token/i);
+  });
 });

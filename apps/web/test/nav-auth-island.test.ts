@@ -13,6 +13,12 @@ describe("nav-auth island", () => {
     expect(s).toContain("/api/logout");
     expect(s).not.toMatch(/https?:\/\//);
   });
+  it("also wires Sign out EVERYWHERE (#74 audit, batch B) to its own distinct hop", () => {
+    const s = island();
+    expect(s).toContain("/api/logout-all");
+    expect(s).toMatch(/signOutAll/);
+    expect(s).toMatch(/Sign out everywhere/);
+  });
   it("upgrades the slot for signed-in viewers and wires Sign out", () => {
     const s = island();
     expect(s).toContain("data-auth-slot");
