@@ -108,3 +108,23 @@ describe("[handle]/[slug].astro wires the hide control", () => {
     expect(page).toMatch(/\.post-visibility-view\s*\[hidden\]\s*\{\s*display:\s*none/);
   });
 });
+
+describe("⚠️ #82 — Hide and Delete are grouped into ONE toolbar, not stacked separately", () => {
+  it("both SSR-hidden placeholders sit inside a shared .owner-actions row", () => {
+    const start = page.indexOf('<div class="owner-actions">');
+    expect(start, "no .owner-actions wrapper found").toBeGreaterThan(-1);
+    const visibilityAt = page.indexOf("data-post-visibility-view", start);
+    const deleteAt = page.indexOf("data-post-delete", start);
+    expect(visibilityAt, "hide control not found after the wrapper opens").toBeGreaterThan(start);
+    expect(deleteAt, "delete control not found after the wrapper opens").toBeGreaterThan(start);
+  });
+
+  it("the wrapper, not the individual controls, now owns the row's spacing/margin", () => {
+    expect(page).toMatch(/\.owner-actions\{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin:/);
+    // Negative: neither control declares its OWN margin anymore — a
+    // regression here would silently reintroduce the two-stacked-pills look
+    // even though the wrapper exists.
+    expect(page).not.toMatch(/\.post-delete\{display:flex;align-items:center;gap:10px;margin:/);
+    expect(page).not.toMatch(/\.post-visibility-view\{display:flex;align-items:center;gap:10px;margin:/);
+  });
+});
