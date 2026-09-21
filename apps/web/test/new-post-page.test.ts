@@ -289,6 +289,32 @@ describe("editing an existing post", () => {
   });
 });
 
+describe("⚠️ #71 — Discard is a plain navigation link, never a form submit", () => {
+  it("is an <a>, not a <button> — nothing to POST, nothing to confirm before abandoning UNSAVED edits", () => {
+    // A submit button would round-trip through the api for zero reason: a
+    // plain GET already discards whatever is typed the moment the page
+    // navigates away. Positive: the control exists at all.
+    expect(code).toMatch(/<a\s+class="btn btn-ghost"\s+href=\{postId === null/);
+    expect(code).not.toMatch(/name="intent"\s+value="discard"/);
+  });
+
+  it("a NEW post (nothing saved yet) discards to /feed", () => {
+    expect(code).toMatch(/postId === null \? "\/feed"/);
+  });
+
+  it("an EXISTING post reloads its OWN saved state — discards the EDIT, never the post itself", () => {
+    // ⚠️ Distinct from Delete below in effect, not just label: this must
+    // never reach a mutating endpoint. `/new-post?post=<id>` is a plain GET
+    // back to the editor, which reloads the server's last-saved copy.
+    expect(code).toMatch(/`\/new-post\?post=\$\{encodeURIComponent\(postId\)\}`/);
+  });
+
+  it("shows different copy for the two cases, so a reader can tell them apart", () => {
+    expect(code).toContain('"Discard"');
+    expect(code).toContain('"Discard changes"');
+  });
+});
+
 describe("⚠️ tags — no-JS, comma-separated (Task 6)", () => {
   it("has a no-JS comma-separated tags input", () => {
     expect(rawSource).toMatch(/<input\s+type="text"\s+id="tags"\s+name="tags"/);
