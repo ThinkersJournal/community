@@ -48,6 +48,25 @@ export const LoginInput = z.object({
   password: z.string().min(1),
 });
 
+/**
+ * `POST /auth/forgot-password` (#70) — requests a reset link. Deliberately NO
+ * password field: this is the "I forgot it" entry point.
+ */
+export const ForgotPasswordInput = z.object({
+  email: NormalizedEmail,
+  turnstileToken: z.string().min(1),
+});
+
+/**
+ * `POST /auth/reset-password` (#70) — redeems a reset token for a new
+ * password. Same `min(12)` floor as `SignupInput.password` — a reset must
+ * not let someone downgrade to a weaker password than signup would accept.
+ */
+export const ResetPasswordInput = z.object({
+  token: z.string().min(1),
+  password: z.string().min(12),
+});
+
 /** Server-side session record stored alongside the session cookie. */
 export type SessionData = {
   userId: string;
