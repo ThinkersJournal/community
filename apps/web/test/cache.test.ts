@@ -149,6 +149,22 @@ describe("markPrivate", () => {
     expect(ctx.cache.set).toHaveBeenCalledWith(false);
     expect(ctx.response.headers.get("cache-control")).toBe("private, no-store");
   });
+
+  it("⚠️ still sets the header even when cache.set() throws (#79 — 404.astro's reroute path)", () => {
+    // src/pages/404.astro is reached through Astro's reroute-on-unmatched-path
+    // mechanism, which renders WITHOUT provisioning Astro.cache first — calling
+    // it throws there (verified against the installed astro/adapter; see that
+    // file's header and this function's own header in src/lib/cache.ts). The
+    // edge is unaffected either way (the adapter's own default-deny stamp is
+    // unconditional), but this pins that the browser-facing header still gets
+    // set — the ONE thing a caught throw here could otherwise cost.
+    const ctx = context();
+    ctx.cache.set = vi.fn(() => {
+      throw new Error("Astro.cache not provisioned on this render path");
+    });
+    expect(() => markPrivate(ctx)).not.toThrow();
+    expect(ctx.response.headers.get("cache-control")).toBe("private, no-store");
+  });
 });
 
 /**
