@@ -42,7 +42,6 @@ test("a NEW post: opening the confirm changes nothing; confirming leaves without
 
 test("an EXISTING post: 'Discard changes' reloads the saved version behind its own confirm — it does NOT delete the post", async ({
   page,
-  request,
 }) => {
   const { postId, url } = await publishPost(page, {
     title: "Untouched By Discard",
@@ -60,7 +59,10 @@ test("an EXISTING post: 'Discard changes' reloads the saved version behind its o
   await expect(page.locator("#markdownSource")).toHaveValue("an edit nobody will save");
 
   await confirm.click();
-  await expect(page).toHaveURL(new RegExp(`/new-post\\?post=${postId}$`));
+  // A plain substring check, deliberately NOT `new RegExp(...)` built from
+  // `postId` — a dynamically-constructed RegExp from external-shaped input
+  // is a needless pattern to reach for when an exact suffix is already known.
+  await page.waitForURL((u) => u.pathname === "/new-post" && u.searchParams.get("post") === postId);
   // The RELOADED editor shows the ORIGINAL saved body, not the abandoned edit.
   await expect(page.locator("#markdownSource")).toHaveValue("original body");
 
