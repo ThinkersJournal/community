@@ -42,7 +42,14 @@ test("a NEW post: opening the confirm changes nothing; confirming leaves without
 
 test("an EXISTING post: 'Discard changes' reloads the saved version behind its own confirm — it does NOT delete the post", async ({
   page,
+  request,
 }) => {
+  // publishPost requires an already-signed-in caller (see its own header) —
+  // dropped when the Codacy "unused request" fix removed this call along
+  // with the param, not just the param. Caught by the e2e failure this
+  // produced, not by review: "publishPost: /api/me returned no username".
+  await signUpAndVerify(page, request);
+
   const { postId, url } = await publishPost(page, {
     title: "Untouched By Discard",
     markdownSource: "original body",
