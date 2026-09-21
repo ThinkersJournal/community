@@ -1,0 +1,53 @@
+---
+/**
+ * THE CUSTOM 404 (#79). Astro serves this file automatically, with a real 404
+ * status, for any request that matches no route at all — verified against the
+ * installed astro@7.0.9 (`node_modules/astro/dist/core/app/base.js`'s
+ * `renderError`, which "try[s] sending the according page (e.g. 404.astro)"
+ * for a known error code; the routing manifest's own default-404 fallback,
+ * `astro-designed-error-pages.js`, is what this file REPLACES by existing).
+ * No manual `Astro.response.status = 404` is needed or added here — the
+ * framework sets it for the page it dispatches to.
+ *
+ * ⚠️ THIS IS NOT THE SAME 404 AS `[handle]/[slug].astro`'s OWN EARLY RETURN.
+ * That page still MATCHES its route (`/@user/slug`) and decides, inside its
+ * own logic, to answer 404 for a draft/hidden/nonexistent post — Astro's
+ * router never reaches this file for that case. THIS file only renders when
+ * NO page route matches the URL at all (a typo, a dead link, a made-up path).
+ * Do not "simplify" this page by trying to make it also cover that case —
+ * they are different problems with different correct cache behavior (see
+ * below) and [slug].astro's own not-found return must stay exactly as it is.
+ *
+ * ⚠️ MUST STAY UNCACHEABLE, on purpose, same reasoning as
+ * `[handle]/[slug].astro`'s not-found branch (that file's header, and
+ * apps/web/test/post-page.test.ts's "a NOT-FOUND returns BEFORE it ever
+ * declares cacheability" pin): caching negatives correctly is a purge
+ * problem a 404 page cannot solve for itself (a path that 404s today may be
+ * real tomorrow — a moved page, a fixed typo, a future route), so this calls
+ * `markPrivate`, not one of the cacheable helpers, even though its own
+ * markup never varies per viewer. `markPrivate` is the established shape for
+ * "this page must never be edge-cacheable" regardless of WHY (login.astro,
+ * new-post.astro use it for the identical reason with a different cause).
+ */
+import PageLayout from "../components/PageLayout.astro";
+import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+---
+<PageLayout
+  title="Page not found — Thinker's Journal Community"
+  eyebrow="Error"
+  heading="Page not found"
+  intro="That page doesn't exist — it may have been moved, hidden, or the link may be out of date."
+>
+  <p class="back">
+    <a class="link" href="/">← Back to Discover</a>
+    {" "}or{" "}
+    <a class="link" href="/feed">your feed</a>.
+  </p>
+</PageLayout>
+<style>
+  .back{color:var(--muted)}
+</style>
