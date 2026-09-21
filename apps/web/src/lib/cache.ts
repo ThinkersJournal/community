@@ -164,9 +164,29 @@ function isViewerSpecific(context: CacheContext): boolean {
  * test/page-cache-inventory.test.ts forbids `cache.set(` everywhere under src/
  * except here: preventing the `public` directive from ever being emitted is the
  * only thing that works.
+ *
+ * ⚠️ `cache.set(false)` IS BEST-EFFORT, ON PURPOSE (#79). `Astro.cache` is
+ * provisioned by Astro's own `render()` wrapper before a page renders — true
+ * for every NORMAL request. `src/pages/404.astro` is the one page in this app
+ * also reached through Astro's reroute-on-unmatched-path mechanism, which
+ * calls into page rendering WITHOUT that wrapper, so `Astro.cache` is not
+ * provisioned there and `.set()` throws (verified against the installed
+ * astro@7.2.8 + @astrojs/cloudflare@14.1.3 — see 404.astro's own header for
+ * the full trace). Swallowing that one, specific throw costs nothing: per
+ * this function's own header, `cache.set(false)`'s only job is to stop the
+ * provider emitting a `public` CDN directive — and the adapter's SEPARATE,
+ * unconditional fail-closed stamp (`Cloudflare-CDN-Cache-Control: no-store`
+ * on any response that never successfully opted in, pinned in
+ * test/workers-cache.test.ts) already guarantees the exact same outcome
+ * whether this call succeeds or not. The `cache-control` header below is
+ * unaffected either way — it does not depend on `cache.set` succeeding.
  */
 function refuse(context: CacheContext): void {
-  context.cache.set(false);
+  try {
+    context.cache.set(false);
+  } catch {
+    // See the paragraph above — the edge guarantee holds regardless.
+  }
   context.response.headers.set("cache-control", "private, no-store");
 }
 

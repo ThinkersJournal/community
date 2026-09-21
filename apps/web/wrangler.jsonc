@@ -132,7 +132,20 @@
     // static files and to fall back for 404s. Declared explicitly (rather than
     // left to the adapter, which would inject exactly this) so the binding is
     // visible where the rest of the Worker's surface is declared.
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    // ⚠️ #79 — WITHOUT THIS, THE WORKER NEVER RUNS FOR AN UNMATCHED PATH, so
+    // `src/pages/404.astro` never renders. Cloudflare's default for a Worker
+    // with static assets is `run_worker_first: false`: a request is checked
+    // against the asset manifest FIRST, and a path that matches NOTHING there
+    // gets `not_found_handling`'s default ("none") — a bare 404, no body, no
+    // headers, THE WORKER SCRIPT NEVER INVOKED. Confirmed on the wire in CI's
+    // e2e (test-results/not-found-*): status 404 but `cache-control` came back
+    // `undefined`, not this app's `private, no-store` — proof no app code ran.
+    // `true` routes EVERY request through the Worker first; real static assets
+    // still resolve, because Astro's own SSR handler falls back to `env.ASSETS`
+    // for anything that IS a real built asset (only a path that is neither a
+    // known route NOR a known asset reaches 404.astro).
+    "run_worker_first": true
   },
   // ⚠️ THE POINT OF THIS WORKER'S TOPOLOGY.
   // `service` is the api Worker's NAME (its `name` field in

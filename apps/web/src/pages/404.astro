@@ -2,12 +2,10 @@
 /**
  * THE CUSTOM 404 (#79). Astro serves this file automatically, with a real 404
  * status, for any request that matches no route at all — verified against the
- * installed astro@7.0.9 (`node_modules/astro/dist/core/app/base.js`'s
- * `renderError`, which "try[s] sending the according page (e.g. 404.astro)"
- * for a known error code; the routing manifest's own default-404 fallback,
- * `astro-designed-error-pages.js`, is what this file REPLACES by existing).
- * No manual `Astro.response.status = 404` is needed or added here — the
- * framework sets it for the page it dispatches to.
+ * installed astro@7.2.8 (`dist/server/entry.mjs`'s `renderDefaultError`,
+ * which looks up the custom `/404` route and renders it for any unmatched
+ * path). No manual `Astro.response.status = 404` is needed or added here —
+ * the framework sets it for the page it dispatches to.
  *
  * ⚠️ THIS IS NOT THE SAME 404 AS `[handle]/[slug].astro`'s OWN EARLY RETURN.
  * That page still MATCHES its route (`/@user/slug`) and decides, inside its
@@ -28,6 +26,15 @@
  * markup never varies per viewer. `markPrivate` is the established shape for
  * "this page must never be edge-cacheable" regardless of WHY (login.astro,
  * new-post.astro use it for the identical reason with a different cause).
+ *
+ * ⚠️ THIS PAGE IS THE ONE REASON `refuse()` in src/lib/cache.ts wraps its
+ * `Astro.cache.set(false)` call in a try/catch. Unlike every other page here,
+ * this one is ALSO reached through Astro's reroute-on-unmatched-path
+ * mechanism (any real 404 — the common case, not a direct hit on literally
+ * `/404`), which renders the page WITHOUT the normal `render()` wrapper that
+ * provisions `Astro.cache` first. `markPrivate` itself is unaware of any of
+ * this — see `refuse()`'s own header in src/lib/cache.ts for the full trace
+ * and why swallowing that one throw there is safe.
  */
 import PageLayout from "../components/PageLayout.astro";
 import { markPrivate } from "../lib/cache";
