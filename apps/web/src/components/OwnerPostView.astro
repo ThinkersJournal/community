@@ -49,41 +49,49 @@ const ownerCsrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : nu
 
 <BaseLayout title={ownerPost.title}>
   <article class="wrap post owner-view">
-    {ownerPost.hiddenAt !== null ? (
-      <p id="hidden-owner-banner" role="status">
-        <strong>This post is hidden.</strong>{" "}
-        {ownerPost.hiddenReason === "author"
-          ? "You hid it. It is not visible to anyone else."
-          : "It is not visible to anyone else, following a moderation review or a report about it."}
-      </p>
-    ) : (
-      <p id="draft-owner-banner" role="status">
-        <strong>This is a draft.</strong> It has not been published, so it is not visible to anyone else.
-      </p>
-    )}
     <h1>{ownerPost.title}</h1>
 
-    {/* Only for a PUBLISHED post: a draft has nothing to hide/unhide. Unhide
-        gated on hiddenReason === 'author' (PM review note (a)) — a UI gate
-        only; POST /posts/:id/unhide still re-derives this itself and is the
-        actual authority (403 POST_UNDER_MODERATION otherwise, which the
-        script surfaces if this gate is ever wrong). */}
-    {ownerPost.status === "published" && ownerCsrfToken !== null && (
-      <div class="visibility-zone" data-post-visibility data-post-id={ownerPost.id} data-csrf-token={ownerCsrfToken}>
-        <button type="button" class="btn btn-ghost" data-hide-btn hidden={ownerPost.hiddenAt !== null}>
-          Hide post
-        </button>
-        <button
-          type="button"
-          class="btn btn-ghost"
-          data-unhide-btn
-          hidden={!(ownerPost.hiddenAt !== null && ownerPost.hiddenReason === "author")}
-        >
-          Unhide post
-        </button>
-        <p class="visibility-error" data-visibility-error hidden />
-      </div>
-    )}
+    {/* #82 — banner and the Hide/Unhide toolbar grouped TOGETHER, right after
+        the heading, instead of the heading sitting between them (the
+        reported "two pieces of the same concern split across the heading").
+        Same relative position as [handle]/[slug].astro's public branch:
+        heading, then the owner's status/actions cluster, then content. */}
+    <div class="owner-status">
+      {ownerPost.hiddenAt !== null ? (
+        <p id="hidden-owner-banner" role="status">
+          <strong>This post is hidden.</strong>{" "}
+          {ownerPost.hiddenReason === "author"
+            ? "You hid it. It is not visible to anyone else."
+            : "It is not visible to anyone else, following a moderation review or a report about it."}
+        </p>
+      ) : (
+        <p id="draft-owner-banner" role="status">
+          <strong>This is a draft.</strong> It has not been published, so it is not visible to anyone else.
+        </p>
+      )}
+
+      {/* Only for a PUBLISHED post: a draft has nothing to hide/unhide. Unhide
+          gated on hiddenReason === 'author' (PM review note (a)) — a UI gate
+          only; POST /posts/:id/unhide still re-derives this itself and is the
+          actual authority (403 POST_UNDER_MODERATION otherwise, which the
+          script surfaces if this gate is ever wrong). */}
+      {ownerPost.status === "published" && ownerCsrfToken !== null && (
+        <div class="visibility-zone" data-post-visibility data-post-id={ownerPost.id} data-csrf-token={ownerCsrfToken}>
+          <button type="button" class="btn btn-ghost" data-hide-btn hidden={ownerPost.hiddenAt !== null}>
+            Hide post
+          </button>
+          <button
+            type="button"
+            class="btn btn-ghost"
+            data-unhide-btn
+            hidden={!(ownerPost.hiddenAt !== null && ownerPost.hiddenReason === "author")}
+          >
+            Unhide post
+          </button>
+          <p class="visibility-error" data-visibility-error hidden />
+        </div>
+      )}
+    </div>
 
     {ownerPost.tags.length > 0 && (
       <ul class="tags">
@@ -104,9 +112,13 @@ const ownerCsrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : nu
 </BaseLayout>
 
 <style>
-  .owner-view #hidden-owner-banner,.owner-view #draft-owner-banner{border-left:3px solid var(--color-warning, #b45309);padding-left:.75rem;margin-bottom:20px}
+  /* #82 — banner + Hide/Unhide grouped as one cluster, clearly separated
+     from the heading above (margin-top) and the body below (margin-bottom),
+     instead of the heading splitting them. */
+  .owner-status{margin:20px 0 28px}
+  .owner-view #hidden-owner-banner,.owner-view #draft-owner-banner{border-left:3px solid var(--color-warning, #b45309);padding-left:.75rem;margin-bottom:14px}
   .owner-view-edit{margin-top:24px}
-  .visibility-zone{display:flex;align-items:center;gap:10px;margin:-14px 0 20px}
+  .visibility-zone{display:flex;align-items:center;gap:10px}
   .visibility-zone [hidden]{display:none}
   .tags{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0}
   .tags .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}

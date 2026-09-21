@@ -80,3 +80,25 @@ describe("[handle]/[slug].astro — the split kept the public branch untouched",
     expect(gateAt).toBeLessThan(byslugAt);
   });
 });
+
+describe("⚠️ #82 — OwnerPostView: the heading no longer splits the banner from Hide/Unhide", () => {
+  it("the heading comes FIRST, then the banner+actions cluster together — not banner, heading, actions", () => {
+    const h1At = ownerSource.indexOf("<h1>{ownerPost.title}</h1>");
+    const statusAt = ownerSource.indexOf('<div class="owner-status">');
+    const bannerAt = ownerSource.indexOf('id="hidden-owner-banner"');
+    const visibilityAt = ownerSource.indexOf('class="visibility-zone"');
+    expect(h1At, "heading not found").toBeGreaterThan(-1);
+    expect(statusAt, "no .owner-status wrapper found").toBeGreaterThan(-1);
+    expect(bannerAt).toBeGreaterThan(-1);
+    expect(visibilityAt).toBeGreaterThan(-1);
+    // h1 before the status cluster, and the banner+actions inside it stay
+    // adjacent to each other (no heading between them anymore).
+    expect(h1At).toBeLessThan(statusAt);
+    expect(statusAt).toBeLessThan(bannerAt);
+    expect(bannerAt).toBeLessThan(visibilityAt);
+  });
+
+  it("the status cluster gets its own top/bottom separation from the heading and the body", () => {
+    expect(ownerSource).toMatch(/\.owner-status\{margin:/);
+  });
+});

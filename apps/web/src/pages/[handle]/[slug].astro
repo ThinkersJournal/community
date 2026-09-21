@@ -266,42 +266,58 @@ if (post !== null) {
         · <time datetime={post.publishedAt}>{publishedDisplay}</time>
       </p>
 
-      {/* THE HIDE CONTROL (#74 audit finding, batch A-2) — SAME SSR-hidden +
-          client-reveal pattern as the delete control just below, and for the
-          same reason: this render is fully anonymous + edge-cached, so there
-          is no viewer-specific value to decide "is this viewer the author"
-          here. HIDE ONLY, never Unhide — this page 404s on a hidden post
-          (`GET /public/posts` filters `hidden_at IS NULL`), so a post this
-          control can ever see is always currently visible; Unhide lives on
-          the editor AND (#78) this post's own URL, once OwnerPostView takes
-          over for the author. `data-handle`/`data-slug` are what let the
-          script redirect back to THIS post's own URL on success (#78 item 2)
-          instead of the editor — see src/scripts/post-visibility-view.ts's
-          header. */}
-      <div
-        class="post-visibility-view"
-        data-post-visibility-view
-        data-post-id={post.id}
-        data-post-author-id={post.authorId}
-        data-handle={post.username}
-        data-slug={post.slug}
-        hidden
-      ></div>
+      {/* #82 — Hide and Delete grouped into ONE toolbar row instead of two
+          stacked pills. Each control is still its OWN independent SSR-hidden
+          placeholder revealed by its OWN island (below); this wrapper mostly
+          changes the LAYOUT, not the reveal logic — EXCEPT for its own
+          `hidden`, which is new. PM review: `.owner-actions`'s margin
+          collapses even while both children are `display:none`, so an
+          UNCONDITIONALLY-visible wrapper left ~6px of dead space above the
+          body for every ANONYMOUS reader (measured, not assumed — a zero-
+          height flex box's negative top / positive bottom margin still
+          collapses with its neighbours). So the wrapper is ALSO SSR-hidden by
+          default, and each island now reveals it (`.closest(".owner-actions")`)
+          alongside its own control — whichever island fires, the wrapper
+          becomes visible with it, so there is no third reveal to keep in
+          sync as controls are added or removed. */}
+      <div class="owner-actions" hidden>
+        {/* THE HIDE CONTROL (#74 audit finding, batch A-2) — SAME SSR-hidden +
+            client-reveal pattern as the delete control just below, and for the
+            same reason: this render is fully anonymous + edge-cached, so there
+            is no viewer-specific value to decide "is this viewer the author"
+            here. HIDE ONLY, never Unhide — this page 404s on a hidden post
+            (`GET /public/posts` filters `hidden_at IS NULL`), so a post this
+            control can ever see is always currently visible; Unhide lives on
+            the editor AND (#78) this post's own URL, once OwnerPostView takes
+            over for the author. `data-handle`/`data-slug` are what let the
+            script redirect back to THIS post's own URL on success (#78 item 2)
+            instead of the editor — see src/scripts/post-visibility-view.ts's
+            header. */}
+        <div
+          class="post-visibility-view"
+          data-post-visibility-view
+          data-post-id={post.id}
+          data-post-author-id={post.authorId}
+          data-handle={post.username}
+          data-slug={post.slug}
+          hidden
+        ></div>
 
-      {/* THE DELETE CONTROL — SSR-hidden placeholder, a SEPARATE element from
-          `.comments`'s data-post-id/data-post-author-id (that pair is the
-          comments island's ownership contract; this is the post-delete
-          island's, and a shared element would couple two independent
-          reveal decisions). SSR default is hidden — this render is fully
-          anonymous + edge-cached (see this file's header), so there is no
-          viewer-specific value to decide "is this viewer the author" here.
-          The post-delete island (src/scripts/post-delete.ts) reveals it
-          client-side, ONLY for the signed-in author. `data-handle` carries
-          `post.username` (NOT the `handle` route param, which still carries
-          its `@` prefix) — the island builds `"/@" + handle` for the
-          post-delete redirect, exactly the unprefixed form every other link
-          on this page already uses (see the href just above). */}
-      <div class="post-delete" data-post-delete data-post-id={post.id} data-post-author-id={post.authorId} data-handle={post.username} hidden></div>
+        {/* THE DELETE CONTROL — SSR-hidden placeholder, a SEPARATE element from
+            `.comments`'s data-post-id/data-post-author-id (that pair is the
+            comments island's ownership contract; this is the post-delete
+            island's, and a shared element would couple two independent
+            reveal decisions). SSR default is hidden — this render is fully
+            anonymous + edge-cached (see this file's header), so there is no
+            viewer-specific value to decide "is this viewer the author" here.
+            The post-delete island (src/scripts/post-delete.ts) reveals it
+            client-side, ONLY for the signed-in author. `data-handle` carries
+            `post.username` (NOT the `handle` route param, which still carries
+            its `@` prefix) — the island builds `"/@" + handle` for the
+            post-delete redirect, exactly the unprefixed form every other link
+            on this page already uses (see the href just above). */}
+        <div class="post-delete" data-post-delete data-post-id={post.id} data-post-author-id={post.authorId} data-handle={post.username} hidden></div>
+      </div>
 
       {/* Freeform tags (M2.4c). encodeURIComponent on the slug in the href — a URL
           needs percent-encoding; Astro `{}` only HTML-escapes. The label is an
@@ -388,7 +404,17 @@ if (post !== null) {
 <style>
   .post{padding:clamp(40px,7vw,80px) 0;max-width:min(var(--wrap),760px)}
   .post .meta{color:var(--dim);margin:8px 0 28px}
-  .post-delete{display:flex;align-items:center;gap:10px;margin:-14px 0 20px}
+  /* #82 — ONE toolbar row for both owner controls, wrapping on narrow
+     viewports instead of each control stacking on its own line. The two
+     children keep their own display:flex for their OWN internal layout
+     (a button plus whatever confirm/error state its island appends), but
+     the outer spacing/margin now lives on THIS wrapper, not on each child. */
+  .owner-actions{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin:-14px 0 20px}
+  /* `.owner-actions{display:flex}` is itself author-origin and would defeat
+     the UA `[hidden]{display:none}` the SAME way `.btn[hidden]` had to be
+     added globally — same class of bug, applied one level up the tree. */
+  .owner-actions[hidden]{display:none}
+  .post-delete{display:flex;align-items:center;gap:10px}
   /* Nav-bell fix pattern (Nav.astro:48) — CORRECTED FOR ORIGIN, not just
      specificity (fix round 1). `.btn{display:inline-block}` (global.css) is
      AUTHOR-origin, so it beats the UA sheet's `[hidden]{display:none}`
@@ -411,7 +437,7 @@ if (post !== null) {
   .post-delete [hidden]{display:none}
   .post-delete-confirm{display:flex;align-items:center;gap:10px;color:var(--dim)}
   .post-delete-error{color:var(--dim);margin:6px 0 0;font-size:.9em}
-  .post-visibility-view{display:flex;align-items:center;gap:10px;margin:-14px 0 8px}
+  .post-visibility-view{display:flex;align-items:center;gap:10px}
   .post-visibility-view[hidden]{display:none}
   .post-visibility-view [hidden]{display:none}
   .post-visibility-error{color:var(--dim);margin:6px 0 0;font-size:.9em}

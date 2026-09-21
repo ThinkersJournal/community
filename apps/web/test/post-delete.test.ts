@@ -136,4 +136,20 @@ describe("[handle]/[slug].astro wires the delete control", () => {
     // guard — same defect class, same fix shape.
     expect(page).toMatch(/\.post-delete\s+\[hidden\]\s*\{\s*display:\s*none/);
   });
+
+  /**
+   * #82, PM review — verified empirically with a real rendered fixture, not
+   * just this string assertion (see the PR): the shared `.owner-actions`
+   * wrapper (post-visibility-view.test.ts owns its own layout/spacing pins)
+   * is ALSO SSR-hidden, and each island — this one included — reveals it
+   * alongside its own control so an anonymous reader never pays its
+   * collapsed-margin dead space.
+   */
+  it("the delete island reveals the shared .owner-actions wrapper alongside its own control", () => {
+    const revealAt = island.indexOf("root.hidden = false");
+    expect(revealAt).toBeGreaterThan(-1);
+    const nearby = island.slice(revealAt, revealAt + 300);
+    expect(nearby).toContain('closest<HTMLElement>(".owner-actions")');
+    expect(nearby).toContain('.removeAttribute("hidden")');
+  });
 });
