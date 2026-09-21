@@ -289,12 +289,31 @@ describe("editing an existing post", () => {
   });
 });
 
-describe("⚠️ #71 — Discard is a plain navigation link, never a form submit", () => {
-  it("is an <a>, not a <button> — nothing to POST, nothing to confirm before abandoning UNSAVED edits", () => {
+describe("⚠️ #71 — Discard is a two-step confirm, never a one-click destructive link", () => {
+  // PM review: a bare "Discard" link silently destroys unsaved text on one
+  // click while READING as harmless ("just leave this screen") — the worst
+  // kind of destructive control, and a link click does not reliably fire
+  // beforeunload to warn on the way out. Confirmed here rather than assumed:
+  // the control must be a <details>/<summary> disclosure, the SAME no-JS
+  // pattern Delete uses (the issue's own suggested precedent), not a bare
+  // one-click <a>.
+  it("is a <details> disclosure, not a bare one-click link", () => {
+    expect(code).toMatch(/<details class="discard-zone">/);
+    expect(code).toMatch(/<summary class="btn btn-ghost">\{postId === null \? "Discard" : "Discard changes"\}<\/summary>/);
+  });
+
+  it("the actual navigation only happens behind the confirm step, and is still a plain LINK — nothing to POST", () => {
     // A submit button would round-trip through the api for zero reason: a
     // plain GET already discards whatever is typed the moment the page
-    // navigates away. Positive: the control exists at all.
-    expect(code).toMatch(/<a\s+class="btn btn-ghost"\s+href=\{postId === null/);
+    // navigates away. Positive: the confirm link exists, inside the
+    // disclosure. Negative: it never reaches a mutating "discard" intent —
+    // there is no backend concept of one.
+    const detailsStart = code.indexOf('<details class="discard-zone">');
+    const detailsEnd = code.indexOf("</details>", detailsStart);
+    expect(detailsStart).toBeGreaterThan(-1);
+    expect(detailsEnd).toBeGreaterThan(detailsStart);
+    const block = code.slice(detailsStart, detailsEnd);
+    expect(block).toMatch(/<a\s+class="btn btn-primary"\s+href=\{postId === null/);
     expect(code).not.toMatch(/name="intent"\s+value="discard"/);
   });
 
@@ -309,9 +328,29 @@ describe("⚠️ #71 — Discard is a plain navigation link, never a form submit
     expect(code).toMatch(/`\/new-post\?post=\$\{encodeURIComponent\(postId\)\}`/);
   });
 
-  it("shows different copy for the two cases, so a reader can tell them apart", () => {
+  it("⚠️ the confirm-step LABEL carries its own meaning — 'Discard changes' near 'Delete post' must not read as the same action", () => {
+    // PM review: the distinction between discarding an EDIT and deleting the
+    // POST is obvious to the author of this code and invisible to a reader
+    // staring at two buttons. Every copy string, not just the summary,
+    // distinguishes the two cases.
     expect(code).toContain('"Discard"');
     expect(code).toContain('"Discard changes"');
+    expect(code).toContain('"Yes, discard"');
+    expect(code).toContain('"Yes, discard changes"');
+    expect(code).toMatch(/Nothing you've typed has been saved/);
+    expect(code).toMatch(/The saved version of this post will not be affected/);
+  });
+
+  it("renders for BOTH a new post and an existing one — unlike Delete, which is edit-mode only", () => {
+    // The <details> itself carries no `postId !== null &&` guard (both
+    // branches of its own ternaries cover postId === null and !== null) —
+    // positive control: Delete right below DOES carry that guard, so this
+    // isn't a vacuous regex match on the wrong block.
+    const discardAt = code.indexOf('<details class="discard-zone">');
+    const deleteAt = code.indexOf('<details class="danger-zone">');
+    expect(discardAt).toBeGreaterThan(-1);
+    expect(deleteAt).toBeGreaterThan(discardAt);
+    expect(code.slice(0, discardAt).trimEnd()).not.toMatch(/postId !== null &&\s*\($/);
   });
 });
 
