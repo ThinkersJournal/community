@@ -111,7 +111,7 @@ describe("[handle]/[slug].astro wires the hide control", () => {
 
 describe("⚠️ #82 — Hide and Delete are grouped into ONE toolbar, not stacked separately", () => {
   it("both SSR-hidden placeholders sit inside a shared .owner-actions row", () => {
-    const start = page.indexOf('<div class="owner-actions">');
+    const start = page.indexOf('<div class="owner-actions"');
     expect(start, "no .owner-actions wrapper found").toBeGreaterThan(-1);
     const visibilityAt = page.indexOf("data-post-visibility-view", start);
     const deleteAt = page.indexOf("data-post-delete", start);
@@ -126,5 +126,29 @@ describe("⚠️ #82 — Hide and Delete are grouped into ONE toolbar, not stack
     // even though the wrapper exists.
     expect(page).not.toMatch(/\.post-delete\{display:flex;align-items:center;gap:10px;margin:/);
     expect(page).not.toMatch(/\.post-visibility-view\{display:flex;align-items:center;gap:10px;margin:/);
+  });
+
+  /**
+   * ⚠️ PM review, verified empirically (a Playwright fixture measuring real
+   * layout, not just these string assertions — see the PR): an
+   * UNCONDITIONALLY-visible `.owner-actions` collapses its own negative
+   * top / positive bottom margin with its neighbours even while both
+   * children are `display:none`, costing every ANONYMOUS reader ~6px of
+   * dead space above the body. Measured before this fix (34px gap) and
+   * after (28px, byte-identical to the pre-#82 baseline with no wrapper at
+   * all) — a string match alone would not have caught the regression, only
+   * proven the rule shipped.
+   */
+  it("the wrapper is ALSO SSR-hidden by default — no dead space for an anonymous reader", () => {
+    expect(page).toMatch(/<div class="owner-actions" hidden>/);
+    expect(page).toMatch(/\.owner-actions\[hidden\]\{display:\s*none\}/);
+  });
+
+  it("the hide island reveals the shared wrapper alongside its own control", () => {
+    const revealAt = island.indexOf("root.hidden = false");
+    expect(revealAt).toBeGreaterThan(-1);
+    const nearby = island.slice(revealAt, revealAt + 300);
+    expect(nearby).toContain('closest<HTMLElement>(".owner-actions")');
+    expect(nearby).toContain('.removeAttribute("hidden")');
   });
 });

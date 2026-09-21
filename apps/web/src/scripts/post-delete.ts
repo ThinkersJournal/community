@@ -52,6 +52,11 @@ export function initPostDelete(): void {
     const csrfToken = m.csrfToken;
 
     root.hidden = false; // reveal for the owner only
+    // #82 — also reveal the shared .owner-actions toolbar this control sits
+    // in (see [handle]/[slug].astro's header): the wrapper is independently
+    // SSR-hidden so an anonymous reader never pays even its collapsed-margin
+    // dead space, and whichever island fires first is what un-hides it.
+    root.closest<HTMLElement>(".owner-actions")?.removeAttribute("hidden");
 
     const start = document.createElement("button");
     start.type = "button";

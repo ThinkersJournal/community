@@ -268,12 +268,19 @@ if (post !== null) {
 
       {/* #82 — Hide and Delete grouped into ONE toolbar row instead of two
           stacked pills. Each control is still its OWN independent SSR-hidden
-          placeholder revealed by its OWN island (below) — this wrapper only
-          changes the LAYOUT, not the reveal logic; a viewer for whom only one
-          control ever appears (there is no case where neither does, for the
-          signed-in author) still sees it correctly positioned, since a
-          hidden sibling takes no flex space. */}
-      <div class="owner-actions">
+          placeholder revealed by its OWN island (below); this wrapper mostly
+          changes the LAYOUT, not the reveal logic — EXCEPT for its own
+          `hidden`, which is new. PM review: `.owner-actions`'s margin
+          collapses even while both children are `display:none`, so an
+          UNCONDITIONALLY-visible wrapper left ~6px of dead space above the
+          body for every ANONYMOUS reader (measured, not assumed — a zero-
+          height flex box's negative top / positive bottom margin still
+          collapses with its neighbours). So the wrapper is ALSO SSR-hidden by
+          default, and each island now reveals it (`.closest(".owner-actions")`)
+          alongside its own control — whichever island fires, the wrapper
+          becomes visible with it, so there is no third reveal to keep in
+          sync as controls are added or removed. */}
+      <div class="owner-actions" hidden>
         {/* THE HIDE CONTROL (#74 audit finding, batch A-2) — SAME SSR-hidden +
             client-reveal pattern as the delete control just below, and for the
             same reason: this render is fully anonymous + edge-cached, so there
@@ -403,6 +410,10 @@ if (post !== null) {
      (a button plus whatever confirm/error state its island appends), but
      the outer spacing/margin now lives on THIS wrapper, not on each child. */
   .owner-actions{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin:-14px 0 20px}
+  /* `.owner-actions{display:flex}` is itself author-origin and would defeat
+     the UA `[hidden]{display:none}` the SAME way `.btn[hidden]` had to be
+     added globally — same class of bug, applied one level up the tree. */
+  .owner-actions[hidden]{display:none}
   .post-delete{display:flex;align-items:center;gap:10px}
   /* Nav-bell fix pattern (Nav.astro:48) — CORRECTED FOR ORIGIN, not just
      specificity (fix round 1). `.btn{display:inline-block}` (global.css) is
