@@ -367,6 +367,12 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /__test/last-verify-token",
     build: () => new Request("https://api.test/__test/last-verify-token"),
   },
+  // #70 — the identical shape as last-verify-token above, for the same reason.
+  {
+    name: "404 reset-token test route with no stashed token",
+    route: "GET /__test/last-reset-token",
+    build: () => new Request("https://api.test/__test/last-reset-token"),
+  },
   // GET /admin/whoami (M4 2a) is a GET, so it is not in MUTATING and LAYER 1's
   // automatic origin-less probe never reaches it — but it DOES have a real
   // error path (requireAdmin's ADMIN_REQUIRED, src/admin/require-admin.ts), so

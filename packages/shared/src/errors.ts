@@ -22,6 +22,7 @@ export type ApiErrorCode =
   | "INVALID_JSON"           // 400 — the body was not JSON at all
   | "INVALID_INPUT"          // 400 — zod rejected it; `fields` names the paths
   | "INVALID_TOKEN"          // 400 — a verification token is unknown/expired/used
+  | "INVALID_RESET_TOKEN"    // 400 — a password-reset token is unknown/expired/used (#70)
   | "CANNOT_FOLLOW_SELF"     // 400 — a user cannot follow themselves (M2.1)
   | "INVALID_REACTION_KIND"  // 400 — kind not in the four-tone set (M2.2)
   | "CANNOT_BLOCK_SELF"      // 400 — a user cannot block themselves (M4)

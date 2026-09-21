@@ -7,6 +7,12 @@
  * issued by this Worker. That token verifies an arbitrary account, so if this
  * route ever answered in production it would be a full account-takeover vector.
  *
+ * `GET /__test/last-reset-token` (#70) is the identical seam for password
+ * reset: returns the last RAW reset token issued, standing in for reading the
+ * email E2E's dummy Postmark token prevents from actually sending. That token
+ * sets an arbitrary account's password AND logs the caller in — an even
+ * LARGER blast radius than the verify token — so it gets the exact same gate.
+ *
  * `POST /__test/reap-unverified` (handle-at-signup Task 8) invokes the daily
  * unverified-account reaper (src/auth/reap-unverified.ts) on demand and
  * returns how many rows it deleted — a test seam for exercising a cron-only
@@ -42,6 +48,7 @@
  */
 import { checkOrigin } from "../auth/csrf";
 import { TEST_LAST_TOKEN_KEY } from "../auth/email-verify";
+import { TEST_LAST_RESET_TOKEN_KEY } from "../auth/password-reset";
 import { reapUnverifiedAccounts } from "../auth/reap-unverified";
 import { errorResponse, notFoundResponse } from "../http/errors";
 import { reapOrphanMedia } from "../media/reap-orphan-media";
@@ -72,6 +79,18 @@ export async function handleTestRoute(
 
   if (request.method === "GET" && pathname === "/__test/last-verify-token") {
     const token = await env.SESSIONS.get(TEST_LAST_TOKEN_KEY);
+    if (token === null) {
+      return notFoundResponse();
+    }
+    return new Response(token, {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
+  }
+
+  // #70 — identical shape to last-verify-token above.
+  if (request.method === "GET" && pathname === "/__test/last-reset-token") {
+    const token = await env.SESSIONS.get(TEST_LAST_RESET_TOKEN_KEY);
     if (token === null) {
       return notFoundResponse();
     }

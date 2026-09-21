@@ -79,6 +79,15 @@ import type { RouteDef } from "../src/routing";
 const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   "POST /auth/signup",
   "POST /auth/login",
+  // #70 password reset — no session exists yet at either step (that is the
+  // whole reason these routes exist: a user who cannot authenticate).
+  // `forgot-password` runs inline `checkOrigin` + its own two-bucket rate
+  // limit, same shape as signup/login. `reset-password` runs inline
+  // `checkOrigin` only — no rate limit, because token entropy (not request
+  // volume) is its defense, the same reasoning `GET /verify-email` already
+  // relies on. See both routes' own headers.
+  "POST /auth/forgot-password",
+  "POST /auth/reset-password",
   // Token-authed one-click unsubscribe (M2.3c, RFC 8058): cross-origin, no
   // session/CSRF by design — a mail provider's one-click POST carries no cookie,
   // so the HMAC token IS the auth (see src/routes/unsub.ts). Unlike signup/login

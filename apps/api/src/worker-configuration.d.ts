@@ -18,6 +18,12 @@ interface __BaseEnv_Env {
 	REACTION_LIMITER: RateLimit;
 	REPORT_LIMITER: RateLimit;
 	BLOCK_LIMITER: RateLimit;
+	// #70 — added by hand rather than by rerunning `wrangler types`: the last
+	// regeneration in this checkout also dropped CF_ACCESS_*/CACHE_PURGE_*
+	// below (this checkout's `.dev.vars` does not declare them) and pulled in
+	// a large, unrelated workerd-docstring-wording diff. A single hand-added
+	// line matches this file's own established pattern for exactly this case.
+	RESET_LIMITER: RateLimit;
 	IMAGES: ImagesBinding;
 	TURNSTILE_SECRET_KEY: string;
 	POSTMARK_SERVER_TOKEN: string;

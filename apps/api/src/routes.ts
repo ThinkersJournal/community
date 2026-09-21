@@ -31,6 +31,7 @@ import { handlePublicComments } from "./routes/comments-public";
 import { handleCsrf } from "./routes/csrf";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
+import { handleForgotPassword } from "./routes/forgot-password";
 import { handleHealthDb } from "./routes/health-db";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
@@ -70,6 +71,7 @@ import {
 } from "./routes/reactions";
 import { handleCreateReport } from "./routes/reports";
 import { handleResendVerification } from "./routes/resend-verification";
+import { handleResetPassword } from "./routes/reset-password";
 import { handlePublicSearch } from "./routes/search";
 import { handleSignup } from "./routes/signup";
 import {
@@ -99,6 +101,14 @@ export const ROUTES: readonly RouteDef[] = [
   // test/route-protection.test.ts.
   { method: "POST", pattern: "/auth/signup", handler: handleSignup },
   { method: "POST", pattern: "/auth/login", handler: handleLogin },
+
+  // #70 — password reset. Same PIPELINE_EXEMPT shape as signup/login (no
+  // session exists yet), each running its own inline `checkOrigin`. See
+  // src/routes/forgot-password.ts and src/routes/reset-password.ts for the
+  // full reasoning, including why their `checkOrigin` runs BEFORE parsing —
+  // the one deliberate ordering difference from signup/login.
+  { method: "POST", pattern: "/auth/forgot-password", handler: handleForgotPassword },
+  { method: "POST", pattern: "/auth/reset-password", handler: handleResetPassword },
 
   // Unlike signup/login these DO run the pipeline — they have a session — but
   // WITHOUT `requireVerifiedEmail`: an unverified user must still be able to
@@ -348,6 +358,14 @@ export const ROUTES: readonly RouteDef[] = [
   {
     method: "GET",
     pattern: "/__test/last-verify-token",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
+
+  // TEST-ONLY (#70). Same null-means-404 contract and same handler as above.
+  {
+    method: "GET",
+    pattern: "/__test/last-reset-token",
     handler: async (request, env, ctx) =>
       (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },

@@ -24,8 +24,12 @@ import type { APIRequestContext, Page } from "@playwright/test";
 /**
  * A password that satisfies the api's zod schema (>= 12 chars). The password is
  * not what any of these tests is about.
+ *
+ * Exported (#70) so e2e/password-reset.spec.ts can log in with it before a
+ * reset and assert it stops working after one, without a second copy of the
+ * literal to drift from this one.
  */
-const PASSWORD = "correct-horse-battery-staple";
+export const PASSWORD = "correct-horse-battery-staple";
 
 /**
  * A brand-new address for every run.
