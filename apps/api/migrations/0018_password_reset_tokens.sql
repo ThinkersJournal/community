@@ -21,6 +21,13 @@
 CREATE TABLE password_reset_tokens (
   id         uuid PRIMARY KEY DEFAULT uuidv7(),
   user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- UNIQUE is load-bearing, not incidental: it is what makes the consuming
+  -- UPDATE's `WHERE token_hash = $1 ...` match AT MOST ONE ROW, so the
+  -- compare-and-set (src/auth/password-reset.ts / routes/reset-password.ts)
+  -- is unambiguous as well as atomic — there is no world where two live rows
+  -- share a hash and the UPDATE has to pick one. 256 bits of CSPRNG output
+  -- makes a real collision practically impossible; the constraint is what
+  -- turns "practically impossible" into "the database also refuses it".
   token_hash text NOT NULL UNIQUE,
   expires_at timestamptz NOT NULL,
   -- NULL = still redeemable. Set exactly once, by the atomic UPDATE that
