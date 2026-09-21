@@ -17,8 +17,10 @@ test("an unknown path gets a real 404 status with the themed shell, not Astro's 
   await expect(page.locator("footer.ft")).toBeVisible();
   await expect(page.locator("h1")).toHaveText("Page not found");
   // A route back — same control as post-page-owner-fallback's "at least one
-  // route back" requirement.
-  await expect(page.locator('a[href="/"]')).toBeVisible();
+  // route back" requirement. Scoped to `main` (this page's own body), not a
+  // bare `a[href="/"]`: the nav's own "Discover" link ALSO points at `/`,
+  // and a bare selector strict-mode-violates on two matches.
+  await expect(page.locator('main a[href="/"]')).toBeVisible();
 });
 
 test("⚠️ the 404 response is never edge-cacheable — private, no-store", async ({ page }) => {
