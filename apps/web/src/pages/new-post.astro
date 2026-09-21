@@ -413,6 +413,40 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
             </div>
           </form>
 
+          {/* #71 — a two-step confirm, the SAME no-JS <details>/<summary>
+              pattern as Delete below (the issue's own suggested precedent),
+              not a bare link. A plain "Discard" link that silently destroys
+              unsaved text on one click is the WORST kind of destructive
+              control — it reads as harmless ("just leave this screen") while
+              behaving like Delete, and a link click does not reliably fire
+              `beforeunload` to warn on the way out (browsers increasingly
+              suppress that prompt without real interaction anyway). This
+              needs its own confirm step, and OUTSIDE `<form>` like Delete,
+              deliberately: the "confirm" action is a plain LINK, not a
+              submit — discarding needs no backend call, a bare GET already
+              throws away unsaved state for free, so there is nothing to POST.
+              Label carries its own meaning, per PM review: "Discard changes"
+              (not just "Discard") for an existing post, because reloading
+              `?post=<id>` discards the EDIT, never the saved post itself —
+              that distinction is invisible to a reader staring at a button
+              next to one labelled "Delete post". */}
+          <details class="discard-zone">
+            <summary class="btn btn-ghost">{postId === null ? "Discard" : "Discard changes"}</summary>
+            <div class="discard-confirm">
+              <p>
+                {postId === null
+                  ? "Discard this post? Nothing you've typed has been saved."
+                  : "Discard your unsaved changes? The saved version of this post will not be affected."}
+              </p>
+              <a
+                class="btn btn-primary"
+                href={postId === null ? "/feed" : `/new-post?post=${encodeURIComponent(postId)}`}
+              >
+                {postId === null ? "Yes, discard" : "Yes, discard changes"}
+              </a>
+            </div>
+          </details>
+
           {
             // ⚠️ EDIT MODE ONLY — never for a brand-new post (postId === null).
             // Same owner-only/per-viewer reasoning as Delete below: a
@@ -536,6 +570,11 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     display:flex;flex-direction:column;gap:8px}
   .form legend{color:var(--muted);font-size:14px;padding:0 6px}
   .actions{display:flex;gap:12px;flex-wrap:wrap}
+  .discard-zone{margin-top:20px}
+  .discard-zone summary{cursor:pointer;list-style:none}
+  .discard-zone summary::-webkit-details-marker{display:none}
+  .discard-confirm{display:flex;flex-direction:column;gap:10px;margin-top:12px;
+    padding:16px;border:1px solid var(--line);border-radius:8px}
   .danger-zone{margin-top:32px}
   .danger-zone summary{cursor:pointer;list-style:none}
   .danger-zone summary::-webkit-details-marker{display:none}
