@@ -44,6 +44,12 @@
  *   2. Snapshot which workerd processes are already running.
  *   3. Run `astro build`.
  *   4. Kill only the workerd processes that appeared DURING step 3.
+ *   5. (#89 follow-up) If the build succeeded AND `PUBLIC_TURNSTILE_SITE_KEY`
+ *      is set — i.e. this build declares itself production-shaped — fail if
+ *      the built output still contains the dev/e2e-only Turnstile
+ *      `dummy-token` fallback. See scripts/turnstile-build-guard.mjs for the
+ *      full reasoning (CireSnave's ruling on #89: a production build
+ *      containing dummy-token should fail, not ship).
  *
  * ⚠️ STEP 4 IS SCOPED BY DIFF, AND THAT PRECISION IS THE WHOLE POINT. An earlier
  * version of this script killed every workerd under this repo before building.
@@ -62,6 +68,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { assertNoDummyTokenLeak } from "../apps/web/scripts/turnstile-build-guard.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -218,6 +226,18 @@ if (reaped > 0) {
     `[build-web] reaped ${reaped} workerd process(es) leaked by astro build ` +
       `(see this script's header)`,
   );
+}
+
+// ---- 5. Turnstile dummy-token production guard (#89 follow-up) -------------
+// Only worth asking when the build itself succeeded — an incomplete/failed
+// build's partial output has nothing meaningful to assert about.
+if (build.status === 0) {
+  try {
+    assertNoDummyTokenLeak(path.join(webDir, "dist"));
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
 }
 
 process.exit(build.status ?? 1);
