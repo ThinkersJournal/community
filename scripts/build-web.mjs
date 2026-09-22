@@ -38,18 +38,25 @@
  * WHAT THIS DOES — fix the LEAK, rather than mop up after it
  * ─────────────────────────────────────────────────────────────────────────────
  *
+ *   0. (#89 follow-up) FAIL FAST, before touching `dist` or spawning
+ *      anything, if this is a genuine Cloudflare Workers Builds run
+ *      (`WORKERS_CI === "1"`, injected by Cloudflare itself — NOT the bare
+ *      `CI` var, which this repo's own GitHub Actions CI also sets) with no
+ *      `PUBLIC_TURNSTILE_SITE_KEY`. See scripts/turnstile-build-guard.mjs's
+ *      header for why THIS is the primary check and not the dummy-token
+ *      scan below — a first version of this guard checked only the scan and
+ *      would have PASSED the exact build that caused #89.
  *   1. Remove `apps/web/dist` (astro's own emptyDir is disabled via
  *      `vite.build.emptyOutDir: false` in astro.config.mjs, precisely so its
  *      broken code path is never reached; THIS is what cleans the output).
  *   2. Snapshot which workerd processes are already running.
  *   3. Run `astro build`.
  *   4. Kill only the workerd processes that appeared DURING step 3.
- *   5. (#89 follow-up) If the build succeeded AND `PUBLIC_TURNSTILE_SITE_KEY`
- *      is set — i.e. this build declares itself production-shaped — fail if
- *      the built output still contains the dev/e2e-only Turnstile
- *      `dummy-token` fallback. See scripts/turnstile-build-guard.mjs for the
- *      full reasoning (CireSnave's ruling on #89: a production build
- *      containing dummy-token should fail, not ship).
+ *   5. (#89 follow-up, SECONDARY) If the build succeeded AND
+ *      `PUBLIC_TURNSTILE_SITE_KEY` is set, fail if the built output still
+ *      contains the dev/e2e-only Turnstile `dummy-token` fallback anyway —
+ *      belt-and-braces for step 0 having passed but the fallback leaking
+ *      through some other path (DCE not firing, a future hardcoded copy).
  *
  * ⚠️ STEP 4 IS SCOPED BY DIFF, AND THAT PRECISION IS THE WHOLE POINT. An earlier
  * version of this script killed every workerd under this repo before building.
@@ -69,12 +76,27 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { assertNoDummyTokenLeak } from "../apps/web/scripts/turnstile-build-guard.mjs";
+import {
+  assertNoDummyTokenLeak,
+  assertTurnstileKeySetOnDeploy,
+} from "../apps/web/scripts/turnstile-build-guard.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const webDir = path.join(repoRoot, "apps", "web");
 const distDir = path.join(webDir, "dist");
+
+// ---- 0. Turnstile deploy-build guard (#89 follow-up), PRIMARY check --------
+// Runs FIRST, before anything else in this script — see this file's header
+// and scripts/turnstile-build-guard.mjs's own header for why this is the
+// check that actually closes #89 (a version keyed only on the dummy-token
+// scan below would have passed the exact build that broke production).
+try {
+  assertTurnstileKeySetOnDeploy();
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
 
 /** Block synchronously for `ms` without burning CPU. */
 function sleepSync(ms) {
