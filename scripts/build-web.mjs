@@ -38,12 +38,25 @@
  * WHAT THIS DOES — fix the LEAK, rather than mop up after it
  * ─────────────────────────────────────────────────────────────────────────────
  *
+ *   0. (#89 follow-up) FAIL FAST, before touching `dist` or spawning
+ *      anything, if this is a genuine Cloudflare Workers Builds run
+ *      (`WORKERS_CI === "1"`, injected by Cloudflare itself — NOT the bare
+ *      `CI` var, which this repo's own GitHub Actions CI also sets) with no
+ *      `PUBLIC_TURNSTILE_SITE_KEY`. See scripts/turnstile-build-guard.mjs's
+ *      header for why THIS is the primary check and not the dummy-token
+ *      scan below — a first version of this guard checked only the scan and
+ *      would have PASSED the exact build that caused #89.
  *   1. Remove `apps/web/dist` (astro's own emptyDir is disabled via
  *      `vite.build.emptyOutDir: false` in astro.config.mjs, precisely so its
  *      broken code path is never reached; THIS is what cleans the output).
  *   2. Snapshot which workerd processes are already running.
  *   3. Run `astro build`.
  *   4. Kill only the workerd processes that appeared DURING step 3.
+ *   5. (#89 follow-up, SECONDARY) If the build succeeded AND
+ *      `PUBLIC_TURNSTILE_SITE_KEY` is set, fail if the built output still
+ *      contains the dev/e2e-only Turnstile `dummy-token` fallback anyway —
+ *      belt-and-braces for step 0 having passed but the fallback leaking
+ *      through some other path (DCE not firing, a future hardcoded copy).
  *
  * ⚠️ STEP 4 IS SCOPED BY DIFF, AND THAT PRECISION IS THE WHOLE POINT. An earlier
  * version of this script killed every workerd under this repo before building.
@@ -63,10 +76,43 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  assertNoDummyTokenLeak,
+  assertTurnstileKeySetOnDeploy,
+} from "../apps/web/scripts/turnstile-build-guard.mjs";
+
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const webDir = path.join(repoRoot, "apps", "web");
 const distDir = path.join(webDir, "dist");
+
+// ---- 0. Turnstile deploy-build guard (#89 follow-up), PRIMARY check --------
+// Runs FIRST, before anything else in this script — see this file's header
+// and scripts/turnstile-build-guard.mjs's own header for why this is the
+// check that actually closes #89 (a version keyed only on the dummy-token
+// scan below would have passed the exact build that broke production).
+//
+// ⚠️ PRINTED UNCONDITIONALLY, ON EVERY RUN — pass or fail, dev or deploy.
+// `assertTurnstileKeySetOnDeploy`'s WORKERS_CI=1 signal is taken from
+// Cloudflare's OWN docs, not observed against a real Workers Builds run
+// (this repo has never actually been built there with the guard present).
+// If that signal is absent, misspelled, or scoped differently than
+// documented, the check never fires — silently, indistinguishable from a
+// passing build, the SAME failure shape as #89 itself and as this guard's
+// own first draft (see turnstile-build-guard.mjs's header). A doc citation
+// is a claim; this line is what turns it into an observation the moment it
+// first matters — the FIRST real Workers Builds log after CireSnave sets
+// the site key is ground truth, read directly, not inferred.
+console.log(
+  `[build-web] WORKERS_CI=${JSON.stringify(process.env.WORKERS_CI ?? null)} ` +
+    `PUBLIC_TURNSTILE_SITE_KEY=${process.env.PUBLIC_TURNSTILE_SITE_KEY ? "(set)" : "(unset)"}`,
+);
+try {
+  assertTurnstileKeySetOnDeploy();
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
 
 /** Block synchronously for `ms` without burning CPU. */
 function sleepSync(ms) {
@@ -218,6 +264,18 @@ if (reaped > 0) {
     `[build-web] reaped ${reaped} workerd process(es) leaked by astro build ` +
       `(see this script's header)`,
   );
+}
+
+// ---- 5. Turnstile dummy-token production guard (#89 follow-up) -------------
+// Only worth asking when the build itself succeeded — an incomplete/failed
+// build's partial output has nothing meaningful to assert about.
+if (build.status === 0) {
+  try {
+    assertNoDummyTokenLeak(path.join(webDir, "dist"));
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
 }
 
 process.exit(build.status ?? 1);
