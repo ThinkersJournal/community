@@ -60,7 +60,7 @@
  * observed directly, which is also the SECONDARY check's own positive/
  * negative control — see test/turnstile-build-guard.node.test.ts.
  */
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 /**
@@ -71,14 +71,24 @@ import { join, relative } from "node:path";
  * guards in this codebase make the identical choice, for the identical
  * reason). A file that cannot be read as UTF-8 (a font, an image) simply
  * cannot contain this ASCII literal meaningfully and is skipped.
+ *
+ * ⚠️ `readdirSync(dir, { withFileTypes: true })`, NOT a separate `statSync`
+ * per entry — CodeQL flagged the earlier two-call form as a TOCTOU
+ * (check-then-act: `statSync` decides "is this a directory", then a LATER,
+ * separate `readFileSync` acts on that same path). Getting the file-type
+ * from the SAME `readdirSync` call that names the entry removes that extra
+ * race window entirely, matching the identical pattern
+ * test/dmca-phone-only-on-dmca-page.node.test.ts's own walker already uses.
+ * The remaining gap — the file changing between this dirent snapshot and
+ * the `readFileSync` below — is handled the way CodeQL wants a TOCTOU
+ * handled: not avoided, but TOLERATED, by the try/catch already there.
  */
 export function findDummyTokenLeak(distDir) {
   const offenders = [];
   const walk = (dir) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      const stat = statSync(full);
-      if (stat.isDirectory()) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
         walk(full);
         continue;
       }

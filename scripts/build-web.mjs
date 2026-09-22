@@ -91,6 +91,22 @@ const distDir = path.join(webDir, "dist");
 // and scripts/turnstile-build-guard.mjs's own header for why this is the
 // check that actually closes #89 (a version keyed only on the dummy-token
 // scan below would have passed the exact build that broke production).
+//
+// ⚠️ PRINTED UNCONDITIONALLY, ON EVERY RUN — pass or fail, dev or deploy.
+// `assertTurnstileKeySetOnDeploy`'s WORKERS_CI=1 signal is taken from
+// Cloudflare's OWN docs, not observed against a real Workers Builds run
+// (this repo has never actually been built there with the guard present).
+// If that signal is absent, misspelled, or scoped differently than
+// documented, the check never fires — silently, indistinguishable from a
+// passing build, the SAME failure shape as #89 itself and as this guard's
+// own first draft (see turnstile-build-guard.mjs's header). A doc citation
+// is a claim; this line is what turns it into an observation the moment it
+// first matters — the FIRST real Workers Builds log after CireSnave sets
+// the site key is ground truth, read directly, not inferred.
+console.log(
+  `[build-web] WORKERS_CI=${JSON.stringify(process.env.WORKERS_CI ?? null)} ` +
+    `PUBLIC_TURNSTILE_SITE_KEY=${process.env.PUBLIC_TURNSTILE_SITE_KEY ? "(set)" : "(unset)"}`,
+);
 try {
   assertTurnstileKeySetOnDeploy();
 } catch (err) {
