@@ -16,7 +16,11 @@ import { withClient } from "../db/client";
 import { listOpenQueue } from "../moderation/queue";
 import { applyMediaVisibilityChange } from "../media/visibility-hook";
 import type { LegalHoldCategory } from "../media/legal-hold";
-import { requestMediaAccess, approveMediaAccess } from "../moderation/media-access-requests";
+import {
+  requestMediaAccess,
+  approveMediaAccess,
+  listPendingMediaAccessRequests,
+} from "../moderation/media-access-requests";
 import { r2KeyForSha256 } from "../media/key-pattern";
 import { backfillHiddenMedia } from "../media/backfill-hidden-media";
 
@@ -198,6 +202,35 @@ export async function handleAdminDecision(
 }
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
+/** `r2KeyForSha256`'s inverse, for display only — never used to authorize anything. */
+const R2_KEY_TO_SHA256 = /^media\/post\/([0-9a-f]{64})\.webp$/;
+
+/**
+ * `GET /admin/media-access-requests` — every UNAPPROVED request (endpoint/UI
+ * audit, 2026-09-24). GET, so it does not touch the mutating pipeline, same
+ * shape as `GET /admin/queue` just above.
+ */
+export async function handleListMediaAccessRequests(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  const pending = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => listPendingMediaAccessRequests(c));
+  const requests = pending.map((r) => ({
+    id: r.id,
+    // ⚠️ Display only. `approveMediaAccess`'s self-approval refusal compares
+    // `requestedBy`/`approvedBy` directly, never this — extraction failing
+    // (a key that somehow isn't the expected shape) degrades to showing the
+    // raw key, never to hiding or misattributing the row.
+    sha256: R2_KEY_TO_SHA256.exec(r.r2Key)?.[1] ?? r.r2Key,
+    requestedBy: r.requestedBy,
+    reason: r.reason,
+    createdAt: r.createdAt.toISOString(),
+  }));
+  return new Response(JSON.stringify({ requests }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 /**
  * `POST /admin/media-access-requests` — the FIRST of the two hands (#61).

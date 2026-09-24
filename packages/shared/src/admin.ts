@@ -43,3 +43,20 @@ export type AdminDecisionKind = (typeof ADMIN_DECISIONS)[number];
 /** Mirrors `LEGAL_HOLD_CATEGORIES` in apps/api/src/routes/admin.ts. */
 export const LEGAL_HOLD_CATEGORIES = ["csam", "dmca", "other"] as const;
 export type LegalHoldCategoryWire = (typeof LEGAL_HOLD_CATEGORIES)[number];
+
+/**
+ * A row in `GET /admin/media-access-requests` — the two-person grant queue
+ * (#61). `sha256` is derived from `r2_key` for DISPLAY ONLY; the two-person
+ * check itself compares `requestedBy`/the viewer's own identity, never this.
+ */
+export interface AdminMediaAccessRequest {
+  id: string;
+  sha256: string;
+  requestedBy: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface AdminMediaAccessRequestsResponse {
+  requests: AdminMediaAccessRequest[];
+}

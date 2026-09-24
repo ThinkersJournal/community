@@ -93,6 +93,7 @@ const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "
 <BaseLayout title="Moderation queue">
   <div class="wrap admin-page">
     <h1>Moderation queue</h1>
+    <p class="admin-nav"><a class="link" href="/admin/media-access">Media access requests →</a></p>
     {decisionError && <p class="err">Decision failed: {decisionError}</p>}
     {queueError && <p class="err">Could not load the queue: {queueError}</p>}
     {
@@ -140,6 +141,7 @@ const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "
 </BaseLayout>
 <style>
   .admin-page{padding:clamp(40px,7vw,80px) 0}
+  .admin-nav{margin:4px 0 20px}
   .err{color:var(--red, #e5484d)}
   .queue{list-style:none;display:flex;flex-direction:column;gap:24px;margin-top:24px}
   .queue-item{border:1px solid var(--line);border-radius:8px;padding:16px}

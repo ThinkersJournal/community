@@ -23,6 +23,7 @@ import {
   handleAdminWhoami,
   handleApproveMediaAccess,
   handleBackfillHiddenMedia,
+  handleListMediaAccessRequests,
   handleRequestMediaAccess,
 } from "./routes/admin";
 import { handleBlock, handleBlockStatus, handleListBlocks, handleUnblock } from "./routes/blocks";
@@ -358,6 +359,11 @@ export const ROUTES: readonly RouteDef[] = [
   // lets /media/restricted/:sha256 serve a held object.
   { method: "POST", pattern: "/admin/media-access-requests", handler: handleRequestMediaAccess },
   { method: "POST", pattern: "/admin/media-access-requests/:id/approve", handler: handleApproveMediaAccess },
+
+  // GET read (endpoint/UI audit, 2026-09-24) — every UNAPPROVED request, the
+  // admin UI's data source. Distinct method from the POST literal above, no
+  // shadow risk.
+  { method: "GET", pattern: "/admin/media-access-requests", handler: handleListMediaAccessRequests },
 
   // #61 — the one-off backfill for media already public despite belonging to
   // already-hidden content. Same Access trust domain/shape as the routes
