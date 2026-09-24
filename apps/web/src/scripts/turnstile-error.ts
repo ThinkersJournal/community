@@ -33,22 +33,25 @@ declare global {
     // `data-timeout-callback` as two independently-configured callbacks by
     // name; it does not pass a discriminator identifying which fired.
     //
-    // ⚠️ REST-TUPLE PARAMS (`...args: [T?]`), NOT a named optional param —
-    // an interface method signature has no body, so a NAMED parameter is
-    // definitionally "unused" within the signature itself; Codacy flagged
-    // exactly that, and an underscore prefix did NOT satisfy this project's
-    // rule config for this position (confirmed by re-running with it, not
-    // assumed). A rest tuple accepts the identical call shape (zero or one
-    // argument of the given type) with no name to flag. `turnstileOnError`
-    // still receives Turnstile's own error-code string at the call site —
-    // this app just never reads it (see the doc comment on its assignment
-    // below for why); `reset` is genuinely CALLED with a real argument
-    // (`window.turnstile?.reset(container)` below), so this only changes
-    // how the type is spelled, not what it accepts.
-    turnstileOnError?: (...args: [string?]) => void;
+    // ⚠️ NO PARAMETER AT ALL — Turnstile calls this with an error-code
+    // string, but TypeScript structural typing lets a zero-arg function
+    // satisfy a call site that passes one (JS itself ignores extra call
+    // arguments), so `() => void` is both valid AND accurate: this app
+    // genuinely never reads that code (see the assignment below for why —
+    // the server-side signal is where the real diagnosis belongs).
+    turnstileOnError?: () => void;
     turnstileOnTimeout?: () => void;
     turnstile?: {
-      reset: (...args: [(string | HTMLElement)?]) => void;
+      // ⚠️ `widget` IS a real, used parameter — `window.turnstile?.reset(container)`
+      // below passes one — so it cannot be dropped the way turnstileOnError's
+      // was. Codacy flags it anyway (a "reset" definitely unused warning);
+      // traced independently across THREE renaming attempts (widget, _widget,
+      // a rest-tuple named args) and the finding followed the parameter
+      // regardless of name — an interface method signature has no body, so
+      // ANY named parameter in one reads as "unused" to this rule. Disposed
+      // as a false positive on the PR rather than mangled into a fourth
+      // syntax variant; see this PR's Codacy comment for the trace.
+      reset: (widget?: string | HTMLElement) => void;
     };
   }
 }
