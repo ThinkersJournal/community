@@ -47,6 +47,18 @@ interface __BaseEnv_Env {
 	NOTIFY: DurableObjectNamespace<import("./index").NotifyDO>;
 	POST_LIVE: DurableObjectNamespace<import("./index").PostLiveDO>;
 	WEB: Fetcher /* thinkersjournal-web */;
+	// Build-identity (2026-09-24) — added by hand, same reason as CF_ACCESS_*
+	// above: a full `wrangler types` regeneration in this checkout drops
+	// several hand-added bindings and pulls in an unrelated diff. See
+	// src/routes/health-build.ts.
+	CF_VERSION_METADATA: {
+		/** The ID of the Worker Version using this binding */
+		id: string;
+		/** The tag of the Worker Version using this binding */
+		tag: string;
+		/** The timestamp of when the Worker Version was uploaded */
+		timestamp: string;
+	};
 }
 declare namespace Cloudflare {
 	interface GlobalProps {

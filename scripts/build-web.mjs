@@ -46,6 +46,14 @@
  *      header for why THIS is the primary check and not the dummy-token
  *      scan below — a first version of this guard checked only the scan and
  *      would have PASSED the exact build that caused #89.
+ *   0b. (build-identity, 2026-09-24) Attempt `git rev-parse --short HEAD` and,
+ *      if it succeeds, set `PUBLIC_BUILD_SHA` so Vite inlines it into
+ *      `GET /health/build` (src/pages/health/build.ts) — same
+ *      build-time-inlined-constant mechanism as `PUBLIC_TURNSTILE_SITE_KEY`.
+ *      Printed unconditionally either way; never fabricates a value if git
+ *      is unavailable in the real build container (unverified — this repo
+ *      has never actually deployed through Workers Builds with this in
+ *      place; see health-build.ts's header for what that leaves open).
  *   1. Remove `apps/web/dist` (astro's own emptyDir is disabled via
  *      `vite.build.emptyOutDir: false` in astro.config.mjs, precisely so its
  *      broken code path is never reached; THIS is what cleans the output).
@@ -112,6 +120,31 @@ try {
 } catch (err) {
   console.error(err.message);
   process.exit(1);
+}
+
+// ---- 0b. Build-identity SHA (2026-09-24) ------------------------------------
+// `git rev-parse --short HEAD` is the one candidate that does not require
+// guessing a Workers-Builds-specific env var name — it works the same way in
+// local dev, this repo's own GitHub Actions CI, and (if `.git` survives the
+// checkout there, which is UNVERIFIED) a real Workers Builds run. Printed
+// unconditionally, same discipline as the WORKERS_CI line above: if git is
+// ever unavailable in the real deploy container, that becomes visible on the
+// first real Workers Builds log instead of silently shipping a fabricated
+// value. Never sets PUBLIC_BUILD_SHA on failure — an absent field is honest;
+// a placeholder string is not.
+let buildSha = null;
+try {
+  buildSha = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+} catch (err) {
+  console.error(`[build-web] could not determine git SHA via git rev-parse: ${err.message}`);
+}
+console.log(`[build-web] PUBLIC_BUILD_SHA=${buildSha ?? "(unavailable)"}`);
+if (buildSha !== null) {
+  process.env.PUBLIC_BUILD_SHA = buildSha;
 }
 
 /** Block synchronously for `ms` without burning CPU. */

@@ -516,6 +516,15 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
         'async function handleHealthDb(_request, env, _ctx, _params) { const state = await (0,__vite_ssr_import_0__.readDbProbe)(env); const now = Date.now(); const ageMs = state === null ? null : now - state.lastCheckAt; const isStale = ageMs !== null && ageMs > __vite_ssr_import_0__.STALE_AFTER_MS; const status = state === null ? "unknown" : isStale ? "stale" : state.ok ? "ok" : "down"; // A dumb external HTTP monitor (uptime checker, load balancer health check) // alerts on non-200 — so "ok" is the ONLY 2xx; every other status is 503. const httpStatus = status === "ok" ? 200 : 503; const body = { status, lastCheckAt: state?.lastCheckAt ?? null, ageMs, staleAfterMs: __vite_ssr_import_0__.STALE_AFTER_MS, checkedRecently: !isStale }; // Detail (the raw error string and the recent-probe series) is withheld // from the public/prod response — a leaked connection error (hostname, // driver internals) reads badly surfaced in an incident writeup, and the // recent series is more than an external monitor needs. Gated on the same // TEST_ROUTES flag every other dev/test-only seam uses (src/routes/__test.ts); // a future prod-auth gate can widen this deliberately. if (env.TEST_ROUTES === "1") { body.error = state?.error ?? null; body.latencyMs = state?.latencyMs ?? null; body.recent = state?.recent ?? []; }; return new Response(JSON.stringify(body), { status: httpStatus, headers: { "content-type": "application/json" } }); }',
     },
   ],
+  [
+    "GET /health/build",
+    {
+      reason:
+        "A pure runtime binding readout — env.CF_VERSION_METADATA, populated by Cloudflare's own deploy infrastructure. No params to validate, no DB/KV read, no branches. See src/routes/health-build.ts.",
+      handlerSource:
+        'function handleHealthBuild(_request, env) { const meta = env.CF_VERSION_METADATA; return Promise.resolve(new Response(JSON.stringify({ worker: "api", version: { id: meta.id, tag: meta.tag, timestamp: meta.timestamp } }), { status: 200, headers: { "content-type": "application/json" } })); }',
+    },
+  ],
   // ⚠️ THE FIRST *MUTATING* ERROR_FREE ENTRY, and it is error-free BY SECURITY
   // DESIGN, not by lacking I/O. One-click unsubscribe (M2.3c, RFC 8058;
   // src/routes/unsub.ts) ALWAYS returns a neutral 200 (empty JSON) — for an
