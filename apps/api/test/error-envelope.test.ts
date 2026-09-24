@@ -522,7 +522,7 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
       reason:
         "A pure runtime binding readout — env.CF_VERSION_METADATA, populated by Cloudflare's own deploy infrastructure. No params to validate, no DB/KV read, no branches. See src/routes/health-build.ts.",
       handlerSource:
-        'async function handleHealthBuild(_request, env, _ctx, _params) { const meta = env.CF_VERSION_METADATA; return new Response(JSON.stringify({ worker: "api", version: { id: meta.id, tag: meta.tag, timestamp: meta.timestamp } }), { status: 200, headers: { "content-type": "application/json" } }); }',
+        'function handleHealthBuild(_request, env) { const meta = env.CF_VERSION_METADATA; return Promise.resolve(new Response(JSON.stringify({ worker: "api", version: { id: meta.id, tag: meta.tag, timestamp: meta.timestamp } }), { status: 200, headers: { "content-type": "application/json" } })); }',
     },
   ],
   // ⚠️ THE FIRST *MUTATING* ERROR_FREE ENTRY, and it is error-free BY SECURITY

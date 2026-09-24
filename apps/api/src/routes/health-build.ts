@@ -36,18 +36,23 @@
  * `GET /health` (ERROR_FREE in test/error-envelope.test.ts): nothing here
  * can fail short of the Worker not running at all.
  */
-export async function handleHealthBuild(
-  _request: Request,
-  env: Env,
-  _ctx: ExecutionContext,
-  _params: Readonly<Record<string, string>>,
-): Promise<Response> {
+// Two params, not the full four-param RouteHandler shape — matches
+// handleCsrf's identical minimal signature (a function requiring fewer
+// params satisfies a type requiring more, TypeScript's own trailing-args
+// bivariance), and avoids declaring `ctx`/`params` just to prefix them
+// `_` and never touch them. Not `async` either — there is no `await` in
+// this body (a pure sync readout), and `Promise.resolve` alone satisfies
+// RouteHandler's `Promise<Response>` return type without an async
+// function Codacy flags for having no `await` expression.
+export function handleHealthBuild(_request: Request, env: Env): Promise<Response> {
   const meta = env.CF_VERSION_METADATA;
-  return new Response(
-    JSON.stringify({
-      worker: "api",
-      version: { id: meta.id, tag: meta.tag, timestamp: meta.timestamp },
-    }),
-    { status: 200, headers: { "content-type": "application/json" } },
+  return Promise.resolve(
+    new Response(
+      JSON.stringify({
+        worker: "api",
+        version: { id: meta.id, tag: meta.tag, timestamp: meta.timestamp },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ),
   );
 }

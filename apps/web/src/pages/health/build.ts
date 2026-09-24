@@ -24,20 +24,29 @@ import type { APIRoute } from "astro";
 
 export const prerender = false;
 
-export const GET: APIRoute = async (context) => {
+// Not async: nothing here awaits anything (a pure sync env/env-var readout),
+// and Astro's own APIRoute type accepts a plain `Response` return alongside
+// `Promise<Response>` — no need for an async function with no `await`.
+export const GET: APIRoute = (context) => {
   const headers = new Headers({ "content-type": "application/json" });
   markPrivate({ request: context.request, response: { headers }, cache: context.cache });
 
   // ⚠️ `env` FROM `cloudflare:workers`, NOT `Astro.locals.runtime.env` — that
   // was REMOVED in Astro v6 and THROWS on access under the installed astro@7.
   // Same trap as src/lib/api.ts's and internal/purge.ts's headers.
+  //
+  // ⚠️ NO `meta ? ... : null` TERNARY: `CF_VERSION_METADATA` is a REQUIRED
+  // binding (declared non-optional in worker-configuration.d.ts), so `meta`
+  // is never falsy — that ternary was flagged as an always-truthy no-op
+  // conditional and rightly so. `sha`, not `version`, is the field that can
+  // genuinely be absent (PUBLIC_BUILD_SHA is only set on success).
   const meta = env.CF_VERSION_METADATA;
   const sha = import.meta.env.PUBLIC_BUILD_SHA as string | undefined;
   return new Response(
     JSON.stringify({
       worker: "web",
       sha: sha ?? null,
-      version: meta ? { id: meta.id, tag: meta.tag, timestamp: meta.timestamp } : null,
+      version: { id: meta.id, tag: meta.tag, timestamp: meta.timestamp },
     }),
     { status: 200, headers },
   );
