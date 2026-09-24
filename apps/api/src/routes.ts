@@ -32,6 +32,7 @@ import { handleCsrf } from "./routes/csrf";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
 import { handleForgotPassword } from "./routes/forgot-password";
+import { handleHealthBuild } from "./routes/health-build";
 import { handleHealthDb } from "./routes/health-db";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
@@ -93,6 +94,11 @@ export const ROUTES: readonly RouteDef[] = [
   // from `/health` above — no shadow risk. Reads only KV (never the DB); see
   // src/routes/health-db.ts and src/health/probe.ts.
   { method: "GET", pattern: "/health/db", handler: handleHealthDb },
+
+  // Build identity (2026-09-24) — distinct literal path from both routes
+  // above, no shadow risk. Pure runtime binding readout (version_metadata);
+  // see src/routes/health-build.ts for why it has no `sha` field.
+  { method: "GET", pattern: "/health/build", handler: handleHealthBuild },
 
   // ⚠️ Signup and login do NOT run the mutating pipeline (src/auth/pipeline.ts)
   // — they are how a session comes to exist, so its "401 if no session" step

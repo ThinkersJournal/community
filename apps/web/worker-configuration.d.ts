@@ -5,6 +5,19 @@ interface __BaseEnv_Env {
 	ASSETS: Fetcher;
 	PURGE_SECRET: string;
 	API: Fetcher /* thinkersjournal-api */;
+	// Build-identity (2026-09-24) — added by hand rather than a full
+	// regeneration, matching apps/api/src/worker-configuration.d.ts's
+	// established CF_ACCESS_* precedent: a full `wrangler types` run here
+	// pulled in ~1250 lines of unrelated workerd-docstring diff. See
+	// src/pages/health/build.ts.
+	CF_VERSION_METADATA: {
+		/** The ID of the Worker Version using this binding */
+		id: string;
+		/** The tag of the Worker Version using this binding */
+		tag: string;
+		/** The timestamp of when the Worker Version was uploaded */
+		timestamp: string;
+	};
 }
 declare namespace Cloudflare {
 	interface Env extends __BaseEnv_Env {}

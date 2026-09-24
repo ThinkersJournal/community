@@ -230,5 +230,14 @@
   "triggers": { "crons": ["*/2 * * * *", "0 14 * * *", "30 3 * * *", "15 4 * * *", "20 4 * * *"] },
   "observability": {
     "enabled": true
+  },
+  // Build-identity (2026-09-24) — GET /health/build reads this. Cloudflare's
+  // OWN version registry populates `id`/`tag`/`timestamp` on every deploy
+  // regardless of build command, unlike a git SHA baked in by a build script
+  // (which this repo has no verified hook for on THIS Worker — see
+  // src/routes/health-build.ts's header). No config value here; the binding
+  // itself is the whole thing.
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
   }
 }
