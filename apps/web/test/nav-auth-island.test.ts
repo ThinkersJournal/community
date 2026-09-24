@@ -34,6 +34,15 @@ describe("nav-auth island", () => {
     const s = island();
     expect(s).toMatch(/\.catch\(/);
   });
+
+  it("⚠️ links to /settings/notifications for signed-in viewers (endpoint/UI audit, 2026-09-24)", () => {
+    // Before this: the page worked, no CSS/hidden defect — but its ONLY
+    // inbound link anywhere in the app was the unsubscribe-email landing
+    // page. A signed-in member had NO click-path to their own preferences.
+    const s = island();
+    expect(s).toContain('settings.href = "/settings/notifications"');
+    expect(s).toMatch(/slot\.appendChild\(settings\)/);
+  });
 });
 
 describe("Nav mounts the island as a bundled module", () => {
