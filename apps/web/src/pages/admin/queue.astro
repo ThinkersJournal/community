@@ -1,0 +1,153 @@
+---
+/**
+ * `/admin/queue` — the moderation review queue + the decision action, in one
+ * page (M4 2b; PM ruling on module 2a: "API-first, with a thin server-rendered
+ * admin on top. No SPA" — this follows that exactly, no client JS at all).
+ *
+ * ⚠️⚠️ THE PROPERTY THIS FILE MUST NEVER LOSE: no queue content (a post title,
+ * a comment excerpt, a report count — anything from a hidden/reported item)
+ * reaches the HTML on any request that does not carry a verified Access JWT.
+ * The guard below is therefore the FIRST statement in this file's
+ * frontmatter, before markPrivate, before the CSP, before ANY api call — an
+ * early `return` there means NOTHING below it ever executes, so there is no
+ * later code path that could fetch queue data and then merely fail to render
+ * it. Verified live against a real `wrangler dev` instance with no Access
+ * header sent at all: the response was a bare 401 with an empty body, before
+ * any Service-Binding call to the api ran (see this PR's description for the
+ * literal request/response).
+ *
+ * ⚠️ THIS PAGE IS SAFE-BUT-INERT UNTIL A REAL CLOUDFLARE ACCESS APPLICATION
+ * EXISTS, SCOPED TO THIS PATH (a dashboard action, not a code change — see
+ * docs/superpowers/plans/2026-09-08-m4-module-2a-admin-foundation.md's own
+ * closing note on `/admin/whoami`). Without it, Cloudflare never injects the
+ * Access header at all, this guard fires on every request, and the page
+ * answers 401 to everyone — the correct default, not a bug to work around.
+ *
+ * ⚠️ THE EDGE ACCESS APPLICATION IS THE PRIMARY CONTROL; THIS GUARD IS WHAT
+ * KEEPS "never SSR-then-hide" TRUE EVEN IF THAT APPLICATION IS MISCONFIGURED
+ * OR ABSENT — not defence-in-depth as decoration, but the thing that makes
+ * the guarantee hold unconditionally rather than "as long as the dashboard
+ * is set up correctly".
+ *
+ * ⚠️ NO GENERIC PROXY. This page's own frontmatter is the only caller of the
+ * api's `/admin/*` routes for this page — there is no `/api/admin/*` browser-
+ * facing endpoint a member's session could ever reach. See
+ * src/lib/admin-api.ts's header for the full reasoning.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { adminApiErrorCode, adminApiFetch } from "../../lib/admin-api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+import {
+  ACCESS_JWT_HEADER,
+  ADMIN_DECISIONS,
+  LEGAL_HOLD_CATEGORIES,
+  type AdminDecisionKind,
+  type AdminQueueResponse,
+  type LegalHoldCategoryWire,
+} from "@thinkersjournal/shared";
+
+// ⚠️⚠️ THE GUARD — see this file's header. Nothing above this line does
+// anything; nothing below it may run when this returns.
+const accessJwt = Astro.request.headers.get(ACCESS_JWT_HEADER);
+if (accessJwt === null || accessJwt === "") {
+  return new Response(null, { status: 401 });
+}
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+let decisionError: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const subject = form.get("subject");
+  const subjectId = form.get("subjectId");
+  const decision = form.get("decision");
+  const reason = form.get("reason");
+  const legalHold = form.get("legalHold") === "on";
+  const legalHoldCategory = form.get("legalHoldCategory");
+
+  const res = await adminApiFetch("/admin/decision", {
+    method: "POST",
+    accessJwt,
+    origin: Astro.request.headers.get("Origin") ?? "",
+    body: {
+      subject,
+      subjectId,
+      decision,
+      reason,
+      ...(legalHold ? { legalHold: true, legalHoldCategory } : {}),
+    },
+  });
+  if (res.status !== 200) {
+    decisionError = adminApiErrorCode(res) ?? "DECISION_FAILED";
+  }
+}
+
+const queueResp = await adminApiFetch<AdminQueueResponse>("/admin/queue", { accessJwt });
+const items = queueResp.status === 200 && queueResp.data ? queueResp.data.items : [];
+const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "QUEUE_LOAD_FAILED") : null;
+---
+<BaseLayout title="Moderation queue">
+  <div class="wrap admin-page">
+    <h1>Moderation queue</h1>
+    {decisionError && <p class="err">Decision failed: {decisionError}</p>}
+    {queueError && <p class="err">Could not load the queue: {queueError}</p>}
+    {
+      items.length === 0 ? (
+        <p id="no-items">Nothing open.</p>
+      ) : (
+        <ul class="queue">
+          {items.map((item) => (
+            <li class="queue-item">
+              <p class="excerpt">{item.excerpt}</p>
+              <p class="meta">
+                {item.kind} · {item.reportCount} report{item.reportCount === 1 ? "" : "s"} ·
+                {" "}{item.hiddenAt ? "hidden" : "not hidden"} · oldest report {item.oldestReportAt}
+              </p>
+              <form method="POST" class="decision-form">
+                <input type="hidden" name="subject" value={item.kind} />
+                <input type="hidden" name="subjectId" value={item.targetId} />
+                <label>
+                  Statement of reasons (shown to the author)
+                  <textarea name="reason" required maxlength="2000" />
+                </label>
+                <label class="legal-hold-row">
+                  <input type="checkbox" name="legalHold" />
+                  Legal hold
+                  <select name="legalHoldCategory">
+                    {LEGAL_HOLD_CATEGORIES.map((cat: LegalHoldCategoryWire) => (
+                      <option value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </label>
+                <div class="decision-buttons">
+                  {ADMIN_DECISIONS.map((d: AdminDecisionKind) => (
+                    <button type="submit" name="decision" value={d} class="btn btn-ghost">
+                      {d.replace("_", " ")}
+                    </button>
+                  ))}
+                </div>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .admin-page{padding:clamp(40px,7vw,80px) 0}
+  .err{color:var(--red, #e5484d)}
+  .queue{list-style:none;display:flex;flex-direction:column;gap:24px;margin-top:24px}
+  .queue-item{border:1px solid var(--line);border-radius:8px;padding:16px}
+  .queue-item .excerpt{font-weight:600}
+  .queue-item .meta{color:var(--muted);font-size:13px;margin:6px 0 12px}
+  .decision-form{display:flex;flex-direction:column;gap:10px}
+  .decision-form textarea{width:100%;background:var(--ink2);border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;color:var(--text);font:inherit;margin-top:4px}
+  .legal-hold-row{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}
+  .decision-buttons{display:flex;gap:10px;flex-wrap:wrap}
+</style>
