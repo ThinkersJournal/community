@@ -16,7 +16,7 @@
  * Both users' cached followee lists are busted afterward (best-effort, same
  * fail-open reasoning as bustFolloweeCache's own header).
  */
-import { runMutatingPipeline } from "../auth/pipeline";
+import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
@@ -116,4 +116,89 @@ export async function handleUnblock(
   // included (handleUnfollow follows.ts:96, handleDeletePost posts.ts). A lone
   // 204 here would make unblock the one DELETE a uniform client must special-case.
   return new Response(null, { status: 200 });
+}
+
+/**
+ * GET /blocks/status?id=<uuid>&id=<uuid>… — for the signed-in viewer, which of
+ * the given ids they have blocked. Mirrors follows.ts's handleFollowStatus
+ * exactly (same GET/no-CSRF/readCurrentSession shape, same bounded id list) —
+ * this is what lets a profile page render Block vs. Unblock without a write.
+ */
+const STATUS_MAX_IDS = 100;
+
+export async function handleBlockStatus(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const session = await readCurrentSession(env, request, () =>
+    errorResponse("LOGIN_REQUIRED", 401),
+  );
+  if (session instanceof Response) return session;
+
+  const ids = new URL(request.url).searchParams
+    .getAll("id")
+    .filter((id) => UUID_RE.test(id))
+    .slice(0, STATUS_MAX_IDS);
+
+  if (ids.length === 0) {
+    return new Response(JSON.stringify({ blocked: [], viewerId: session.userId }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  const blocked = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ blocked_id: string }>(
+      `SELECT blocked_id FROM blocks
+        WHERE blocker_id = $1 AND blocked_id = ANY($2::uuid[])`,
+      [session.userId, ids],
+    );
+    return rows.map((r) => r.blocked_id);
+  });
+  return new Response(JSON.stringify({ blocked, viewerId: session.userId }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * GET /blocks — every user the signed-in viewer has blocked, most recent
+ * first. The only way to reach "unblock" WITHOUT already knowing the blocked
+ * user's handle (endpoint/UI audit, 2026-09-24: block without this is a
+ * one-way door for anyone who can't find their way back to that profile).
+ */
+export async function handleListBlocks(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const session = await readCurrentSession(env, request, () =>
+    errorResponse("LOGIN_REQUIRED", 401),
+  );
+  if (session instanceof Response) return session;
+
+  const users = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{
+      user_id: string;
+      username: string;
+      display_name: string | null;
+    }>(
+      `SELECT p.user_id, p.username, p.display_name
+         FROM blocks b
+         JOIN profiles p ON p.user_id = b.blocked_id
+        WHERE b.blocker_id = $1
+        ORDER BY b.created_at DESC`,
+      [session.userId],
+    );
+    return rows.map((r) => ({
+      userId: r.user_id,
+      username: r.username,
+      displayName: r.display_name,
+    }));
+  });
+  return new Response(JSON.stringify({ users }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 }
