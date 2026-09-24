@@ -52,4 +52,23 @@ describe("forgot-password.astro", () => {
   it("links to /login", () => {
     expect(code).toMatch(/href="\/login"/);
   });
+
+  // ⚠️ 2026-09-24 — same failure-UX fix as signup.astro (see
+  // src/scripts/turnstile-error.ts's header): a failed/timed-out challenge
+  // used to leave the visitor on "Verifying…" forever with no feedback.
+  it("wires the real widget's error/timeout callbacks to the shared failure-UX island, co-located with the widget branch", () => {
+    const ternaryStart = code.indexOf("turnstileSiteKey ? (");
+    const widgetBranch = code.slice(ternaryStart, code.indexOf(") : (", ternaryStart));
+    expect(widgetBranch).toContain('data-error-callback="turnstileOnError"');
+    expect(widgetBranch).toContain('data-timeout-callback="turnstileOnTimeout"');
+    expect(widgetBranch).toContain("data-turnstile-error");
+    expect(widgetBranch).toContain("data-turnstile-retry");
+    expect(code).toContain('import { initTurnstileErrorHandling } from "../scripts/turnstile-error"');
+    expect(code).toContain("initTurnstileErrorHandling();");
+  });
+
+  it("the retry affordance shows explanatory copy, not a bare button with no context", () => {
+    expect(code).toMatch(/Verification failed/);
+    expect(code).toMatch(/Tap to retry/);
+  });
 });

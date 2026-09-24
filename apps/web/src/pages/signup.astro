@@ -143,11 +143,26 @@ if (Astro.request.method === "POST") {
             */}
             {
               turnstileSiteKey ? (
-                <div
-                  class="cf-turnstile"
-                  data-sitekey={turnstileSiteKey}
-                  data-response-field-name="turnstileToken"
-                ></div>
+                <>
+                  <div
+                    class="cf-turnstile"
+                    data-sitekey={turnstileSiteKey}
+                    data-response-field-name="turnstileToken"
+                    data-error-callback="turnstileOnError"
+                    data-timeout-callback="turnstileOnTimeout"
+                  ></div>
+                  {/* SSR-hidden — src/scripts/turnstile-error.ts reveals this
+                      and disables Submit on a widget error/timeout, matching
+                      the tonight's-outage lesson: a stuck "Verifying…" with
+                      no feedback cost two hours diagnosing something that
+                      turned out to be Turnstile working as designed. This is
+                      feedback ONLY — no mode change, no bypass; see that
+                      file's header for the hard boundary. */}
+                  <p class="turnstile-error" data-turnstile-error hidden>
+                    Verification failed.{" "}
+                    <button type="button" data-turnstile-retry class="link">Tap to retry</button>
+                  </p>
+                </>
               ) : (
                 // ⚠️ type="text", NOT hidden. This dev/e2e-only fallback must be
                 // a VISIBLE, fillable input: the Playwright helper drives it with
@@ -171,6 +186,10 @@ if (Astro.request.method === "POST") {
                   challenges.cloudflare.com only (src/lib/csp.ts's signup policy).
                 */}
                 <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+                <script>
+                  import { initTurnstileErrorHandling } from "../scripts/turnstile-error";
+                  initTurnstileErrorHandling();
+                </script>
               </>
             )
           }
@@ -183,6 +202,7 @@ if (Astro.request.method === "POST") {
 </BaseLayout>
 <style>
   .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .turnstile-error{color:var(--red, #e5484d);font-size:14px;margin-top:-4px}
   .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
   .form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
   .form input{background:var(--ink2);border:1px solid var(--line);border-radius:8px;
