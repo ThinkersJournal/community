@@ -16,7 +16,7 @@ import { errorResponse } from "../http/errors";
 
 import { verifyAccessJwt, type AdminIdentity } from "./access-jwt";
 
-export const ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion";
+import { ACCESS_JWT_HEADER } from "@thinkersjournal/shared";
 
 export async function requireAdmin(request: Request, env: Env): Promise<AdminIdentity | Response> {
   const token = request.headers.get(ACCESS_JWT_HEADER);
