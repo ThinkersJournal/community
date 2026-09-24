@@ -58,6 +58,36 @@ jobs:
           test -f apps/web/dist/server/entry.mjs
           echo "OK: apps/web/dist/server/entry.mjs present — build-gated tests will fire."
 
+      # test/hidden-controls-render.node.test.ts (apps/web) launches real
+      # Playwright chromium directly — same browser binary the `e2e` job
+      # below already installs, needed here too since this job's `pnpm -r
+      # run test` is what actually runs that suite.
+      #
+      # ⚠️ CACHED (PM review, 2026-09-24): without this, `test` AND `e2e` —
+      # BOTH required checks — download the chromium binary from Playwright's
+      # CDN on every single PR, forever, with no caching anywhere in this
+      # workflow. That is a permanent network-dependent flakiness tax on the
+      # gate protecting main. Playwright's own recommended CI pattern: cache
+      # `~/.cache/ms-playwright` keyed on the lockfile (which pins
+      # @playwright/test's exact version, so a version bump correctly busts
+      # the cache), and on a hit skip the browser download but still run
+      # `install-deps` (apt-only, no download) — a fresh runner's OS-level
+      # libraries are not part of this cache path and are needed either way.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright browser + OS deps
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install Playwright OS deps only (browser cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
       - name: Run tests
         run: pnpm -r run test
 
@@ -102,8 +132,26 @@ jobs:
       - name: Migrate the dev database (E2E writes real users to it)
         run: pnpm --filter @thinkersjournal/api run migrate
 
+      # ⚠️ CACHED — same reasoning and key as the `test` job above. Same
+      # cache key deliberately: `test` and `e2e` run CONCURRENTLY in this
+      # workflow (no `needs:` between them), so neither warms the other
+      # within one run — the shared key means whichever job's cache-save
+      # lands first (GitHub dedupes concurrent saves of the same key) is
+      # what every LATER run, in either job, then hits.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install Playwright browser + OS deps
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install Playwright OS deps only (browser cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
 
       # Playwright's own webServer config builds web and starts BOTH wrangler dev
       # processes (api on 8788, web on 8787). GitHub sets CI=true automatically,
