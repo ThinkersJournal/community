@@ -32,10 +32,10 @@ declare global {
     // argument — Turnstile calls `data-error-callback` and
     // `data-timeout-callback` as two independently-configured callbacks by
     // name; it does not pass a discriminator identifying which fired.
-    turnstileOnError?: (errorCode?: string) => void;
+    turnstileOnError?: (_errorCode?: string) => void;
     turnstileOnTimeout?: () => void;
     turnstile?: {
-      reset: (widget?: string | HTMLElement) => void;
+      reset: (_widget?: string | HTMLElement) => void;
     };
   }
 }
@@ -46,7 +46,7 @@ function reportFailure(kind: "widget_error" | "widget_timeout"): void {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ kind }),
-  }).catch(() => {});
+  }).catch(() => { /* fire-and-forget — a lost signal must not break the UX */ });
 }
 
 export function initTurnstileErrorHandling(): void {
@@ -68,8 +68,8 @@ export function initTurnstileErrorHandling(): void {
   // Turnstile-internal diagnostic code, not a credential, but this file's
   // job is the UX + a COUNT, not a diagnosis; the server-side signal above
   // already carries everything an operator needs.
-  window.turnstileOnError = () => showFailure("widget_error");
-  window.turnstileOnTimeout = () => showFailure("widget_timeout");
+  window.turnstileOnError = () => { showFailure("widget_error"); };
+  window.turnstileOnTimeout = () => { showFailure("widget_timeout"); };
 
   retryBtn.addEventListener("click", () => {
     errorNote.hidden = true;

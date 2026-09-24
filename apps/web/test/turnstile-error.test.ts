@@ -45,7 +45,7 @@ describe("turnstile-error island", () => {
 
   it("reports a countable signal to /api/turnstile-signal, fire-and-forget, on both error and timeout", () => {
     expect(code).toContain('fetch("/api/turnstile-signal"');
-    expect(code).toMatch(/\.catch\(\(\)\s*=>\s*\{\}\)/); // never surfaces as an unhandled rejection
+    expect(code).toMatch(/\.catch\(\(\) => \{/); // never surfaces as an unhandled rejection
     expect(code).toContain('"widget_error"');
     expect(code).toContain('"widget_timeout"');
   });
