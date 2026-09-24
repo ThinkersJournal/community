@@ -25,7 +25,7 @@ import {
   handleBackfillHiddenMedia,
   handleRequestMediaAccess,
 } from "./routes/admin";
-import { handleBlock, handleUnblock } from "./routes/blocks";
+import { handleBlock, handleBlockStatus, handleListBlocks, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
 import { handleCsrf } from "./routes/csrf";
@@ -231,6 +231,13 @@ export const ROUTES: readonly RouteDef[] = [
   // (different methods, no shadow risk).
   { method: "POST", pattern: "/blocks", handler: handleBlock },
   { method: "DELETE", pattern: "/blocks/:blockedId", handler: handleUnblock },
+
+  // GET reads (endpoint/UI audit, 2026-09-24) — /blocks/status mirrors
+  // /follows/status exactly (same GET/no-CSRF/readCurrentSession shape); GET
+  // /blocks is the viewer's own blocked list, the only way to reach "unblock"
+  // without already knowing the blocked user's handle.
+  { method: "GET", pattern: "/blocks/status", handler: handleBlockStatus },
+  { method: "GET", pattern: "/blocks", handler: handleListBlocks },
 
   // Per-viewer home feed (M2.1) — no-store, never edge-cached.
   { method: "GET", pattern: "/feed", handler: handleFeed },

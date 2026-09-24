@@ -189,6 +189,19 @@ describe("DELETE /blocks/:blockedId", () => {
     expect(((await response.json()) as { code: string }).code).toBe("NOT_BLOCKED");
   });
 
+  it("removed from the viewer's GET /blocks list", async () => {
+    const blocker = await createVerifiedActor();
+    const blocked = await createVerifiedActor();
+    await block(blocker, blocked.userId);
+    await unblock(blocker, blocked.userId);
+
+    const response = await fetchWorker(
+      new Request("https://api.test/blocks", { headers: { Cookie: blocker.cookie } }),
+    );
+    const body = (await response.json()) as { users: { userId: string }[] };
+    expect(body.users.some((u) => u.userId === blocked.userId)).toBe(false);
+  });
+
   it("busts the followee cache for BOTH users on unblock", async () => {
     const blocker = await createVerifiedActor();
     const blocked = await createVerifiedActor();
@@ -222,5 +235,64 @@ describe("DELETE /blocks/:blockedId", () => {
     expect(busted.sort()).toEqual(
       [`followees:${blocker.userId}`, `followees:${blocked.userId}`].sort(),
     );
+  });
+});
+
+describe("GET /blocks/status", () => {
+  it("returns the subset of ids the viewer has blocked", async () => {
+    const other = await createVerifiedActor();
+    await block(alice, other.userId);
+
+    const response = await fetchWorker(
+      new Request(`https://api.test/blocks/status?id=${other.userId}&id=${bob.userId}`, {
+        headers: { Cookie: alice.cookie },
+      }),
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { blocked: string[]; viewerId: string };
+    expect(body.blocked).toContain(other.userId);
+    expect(body.blocked).not.toContain(bob.userId);
+    expect(body.viewerId).toBe(alice.userId);
+  });
+
+  it("401s without a session", async () => {
+    const response = await fetchWorker(
+      new Request(`https://api.test/blocks/status?id=${bob.userId}`),
+    );
+    expect(response.status).toBe(401);
+  });
+});
+
+describe("GET /blocks", () => {
+  it("lists every user the viewer has blocked, most recent first", async () => {
+    const blocker = await createVerifiedActor();
+    const first = await createVerifiedActor();
+    const second = await createVerifiedActor();
+    await block(blocker, first.userId);
+    await block(blocker, second.userId);
+
+    const response = await fetchWorker(
+      new Request("https://api.test/blocks", { headers: { Cookie: blocker.cookie } }),
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      users: { userId: string; username: string; displayName: string | null }[];
+    };
+    expect(body.users.map((u) => u.userId)).toEqual([second.userId, first.userId]);
+    expect(body.users[0]?.username).toBe(second.username);
+  });
+
+  it("401s without a session", async () => {
+    const response = await fetchWorker(new Request("https://api.test/blocks"));
+    expect(response.status).toBe(401);
+  });
+
+  it("empty for a viewer who has blocked no one", async () => {
+    const lonely = await createVerifiedActor();
+    const response = await fetchWorker(
+      new Request("https://api.test/blocks", { headers: { Cookie: lonely.cookie } }),
+    );
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { users: unknown[] }).users).toEqual([]);
   });
 });

@@ -319,6 +319,19 @@ if (post !== null) {
         <div class="post-delete" data-post-delete data-post-id={post.id} data-post-author-id={post.authorId} data-handle={post.username} hidden></div>
       </div>
 
+      {/* THE REPORT CONTROL (endpoint/UI audit, 2026-09-24) — available to ANY
+          signed-in verified viewer, not owner-gated like owner-actions above
+          (a member reports someone ELSE's post, never their own in practice,
+          but nothing here special-cases that — the backend doesn't either).
+          Same SSR-hidden + client-reveal shape as the owner controls: this
+          render is fully anonymous + edge-cached, so there is no
+          viewer-specific value to decide "is this viewer signed in" here.
+          POST /reports already returns a bare 201 either way (never reveals
+          whether THIS report tripped the auto-hide threshold) — the
+          acknowledgment src/scripts/report-control.ts shows is identical on
+          every successful submit, by construction, not by care taken here. */}
+      <div class="post-report" data-post-report data-post-id={post.id} hidden></div>
+
       {/* Freeform tags (M2.4c). encodeURIComponent on the slug in the href — a URL
           needs percent-encoding; Astro `{}` only HTML-escapes. The label is an
           Astro `{}` expression (escaped), never set:html. */}
@@ -391,9 +404,11 @@ if (post !== null) {
       import { initCommentsLive } from "../../scripts/comments-live";
       import { initPostDelete } from "../../scripts/post-delete";
       import { initPostVisibilityView } from "../../scripts/post-visibility-view";
+      import { initPostReport } from "../../scripts/post-report";
       initCommentsIsland();
       initReactionsIsland();
       initCommentsLive();
+      initPostReport();
       initPostDelete();
       initPostVisibilityView();
     </script>
@@ -440,6 +455,12 @@ if (post !== null) {
   .post-visibility-view{display:flex;align-items:center;gap:10px}
   .post-visibility-view[hidden]{display:none}
   .post-visibility-view [hidden]{display:none}
+  /* Same class of bug as .post-delete/.post-visibility-view above (author-origin
+     display:flex beats the UA [hidden] rule) — same fix, applied here too. */
+  .post-report{display:flex;align-items:center;gap:10px;margin:16px 0 0}
+  .post-report[hidden]{display:none}
+  .report-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .report-note{color:var(--dim);font-size:.9em}
   .post-visibility-error{color:var(--dim);margin:6px 0 0;font-size:.9em}
   .tags{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0}
   .tags .tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}

@@ -164,6 +164,12 @@ const displayDate = (value: string): string => {
       <span><strong data-following-count>—</strong> following</span>
     </section>
     <button class="btn btn-primary follow" data-follow-btn data-user-id={profile.userId} hidden>Follow</button>
+    {/* Block/Unblock (endpoint/UI audit, 2026-09-24) — SSR-hidden, same
+        reveal-via-/api/blocks?status= pattern as Follow above. The confirm
+        copy this reveals is a HARD REQUIREMENT of the M4 report/block design
+        doc §2.1 (block is interaction-control, not invisibility) — see
+        src/scripts/block-toggle.ts's header before changing any wording. */}
+    <button class="btn btn-ghost block" data-block-btn data-user-id={profile.userId} hidden>Block</button>
 
     {/* Follower/following lists — load client-side on click; the disclosure
         buttons carry only the profile owner's username (viewer-independent),
@@ -229,16 +235,22 @@ const displayDate = (value: string): string => {
   </div>
 
   <script>
+    import { initBlockToggle } from "../../scripts/block-toggle";
     import { initOwnerPosts } from "../../scripts/owner-posts";
     import { initSocialIsland } from "../../scripts/social";
     initSocialIsland();
     initOwnerPosts();
+    initBlockToggle();
   </script>
 </BaseLayout>
 <style>
   .profile{padding:clamp(40px,7vw,80px) 0}
   .bio{color:var(--muted);margin:12px 0}
   .social{display:flex;gap:22px;color:var(--muted);margin:18px 0}
+  .block{margin-left:12px}
+  .block-confirm{display:flex;flex-direction:column;gap:10px;margin:12px 0;
+    padding:16px;border:1px solid var(--line);border-radius:8px;max-width:480px}
+  .block-confirm p{color:var(--muted)}
   .lists{display:flex;flex-wrap:wrap;gap:12px;margin:18px 0}
   .posts{list-style:none;display:flex;flex-direction:column;gap:24px;margin-top:28px}
   .tags{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0}

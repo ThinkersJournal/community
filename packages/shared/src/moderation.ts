@@ -31,3 +31,22 @@ export const ReportInput = z
 export const BlockInput = z.object({
   blockedId: z.string().uuid(),
 });
+
+/** `GET /blocks/status?id=…&id=…` — the subset of ids the viewer has blocked. */
+export interface BlockStatusResult {
+  blocked: string[];
+  /** The signed-in viewer's own user id (so a caller can self-exclude/hide). */
+  viewerId: string;
+}
+
+/** A row in the viewer's own blocked-users list. */
+export interface BlockedUser {
+  userId: string;
+  username: string;
+  displayName: string | null;
+}
+
+/** `GET /blocks` — every user the signed-in viewer has blocked, most recent first. */
+export interface BlockedList {
+  users: BlockedUser[];
+}

@@ -282,6 +282,19 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /follows/status",
     build: () => new Request("https://api.test/follows/status?id=00000000-0000-7000-8000-000000000000"),
   },
+  // GET /blocks/status and GET /blocks (endpoint/UI audit, 2026-09-24)
+  // authenticate via readCurrentSession, identical shape to GET
+  // /follows/status just above — their only error path.
+  {
+    name: "401 blocks/status with no session",
+    route: "GET /blocks/status",
+    build: () => new Request("https://api.test/blocks/status?id=00000000-0000-7000-8000-000000000000"),
+  },
+  {
+    name: "401 blocks list with no session",
+    route: "GET /blocks",
+    build: () => new Request("https://api.test/blocks"),
+  },
   {
     name: "401 reactions/mine with no session",
     route: "GET /reactions/mine",

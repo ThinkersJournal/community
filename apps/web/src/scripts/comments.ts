@@ -5,7 +5,14 @@
  * here comes from /api/me at runtime. After ANY successful write it reloads —
  * the api purged post:<id> before answering, so the reload IS the fresh render.
  * DOM is built with createElement/textContent ONLY (no HTML injection sink).
+ *
+ * Report (endpoint/UI audit, 2026-09-24): every comment NOT the viewer's own
+ * gets a Report button (src/scripts/report-control.ts) — reporting your own
+ * comment is nonsensical and the backend doesn't special-case it, so this is
+ * the one place that gate is applied.
  */
+import { wireReportButton } from "./report-control";
+
 interface MeResponse {
   loggedIn: boolean;
   userId: string | null;
@@ -191,6 +198,10 @@ export function wireCommentAffordances(
         });
     });
     actions.appendChild(del);
+  }
+
+  if (authorId !== viewerId) {
+    wireReportButton(actions, { csrfToken, target: { commentId } });
   }
 }
 

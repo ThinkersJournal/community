@@ -1,0 +1,62 @@
+---
+/**
+ * `/settings/blocked` — the viewer's own blocked-users list, with Unblock.
+ * Endpoint/UI audit, 2026-09-24: without this page, unblock is only reachable
+ * from a blocked user's OWN profile — a one-way door for anyone who doesn't
+ * remember their handle. Authed + never cached (markPrivate), same shape as
+ * settings/notifications.astro: this page reads a real session, so — unlike
+ * the profile page's Block/Unblock toggle — it SSR-renders the list directly
+ * rather than hydrating client-side; there is no anonymous/cached render of
+ * this page to protect.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { apiFetch } from "../../lib/api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+import type { BlockedList } from "@thinkersjournal/shared";
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
+const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
+if (csrfToken === null) return Astro.redirect("/login");
+
+const listResp = await apiFetch<BlockedList>("/blocks", { request: Astro.request });
+const users = listResp.status === 200 && listResp.data ? listResp.data.users : [];
+---
+<BaseLayout title="Blocked users">
+  <div class="wrap form-page">
+    <h1>Blocked users</h1>
+    <p class="settings-nav"><a class="link" href="/settings/notifications">← Notification emails</a></p>
+    <p class="hint">Blocking stops someone from following, commenting on, or reacting to you — it does not hide your public posts from them. See a user's own profile to block someone new.</p>
+    {
+      users.length === 0 ? (
+        <p id="no-blocks">You haven't blocked anyone.</p>
+      ) : (
+        <ul class="blocked-list" data-blocked-list data-csrf-token={csrfToken}>
+          {users.map((u) => (
+            <li data-blocked-row data-user-id={u.userId}>
+              <a href={`/@${encodeURIComponent(u.username)}`}>{u.displayName ?? `@${u.username}`}</a>
+              <button type="button" class="btn btn-ghost" data-unblock-btn data-user-id={u.userId}>Unblock</button>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </div>
+
+  <script>
+    import { initBlockedList } from "../../scripts/blocked-list";
+    initBlockedList();
+  </script>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:560px}
+  .settings-nav{margin:4px 0 20px}
+  .hint{color:var(--muted);font-size:14px;margin:12px 0 24px}
+  .blocked-list{list-style:none;display:flex;flex-direction:column;gap:12px}
+  .blocked-list li{display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:12px 16px;border:1px solid var(--line);border-radius:8px}
+</style>
