@@ -140,5 +140,5 @@ export function initBlockToggle(): void {
     } else {
       renderBlockState(btn, csrfToken, profileUserId);
     }
-  });
+  }).catch(() => { /* loadStatus never rejects (its own try/catch always resolves with a fallback) — belt-and-braces, matches nav-auth.ts's swallow */ });
 }
