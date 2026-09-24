@@ -49,6 +49,15 @@ export function initNavAuth(): void {
       profile.href = me.username ? `/@${me.username}` : "/feed";
       profile.textContent = me.username ? `@${me.username}` : "Account";
 
+      // Endpoint/UI audit (2026-09-24): /settings/notifications had a
+      // working page and no CSS/hidden defect, but its ONLY inbound link in
+      // the whole app was the unsubscribe-email landing page's "changed
+      // your mind?" line — a signed-in member browsing the site had no
+      // click-path to their own notification preferences at all.
+      const settings = document.createElement("a");
+      settings.href = "/settings/notifications";
+      settings.textContent = "Settings";
+
       const out = document.createElement("button");
       out.type = "button";
       out.className = "signout";
@@ -71,6 +80,7 @@ export function initNavAuth(): void {
       // any arity. appendChild is unaffected (see social.ts for precedent).
       slot.appendChild(newPost);
       slot.appendChild(profile);
+      slot.appendChild(settings);
       slot.appendChild(out);
       slot.appendChild(outAll);
     })
