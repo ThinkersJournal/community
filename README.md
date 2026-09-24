@@ -304,45 +304,54 @@ nosniff`, and the **CSAM Scanning Tool** activated.
 
 ### Post-deploy smoke check (`pnpm smoke:deploy`)
 
-**Run this against the deployed api before pointing DNS at it.** It is the concrete,
-runnable form of two gate items that used to be prose (`TEST_ROUTES` unset; "one pass on
-real infra"), and it exits non-zero with a named failure:
+**Run this against the deployed `web` hostname after a deploy.** It is the concrete,
+runnable form of gate items that used to be prose ("one pass on real infra"), and it
+exits non-zero with a named failure:
 
 ```bash
-pnpm smoke:deploy https://thinkersjournal-api.<subdomain>.workers.dev \
-  --turnstile-token '<a freshly-solved Turnstile token>'
+pnpm smoke:deploy --turnstile-token '<a freshly-solved Turnstile token>'
+# defaults to https://community.thinkersjournal.com; override with a positional arg
+# or SMOKE_BASE_URL if ever needed against a different deployed host
 ```
+
+⚠️ **Retargeted 2026-09-24 — the `api` Worker has NO public route at all.**
+`apps/api/wrangler.jsonc` sets `workers_dev: false` (the post-DNS-cutover deploy-gate
+item), so the api is reachable only through `web`'s Service Binding, and `web`'s own
+public hostname is the only path this script (or anything else outside Cloudflare) can
+use to reach it. An earlier version of this script targeted the api's own
+`*.workers.dev` URL directly; that URL now answers with Cloudflare's own edge error
+1042, and the script had been silently unrunnable against production since the cutover.
 
 | # | Assertion | What a failure means |
 | --- | --- | --- |
-| 1 | `GET /__test/last-verify-token` → **404** | `TEST_ROUTES` leaked into prod — the route hands out a live verification token (account takeover). |
-| 2 | `GET /health` → **200** | The api is not serving. |
-| 3 | A real signup → **201** | Hyperdrive/Neon, the argon2id `.wasm` bundling, the KV write, or the DO round-trip is broken on real infra. |
-| 4 | That signup's `Set-Cookie` carries **`Secure`** and is **HOST-ONLY** (no `Domain=` attribute) | `TEST_ROUTES` leaked — session tokens are riding plaintext http. |
+| 1 | `GET /health/db` → **200**, `{"status":"ok",...}` | `web` is not serving, or the `web → api` Service Binding is down. |
+| 2 | A real signup via `web`'s `/signup` page → renders its "check email" success state | The Origin allowlist rejected this exact host, or Hyperdrive/Neon, the argon2id `.wasm` bundling, the KV write, the DO round-trip, or Turnstile is broken on real infra. |
+| 3 | That signup's `Set-Cookie` carries **`Secure`** and is **HOST-ONLY** (no `Domain=` attribute) | `TEST_ROUTES` leaked into prod — session tokens are riding plaintext http. |
 
-**Why a `curl`-shaped check and not a browser.** The first deploy is on `*.workers.dev`,
-which is **not** in `PRODUCTION_ORIGINS`, and the session cookie is HOST-ONLY (no
-`Domain=` attribute, scoped to exactly `community.thinkersjournal.com`) — so from a
-*browser* on the workers.dev URL every POST 403s and the cookie is rejected. The browser
-path simply **cannot** be validated before cutover. But `checkOrigin` reads a
-*client-supplied* header and the api has a public URL, so a non-browser client closes the
-gap completely:
+⚠️ **`TEST_ROUTES` unset can no longer be verified from outside at all.** The old check
+(`GET /__test/last-verify-token` → 404 on the api's own public URL) has no equivalent
+post-cutover — that route is deliberately NOT proxied through `web` (proxying a
+dev/test-only credential-leak seam through the public Worker would be a worse hole than
+the one it exists to catch). The script prints a loud manual-verification notice instead
+of a check result; confirm directly in the Cloudflare dashboard's Workers Builds project
+vars for `thinkersjournal-api`. Assertion 3 above still verifies the flag's *consequence*
+(the cookie attribute it strips) even though the flag itself isn't independently checkable.
 
-```bash
-curl -X POST https://thinkersjournal-api.<sub>.workers.dev/auth/signup \
-  -H 'Origin: https://community.thinkersjournal.com' -H 'content-type: application/json' \
-  -d '{"email":"smoke-<uuid>@example.com","password":"<12+ chars>","turnstileToken":"<real>"}'
-```
-
-A **201** proves Hyperdrive connectivity **+** the argon2id `.wasm` bundling **+** the KV
-write **+** the DO round-trip, on **real** infra. That is not a bypass: the Origin
-allowlist defends *browsers* (a page on evil.com cannot forge the header), never scripts —
-the api's real guards against those are `TEST_ROUTES` unset, CSRF, and the session/epoch
-checks. `scripts/deploy-smoke.mjs` is exactly this request, plus the cookie assertion.
+**Why this drives the real browser page, not a hand-built JSON request.** `web`'s
+`/signup` is a server-rendered FORM POST target, not a JSON API — a real browser posting
+form-urlencoded data to `web`'s own origin is the actual production path (browser → web →
+api over the Service Binding), and it is what this script now does. The `Origin` header
+it sends is derived from the target host itself, exactly what a real browser on that host
+would send — not a separately hardcoded value that could silently drift from whatever
+`checkOrigin`'s allowlist actually contains.
 
 > ⚠️ It writes a **real, unverified user** to the production DB (a per-run
 > `smoke-<uuid>@example.com`). That is the point — a dry run proves nothing about
 > Hyperdrive. Clean these up periodically.
+
+> ⚠️ **The Turnstile token requirement is permanent, not a gap to close.** It must be a
+> real, freshly human-solved token (single-use, ~300s TTL) — there is no automatable
+> substitute that would not reintroduce the exact always-passing fallback `#89` was about.
 >
 > ⚠️ It needs a **real Turnstile token** (prod runs real keys, so the dummy secret is not
 > deployed): solve the widget on the real signup page and copy the

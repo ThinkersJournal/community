@@ -59,6 +59,25 @@
  * exactly the two expected compiled chunks (signup, forgot-password). Both
  * observed directly, which is also the SECONDARY check's own positive/
  * negative control — see test/turnstile-build-guard.node.test.ts.
+ *
+ * ⚠️✅ `WORKERS_CI` CONFIRMED REAL, 2026-09-24, Workers Builds ID
+ * `8cb3ff12-16fd-4cb4-a0eb-536dd1722a15` — this stopped being a doc citation
+ * today. CireSnave read the deploy log (dashboard-only; not reachable via
+ * the check-run API — its `text` field is empty) and quoted this repo's own
+ * unconditional log line from build-web.mjs's step 0 verbatim:
+ *
+ *     10:15:17.602  [build-web] WORKERS_CI="1" PUBLIC_TURNSTILE_SITE_KEY=(set)
+ *
+ * `WORKERS_CI` is exactly `"1"`, the literal value `assertTurnstileKeySetOnDeploy`
+ * compares against below — so the PRIMARY check was not merely present in
+ * source, it EXECUTED, on the real build that finally shipped the real site
+ * key. Until this confirmation, "a production build without the site key is
+ * a failed build" was an assertion that might never once have fired, gated
+ * entirely on a variable nobody with dashboard access had looked at — which
+ * would have left the dummy-token scan below as the only check actually
+ * running. It does not need re-confirming on every future build; Cloudflare
+ * stamping this variable is not something this repo's own code could
+ * silently stop being true for, the way a hand-set site key could.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
