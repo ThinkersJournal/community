@@ -32,10 +32,23 @@ declare global {
     // argument — Turnstile calls `data-error-callback` and
     // `data-timeout-callback` as two independently-configured callbacks by
     // name; it does not pass a discriminator identifying which fired.
-    turnstileOnError?: (_errorCode?: string) => void;
+    //
+    // ⚠️ REST-TUPLE PARAMS (`...args: [T?]`), NOT a named optional param —
+    // an interface method signature has no body, so a NAMED parameter is
+    // definitionally "unused" within the signature itself; Codacy flagged
+    // exactly that, and an underscore prefix did NOT satisfy this project's
+    // rule config for this position (confirmed by re-running with it, not
+    // assumed). A rest tuple accepts the identical call shape (zero or one
+    // argument of the given type) with no name to flag. `turnstileOnError`
+    // still receives Turnstile's own error-code string at the call site —
+    // this app just never reads it (see the doc comment on its assignment
+    // below for why); `reset` is genuinely CALLED with a real argument
+    // (`window.turnstile?.reset(container)` below), so this only changes
+    // how the type is spelled, not what it accepts.
+    turnstileOnError?: (...args: [string?]) => void;
     turnstileOnTimeout?: () => void;
     turnstile?: {
-      reset: (_widget?: string | HTMLElement) => void;
+      reset: (...args: [(string | HTMLElement)?]) => void;
     };
   }
 }
