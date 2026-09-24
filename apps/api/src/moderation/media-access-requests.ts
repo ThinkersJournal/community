@@ -47,3 +47,42 @@ export async function approveMediaAccess(
   );
   return (rowCount ?? 0) > 0;
 }
+
+export interface PendingMediaAccessRequest {
+  readonly id: string;
+  readonly r2Key: string;
+  readonly requestedBy: string;
+  readonly reason: string;
+  readonly createdAt: Date;
+}
+
+/**
+ * Every UNAPPROVED request, oldest first — the admin UI's whole reason for
+ * existing (endpoint/UI audit, 2026-09-24): before this there was no way to
+ * SEE a pending request except a raw HTTP call. `approved_by IS NULL` is the
+ * same predicate `approveMediaAccess`'s own `WHERE` clause requires to
+ * succeed, so a row that disappears from this list is exactly a row that can
+ * no longer be approved (already approved, by construction — there is no
+ * delete/expiry path on this table).
+ */
+export async function listPendingMediaAccessRequests(c: Client): Promise<PendingMediaAccessRequest[]> {
+  const { rows } = await c.query<{
+    id: string;
+    r2_key: string;
+    requested_by: string;
+    reason: string;
+    created_at: Date;
+  }>(
+    `SELECT id, r2_key, requested_by, reason, created_at
+       FROM media_access_requests
+      WHERE approved_by IS NULL
+      ORDER BY created_at ASC`,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    r2Key: r.r2_key,
+    requestedBy: r.requested_by,
+    reason: r.reason,
+    createdAt: r.created_at,
+  }));
+}

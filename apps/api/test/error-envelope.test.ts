@@ -409,6 +409,13 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /admin/queue",
     build: () => new Request("https://api.test/admin/queue"),
   },
+  // GET /admin/media-access-requests (endpoint/UI audit, 2026-09-24) — same
+  // shape as GET /admin/queue directly above.
+  {
+    name: "401 admin media-access-requests list with no Access header",
+    route: "GET /admin/media-access-requests",
+    build: () => new Request("https://api.test/admin/media-access-requests"),
+  },
   // GET /media/restricted/:sha256 (#61) — a GET, so LAYER 1 never reaches it.
   // A malformed sha256 is its simplest reachable failure (NOT_FOUND, before
   // any auth check runs — src/routes/media-restricted.ts never distinguishes

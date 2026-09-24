@@ -1,0 +1,154 @@
+---
+/**
+ * `/admin/media-access` — the two-person grant for legally-held media (#61;
+ * M4 2b follow-up, endpoint/UI audit 2026-09-24). Same shape and same
+ * trust-boundary properties as `/admin/queue.astro` — see that file's header
+ * for the full reasoning; this one adds the two-person legibility
+ * requirement on top.
+ *
+ * ⚠️⚠️ THE SAME PROPERTY AS THE QUEUE PAGE: no request content (a sha256, a
+ * reason, an admin's email) reaches the HTML on any request that does not
+ * carry a verified Access JWT. The guard is the FIRST statement, before
+ * markPrivate, before the CSP, before any api call — verified live the same
+ * way (see this PR's description).
+ *
+ * ⚠️ TWO-PERSON LEGIBILITY (PM requirement, 2026-09-24): the api's
+ * `approveMediaAccess` already REFUSES a self-approval — that is the
+ * enforcement. This page's job is to make the RULE VISIBLE before the click:
+ * a pending request the viewer made themselves renders "Awaiting a
+ * different admin" instead of an Approve button, using the SAME
+ * case/whitespace-insensitive comparison `approveMediaAccess` itself uses
+ * (`lower(trim(...))` on both sides) — see packages/shared/src/admin.ts's
+ * AdminMediaAccessRequest and apps/api/src/moderation/
+ * media-access-requests.ts's own comment on why that normalization exists.
+ * A moderator who does not understand the rule assumes the system is
+ * broken; a button that visibly can't be clicked for a stated reason does not.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { adminApiErrorCode, adminApiFetch } from "../../lib/admin-api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+import {
+  ACCESS_JWT_HEADER,
+  type AdminIdentityWire,
+  type AdminMediaAccessRequestsResponse,
+} from "@thinkersjournal/shared";
+
+// ⚠️⚠️ THE GUARD — see this file's header. Nothing above this line does
+// anything; nothing below it may run when this returns.
+const accessJwt = Astro.request.headers.get(ACCESS_JWT_HEADER);
+if (accessJwt === null || accessJwt === "") {
+  return new Response(null, { status: 401 });
+}
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+let actionError: string | null = null;
+let requestOk = false;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const intent = form.get("intent");
+  const origin = Astro.request.headers.get("Origin") ?? "";
+
+  if (intent === "approve") {
+    const id = form.get("id");
+    const res = await adminApiFetch(`/admin/media-access-requests/${id}/approve`, {
+      method: "POST",
+      accessJwt,
+      origin,
+    });
+    if (res.status !== 204) actionError = adminApiErrorCode(res) ?? "APPROVE_FAILED";
+  } else if (intent === "request") {
+    const sha256 = form.get("sha256");
+    const reason = form.get("reason");
+    const res = await adminApiFetch("/admin/media-access-requests", {
+      method: "POST",
+      accessJwt,
+      origin,
+      body: { sha256, reason },
+    });
+    if (res.status === 201) requestOk = true;
+    else actionError = adminApiErrorCode(res) ?? "REQUEST_FAILED";
+  }
+}
+
+const whoamiResp = await adminApiFetch<AdminIdentityWire>("/admin/whoami", { accessJwt });
+const viewerEmail = whoamiResp.status === 200 ? (whoamiResp.data?.email ?? null) : null;
+
+const listResp = await adminApiFetch<AdminMediaAccessRequestsResponse>("/admin/media-access-requests", {
+  accessJwt,
+});
+const requests = listResp.status === 200 && listResp.data ? listResp.data.requests : [];
+const listError = listResp.status !== 200 ? (adminApiErrorCode(listResp) ?? "LIST_LOAD_FAILED") : null;
+
+/** Mirrors approveMediaAccess's own `lower(trim(requested_by)) <> lower(trim($2))` check, for display only. */
+function isOwnRequest(requestedBy: string): boolean {
+  return viewerEmail !== null && requestedBy.trim().toLowerCase() === viewerEmail.trim().toLowerCase();
+}
+---
+<BaseLayout title="Media access requests">
+  <div class="wrap admin-page">
+    <h1>Legally-held media — access requests</h1>
+    <p class="admin-nav"><a class="link" href="/admin/queue">← Moderation queue</a></p>
+    {actionError && <p class="err">Action failed: {actionError}</p>}
+    {requestOk && <p class="ok">Request submitted.</p>}
+    {listError && <p class="err">Could not load requests: {listError}</p>}
+
+    <form method="POST" class="request-form">
+      <input type="hidden" name="intent" value="request" />
+      <label>
+        sha256
+        <input type="text" name="sha256" required pattern="[0-9a-f]{64}" maxlength="64" />
+      </label>
+      <label>
+        Reason
+        <textarea name="reason" required maxlength="2000" />
+      </label>
+      <button type="submit" class="btn btn-primary">Request access</button>
+    </form>
+
+    <h2>Pending</h2>
+    {
+      requests.length === 0 ? (
+        <p id="no-requests">Nothing pending.</p>
+      ) : (
+        <ul class="requests">
+          {requests.map((r) => (
+            <li class="request-item">
+              <p class="sha">{r.sha256}</p>
+              <p class="meta">requested by {r.requestedBy} · {r.reason} · {r.createdAt}</p>
+              {isOwnRequest(r.requestedBy) ? (
+                <p class="own-request">Awaiting a different admin — you can't approve your own request.</p>
+              ) : (
+                <form method="POST" class="approve-form">
+                  <input type="hidden" name="intent" value="approve" />
+                  <input type="hidden" name="id" value={r.id} />
+                  <button type="submit" class="btn btn-ghost">Approve</button>
+                </form>
+              )}
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .admin-page{padding:clamp(40px,7vw,80px) 0}
+  .admin-nav{margin:4px 0 20px}
+  .err{color:var(--red, #e5484d)}
+  .ok{color:var(--green)}
+  .request-form{display:flex;flex-direction:column;gap:10px;max-width:480px;margin:20px 0 32px;
+    padding:16px;border:1px solid var(--line);border-radius:8px}
+  .request-form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .request-form input,.request-form textarea{background:var(--ink2);border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;color:var(--text);font:inherit}
+  .requests{list-style:none;display:flex;flex-direction:column;gap:16px}
+  .request-item{border:1px solid var(--line);border-radius:8px;padding:16px}
+  .request-item .sha{font-family:monospace;font-size:13px;word-break:break-all}
+  .request-item .meta{color:var(--muted);font-size:13px;margin:6px 0 12px}
+  .own-request{color:var(--dim);font-size:14px;font-style:italic}
+</style>
