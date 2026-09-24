@@ -57,14 +57,16 @@ describe("setPublicPageCsp", () => {
     expect(emittedCsp()).toContain("script-src");
   });
 
-  it("⚠️ script-src is exactly 'self' — NO 'unsafe-inline', ever", () => {
+  it("⚠️ script-src is 'self' + the Cloudflare Insights beacon host — NO 'unsafe-inline', ever", () => {
     // THE directive the whole policy exists for. Astro bundles <script> into
-    // external modules, so nothing on this page needs inline script. If this
-    // ever reddens because someone added 'unsafe-inline', the answer is to
-    // remove it, not to update this test.
+    // external modules, so nothing on this page needs inline script. The
+    // beacon host (2026-09-24, CireSnave's call — see src/lib/csp.ts's
+    // header) is the one deliberate exception: still a host allowance, not
+    // 'unsafe-inline'. If this ever reddens because someone added
+    // 'unsafe-inline', the answer is to remove it, not to update this test.
     const scriptSrc = directive(emittedCsp(), "script-src");
     // Positive first: prove we are looking at a real, expected value...
-    expect(scriptSrc).toBe("'self'");
+    expect(scriptSrc).toBe("'self' https://static.cloudflareinsights.com");
     // ...then the negative, scoped to THIS directive only.
     expect(scriptSrc).not.toContain("unsafe-inline");
     expect(scriptSrc).not.toContain("unsafe-eval");
@@ -108,7 +110,8 @@ describe("setPublicPageCsp", () => {
 
   it("pins the EXACT policy (an unreviewed edit to the CSP must redden)", () => {
     expect(emittedCsp()).toBe(
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+      "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; " +
+        "style-src 'self' 'unsafe-inline'; " +
         "img-src 'self' https://cdn.thinkersjournal.com; font-src 'self'; connect-src 'self'; " +
         "form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'",
     );
@@ -150,11 +153,11 @@ describe("setPublicPageCsp({ turnstile: true }) — the signup page only", () =>
     return header as string;
   }
 
-  it("adds the Turnstile host to script-src — but STILL no 'unsafe-inline'", () => {
+  it("adds the Turnstile host to script-src (alongside the beacon host) — but STILL no 'unsafe-inline'", () => {
     // The api.js is an EXTERNAL script (a src), so the host allowance suffices;
     // the no-inline property this whole file exists for is preserved even here.
     const scriptSrc = directive(emittedSignupCsp(), "script-src");
-    expect(scriptSrc).toBe(`'self' ${TURNSTILE}`);
+    expect(scriptSrc).toBe(`'self' https://static.cloudflareinsights.com ${TURNSTILE}`);
     expect(scriptSrc).not.toContain("unsafe-inline");
     expect(scriptSrc).not.toContain("unsafe-eval");
   });
@@ -185,7 +188,8 @@ describe("setPublicPageCsp({ turnstile: true }) — the signup page only", () =>
 
   it("pins the EXACT signup policy (an unreviewed edit must redden)", () => {
     expect(SIGNUP_PAGE_CSP).toBe(
-      "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; " +
+      "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com " +
+        "https://challenges.cloudflare.com; " +
         "style-src 'self' 'unsafe-inline'; img-src 'self' https://cdn.thinkersjournal.com; " +
         "font-src 'self'; connect-src 'self' https://challenges.cloudflare.com; " +
         "frame-src https://challenges.cloudflare.com; form-action 'self'; " +
@@ -195,8 +199,21 @@ describe("setPublicPageCsp({ turnstile: true }) — the signup page only", () =>
 
   it("⚠️ PUBLIC_PAGE_CSP (the attacker-authored post page etc.) does NOT carry Turnstile", () => {
     // The whole reason this is a per-page opt-in: the cached, attacker-authored
-    // post page's policy must stay as tight as before.
+    // post page's policy must stay as tight as before — except for the
+    // zone-wide beacon host, which applies everywhere regardless (see
+    // src/lib/csp.ts's header: CireSnave chose that trade explicitly,
+    // knowing it reaches this exact page).
     expect(PUBLIC_PAGE_CSP).not.toContain("challenges.cloudflare.com");
     expect(PUBLIC_PAGE_CSP).not.toContain("frame-src");
+    expect(PUBLIC_PAGE_CSP).toContain("https://static.cloudflareinsights.com");
+  });
+
+  it("⚠️ connect-src does NOT carry the beacon host — not pre-emptively widened (only add if a real violation is observed)", () => {
+    // PM instruction, 2026-09-24: earn each CSP entry by observing an actual
+    // violation, never by guessing what a third party "probably" needs.
+    // This must be revisited (not silently "fixed") if the beacon is ever
+    // observed failing to report telemetry after deploy.
+    expect(directive(emittedCsp(), "connect-src")).toBe("'self'");
+    expect(directive(emittedSignupCsp(), "connect-src")).toBe(`'self' ${TURNSTILE}`);
   });
 });
