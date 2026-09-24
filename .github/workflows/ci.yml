@@ -58,6 +58,13 @@ jobs:
           test -f apps/web/dist/server/entry.mjs
           echo "OK: apps/web/dist/server/entry.mjs present — build-gated tests will fire."
 
+      # test/hidden-controls-render.node.test.ts (apps/web) launches real
+      # Playwright chromium directly — same browser binary the `e2e` job
+      # below already installs, needed here too since this job's `pnpm -r
+      # run test` is what actually runs that suite.
+      - name: Install Playwright browser + OS deps
+        run: pnpm exec playwright install --with-deps chromium
+
       - name: Run tests
         run: pnpm -r run test
 
