@@ -4,10 +4,24 @@
  * is HIDDEN (cache-safe: the nav is shared across every viewer, so it can
  * carry no per-viewer state). This runs client-side and:
  *
- *  1. Detects "signed in" via `/api/notifications-count`'s status code alone
- *     (200 → signed in, anything else → anonymous/degraded) — deliberately
- *     NOT an extra `/api/me` round trip just to check login state (deviation
- *     2, see the task brief). Reveals the bell + badge only on 200.
+ *  1. Detects "signed in" via a fresh `/api/me` check BEFORE ever calling
+ *     `/api/notifications-count` (2026-09-24 — was previously the count
+ *     endpoint's status code alone: 200 → signed in, anything else →
+ *     anonymous/degraded). Changed because that meant EVERY anonymous page
+ *     load fired a 401 against a session-authenticated endpoint — harmless
+ *     functionally (the degraded-mode handling was always correct), but a
+ *     red failed-request entry in the browser console/network panel on
+ *     every single logged-out visit, which is exactly the kind of noise
+ *     that costs real time during an actual incident (it did, once).
+ *     `/api/me` is the SAME idiom this file's own `getCsrfToken()` already
+ *     uses, and the one nav-auth.ts/comments.ts/owner-posts.ts/
+ *     block-toggle.ts all use — not a new pattern. It is a SEPARATE,
+ *     UNCACHED fetch from `getCsrfToken()`'s memoized one: this needs to be
+ *     fresh on every poll (a session that logs in mid-visit must still be
+ *     able to re-arm within one interval — see the WebSocket section
+ *     below), while the CSRF token, once obtained, never needs re-fetching
+ *     for the bell's lifetime. Reveals the bell + badge only once BOTH the
+ *     login check and the count fetch succeed.
  *  2. On click, loads `/api/notifications`, collapses it with
  *     `collapseNotifications` and renders each group's copy with
  *     `notificationLabel`, linked to its target via `notificationHref` — ALL
@@ -45,10 +59,16 @@ import { collapseNotifications, notificationHref, notificationLabel } from "@thi
 import type { NotificationsPage } from "@thinkersjournal/shared";
 
 interface MeResponse {
+  loggedIn: boolean;
   csrfToken: string | null;
 }
 
-/** Cached across the bell's lifetime — "the single /api/me call for the bell". */
+/**
+ * Cached across the bell's lifetime — specifically for the CSRF token, which
+ * never needs re-fetching once a real session has one. NOT used for the
+ * login-detection gate below (`isLoggedIn`), which is deliberately UNCACHED —
+ * see this file's header for why the two have different freshness needs.
+ */
 let csrfTokenPromise: Promise<string | null> | null = null;
 
 function getCsrfToken(): Promise<string | null> {
@@ -62,10 +82,32 @@ function getCsrfToken(): Promise<string | null> {
 }
 
 /**
- * `null` on any non-200 (401/anonymous, a degraded api) OR a network failure —
- * NEVER throws. Callers invoke this fire-and-forget (`void refreshCount(...)`
- * from the WS nudge and the poll), so a `fetch()` rejection on a transient
- * network blip must be swallowed here or it surfaces as an unhandled rejection.
+ * A FRESH (never memoized) check, on every call — the poll's gate for
+ * whether it is even worth calling `/api/notifications-count` at all. `/api/me`
+ * always answers 200 regardless of login state (it reports `loggedIn` in the
+ * body), so this never produces a failed-request console/network entry the
+ * way probing the session-authenticated count endpoint directly used to for
+ * an anonymous visitor.
+ */
+async function isLoggedIn(): Promise<boolean> {
+  try {
+    const resp = await fetch("/api/me");
+    if (!resp.ok) return false;
+    const me = (await resp.json()) as MeResponse;
+    return me.loggedIn;
+  } catch {
+    return false; // network error — degraded, not a throw
+  }
+}
+
+/**
+ * `null` on any non-200 (a degraded api) OR a network failure — NEVER throws.
+ * Callers invoke this fire-and-forget (`void refreshCount(...)` from the WS
+ * nudge and the poll), so a `fetch()` rejection on a transient network blip
+ * must be swallowed here or it surfaces as an unhandled rejection. ⚠️ Callers
+ * MUST have already confirmed `isLoggedIn()` before calling this — see
+ * `refreshCount` — so a genuinely anonymous visitor never reaches this fetch
+ * at all.
  */
 async function fetchUnreadCount(): Promise<number | null> {
   try {
@@ -92,10 +134,13 @@ function applyBadge(badge: HTMLElement, count: number): void {
  * Fires on load, on tab-visible, and every 60s. Only ever REVEALS the bell
  * (never hides it once shown) — a transient/degraded response mid-session
  * should not yank a control the viewer may be mid-interaction with. Returns
- * whether the viewer is signed in (the count came back 200); the poll uses this
- * fresh signal to (re)arm the WebSocket.
+ * whether the viewer is signed in; the poll uses this fresh signal to (re)arm
+ * the WebSocket. Checks `isLoggedIn()` FIRST — an anonymous visitor never
+ * reaches `fetchUnreadCount()`'s call to the session-authenticated count
+ * endpoint at all (see this file's header).
  */
 async function refreshCount(bell: HTMLElement, badge: HTMLElement): Promise<boolean> {
+  if (!(await isLoggedIn())) return false;
   const count = await fetchUnreadCount();
   if (count === null) return false;
   bell.hidden = false;
@@ -236,9 +281,11 @@ export function initNotifyBell(): void {
   // socket if one isn't already live. Three properties we want — two bespoke
   // reconnect designs kept getting one or the other wrong:
   //   • Anonymous / signed-out viewers never open a socket (refreshCount returns
-  //     false on a non-200), so the web proxy never sees a doomed handshake.
-  //   • A dead/expired session (count keeps 401ing) never re-arms — no endless
-  //     reconnect loop against a session that will never authenticate.
+  //     false the moment isLoggedIn() is false), so the web proxy never sees a
+  //     doomed handshake.
+  //   • A dead/expired session (isLoggedIn() keeps reporting false) never
+  //     re-arms — no endless reconnect loop against a session that will never
+  //     authenticate.
   //   • A recovered session/network re-arms within one poll interval (≤60s, and
   //     immediately on tab-focus via visibilitychange) — no permanent latch.
   // A pushed nudge is content-free ({type} only) — it only triggers a refetch

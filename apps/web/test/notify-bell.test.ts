@@ -8,9 +8,34 @@ function stripComments(source: string): string {
 
 const code = stripComments(readFileSync(join(__dirname, "..", "src", "scripts", "notify-bell.ts"), "utf8"));
 describe("notify bell island", () => {
-  it("detects logged-in via the count endpoint, staying hidden on 401 (deviation 2)", () => {
+  it("⚠️ checks /api/me FIRST, before ever calling /api/notifications-count — an anonymous visitor never hits the session-authenticated endpoint at all (2026-09-24, replaces deviation 2)", () => {
+    // ⚠️ ANTI-VACUITY: co-locate the gate with the count call inside
+    // refreshCount's own body — not just "these two strings appear
+    // somewhere in the file", which would stay green even if the order
+    // were reversed (the exact regression this fix closes: a probe against
+    // the count endpoint firing before login is known).
+    expect(code).toMatch(
+      /async function refreshCount\([\s\S]{0,80}\{\s*if \(!\(await isLoggedIn\(\)\)\) return false;\s*const count = await fetchUnreadCount\(\);/,
+    );
     expect(code).toContain("/api/notifications-count");
-    expect(code).toContain(".status"); // branches on it (200 → show, 401 → hide)
+    // isLoggedIn() itself never produces a failed request for an anonymous
+    // visitor — /api/me always answers 200 and reports loggedIn in the body.
+    expect(code).toMatch(/async function isLoggedIn\(\)[\s\S]{0,300}\/api\/me/);
+    expect(code).toMatch(/async function isLoggedIn\(\)[\s\S]{0,300}me\.loggedIn/);
+  });
+
+  it("isLoggedIn() is UNCACHED (fresh every call) — deliberately distinct from getCsrfToken()'s memoized /api/me", () => {
+    // ⚠️ ANTI-VACUITY: assert the memoization variable is scoped to
+    // getCsrfToken only — a regression that made isLoggedIn share
+    // csrfTokenPromise would stop a mid-visit login from re-arming the bell
+    // within one poll interval, and this doesn't call fetch inside an
+    // if-null-then-cache guard the way getCsrfToken does.
+    const isLoggedInBody = code.slice(
+      code.indexOf("async function isLoggedIn()"),
+      code.indexOf("async function fetchUnreadCount()"),
+    );
+    expect(isLoggedInBody).not.toContain("csrfTokenPromise");
+    expect(isLoggedInBody).not.toMatch(/=== null\)/); // no cache-guard shape
   });
   it("builds DOM safely — textContent/createElement only", () => {
     expect(code).toContain("createElement"); // positive anchor
