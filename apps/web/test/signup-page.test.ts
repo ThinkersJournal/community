@@ -78,4 +78,30 @@ describe("signup.astro", () => {
     expect(code).toContain("message = response.data.message;");
     expect(code).toContain("Signup failed. Check your email and password and try again.");
   });
+
+  // ⚠️ 2026-09-24 — a failed/timed-out challenge used to leave the visitor on
+  // "Verifying…" forever with no feedback (see src/scripts/turnstile-error.ts's
+  // header). ONLY on the real-widget branch: the dummy-token fallback has no
+  // widget to fail.
+  it("wires the real widget's error/timeout callbacks to the shared failure-UX island, only on the real-widget branch", () => {
+    expect(rawSource).toContain('data-error-callback="turnstileOnError"');
+    expect(rawSource).toContain('data-timeout-callback="turnstileOnTimeout"');
+    expect(rawSource).toContain("data-turnstile-error");
+    expect(rawSource).toContain("data-turnstile-retry");
+    expect(code).toContain('import { initTurnstileErrorHandling } from "../scripts/turnstile-error"');
+    expect(code).toContain("initTurnstileErrorHandling();");
+    // ⚠️ ANTI-VACUITY: the error/retry markup lives inside the SAME
+    // `turnstileSiteKey ? ... : ...` ternary the widget itself is gated on
+    // (see the render test above) — co-locate rather than re-assert
+    // structure this file already pins elsewhere.
+    const ternaryStart = rawSource.indexOf("turnstileSiteKey ? (");
+    const widgetBranch = rawSource.slice(ternaryStart, rawSource.indexOf(") : (", ternaryStart));
+    expect(widgetBranch).toContain("data-turnstile-error");
+    expect(widgetBranch).toContain("data-turnstile-retry");
+  });
+
+  it("the retry affordance shows explanatory copy, not a bare button with no context", () => {
+    expect(rawSource).toMatch(/Verification failed/);
+    expect(rawSource).toMatch(/Tap to retry/);
+  });
 });
