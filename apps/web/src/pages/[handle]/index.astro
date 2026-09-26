@@ -120,15 +120,8 @@ markPublicCacheable(Astro, [
 setPublicPageCsp(Astro);
 
 const canonical = profileUrl(profile.username);
-// Board item 59 = Option C's tombstone: a fixed placeholder, not the
-// scrubbed username (which would leak the internal "deleted-user-<id>"
-// shape to a reader) and not the real display_name (already NULL post-scrub
-// anyway). Posts are retained and rendered normally below — only the
-// profile's own identity fields are replaced.
-const displayName = profile.anonymised ? "Deleted user" : (profile.displayName ?? profile.username);
-const description = profile.anonymised
-  ? "This account has been deleted."
-  : (profile.bio ?? `Posts by ${displayName} on Thinker's Journal.`);
+const displayName = profile.displayName ?? profile.username;
+const description = profile.bio ?? `Posts by ${displayName} on Thinker's Journal.`;
 // ⚠️ encodeURIComponent on the username in the HREF (a URL needs percent-encoding;
 // Astro's `{}` only HTML-escapes). Usernames are `[a-z0-9_]` today so this is a
 // no-op — but M2 relaxes the charset. Defense-in-depth + future-proofing.
@@ -163,42 +156,30 @@ const displayDate = (value: string): string => {
 
   <div class="wrap profile">
     <h1>{displayName}</h1>
-    {profile.anonymised ? (
-      <p class="bio">This account has been deleted. Its posts are shown below unchanged.</p>
-    ) : (
-      profile.bio && <p class="bio">{profile.bio}</p>
-    )}
+    {profile.bio && <p class="bio">{profile.bio}</p>}
 
-    {/* Board item 59 = Option C: following/blocking/counting a deleted
-        account is meaningless — the whole social section is omitted rather
-        than rendered disabled. Their posts (retained content) still render
-        in the listing below unchanged. */}
-    {!profile.anonymised && (
-      <>
-        {/* Social: hydrated client-side (cached HTML carries no viewer state). */}
-        <section class="social" data-social-counts data-username={profile.username}>
-          <span><strong data-followers-count>—</strong> followers</span>
-          <span><strong data-following-count>—</strong> following</span>
-        </section>
-        <button class="btn btn-primary follow" data-follow-btn data-user-id={profile.userId} hidden>Follow</button>
-        {/* Block/Unblock (endpoint/UI audit, 2026-09-24) — SSR-hidden, same
-            reveal-via-/api/blocks?status= pattern as Follow above. The confirm
-            copy this reveals is a HARD REQUIREMENT of the M4 report/block design
-            doc §2.1 (block is interaction-control, not invisibility) — see
-            src/scripts/block-toggle.ts's header before changing any wording. */}
-        <button class="btn btn-ghost block" data-block-btn data-user-id={profile.userId} hidden>Block</button>
+    {/* Social: hydrated client-side (cached HTML carries no viewer state). */}
+    <section class="social" data-social-counts data-username={profile.username}>
+      <span><strong data-followers-count>—</strong> followers</span>
+      <span><strong data-following-count>—</strong> following</span>
+    </section>
+    <button class="btn btn-primary follow" data-follow-btn data-user-id={profile.userId} hidden>Follow</button>
+    {/* Block/Unblock (endpoint/UI audit, 2026-09-24) — SSR-hidden, same
+        reveal-via-/api/blocks?status= pattern as Follow above. The confirm
+        copy this reveals is a HARD REQUIREMENT of the M4 report/block design
+        doc §2.1 (block is interaction-control, not invisibility) — see
+        src/scripts/block-toggle.ts's header before changing any wording. */}
+    <button class="btn btn-ghost block" data-block-btn data-user-id={profile.userId} hidden>Block</button>
 
-        {/* Follower/following lists — load client-side on click; the disclosure
-            buttons carry only the profile owner's username (viewer-independent),
-            so no viewer state enters this cached HTML. */}
-        <div class="lists">
-          <button class="btn btn-ghost" data-load-list="followers" data-username={profile.username}>Followers</button>
-          <ul data-list-panel="followers"></ul>
-          <button class="btn btn-ghost" data-load-list="following" data-username={profile.username}>Following</button>
-          <ul data-list-panel="following"></ul>
-        </div>
-      </>
-    )}
+    {/* Follower/following lists — load client-side on click; the disclosure
+        buttons carry only the profile owner's username (viewer-independent),
+        so no viewer state enters this cached HTML. */}
+    <div class="lists">
+      <button class="btn btn-ghost" data-load-list="followers" data-username={profile.username}>Followers</button>
+      <ul data-list-panel="followers"></ul>
+      <button class="btn btn-ghost" data-load-list="following" data-username={profile.username}>Following</button>
+      <ul data-list-panel="following"></ul>
+    </div>
 
     {
       profile.posts.length === 0 ? (

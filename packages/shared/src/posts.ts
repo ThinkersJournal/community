@@ -89,8 +89,6 @@ export interface PublicProfile {
   username: string;
   displayName: string | null;
   bio: string | null;
-  /** Same meaning as PublicPost.authorAnonymised, for the profile itself. */
-  anonymised: boolean;
   posts: PublicPostSummary[];
   /** The last id on this page, or null when there are no more. */
   nextCursor: string | null;

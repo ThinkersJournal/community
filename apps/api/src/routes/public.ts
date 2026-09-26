@@ -155,13 +155,18 @@ export async function handlePublicProfile(
         username: string;
         displayName: string | null;
         bio: string | null;
-        anonymised: boolean;
       }>(
-        `SELECT pr.user_id AS "userId", pr.username, pr.display_name AS "displayName", pr.bio,
-                u.anonymised_at IS NOT NULL AS "anonymised"
+        // ⚠️ `u.anonymised_at IS NULL` — an anonymised handle 404s through this
+        // SAME unknown-username path, not a distinct response shape. This is
+        // the enumeration fix (board item 59 follow-up): the profile page was
+        // the widest of six surfaces that still let a stranger group a
+        // deleted account's entire corpus under its permanent scrubbed
+        // handle. Individual posts/comments are UNCHANGED — this only closes
+        // the listing, not the direct link.
+        `SELECT pr.user_id AS "userId", pr.username, pr.display_name AS "displayName", pr.bio
            FROM profiles pr
            JOIN users u ON u.id = pr.user_id
-          WHERE pr.username = $1`,
+          WHERE pr.username = $1 AND u.anonymised_at IS NULL`,
         [username],
       );
       if (owner[0] === undefined) return null;
@@ -246,12 +251,17 @@ export async function handlePublicRecent(
   // sole call site.
   const posts = await withClient(env.HYPERDRIVE_CACHED, ctx, async (c) => {
     const { rows } = await c.query(
+      // ⚠️ `u.anonymised_at IS NULL` — enumeration fix (board item 59 follow-
+      // up). This feeds sitemap.xml/rss.xml, the off-site propagation surface:
+      // without this filter a deleted account's whole corpus stays listed
+      // under its permanent scrubbed handle for crawlers to index.
       `SELECT p.id, p.title, p.slug, pr.username,
               left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
               p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
          FROM posts p
          JOIN profiles pr ON pr.user_id = p.author_id
-        WHERE p.status = 'published' AND p.hidden_at IS NULL
+         JOIN users u ON u.id = p.author_id
+        WHERE p.status = 'published' AND p.hidden_at IS NULL AND u.anonymised_at IS NULL
         ORDER BY p.id DESC
         LIMIT $1`,
       [limit],
@@ -275,12 +285,16 @@ export async function handlePublicDiscover(
     // pre-edit row for up to 25h. See this file's header, bullet 4.
     const page = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const { rows } = await c.query(
+        // ⚠️ `u.anonymised_at IS NULL` — enumeration fix (board item 59
+        // follow-up), same reasoning as handlePublicRecent above.
         `SELECT p.id, p.title, p.slug, pr.username,
                 left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
                 p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
            FROM posts p
            JOIN profiles pr ON pr.user_id = p.author_id
+           JOIN users u ON u.id = p.author_id
           WHERE p.status = 'published' AND p.hidden_at IS NULL AND p.id < $1
+            AND u.anonymised_at IS NULL
           ORDER BY p.id DESC
           LIMIT ${PAGE_SIZE + 1}`,
         [cursor],
@@ -369,6 +383,8 @@ export async function handlePublicTag(
       // so the `p` alias inside TAGS_AGG still binds THIS query's post row
       // rather than colliding with the aggregate's own inner join.
       const { rows } = await c.query(
+        // ⚠️ `u.anonymised_at IS NULL` — enumeration fix (board item 59
+        // follow-up), same reasoning as handlePublicRecent above.
         `SELECT p.id, p.title, p.slug, pr.username,
                 left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
                 p.published_at AS "publishedAt", p.updated_at AS "updatedAt",
@@ -376,8 +392,10 @@ export async function handlePublicTag(
            FROM post_tags ptx
            JOIN posts p     ON p.id = ptx.post_id
            JOIN profiles pr ON pr.user_id = p.author_id
+           JOIN users u     ON u.id = p.author_id
            JOIN tags te     ON te.id = ptx.tag_id
           WHERE te.slug = $1 AND p.status = 'published' AND p.hidden_at IS NULL AND p.id < $2
+            AND u.anonymised_at IS NULL
           ORDER BY p.id DESC
           LIMIT ${PAGE_SIZE + 1}`,
         [slug, cursor],

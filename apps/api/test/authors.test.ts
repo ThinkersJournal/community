@@ -56,4 +56,29 @@ describe("GET /public/authors", () => {
     const response = await fetchWorker(new Request("https://api.test/public/authors?cursor=not-a-uuid"));
     expect(response.status).toBe(400);
   });
+
+  /**
+   * Enumeration fix (board item 59 follow-up). This directory is the
+   * canonical index of every author on the site — a deleted account here is
+   * discoverable with no post link at all, so it must be excluded, not just
+   * tombstoned. Control (`author`) is seeded before this test's scrub, in the
+   * SAME pass, so "excluded" is not indistinguishable from "the reaper broke".
+   */
+  it("excludes a scrubbed (anonymised) account", async () => {
+    const scrubbed = await createVerifiedActor();
+    await seedPost(scrubbed.userId, "published");
+
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [scrubbed.userId]),
+    );
+    await waitOnExecutionContext(ctx);
+
+    const body = (await fetchWorker(new Request("https://api.test/public/authors")).then((r) => r.json())) as {
+      authors: { username: string }[];
+    };
+    expect(body.authors.some((a) => a.username === scrubbed.username)).toBe(false);
+    // CONTROL, same pass: an ordinary author is still present.
+    expect(body.authors.some((a) => a.username === author.username)).toBe(true);
+  });
 });
