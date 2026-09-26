@@ -75,6 +75,20 @@ describe("feed.astro", () => {
     expect(code).not.toContain("set:html");
   });
 
+  /**
+   * Enumeration fix (board item 59 follow-up). The feed itself stays
+   * unfiltered (per-viewer, not a stranger-facing surface) but the byline
+   * must not show the raw deleted-user-<uuid> string — same rule as every
+   * other byline in this app.
+   */
+  it("renders an anonymised author's byline as plain 'Deleted user' text, never a link to their now-404ing profile", () => {
+    expect(code).toContain("post.authorAnonymised");
+    expect(code).toContain("Deleted user");
+    // The post-title link (`/@${post.username}/${post.slug}`) is UNCHANGED —
+    // only the profile-facing byline branches.
+    expect(code).toMatch(/href=\{`\/@\$\{post\.username\}\/\$\{post\.slug\}`\}/);
+  });
+
   it("adopts the chrome + CSP while staying markPrivate", () => {
     expect(code).toMatch(/<BaseLayout\s/);
     expect(code).toContain("setPublicPageCsp(Astro)");

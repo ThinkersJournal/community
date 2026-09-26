@@ -62,6 +62,8 @@ export interface FeedPost {
   updatedAt: string;
   username: string;
   displayName: string | null;
+  /** Same meaning as PublicPost.authorAnonymised (board item 59 = Option C). */
+  authorAnonymised: boolean;
   tags: TagRef[];
 }
 

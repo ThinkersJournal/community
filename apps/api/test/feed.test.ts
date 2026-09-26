@@ -120,6 +120,36 @@ describe("GET /feed", () => {
     expect(mine!.tags).toEqual([{ slug, label: slug }]);
   });
 
+  /**
+   * Enumeration fix (board item 59 follow-up), display-only leg: the feed is
+   * per-viewer and already scoped to people the viewer follows, so it stays
+   * UNFILTERED — but the byline needs the flag to render "Deleted user"
+   * instead of the raw deleted-user-<uuid> string. Control (`followed`,
+   * asserted above) proves an ordinary followee's flag is false.
+   */
+  it("flags authorAnonymised for a scrubbed followee, without dropping their post from the feed", async () => {
+    // A FRESH follower — not the shared `viewer` (its followee list is
+    // already cached by earlier tests in this file, and direct-SQL
+    // seedFollow, unlike the real /follows route, never busts that cache).
+    const freshViewer = await createVerifiedActor();
+    const scrubbedFollowee = await createVerifiedActor();
+    await seedFollow(freshViewer.userId, scrubbedFollowee.userId);
+    await seedPost(scrubbedFollowee.userId, "scrubbed-followee-post", "published");
+
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [scrubbedFollowee.userId]),
+    );
+    await waitOnExecutionContext(ctx);
+
+    const body = (await getFeed(freshViewer).then((r) => r.json())) as {
+      posts: { title: string; authorAnonymised: boolean }[];
+    };
+    const mine = body.posts.find((p) => p.title === "scrubbed-followee-post");
+    expect(mine).toBeDefined();
+    expect(mine!.authorAnonymised).toBe(true);
+  });
+
   it("never shows a followed author's DRAFT", async () => {
     await seedPost(followed.userId, "followed-draft", "draft");
     const body = (await getFeed(viewer).then((r) => r.json())) as { posts: { title: string }[] };
