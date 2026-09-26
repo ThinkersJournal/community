@@ -58,9 +58,13 @@ describe("signup.astro", () => {
   // and surfaces the api's USERNAME_TAKEN suggestions as plain server-rendered
   // text (no client JS for the suggestions; the page's only script is Turnstile's
   // external api.js, and script-src still carries no 'unsafe-inline').
-  it("has a username field with permanence copy, and forwards it to the api", () => {
+  // Account deletion (M4) makes a handle releasable after a 30-day grace
+  // period, so "permanent" is no longer true — the copy states the actual
+  // mechanic (temporary only after deletion, not temporary in general).
+  it("has a username field, and forwards it to the api, with copy that doesn't overclaim permanence", () => {
     expect(rawSource).toMatch(/name="username"/);
-    expect(rawSource).toMatch(/permanent/i);
+    expect(rawSource).not.toMatch(/permanent/i);
+    expect(rawSource).toMatch(/30-day grace/i);
     expect(code).toContain('username: form.get("username")');
   });
 
