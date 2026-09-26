@@ -1,10 +1,13 @@
 # Media Garbage Collector — Requirements
 
-> **Status:** PRE-LAUNCH (re-scoped 2026-08-13). Originally slated for ~M4, but
-> promoted because **post deletion** ships pre-launch (`docs/pre-launch-fixes.md`
-> #5) and deleting a post orphans its images — so reclamation must ship with it.
-> Build as one "content deletion + media reclamation" milestone with #5. This
-> note seeds that milestone's spec.
+> **Status: SHIPPED.** Built as the "content deletion + media reclamation"
+> milestone this note seeded — see
+> `docs/superpowers/specs/2026-08-13-content-deletion-media-reclamation-design.md`
+> for the final design and `apps/api/src/media/reap-orphan-media.ts` for the
+> implementation (both orphan classes below; runs on the daily `15 4 * * *`
+> cron). Kept here for the requirements/rationale history, not as an open item —
+> spec-vs-code audit (2026-09-26) found this still marked PRE-LAUNCH after
+> shipping, which would mislead the next person planning work from this file.
 >
 > **Key unification:** post-deletion orphans and abandoned-upload orphans are the
 > SAME thing — a `media` row referenced by no post — so ONE reference-based
