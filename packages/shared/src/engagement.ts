@@ -47,6 +47,8 @@ export interface CommentAuthor {
   userId: string;
   username: string;
   displayName: string | null;
+  /** Same meaning as PublicPost.authorAnonymised (board item 59 = Option C). */
+  anonymised: boolean;
 }
 
 /** One comment in path order. Tombstones: `deleted: true`, empty body, null author. */

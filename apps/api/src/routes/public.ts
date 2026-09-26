@@ -119,10 +119,12 @@ export async function handlePublicPost(
   const post = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query(
       `SELECT p.id, p.author_id AS "authorId", pr.username, pr.display_name AS "displayName",
+              u.anonymised_at IS NOT NULL AS "authorAnonymised",
               p.title, p.slug, p.markdown_source AS "markdownSource",
               p.published_at AS "publishedAt", p.updated_at AS "updatedAt", ${TAGS_AGG}
          FROM posts p
          JOIN profiles pr ON pr.user_id = p.author_id
+         JOIN users u ON u.id = p.author_id
         WHERE pr.username = $1 AND p.slug = $2 AND p.status = 'published' AND p.hidden_at IS NULL`,
       [username, slug],
     );
@@ -153,9 +155,13 @@ export async function handlePublicProfile(
         username: string;
         displayName: string | null;
         bio: string | null;
+        anonymised: boolean;
       }>(
-        `SELECT user_id AS "userId", username, display_name AS "displayName", bio
-           FROM profiles WHERE username = $1`,
+        `SELECT pr.user_id AS "userId", pr.username, pr.display_name AS "displayName", pr.bio,
+                u.anonymised_at IS NOT NULL AS "anonymised"
+           FROM profiles pr
+           JOIN users u ON u.id = pr.user_id
+          WHERE pr.username = $1`,
         [username],
       );
       if (owner[0] === undefined) return null;

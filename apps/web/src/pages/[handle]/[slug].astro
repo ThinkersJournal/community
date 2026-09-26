@@ -99,6 +99,8 @@ let html = "";
 let description = "";
 let canonical = "";
 let publishedDisplay = "";
+/** Byline text — "Deleted user" for a scrubbed author, else displayName/username. */
+let authorName = "";
 let commentsCursor: string | null = null;
 let renderedComments: Array<{
   id: string;
@@ -110,6 +112,7 @@ let renderedComments: Array<{
   authorId: string | undefined;
   authorUsername: string;
   authorName: string | null;
+  authorAnonymised: boolean;
   html: string;
 }> = [];
 let olderCommentsHref: string | null = null;
@@ -167,7 +170,15 @@ if (post !== null) {
       edited: c.editedAt !== null,
       authorId: c.author?.userId,
       authorUsername: c.author?.username ?? "",
-      authorName: c.author === null ? null : (c.author.displayName ?? c.author.username),
+      // Board item 59 = Option C's tombstone: a "Deleted user" placeholder,
+      // not the real name — same rule as the post's own byline above.
+      authorName:
+        c.author === null
+          ? null
+          : c.author.anonymised
+            ? "Deleted user"
+            : (c.author.displayName ?? c.author.username),
+      authorAnonymised: c.author?.anonymised ?? false,
       html: c.deleted ? "" : await renderMarkdown(c.bodyMarkdown),
     })),
   );
@@ -201,6 +212,10 @@ if (post !== null) {
   ]);
   setPublicPageCsp(Astro);
 
+  // Byline (board item 59 = Option C's tombstone): title/body are untouched
+  // above — only the author name/link change when the account was scrubbed.
+  authorName = post.authorAnonymised ? "Deleted user" : (post.displayName ?? post.username);
+
   jsonLd = {
     "@context": "https://schema.org",
     "@type": "BlogPosting",
@@ -208,7 +223,11 @@ if (post !== null) {
     description,
     datePublished: post.publishedAt,
     dateModified: post.updatedAt,
-    author: { "@type": "Person", name: post.displayName ?? post.username, url: profileUrl(post.username) },
+    // No `url` for an anonymised author — that profile is itself tombstoned
+    // (apps/web/src/pages/[handle]/index.astro), not a real destination.
+    author: post.authorAnonymised
+      ? { "@type": "Person", name: authorName }
+      : { "@type": "Person", name: authorName, url: profileUrl(post.username) },
     mainEntityOfPage: { "@type": "WebPage", "@id": canonical },
   };
 }
@@ -236,7 +255,7 @@ if (post !== null) {
       <meta property="og:url" content={canonical} />
       <meta property="article:published_time" content={post.publishedAt} />
       <meta property="article:modified_time" content={post.updatedAt} />
-      <meta property="article:author" content={post.displayName ?? post.username} />
+      <meta property="article:author" content={authorName} />
       <meta name="twitter:card" content="summary_large_image" />
 
       {/* ⚠️ jsonLdScript, NEVER a bare JSON.stringify: it does not escape `<`, so a
@@ -261,8 +280,16 @@ if (post !== null) {
         {/* ⚠️ encodeURIComponent on the username in the HREF (Astro escapes it as
             TEXT, but a URL needs percent-encoding): usernames are `[a-z0-9_]` today
             so this is a no-op, but M2 relaxes the charset. Defense-in-depth. The
-            display text below is intentionally NOT encoded — Astro `{}` handles it. */}
-        <a class="link" href={`/@${encodeURIComponent(post.username)}`}>{post.displayName ?? post.username}</a>
+            display text below is intentionally NOT encoded — Astro `{}` handles it.
+
+            An anonymised author (board item 59 = Option C) renders as plain
+            text, not a link — their profile is itself tombstoned, not a real
+            destination. See PublicPost.authorAnonymised's own header. */}
+        {post.authorAnonymised ? (
+          <span>{authorName}</span>
+        ) : (
+          <a class="link" href={`/@${encodeURIComponent(post.username)}`}>{authorName}</a>
+        )}
         · <time datetime={post.publishedAt}>{publishedDisplay}</time>
       </p>
 
@@ -379,9 +406,16 @@ if (post !== null) {
             ) : (
               <>
                 <p class="meta">
-                  <a class="link" href={`/@${encodeURIComponent(c.authorUsername)}`}>
-                    {c.authorName}
-                  </a>
+                  {/* An anonymised commenter (board item 59 = Option C) renders
+                      as plain text, not a link — same rule as the post's own
+                      byline above. */}
+                  {c.authorAnonymised ? (
+                    <span>{c.authorName}</span>
+                  ) : (
+                    <a class="link" href={`/@${encodeURIComponent(c.authorUsername)}`}>
+                      {c.authorName}
+                    </a>
+                  )}
                   · <time datetime={c.createdAt}>{c.createdAt.slice(0, 10)}</time>
                   {c.edited && <span class="edited">(edited)</span>}
                 </p>

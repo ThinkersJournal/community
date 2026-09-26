@@ -46,6 +46,7 @@ interface FragmentComment {
   path: string;
   authorUsername: string;
   authorName: string | null;
+  authorAnonymised: boolean;
   createdAt: string;
   edited: boolean;
   deleted: boolean;
@@ -113,11 +114,19 @@ function buildComment(c: FragmentComment): HTMLElement {
 
   const meta = document.createElement("p");
   meta.className = "meta";
-  const a = document.createElement("a");
-  a.className = "link";
-  a.href = `/@${encodeURIComponent(c.authorUsername)}`;
-  a.textContent = c.authorName ?? "";
-  meta.appendChild(a);
+  // An anonymised commenter (board item 59 = Option C) renders as plain
+  // text, not a link — same rule as the SSR page's byline.
+  if (c.authorAnonymised) {
+    const span = document.createElement("span");
+    span.textContent = c.authorName ?? "";
+    meta.appendChild(span);
+  } else {
+    const a = document.createElement("a");
+    a.className = "link";
+    a.href = `/@${encodeURIComponent(c.authorUsername)}`;
+    a.textContent = c.authorName ?? "";
+    meta.appendChild(a);
+  }
   meta.appendChild(document.createTextNode(" · "));
   const time = document.createElement("time");
   time.setAttribute("datetime", c.createdAt);

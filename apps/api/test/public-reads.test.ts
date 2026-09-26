@@ -113,6 +113,41 @@ describe("GET /public/posts", () => {
     expect(post.username).toBe(actor.username);
     // Untagged: [] (COALESCE-guaranteed), never undefined — see TAGS_AGG.
     expect(post.tags).toEqual([]);
+    expect(post.authorAnonymised).toBe(false);
+  });
+
+  /**
+   * Board item 59 = Option C's tombstone. Title/body are untouched (asserted
+   * below) — only this flag exists for the web app to swap the byline. Sets
+   * `anonymised_at` directly rather than running the real reaper: this test
+   * is about the READ side rendering the flag, not the scrub itself (that is
+   * test/anonymise-accounts.test.ts's job).
+   */
+  it("flags authorAnonymised once the author is scrubbed, leaving title/body untouched", async () => {
+    // A DEDICATED actor, not the shared `actor` fixture above — this test
+    // mutates its account state, which every other case in this file relies
+    // on staying an ordinary, non-anonymised account.
+    const scrubbedAuthor = await createVerifiedActor();
+    const { slug } = await create(scrubbedAuthor, {
+      title: "Still Here",
+      markdownSource: "# untouched body",
+      status: "published",
+    });
+
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [scrubbedAuthor.userId]),
+    );
+    await waitOnExecutionContext(ctx);
+
+    const response = await fetchWorker(
+      new Request(`https://api.test/public/posts?username=${scrubbedAuthor.username}&slug=${slug}`),
+    );
+    expect(response.status).toBe(200);
+    const post = (await response.json()) as PublicPost;
+    expect(post.authorAnonymised).toBe(true);
+    expect(post.title).toBe("Still Here");
+    expect(post.markdownSource).toBe("# untouched body");
   });
 
   it("carries its tags", async () => {
@@ -278,6 +313,23 @@ describe("GET /public/profile", () => {
     expect(
       (await fetchWorker(new Request("https://api.test/public/profile?username=nobody"))).status,
     ).toBe(404);
+  });
+
+  it("flags anonymised once the account is scrubbed (board item 59 = Option C)", async () => {
+    const author = await onboardedActor();
+
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [author.userId]),
+    );
+    await waitOnExecutionContext(ctx);
+
+    const response = await fetchWorker(
+      new Request(`https://api.test/public/profile?username=${author.username}`),
+    );
+    expect(response.status).toBe(200);
+    const profile = (await response.json()) as PublicProfile;
+    expect(profile.anonymised).toBe(true);
   });
 
   it("carries each post's tags", async () => {

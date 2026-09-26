@@ -59,7 +59,15 @@ export const GET: APIRoute = async (context) => {
       depth: c.depth,
       path: c.path,
       authorUsername: c.author?.username ?? "",
-      authorName: c.author === null ? null : (c.author.displayName ?? c.author.username),
+      // Board item 59 = Option C's tombstone — same rule as the SSR page's
+      // renderedComments mapping this endpoint mirrors.
+      authorName:
+        c.author === null
+          ? null
+          : c.author.anonymised
+            ? "Deleted user"
+            : (c.author.displayName ?? c.author.username),
+      authorAnonymised: c.author?.anonymised ?? false,
       createdAt: c.createdAt,
       edited: c.editedAt !== null,
       deleted: c.deleted,

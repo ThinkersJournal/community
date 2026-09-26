@@ -28,6 +28,7 @@ interface DbRow {
   authorUserId: string;
   username: string;
   displayName: string | null;
+  authorAnonymised: boolean;
 }
 
 export async function handlePublicComments(
@@ -57,9 +58,11 @@ export async function handlePublicComments(
               c.created_at AS "createdAt", c.edited_at AS "editedAt",
               (c.deleted_at IS NOT NULL) AS deleted,
               c.body_markdown AS "bodyMarkdown", c.path,
-              pr.user_id AS "authorUserId", pr.username, pr.display_name AS "displayName"
+              pr.user_id AS "authorUserId", pr.username, pr.display_name AS "displayName",
+              u.anonymised_at IS NOT NULL AS "authorAnonymised"
          FROM comments c
          JOIN profiles pr ON pr.user_id = c.author_id
+         JOIN users u ON u.id = c.author_id
         -- An auto-hidden comment (hidden_at set) is EXCLUDED entirely — not shown
         -- as a tombstone the way a deleted one is. Its descendants lose their
         -- anchor, but a globally-hidden subtree is exactly what auto-hide intends.
@@ -81,7 +84,12 @@ export async function handlePublicComments(
             id: r.id, parentId: r.parentId, depth: r.depth,
             createdAt: r.createdAt, editedAt: r.editedAt, path: r.path,
             deleted: false, bodyMarkdown: r.bodyMarkdown,
-            author: { userId: r.authorUserId, username: r.username, displayName: r.displayName },
+            author: {
+              userId: r.authorUserId,
+              username: r.username,
+              displayName: r.displayName,
+              anonymised: r.authorAnonymised,
+            },
           },
     );
     return {
