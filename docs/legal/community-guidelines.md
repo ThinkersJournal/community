@@ -37,8 +37,10 @@ You may not post, upload, or link to content that:
     without the right to do so. Copyright complaints follow the
     [DMCA Policy](dmca-policy.md).
 
-**Handles** are permanent and public. You may not squat, sell, or use a handle to
-impersonate; reserved and misleading handles may be reclaimed.
+**Handles** are yours and public while your account is active. If you delete your
+account, your handle may become available to someone else after a 30-day grace
+period. You may not squat, sell, or use a handle to impersonate; reserved and
+misleading handles may be reclaimed.
 
 ## 2. How moderation works
 

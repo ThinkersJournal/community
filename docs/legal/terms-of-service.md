@@ -17,7 +17,9 @@ this requirement and that your use does not violate any applicable law.
 
 ## 2. Your account
 
-- You choose a permanent public **handle** and verify an email address. You are
+- You choose a public **handle** and verify an email address. Your handle is
+  yours while your account is active; if you delete your account, it may
+  become available to someone else after a 30-day grace period. You are
   responsible for the security of your account and for all activity under it.
 - One person or organization per account unless we agree otherwise. Do not share
   credentials or transfer your account without our consent.
@@ -31,9 +33,13 @@ this requirement and that your use does not violate any applicable law.
 - **License to operate.** You grant us a worldwide, non-exclusive, royalty-free
   license to host, store, reproduce, transform (e.g. generate image variants),
   publicly display, and distribute your User Content **solely to operate, secure,
-  and promote the Service**. This license ends when you delete the content or your
-  account, except (a) for content others have shared or referenced, and (b) for
-  reasonable backup/retention periods and legal-compliance copies.
+  and promote the Service**. This license ends when you delete a specific piece
+  of content. **Deleting your account does not end it for content you've
+  already published:** to keep conversations other people are part of intact,
+  your posts and comments remain hosted and displayed after your account is
+  deleted, attributed to a generic "deleted user" rather than your identity.
+  See the [Privacy Policy](privacy-policy.md) for exactly what is and is not
+  retained.
 - **Public by default.** Posts and profiles are publicly viewable and may be
   indexed by search engines. Do not post anything you need to keep private.
 - **Your responsibility.** You represent that you have the rights to your User
@@ -60,7 +66,9 @@ linked service is governed by that service's own terms.
 
 ## 7. Termination
 
-You may stop using the Service and delete your account at any time. We may suspend
+You may stop using the Service and request deletion of your account at any time
+— see the [Privacy Policy](privacy-policy.md) for what that does and does not
+remove. We may suspend
 or terminate your access for violations of these Terms or the Guidelines, to comply
 with law, or to protect the Service or others. Sections that by their nature should
 survive termination (ownership, disclaimers, liability limits, indemnity, governing
