@@ -315,7 +315,16 @@ describe("GET /public/profile", () => {
     ).toBe(404);
   });
 
-  it("flags anonymised once the account is scrubbed (board item 59 = Option C)", async () => {
+  /**
+   * Enumeration fix (board item 59 follow-up). A scrubbed handle 404s through
+   * the SAME unknown-username path — no distinct "this account was deleted"
+   * response, which would recreate the very signal the fix removes. The
+   * profile page was the widest of six surfaces that let a stranger group a
+   * deleted account's entire corpus under its permanent scrubbed handle;
+   * individual posts/comments (test above) are UNCHANGED — only the listing
+   * closes.
+   */
+  it("404s a scrubbed account's profile — indistinguishable from an unknown username", async () => {
     const author = await onboardedActor();
 
     const ctx = createExecutionContext();
@@ -327,9 +336,7 @@ describe("GET /public/profile", () => {
     const response = await fetchWorker(
       new Request(`https://api.test/public/profile?username=${author.username}`),
     );
-    expect(response.status).toBe(200);
-    const profile = (await response.json()) as PublicProfile;
-    expect(profile.anonymised).toBe(true);
+    expect(response.status).toBe(404);
   });
 
   it("carries each post's tags", async () => {

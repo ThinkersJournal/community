@@ -55,12 +55,21 @@ export async function handleFeed(
 
     const feed = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const { rows } = await c.query<FeedPost>(
+        // ⚠️ `u.anonymised_at` — display only, NOT a filter (board item 59
+        // follow-up). Unlike the public listing surfaces (public.ts,
+        // social-public.ts), THIS feed is per-viewer and already scoped to
+        // people the viewer follows — it is not a stranger-facing enumeration
+        // surface, so a followee's old post stays in it. Only the byline
+        // needs the flag, so the web app can render "Deleted user" instead of
+        // the raw deleted-user-<uuid> string.
         `SELECT p.id, p.title, p.slug,
                 left(p.markdown_source, ${EXCERPT_SOURCE_CHARS}) AS "excerptSource",
                 p.published_at AS "publishedAt", p.updated_at AS "updatedAt",
-                pr.username, pr.display_name AS "displayName", ${TAGS_AGG}
+                pr.username, pr.display_name AS "displayName",
+                u.anonymised_at IS NOT NULL AS "authorAnonymised", ${TAGS_AGG}
            FROM posts p
            JOIN profiles pr ON pr.user_id = p.author_id
+           JOIN users u ON u.id = p.author_id
           WHERE p.author_id = ANY($1::uuid[])
             AND p.status = 'published'
             AND p.hidden_at IS NULL

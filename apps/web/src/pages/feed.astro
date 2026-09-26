@@ -64,7 +64,19 @@ const feed: Feed = response.data ?? { posts: [], nextCursor: null };
         {feed.posts.map((post) => (
           <li class="card">
             <h2><a href={`/@${post.username}/${post.slug}`}>{post.title}</a></h2>
-            <p class="meta">by <a class="link" href={`/@${post.username}`}>@{post.username}</a> · <time datetime={post.publishedAt}>{post.publishedAt.slice(0, 10)}</time></p>
+            {/* An anonymised author (board item 59 = Option C) renders as
+                plain text, not a link — their profile now 404s (enumeration
+                fix), and showing the raw deleted-user-<uuid> string would
+                make the tombstone look unreliable rather than deliberate.
+                The post link above is UNCHANGED — a direct item link keeps
+                resolving; only the profile-facing byline changes. */}
+            <p class="meta">
+              by {post.authorAnonymised ? (
+                <span>Deleted user</span>
+              ) : (
+                <a class="link" href={`/@${post.username}`}>@{post.username}</a>
+              )} · <time datetime={post.publishedAt}>{post.publishedAt.slice(0, 10)}</time>
+            </p>
             <p>{post.excerptSource.slice(0, 200)}</p>
             {/* Freeform tags (M2.4c). encodeURIComponent on the slug — a URL
                 needs percent-encoding (unlike this page's other links above,

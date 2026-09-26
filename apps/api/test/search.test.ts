@@ -117,6 +117,46 @@ describe("GET /public/search", () => {
     expect(titles).not.toContain(hidden);
   });
 
+  /**
+   * Enumeration fix (board item 59 follow-up). Same shape as the auto-hide
+   * case above — visible+scrubbed pair seeded together, control proves the
+   * query itself still works.
+   */
+  it("excludes a scrubbed (anonymised) author's post from posts search while an ordinary one is still found", async () => {
+    const term = "zzscrubbedsearchterm";
+    const ctx = createExecutionContext();
+    let scrubbedUserId = "";
+    await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO users (email, password_hash) VALUES ($1,'x') RETURNING id`,
+        [`s-${crypto.randomUUID()}@t.test`]);
+      scrubbedUserId = rows[0]!.id;
+      created.push(scrubbedUserId);
+      await c.query(
+        `INSERT INTO profiles (user_id, username, display_name, bio)
+         VALUES ($1,$2,'Scrubbed Search Author','bio text')`,
+        [scrubbedUserId, `ssa_${crypto.randomUUID().slice(0, 8)}`]);
+      await c.query(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+         VALUES ($1,$2,$3,'body','published',now())`,
+        [scrubbedUserId, `${term} scrubbed one`, `sl-${crypto.randomUUID()}`]);
+    });
+    const scrubCtx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, scrubCtx, (c) =>
+      c.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [scrubbedUserId]),
+    );
+    await waitOnExecutionContext(scrubCtx);
+
+    const { visible } = await seedVisibleAndHidden(term); // reuses its "visible" leg as the control
+
+    const r = await fetchWorker(`${U}/public/search?q=${term}&type=posts`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { results: { title: string }[] };
+    const titles = body.results.map((p) => p.title);
+    expect(titles).not.toContain(`${term} scrubbed one`);
+    expect(titles).toContain(visible);
+  });
+
   it("finds a published post by a partial+typo query, no session needed", async () => {
     await seedAuthorWithPost("Quantum Chromodynamics Primer");
     const r = await fetchWorker(`${U}/public/search?q=${encodeURIComponent("chromodynamcs")}&type=posts`);
@@ -132,6 +172,51 @@ describe("GET /public/search", () => {
     expect(r.status).toBe(200);
     const body = (await r.json()) as { results: { username: string }[] };
     expect(body.results.some((p) => p.username === username)).toBe(true);
+  });
+
+  /**
+   * Enumeration fix (board item 59 follow-up), people-tab leg. `username`
+   * itself is still a live search target after the scrub (display_name/bio
+   * are already NULLed), so this pins that the shared scrubbed string does
+   * not surface here either. Control: an ordinary person with a distinct
+   * display_name is still found in the same pass.
+   */
+  it("excludes a scrubbed (anonymised) account from people search", async () => {
+    const uniqueTerm = `Zqscrub${crypto.randomUUID().slice(0, 8)}`;
+    const ctx = createExecutionContext();
+    let scrubbedUserId = "";
+    let scrubbedUsername = "";
+    await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO users (email, password_hash) VALUES ($1,'x') RETURNING id`,
+        [`s-${crypto.randomUUID()}@t.test`]);
+      scrubbedUserId = rows[0]!.id;
+      created.push(scrubbedUserId);
+      scrubbedUsername = `${uniqueTerm.toLowerCase()}h`;
+      await c.query(
+        `INSERT INTO profiles (user_id, username, display_name, bio)
+         VALUES ($1,$2,$3,'bio text')`,
+        [scrubbedUserId, scrubbedUsername, uniqueTerm]);
+    });
+    await waitOnExecutionContext(ctx);
+
+    const scrubCtx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, scrubCtx, (c) =>
+      c.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [scrubbedUserId]),
+    );
+    await waitOnExecutionContext(scrubCtx);
+
+    // Control: an ordinary person, findable by their own username substring.
+    const { username: control } = await seedAuthorWithPost("Control Post Title");
+
+    const r = await fetchWorker(`${U}/public/search?q=${encodeURIComponent(uniqueTerm)}&type=people`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { results: { username: string }[] };
+    expect(body.results.some((p) => p.username === scrubbedUsername)).toBe(false);
+
+    const r2 = await fetchWorker(`${U}/public/search?q=${encodeURIComponent("Search Ada")}&type=people`);
+    const body2 = (await r2.json()) as { results: { username: string }[] };
+    expect(body2.results.some((p) => p.username === control)).toBe(true);
   });
 
   /**

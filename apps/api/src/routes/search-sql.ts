@@ -14,6 +14,12 @@
  * expression, alias/whitespace-normalized) — it fails if the two ever diverge.
  */
 
+// ⚠️ `u.anonymised_at IS NULL` (both queries below) — enumeration fix (board
+// item 59 follow-up). Added as a PLAIN extra AND/JOIN, never touching the
+// `<%`/`word_similarity(...)` trigram expressions themselves — those must
+// stay byte-for-byte identical to migration 0009's index expressions (see
+// this file's own header + test/search-schema.db.test.ts's pin), and an
+// unrelated filter on a joined table does not touch that expression text.
 export const POSTS_SQL = `
   SELECT p.id, p.title, p.slug,
          left(p.markdown_source, 400) AS "excerptSource",
@@ -22,8 +28,10 @@ export const POSTS_SQL = `
          pr.display_name AS "authorDisplayName"
     FROM posts p
     JOIN profiles pr ON pr.user_id = p.author_id
+    JOIN users u ON u.id = p.author_id
    WHERE p.status = 'published'
      AND p.hidden_at IS NULL
+     AND u.anonymised_at IS NULL
      AND lower($1) <% lower(p.title || ' ' || coalesce(p.markdown_source, ''))
    ORDER BY word_similarity(lower($1), lower(p.title || ' ' || coalesce(p.markdown_source, ''))) DESC,
             p.id DESC
@@ -36,7 +44,9 @@ export const POSTS_SQL = `
 export const PEOPLE_SQL = `
   SELECT pr.username, pr.display_name AS "displayName", pr.bio
     FROM profiles pr
-   WHERE lower($1) <% lower(coalesce(pr.username::text,'') || ' ' || coalesce(pr.display_name,'') || ' ' || coalesce(pr.bio,''))
+    JOIN users u ON u.id = pr.user_id
+   WHERE u.anonymised_at IS NULL
+     AND lower($1) <% lower(coalesce(pr.username::text,'') || ' ' || coalesce(pr.display_name,'') || ' ' || coalesce(pr.bio,''))
    ORDER BY word_similarity(lower($1), lower(coalesce(pr.username::text,'') || ' ' || coalesce(pr.display_name,'') || ' ' || coalesce(pr.bio,''))) DESC,
             pr.user_id DESC
    LIMIT $2 OFFSET $3`;
