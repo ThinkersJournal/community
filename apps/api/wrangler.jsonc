@@ -227,7 +227,12 @@
   // 20 4 * * * = the #61 media-move retry (src/media/moves.ts's
   // processPendingMoves) — after the orphan-media reclaimer (04:15) so the two
   // never race the same R2 objects, before the digest/instant dispatch.
-  "triggers": { "crons": ["*/2 * * * *", "0 14 * * *", "30 3 * * *", "15 4 * * *", "20 4 * * *"] },
+  // 40 4 * * * = the account-anonymisation reaper (board item 59 = Option C,
+  // src/auth/anonymise-accounts.ts) — after the move retry (04:20), before the
+  // digest/instant dispatch.
+  "triggers": {
+    "crons": ["*/2 * * * *", "0 14 * * *", "30 3 * * *", "15 4 * * *", "20 4 * * *", "40 4 * * *"]
+  },
   "observability": {
     "enabled": true
   },

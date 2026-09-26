@@ -50,7 +50,7 @@ import {
 import { base64urlEncode } from "../auth/encoding";
 import { hashPassword } from "../auth/password";
 import { enforceRateLimit } from "../auth/ratelimit";
-import { RESERVED_USERNAMES } from "../auth/reserved-usernames";
+import { isReservedUsername } from "../auth/reserved-usernames";
 import { createSession } from "../auth/session";
 import { verifyTurnstile } from "../auth/turnstile";
 import { suggestUsernames } from "../auth/username-suggest";
@@ -96,7 +96,9 @@ export async function handleSignup(
   // Pure, no-I/O — belongs with the zod validation above, not with the
   // I/O-bearing checks below. `username` is already trimmed + lowercased by
   // `SignupInput`, matching the (also-lowercase) `RESERVED_USERNAMES` entries.
-  if (RESERVED_USERNAMES.has(username)) {
+  // Also rejects the "deleted-user-" prefix src/auth/anonymise-accounts.ts
+  // mints for an anonymised account — see isReservedUsername's own header.
+  if (isReservedUsername(username)) {
     return errorResponse("INVALID_INPUT", 400, {
       fields: ["username"],
       message: "That handle is reserved.",

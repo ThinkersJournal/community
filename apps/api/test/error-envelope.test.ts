@@ -295,6 +295,13 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /blocks",
     build: () => new Request("https://api.test/blocks"),
   },
+  // GET /account (board item 59 = Option C) authenticates via
+  // readCurrentSession, identical shape to GET /blocks/status above.
+  {
+    name: "401 account status with no session",
+    route: "GET /account",
+    build: () => new Request("https://api.test/account"),
+  },
   {
     name: "401 reactions/mine with no session",
     route: "GET /reactions/mine",

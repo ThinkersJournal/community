@@ -27,7 +27,13 @@
  * (it only frees `media` rows that are ALREADY unreferenced and past their
  * 24h grace window), and the same gate.
  *
- * Three layers keep all three from reaching production:
+ * `POST /__test/anonymise-accounts` (board item 59 = Option C) is the same
+ * test seam for the daily account-anonymisation reaper
+ * (src/auth/anonymise-accounts.ts) — invokes it on demand and returns
+ * `{ anonymised }`. It only scrubs accounts whose deletion request is
+ * ALREADY 30+ days old and were never cancelled, same shape as the other two.
+ *
+ * Three layers keep all four from reaching production:
  *   1. `TEST_ROUTES` is set ONLY in the gitignored `.dev.vars` (local dev) and
  *      in `miniflare.bindings` in vitest.config.ts (tests). It is deliberately
  *      NOT in wrangler.jsonc's `vars`, so a deploy cannot carry it along.
@@ -40,12 +46,14 @@
  *      exists.
  *
  * test/email-verify.test.ts covers both states for the token route, including
- * the unset-TEST_ROUTES 404. `POST /__test/reap-unverified` and `POST
- * /__test/reap-orphan-media` additionally run `checkOrigin` inline (same as
- * signup/login — see src/auth/csrf.ts) so each carries the SAME default-deny
- * shape as every other mutating route in src/routes.ts, even though
- * `TEST_ROUTES` already makes it unreachable outside dev/test.
+ * the unset-TEST_ROUTES 404. `POST /__test/reap-unverified`, `POST
+ * /__test/reap-orphan-media`, and `POST /__test/anonymise-accounts`
+ * additionally run `checkOrigin` inline (same as signup/login — see
+ * src/auth/csrf.ts) so each carries the SAME default-deny shape as every
+ * other mutating route in src/routes.ts, even though `TEST_ROUTES` already
+ * makes it unreachable outside dev/test.
  */
+import { anonymiseExpiredAccounts } from "../auth/anonymise-accounts";
 import { checkOrigin } from "../auth/csrf";
 import { TEST_LAST_TOKEN_KEY } from "../auth/email-verify";
 import { TEST_LAST_RESET_TOKEN_KEY } from "../auth/password-reset";
@@ -125,6 +133,20 @@ export async function handleTestRoute(
     }
     const result = await reapOrphanMedia(env, ctx);
     return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  // Same test-seam shape as reap-unverified above, for the daily account-
+  // anonymisation reaper (board item 59 = Option C). See
+  // src/auth/anonymise-accounts.ts.
+  if (request.method === "POST" && pathname === "/__test/anonymise-accounts") {
+    if (!checkOrigin(env, request)) {
+      return errorResponse("FORBIDDEN", 403);
+    }
+    const anonymised = await anonymiseExpiredAccounts(env, ctx);
+    return new Response(JSON.stringify({ anonymised }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
