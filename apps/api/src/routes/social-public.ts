@@ -26,14 +26,7 @@ function notFound(): Response {
   return errorResponse("NOT_FOUND", 404);
 }
 
-/**
- * Resolve a handle to its user id, or null.
- *
- * ⚠️ `u.anonymised_at IS NULL` — enumeration fix (board item 59 follow-up),
- * same reasoning as handlePublicProfile: an anonymised handle resolves to
- * null here exactly like an unknown one, so "who follows @deleted-user-<id>"
- * 404s the same way an unknown username does.
- */
+/** Resolve a handle to its user id, or null. */
 async function userIdForUsername(
   env: Env,
   ctx: ExecutionContext,
@@ -41,10 +34,7 @@ async function userIdForUsername(
 ): Promise<string | null> {
   return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<{ user_id: string }>(
-      `SELECT pr.user_id
-         FROM profiles pr
-         JOIN users u ON u.id = pr.user_id
-        WHERE pr.username = $1 AND u.anonymised_at IS NULL`,
+      "SELECT user_id FROM profiles WHERE username = $1",
       [username],
     );
     return rows[0]?.user_id ?? null;
@@ -93,16 +83,10 @@ async function listUsers(
   try {
     const list = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const { rows } = await c.query<FollowUser & { cursorId: string }>(
-        // ⚠️ `u.anonymised_at IS NULL` — enumeration fix (board item 59
-        // follow-up). The follows edge is RETAINED (per the keep-the-graph
-        // ruling) — only its DISPLAY in a live user's public follower/
-        // following list is filtered. A since-deleted account no longer
-        // surfaces there under its permanent scrubbed handle.
         `SELECT pr.username, pr.display_name AS "displayName", f.id AS "cursorId"
            FROM follows f
            JOIN profiles pr ON pr.user_id = f.${joinColumn}
-           JOIN users u ON u.id = f.${joinColumn}
-          WHERE f.${anchorColumn} = $1 AND f.id < $2 AND u.anonymised_at IS NULL
+          WHERE f.${anchorColumn} = $1 AND f.id < $2
           ORDER BY f.id DESC
           LIMIT ${PAGE_SIZE + 1}`,
         [userId, cursor],
@@ -165,10 +149,6 @@ export async function handlePublicAuthors(
   try {
     const pageData = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const { rows } = await c.query<AuthorSummary>(
-        // ⚠️ `u.anonymised_at IS NULL` — enumeration fix (board item 59
-        // follow-up). This is the canonical index of every author on the
-        // site — the worst of the six surfaces, since a deleted account is
-        // discoverable here with no post link at all.
         `SELECT pr.user_id AS "userId", pr.username, pr.display_name AS "displayName",
                 latest.latest_post_id AS "latestPostId"
            FROM (
@@ -178,8 +158,7 @@ export async function handlePublicAuthors(
               ORDER BY author_id, id DESC
            ) latest
            JOIN profiles pr ON pr.user_id = latest.author_id
-           JOIN users u ON u.id = latest.author_id
-          WHERE latest.latest_post_id < $1 AND u.anonymised_at IS NULL
+          WHERE latest.latest_post_id < $1
           ORDER BY latest.latest_post_id DESC
           LIMIT ${AUTHORS_PAGE_SIZE + 1}`,
         [cursor],
