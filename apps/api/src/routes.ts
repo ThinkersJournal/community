@@ -16,6 +16,11 @@
  * `new Response("nope", { status: 400 })` is not.
  */
 import { notFoundResponse } from "./http/errors";
+import {
+  handleAccountStatus,
+  handleCancelDeletion,
+  handleRequestDeletion,
+} from "./routes/account";
 import { handleTestRoute } from "./routes/__test";
 import {
   handleAdminDecision,
@@ -246,6 +251,12 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/blocks/status", handler: handleBlockStatus },
   { method: "GET", pattern: "/blocks", handler: handleListBlocks },
 
+  // Account deletion (board item 59 = Option C) — request/cancel only stamp
+  // deletion_requested_at; the scrub is a later cron. See src/routes/account.ts.
+  { method: "GET", pattern: "/account", handler: handleAccountStatus },
+  { method: "POST", pattern: "/account/delete", handler: handleRequestDeletion },
+  { method: "POST", pattern: "/account/delete/cancel", handler: handleCancelDeletion },
+
   // Per-viewer home feed (M2.1) — no-store, never edge-cached.
   { method: "GET", pattern: "/feed", handler: handleFeed },
 
@@ -406,6 +417,15 @@ export const ROUTES: readonly RouteDef[] = [
   {
     method: "POST",
     pattern: "/__test/reap-orphan-media",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
+
+  // TEST-ONLY (board item 59 = Option C). Same null-means-404 contract and
+  // same handler as the two above — see src/routes/__test.ts.
+  {
+    method: "POST",
+    pattern: "/__test/anonymise-accounts",
     handler: async (request, env, ctx) =>
       (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },

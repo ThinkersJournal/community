@@ -363,6 +363,31 @@ describe("POST /auth/signup", () => {
   });
 
   /**
+   * `deleted-user-<id>` is the exact string src/auth/anonymise-accounts.ts's
+   * scrubbedUsername mints for an anonymised account (board item 59 = Option
+   * C). Rejecting the whole prefix at signup is what keeps that string
+   * structurally unclaimable — see isReservedUsername's own header.
+   */
+  it("400s for a handle starting with the anonymised-account prefix", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+
+    const response = await signup({
+      email,
+      password: VALID_PASSWORD,
+      username: "deleted-user-anything",
+      turnstileToken: "dummy-turnstile-token",
+    });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { fields: string[] };
+    expect(body.fields).toContain("username");
+    expect(await query("SELECT id FROM users WHERE email = $1", [email])).toHaveLength(
+      0,
+    );
+  });
+
+  /**
    * The profile upsert is `ON CONFLICT (user_id) DO UPDATE SET username =
    * EXCLUDED.username` — it runs on EVERY path, including a re-signup, so a
    * re-signup with a DIFFERENT handle must actually change it, not just leave

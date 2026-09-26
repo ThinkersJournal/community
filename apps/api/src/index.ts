@@ -1,3 +1,4 @@
+import { anonymiseExpiredAccounts } from "./auth/anonymise-accounts";
 import { reapUnverifiedAccounts } from "./auth/reap-unverified";
 import { recordDbProbe } from "./health/probe";
 import { notFoundResponse } from "./http/errors";
@@ -26,12 +27,14 @@ export default {
     return await match.route.handler(request, env, ctx, match.params);
   },
   /*
-   * Five cron patterns, one dispatcher. `30 3 * * *` is the unverified-account
+   * Six cron patterns, one dispatcher. `30 3 * * *` is the unverified-account
    * reaper (handle-at-signup Task 8), `15 4 * * *` is the orphan-media
-   * reclaimer (content-deletion + media-reclamation, Task 4), and `20 4 * * *`
+   * reclaimer (content-deletion + media-reclamation, Task 4), `20 4 * * *`
    * is the #61 media-move retry (src/media/moves.ts's processPendingMoves,
-   * for a public<->restricted move a prior attempt left pending or failed) —
-   * three EXPLICIT, EXCLUSIVE branches, all checked BEFORE the email-drain
+   * for a public<->restricted move a prior attempt left pending or failed),
+   * and `40 4 * * *` is the account-anonymisation reaper (board item 59 =
+   * Option C, src/auth/anonymise-accounts.ts's anonymiseExpiredAccounts) —
+   * four EXPLICIT, EXCLUSIVE branches, all checked BEFORE the email-drain
    * dispatch below, because that dispatch otherwise treats every non-`0 14`
    * cron as the INSTANT drain. The two-minute pattern below is special: it
    * ALSO drives the #61 backfill batch (src/media/backfill-hidden-media.ts's
@@ -40,9 +43,10 @@ export default {
    * the email outbox drains
    * (M2.3c): the daily pattern drains DIGEST-disposition rows, every other
    * pattern drains INSTANT. A THIN dispatcher, like `fetch` above — the reap,
-   * the reclaim, the move retry, the backfill batch and the drain themselves
-   * live in src/auth/reap-unverified.ts, src/media/reap-orphan-media.ts,
-   * src/media/moves.ts, src/media/backfill-hidden-media.ts and
+   * the reclaim, the move retry, the anonymise pass, the backfill batch and
+   * the drain themselves live in src/auth/reap-unverified.ts,
+   * src/media/reap-orphan-media.ts, src/media/moves.ts,
+   * src/auth/anonymise-accounts.ts, src/media/backfill-hidden-media.ts and
    * src/notifications/email-drain.ts.
    */
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -65,6 +69,10 @@ export default {
     }
     if (controller.cron === "20 4 * * *") {
       ctx.waitUntil(processPendingMoves(env, ctx));
+      return;
+    }
+    if (controller.cron === "40 4 * * *") {
+      ctx.waitUntil(anonymiseExpiredAccounts(env, ctx));
       return;
     }
     /*

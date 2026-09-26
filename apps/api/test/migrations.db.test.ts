@@ -171,6 +171,9 @@ describe("0001 users + profiles migration", () => {
       expect(await indexExists(client, "reports_created_idx")).toBe(true);
       // 0015_user_account_status.sql — account status columns.
       expect(await columnExists(client, "users", "disabled_at")).toBe(true);
+      // 0019_account_deletion.sql — account deletion request/scrub columns.
+      expect(await columnExists(client, "users", "deletion_requested_at")).toBe(true);
+      expect(await columnExists(client, "users", "anonymised_at")).toBe(true);
     });
 
     await migrate("down");
@@ -184,6 +187,8 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "moderation_actions")).toBe(false);
       expect(await indexExists(client, "reports_created_idx")).toBe(false);
       expect(await columnExists(client, "users", "disabled_at")).toBe(false);
+      expect(await columnExists(client, "users", "deletion_requested_at")).toBe(false);
+      expect(await columnExists(client, "users", "anonymised_at")).toBe(false);
     });
 
     // THE ISOLATION PROPERTY, pinned. The stack is torn down above — in OUR
@@ -211,6 +216,8 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "moderation_actions")).toBe(true);
       expect(await indexExists(client, "reports_created_idx")).toBe(true);
       expect(await columnExists(client, "users", "disabled_at")).toBe(true);
+      expect(await columnExists(client, "users", "deletion_requested_at")).toBe(true);
+      expect(await columnExists(client, "users", "anonymised_at")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });

@@ -108,6 +108,11 @@ const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // orphan-media reclaimer (src/media/reap-orphan-media.ts). Same reasoning,
   // same inline `checkOrigin`.
   "POST /__test/reap-orphan-media",
+  // TEST-ONLY (board item 59 = Option C): the same TEST_ROUTES-gated debug
+  // seam shape as the two reapers above, for the daily account-anonymisation
+  // reaper (src/auth/anonymise-accounts.ts). Same reasoning, same inline
+  // `checkOrigin`.
+  "POST /__test/anonymise-accounts",
   // The Access-gated moderation decision (M4 2b-ii). Cannot use
   // `runMutatingPipeline`: that authenticates a MEMBER SESSION, and an admin is
   // an Access principal — a different trust domain, and a member session confers
@@ -224,6 +229,7 @@ const DISPATCHER_BODY = indexSource
  * make you look.
  */
 const EXPECTED_DISPATCHER_BODY =
+  'import { anonymiseExpiredAccounts } from "./auth/anonymise-accounts"; ' +
   'import { reapUnverifiedAccounts } from "./auth/reap-unverified"; ' +
   'import { recordDbProbe } from "./health/probe"; ' +
   'import { notFoundResponse } from "./http/errors"; ' +
@@ -259,6 +265,10 @@ const EXPECTED_DISPATCHER_BODY =
   "} " +
   'if (controller.cron === "20 4 * * *") { ' +
   "ctx.waitUntil(processPendingMoves(env, ctx)); " +
+  "return; " +
+  "} " +
+  'if (controller.cron === "40 4 * * *") { ' +
+  "ctx.waitUntil(anonymiseExpiredAccounts(env, ctx)); " +
   "return; " +
   "} " +
   'if (controller.cron === "*/2 * * * *") { ' +
