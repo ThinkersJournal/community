@@ -56,6 +56,14 @@ export interface PublicPost {
   authorId: string;
   username: string;
   displayName: string | null;
+  /**
+   * True once the author has been scrubbed (board item 59 = Option C's
+   * anonymisation reaper, apps/api/src/auth/anonymise-accounts.ts). Title and
+   * body are untouched — only the byline changes. The web app renders a
+   * fixed "Deleted user" placeholder instead of `displayName`/`username`, and
+   * does not link it — see apps/web/src/pages/[handle]/[slug].astro.
+   */
+  authorAnonymised: boolean;
   title: string;
   slug: string;
   /** Rendered by the WEB Worker at read time — never stored as HTML. */
@@ -81,6 +89,8 @@ export interface PublicProfile {
   username: string;
   displayName: string | null;
   bio: string | null;
+  /** Same meaning as PublicPost.authorAnonymised, for the profile itself. */
+  anonymised: boolean;
   posts: PublicPostSummary[];
   /** The last id on this page, or null when there are no more. */
   nextCursor: string | null;

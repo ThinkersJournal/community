@@ -102,8 +102,29 @@ describe("GET /public/comments", () => {
     const page = (await response.json()) as CommentsPage;
     expect(page.comments.map((c) => c.id)).toEqual([a.id, a1.id, b.id]);
     expect(page.comments[1]).toMatchObject({ parentId: a.id, depth: 1, deleted: false });
-    expect(page.comments[0]!.author).toMatchObject({ userId: author.userId });
+    expect(page.comments[0]!.author).toMatchObject({ userId: author.userId, anonymised: false });
     expect(page.nextCursor).toBeNull();
+  });
+
+  /**
+   * Board item 59 = Option C's tombstone. A DEDICATED actor, not the shared
+   * `author` fixture above — this test mutates that account's state, which
+   * every other case in this file relies on staying an ordinary account.
+   */
+  it("flags a comment's author.anonymised once that account is scrubbed", async () => {
+    const scrubbedAuthor = await onboardedActor();
+    const p = await insertPost(author.userId, "published");
+    const c = await insertComment(p, scrubbedAuthor.userId);
+
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (client) =>
+      client.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [scrubbedAuthor.userId]),
+    );
+    await waitOnExecutionContext(ctx);
+
+    const page = (await (await getComments(p)).json()) as CommentsPage;
+    const row = page.comments.find((r) => r.id === c.id);
+    expect(row?.author).toMatchObject({ userId: scrubbedAuthor.userId, anonymised: true });
   });
 
   it("keyset-paginates on path: pages are disjoint, complete, and ordered", async () => {
