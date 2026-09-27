@@ -1,0 +1,27 @@
+name: prod-smoke
+
+# Checks the REAL production URL, not a build artifact — see scripts/smoke-prod.sh's
+# header for why this exists (tonight's homepage/authors/rss.xml outage went
+# undetected by both the DB-health probe and the Playwright e2e suite).
+#
+# Runs periodically (catches config/routing drift with no code change behind
+# it, exactly tonight's incident) and shortly after every push to main (a
+# best-effort catch of a bad deploy; Cloudflare's own build/deploy is not
+# triggered by this workflow and is not synchronous with it, hence the sleep).
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Give the deploy a moment to land
+        if: github.event_name == 'push'
+        run: sleep 90
+      - name: Smoke-check production
+        run: bash scripts/smoke-prod.sh
