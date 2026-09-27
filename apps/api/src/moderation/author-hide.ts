@@ -51,6 +51,17 @@ const LATEST_VISIBILITY_ACTION_IS_AUTHOR_HIDE_SQL = `
       AND ma.action IN (${VISIBILITY_ACTION_KINDS_SQL})
     ORDER BY ma.created_at DESC LIMIT 1) = 'author_hide'`;
 
+/**
+ * "No moderator or pending auto-hide controls this post's visibility" — the
+ * post is visible, or hidden only by its author. Expects the post aliased `t`.
+ *
+ * THE ONE definition of "under moderation" for a post: `hidePost` below gates
+ * on it, and `handleUpdatePost` (routes/posts.ts) freezes edits on its
+ * negation (#58), so the author may edit exactly the posts they could also
+ * hide/unhide themselves. Do not re-derive it at a call site.
+ */
+export const POST_NOT_UNDER_MODERATION_SQL = `(t.hidden_at IS NULL OR ${LATEST_VISIBILITY_ACTION_IS_AUTHOR_HIDE_SQL})`;
+
 export interface AuthorHideResult {
   readonly hidden: boolean;
   readonly authorId: string;
@@ -80,7 +91,7 @@ export async function hidePost(c: Client, postId: string, authorId: string): Pro
         -- currently visible OR already hidden by THIS SAME mechanism.
         FROM users u
         WHERE t.id = $1 AND t.author_id = $2 AND u.id = t.author_id
-          AND (t.hidden_at IS NULL OR ${LATEST_VISIBILITY_ACTION_IS_AUTHOR_HIDE_SQL})
+          AND ${POST_NOT_UNDER_MODERATION_SQL}
         RETURNING t.id, t.author_id, u.email, (old.hidden_at IS NOT NULL) AS was_hidden`,
       [postId, authorId],
     );

@@ -278,6 +278,12 @@ if (Astro.request.method === "POST") {
       // The soft gate: authenticated, but content mutation needs a verified
       // address. Distinct from a CSRF/origin 403, which shares the status.
       outcome = "unverified";
+    } else if (apiErrorCode(response) === "POST_UNDER_MODERATION") {
+      // #58: the api freezes edits while a moderator (or an auto-hide pending
+      // review) controls the post's visibility. Also a 403, so it must be told
+      // apart by code, like EMAIL_NOT_VERIFIED above.
+      outcome = "error";
+      message = "This post is hidden pending review or by moderator decision, so it can't be edited right now.";
     } else {
       outcome = "error";
       message = `Could not save (status ${response.status}).`;

@@ -91,12 +91,21 @@ const ALLOWLIST: readonly AllowEntry[] = [
   },
   {
     file: "comments.ts",
-    match: "SELECT 1 FROM comments WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL",
+    match: "SELECT hidden_at IS NOT NULL AS hidden FROM comments WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL",
     why:
-      "handleUpdateComment no-op probe. Runs ONLY on the 0-row UPDATE path, scoped to " +
-      "author_id = $2 (the caller's OWN comment), to tell a 200 no-op resubmit from a 404. " +
-      "Author-scoped, not a public read; hidden_at governs public visibility, not an author " +
-      "touching their own row.",
+      "handleUpdateComment miss-path probe. Runs ONLY on the 0-row UPDATE path, scoped to " +
+      "author_id = $2 (the caller's OWN comment), to tell a 200 no-op resubmit from a 404 — and " +
+      "(#58) a hidden comment's 403 COMMENT_UNDER_MODERATION, which is why it must SEE hidden " +
+      "rows. Author-scoped, not a public read.",
+  },
+  {
+    file: "posts.ts",
+    match: "SELECT 1 FROM posts WHERE id = $1 AND author_id = $2",
+    why:
+      "handleUpdatePost miss-path probe (#58). Runs ONLY when the edit UPDATE matched 0 rows, " +
+      "scoped to author_id = session.userId, to tell 'not yours / no such post' (404) from 'your " +
+      "post, frozen under moderation' (403 POST_UNDER_MODERATION) — so it must SEE hidden rows. " +
+      "Returns no content; not a public read.",
   },
   {
     file: "comments.ts",

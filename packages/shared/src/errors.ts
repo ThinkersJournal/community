@@ -69,7 +69,13 @@ export type ApiErrorCode =
   // 403" rule, which guards against confirming a STRANGER's guess — telling
   // the confirmed owner they don't control this post's visibility leaks
   // nothing new.
-  | "POST_UNDER_MODERATION";
+  // #58: also refuses an EDIT (PATCH /posts/:id) under the same condition —
+  // the moderator must rule on the version that was reported.
+  | "POST_UNDER_MODERATION"
+  // 403 — #58: PATCH /comments/:id on the caller's own HIDDEN comment. A
+  // comment's hidden_at is only ever moderation's (no author self-hide for
+  // comments). Same confirmed-owner reasoning as POST_UNDER_MODERATION.
+  | "COMMENT_UNDER_MODERATION";
 
 export interface ApiErrorBody {
   code: ApiErrorCode;
