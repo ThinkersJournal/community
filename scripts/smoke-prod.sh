@@ -15,7 +15,7 @@ BASE="${SMOKE_BASE_URL:-https://community.thinkersjournal.com}"
 fail=0
 
 check() {
-  local path="$1" marker="$2" body status
+  local path="$1" marker="$2" status
   status=$(curl -sS -o /tmp/smoke-body -w '%{http_code}' "$BASE$path") || {
     echo "FAIL $path: curl error"
     fail=1
@@ -34,10 +34,16 @@ check() {
   echo "OK   $path"
 }
 
+# ⚠️ No apostrophes in any marker below. apps/web/src/lib/xml.ts's escapeXml
+# turns a literal ' into the entity `&apos;` in both rss.xml and sitemap.xml's
+# output, so a marker containing one (e.g. "Thinker's Journal") can never
+# match the raw bytes — caught by running this against the real feed, not
+# assumed. `<rss version=` and `urlset` are apostrophe-free by construction.
 check "/" "Discover"
 check "/login" "Log in"
 check "/tags" "Tags"
-check "/rss.xml" "Thinker's Journal"
+check "/rss.xml" "rss version"
 check "/authors" "authors"
+check "/sitemap.xml" "urlset"
 
 exit $fail
