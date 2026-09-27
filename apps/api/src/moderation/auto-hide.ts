@@ -15,6 +15,16 @@
  * rows — it never re-stamps `hidden_at` (so the original hide time is
  * preserved) and it never un-hides (there is no path that clears the column
  * here at all).
+ *
+ * ⚠️ ONLY REPORTS NO MODERATOR HAS RULED ON COUNT (issue #55). A report is
+ * counted only if it is at least as new as the target's latest `content_*`
+ * action. Counting every report in the window let one new report re-hide a
+ * post a human had just Restored — the reports behind the first hide were
+ * still in the count — so automation overrode a human decision. The cut-off
+ * matches `queue.ts`'s definition of "handled": a report stamped in the same
+ * instant as a ruling is treated as unruled there, so it is here too.
+ * The latest-action lookup is covered by the partial indexes
+ * `moderation_actions_post_idx` / `moderation_actions_comment_idx`.
  */
 import type { Client } from "pg";
 
@@ -32,7 +42,11 @@ export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<Pu
 
   const { rows } = await c.query<{ n: string }>(
     `SELECT count(*) AS n FROM reports
-      WHERE ${column} = $1 AND created_at > now() - interval '24 hours'`,
+      WHERE ${column} = $1 AND created_at > now() - interval '24 hours'
+        AND created_at >= COALESCE(
+              (SELECT max(ma.created_at) FROM moderation_actions ma
+                WHERE ma.${column} = $1 AND ma.action LIKE 'content\\_%'),
+              '-infinity')`,
     [id],
   );
   const distinctReporters = Number(rows[0]?.n ?? "0");
