@@ -16,11 +16,10 @@
  * `approveMediaAccess` already REFUSES a self-approval — that is the
  * enforcement. This page's job is to make the RULE VISIBLE before the click:
  * a pending request the viewer made themselves renders "Awaiting a
- * different admin" instead of an Approve button, using the SAME
- * case/whitespace-insensitive comparison `approveMediaAccess` itself uses
- * (`lower(trim(...))` on both sides) — see packages/shared/src/admin.ts's
- * AdminMediaAccessRequest and apps/api/src/moderation/
- * media-access-requests.ts's own comment on why that normalization exists.
+ * different admin" instead of an Approve button, using the shared
+ * `sameAdminHand` — the case/whitespace-insensitive rule `approveMediaAccess`
+ * applies in SQL (`lower(trim(...))` on both sides), held to it by one case
+ * table run through both (#98). See packages/shared/src/admin.ts.
  * A moderator who does not understand the rule assumes the system is
  * broken; a button that visibly can't be clicked for a stated reason does not.
  */
@@ -33,6 +32,7 @@ import {
   ACCESS_JWT_HEADER,
   type AdminIdentityWire,
   type AdminMediaAccessRequestsResponse,
+  sameAdminHand,
 } from "@thinkersjournal/shared";
 
 // ⚠️⚠️ THE GUARD — see this file's header. Nothing above this line does
@@ -84,9 +84,9 @@ const listResp = await adminApiFetch<AdminMediaAccessRequestsResponse>("/admin/m
 const requests = listResp.status === 200 && listResp.data ? listResp.data.requests : [];
 const listError = listResp.status !== 200 ? (adminApiErrorCode(listResp) ?? "LIST_LOAD_FAILED") : null;
 
-/** Mirrors approveMediaAccess's own `lower(trim(requested_by)) <> lower(trim($2))` check, for display only. */
+/** Display only — the shared rule, pinned against approveMediaAccess's own SQL by a shared case table (#98). */
 function isOwnRequest(requestedBy: string): boolean {
-  return viewerEmail !== null && requestedBy.trim().toLowerCase() === viewerEmail.trim().toLowerCase();
+  return viewerEmail !== null && sameAdminHand(requestedBy, viewerEmail);
 }
 ---
 <BaseLayout title="Media access requests">
