@@ -13,6 +13,8 @@ import indexSource from "../src/index.ts?raw";
 import { ROUTES } from "../src/routes";
 import { findRoute } from "../src/routing";
 
+import { PIPELINE_EXEMPT } from "./helpers/pipeline-exempt";
+
 import type { RouteDef } from "../src/routing";
 
 /**
@@ -53,82 +55,14 @@ import type { RouteDef } from "../src/routing";
  * A NEW mutating route is therefore covered the moment it is added to the
  * table, whether or not anyone thought about this file. If it runs the
  * pipeline, it passes. If it does not, it fails here — and the only way to make
- * it pass without the pipeline is to add it to `PIPELINE_EXEMPT` below, which is
+ * it pass without the pipeline is to add it to `PIPELINE_EXEMPT`
+ * (test/helpers/pipeline-exempt.ts), which is
  * a deliberate, reviewable act with a documented justification, not an omission.
  *
  * Runs in the POOL project (real workerd): the router is driven end to end,
  * against real KV/DO/Postgres bindings, exactly as production would.
  */
 
-/**
- * The non-GET routes that legitimately do NOT run the mutating pipeline.
- *
- * ⚠️ ADDING TO THIS SET IS A SECURITY DECISION. It is not a way to quiet a
- * failing test — it is an assertion that the route cannot use the pipeline AND
- * that it defends itself some other way. Both entries here are the same case:
- * signup and login are how a session comes to EXIST, so they have none at
- * request time and the pipeline's step 2 would 401 every one of them (its
- * header spells this out). They are not unprotected — each runs `checkOrigin`
- * INLINE, plus its own rate limiting (and, for signup, Turnstile) — and the
- * `exempt routes` block below pins exactly that, so an exemption still buys a
- * route a real assertion rather than a pass.
- *
- * If you are here because you added a route: the answer is almost certainly to
- * call `runMutatingPipeline` in its handler, not to add it here.
- */
-const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
-  "POST /auth/signup",
-  "POST /auth/login",
-  // #70 password reset — no session exists yet at either step (that is the
-  // whole reason these routes exist: a user who cannot authenticate).
-  // `forgot-password` runs inline `checkOrigin` + its own two-bucket rate
-  // limit, same shape as signup/login. `reset-password` runs inline
-  // `checkOrigin` only — no rate limit, because token entropy (not request
-  // volume) is its defense, the same reasoning `GET /verify-email` already
-  // relies on. See both routes' own headers.
-  "POST /auth/forgot-password",
-  "POST /auth/reset-password",
-  // Token-authed one-click unsubscribe (M2.3c, RFC 8058): cross-origin, no
-  // session/CSRF by design — a mail provider's one-click POST carries no cookie,
-  // so the HMAC token IS the auth (see src/routes/unsub.ts). Unlike signup/login
-  // it deliberately runs NO checkOrigin either (a mail client cannot forge one,
-  // and its only effect is master_enabled=false for the token's own user), so it
-  // is NOT asserted by the `exempt routes enforce checkOrigin inline` block
-  // below — it is excluded there explicitly with the same justification.
-  "POST /unsub",
-  // TEST-ONLY (handle-at-signup Task 8): a debug seam gated on TEST_ROUTES ===
-  // "1" (see src/routes/__test.ts), reachable only in dev/test — it has no
-  // session by design, so the pipeline's step 2 would 401 every call. UNLIKE
-  // /unsub above it DOES run an inline `checkOrigin` (there is no bearer token
-  // to substitute for one here), so it is asserted by the `exempt routes
-  // enforce checkOrigin inline` block below, not excluded from it.
-  "POST /__test/reap-unverified",
-  // TEST-ONLY (content-deletion + media-reclamation, Task 4): the same
-  // TEST_ROUTES-gated debug seam shape as reap-unverified above, for the daily
-  // orphan-media reclaimer (src/media/reap-orphan-media.ts). Same reasoning,
-  // same inline `checkOrigin`.
-  "POST /__test/reap-orphan-media",
-  // TEST-ONLY (board item 59 = Option C): the same TEST_ROUTES-gated debug
-  // seam shape as the two reapers above, for the daily account-anonymisation
-  // reaper (src/auth/anonymise-accounts.ts). Same reasoning, same inline
-  // `checkOrigin`.
-  "POST /__test/anonymise-accounts",
-  // The Access-gated moderation decision (M4 2b-ii). Cannot use
-  // `runMutatingPipeline`: that authenticates a MEMBER SESSION, and an admin is
-  // an Access principal — a different trust domain, and a member session confers
-  // no admin authority. It defends itself instead with an inline `checkOrigin`
-  // (see handleAdminDecision), which is required because Cloudflare injects the
-  // Access assertion from the CF_Authorization COOKIE: without it, a cross-site
-  // form post from a logged-in moderator's browser would carry a valid
-  // assertion and drive a real content decision.
-  "POST /admin/decision",
-  // #61's two-person media-access grant — same Access trust domain and same
-  // reasoning as /admin/decision above (Access is a different principal than
-  // a member session; each defends itself with an inline `checkOrigin`).
-  "POST /admin/media-access-requests",
-  "POST /admin/media-access-requests/:id/approve",
-  "POST /admin/backfill-hidden-media",
-]);
 
 /**
  * The subset of PIPELINE_EXEMPT that ALSO performs NO inline `checkOrigin` — the
@@ -371,7 +305,7 @@ describe("every mutating route runs the mutating pipeline", () => {
 
       expect(
         response.status,
-        `${name} did not reject an origin-less mutation with a 403. If this route is new: call runMutatingPipeline (src/auth/pipeline.ts) in its handler — the router does NOT apply it for you. If it genuinely cannot (it has no session to require, like signup/login), add "${name}" to PIPELINE_EXEMPT in this file and give it an inline checkOrigin. Do NOT leave a mutating route with neither.`,
+        `${name} did not reject an origin-less mutation with a 403. If this route is new: call runMutatingPipeline (src/auth/pipeline.ts) in its handler — the router does NOT apply it for you. If it genuinely cannot (it has no session to require, like signup/login), add "${name}" to PIPELINE_EXEMPT (test/helpers/pipeline-exempt.ts) and give it an inline checkOrigin. Do NOT leave a mutating route with neither.`,
       ).toBe(403);
     },
   );
