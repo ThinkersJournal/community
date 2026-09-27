@@ -29,7 +29,10 @@ const users = listResp.status === 200 && listResp.data ? listResp.data.users : [
 <BaseLayout title="Blocked users">
   <div class="wrap form-page">
     <h1>Blocked users</h1>
-    <p class="settings-nav"><a class="link" href="/settings/notifications">← Notification emails</a></p>
+    <p class="settings-nav">
+      <a class="link" href="/settings/notifications">← Notification emails</a> ·
+      <a class="link" href="/settings/account">Account →</a>
+    </p>
     <p class="hint">Blocking stops someone from following, commenting on, or reacting to you — it does not hide your public posts from them. See a user's own profile to block someone new.</p>
     {
       users.length === 0 ? (
