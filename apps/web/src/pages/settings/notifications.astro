@@ -47,7 +47,10 @@ const prefs: NotificationPrefs = current.status === 200 && current.data ? curren
 <BaseLayout title="Notification settings">
   <div class="wrap form-page">
     <h1>Notification emails</h1>
-    <p class="settings-nav"><a class="link" href="/settings/blocked">Blocked users →</a></p>
+    <p class="settings-nav">
+      <a class="link" href="/settings/blocked">Blocked users →</a> ·
+      <a class="link" href="/settings/account">Account →</a>
+    </p>
     {saved && <p class="ok">Saved.</p>}
     {error && <p class="err">Could not save. Try again.</p>}
     <form method="POST" class="form">

@@ -1,0 +1,135 @@
+---
+/**
+ * `/settings/account` — request/cancel account deletion (board item 59 =
+ * Option C). Authed + never cached (markPrivate), same shape as
+ * settings/notifications.astro / settings/blocked.astro.
+ *
+ * ⚠️ THIS PAGE'S COPY IS THE ONE PLACE A USER ACTUALLY READS BEFORE DELETING
+ * their account, so it is held to the same "no overclaiming" standard as the
+ * legal drafts (spec-vs-code audit, 2026-09-26): deletion ANONYMISES, it does
+ * not erase — posts/comments stay published under a "Deleted user" byline,
+ * the account stays fully usable during the 30-day grace period, and the
+ * handle is only released (not guaranteed reassigned) after that.
+ *
+ * TWO-STEP CONFIRM, SSR-ONLY — no client-side island needed (unlike the post
+ * page's [data-post-delete], which must reveal client-side because THAT page
+ * is anonymous + edge-cached; this page is already session-private). `?step=
+ * confirm` is a plain GET (safe, no state change) that swaps in the real POST
+ * form; the initial view has no way to submit the delete request in one click.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { apiErrorCode, apiFetch, applyCookies } from "../../lib/api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
+const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
+if (csrfToken === null) return Astro.redirect("/login");
+
+let error: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const endpoint = form.get("action") === "cancel" ? "/account/delete/cancel" : "/account/delete";
+  const res = await apiFetch(endpoint, {
+    method: "POST",
+    request: Astro.request,
+    origin: Astro.request.headers.get("Origin") ?? "",
+    csrfToken: String(form.get("csrfToken") ?? ""),
+  });
+  applyCookies(Astro.response.headers, res.setCookies);
+  if (res.status !== 200) {
+    error = apiErrorCode(res) ?? "SAVE_FAILED";
+  } else {
+    // PRG — a bare re-render of the POST would resubmit on refresh. Fresh GET
+    // re-fetches /account below and shows the outcome (pending or cancelled).
+    return Astro.redirect("/settings/account");
+  }
+}
+
+const status = await apiFetch<{ deletionRequestedAt: string | null }>("/account", {
+  request: Astro.request,
+});
+const deletionRequestedAt = status.status === 200 ? (status.data?.deletionRequestedAt ?? null) : null;
+
+// Display-only estimate — the actual cutoff is computed server-side, at scrub
+// time, from the stored timestamp; this is never what the reaper reads.
+const scrubEstimate =
+  deletionRequestedAt === null
+    ? null
+    : new Date(new Date(deletionRequestedAt).getTime() + 30 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10);
+
+const confirming = Astro.url.searchParams.get("step") === "confirm";
+---
+
+<BaseLayout title="Account">
+  <div class="wrap form-page">
+    <h1>Account</h1>
+    <p class="settings-nav">
+      <a class="link" href="/settings/notifications">Notification emails</a> ·
+      <a class="link" href="/settings/blocked">Blocked users</a>
+    </p>
+    {error && <p class="err">Could not save. Try again.</p>}
+
+    {deletionRequestedAt !== null ? (
+      <>
+        <h2>Account deletion pending</h2>
+        <p class="hint">
+          Your account is scheduled to be anonymised on or after <strong>{scrubEstimate}</strong>.
+          Until then it stays fully usable — nothing changes yet. You can cancel any time
+          before that date.
+        </p>
+        <form method="POST" class="form">
+          <input type="hidden" name="csrfToken" value={csrfToken} />
+          <input type="hidden" name="action" value="cancel" />
+          <button type="submit" class="btn btn-primary">Cancel deletion</button>
+        </form>
+      </>
+    ) : confirming ? (
+      <>
+        <h2>Delete your account?</h2>
+        <p class="hint">
+          This starts a 30-day countdown. Your account stays fully usable during
+          that time, and you can cancel it here at any time. If the 30 days pass
+          without a cancel, we anonymise your account: your email, password, and
+          profile details are scrubbed, and your handle may become available to
+          someone else. <strong>Your posts and comments are not deleted</strong> —
+          they stay published, attributed to "Deleted user" instead of your
+          identity, so conversations other people are part of aren't broken.
+        </p>
+        <form method="POST" class="form">
+          <input type="hidden" name="csrfToken" value={csrfToken} />
+          <input type="hidden" name="action" value="request" />
+          <button type="submit" class="btn btn-ghost">Yes, start deletion</button>
+          <a class="link" href="/settings/account">Never mind</a>
+        </form>
+      </>
+    ) : (
+      <>
+        <h2>Delete your account</h2>
+        <p class="hint">
+          Deleting your account does not erase it immediately. After a 30-day
+          grace period — during which your account stays fully usable and you
+          can cancel at any time — we anonymise it: your email, password, and
+          profile details are scrubbed, and your handle may become available
+          to someone else. Your posts and comments are not deleted; they stay
+          published, attributed to "Deleted user" instead of your identity, so
+          conversations other people are part of aren't broken.
+        </p>
+        <a class="link" href="/settings/account?step=confirm">Delete my account…</a>
+      </>
+    )}
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:560px}
+  .settings-nav{margin:4px 0 20px}
+  .hint{color:var(--muted);font-size:14px;margin:12px 0 24px}
+  .err{color:var(--muted)}
+  .form{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+</style>
