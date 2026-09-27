@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
+import { applyDecision } from "../src/moderation/decide";
 import { createPublished, createVerifiedActor, deleteCreatedUsers } from "./actor";
 
 import type { Actor } from "./actor";
@@ -75,6 +76,36 @@ async function postHiddenAt(postId: string): Promise<string | null> {
   });
   await waitOnExecutionContext(ctx);
   return hiddenAt;
+}
+
+async function commentHiddenAt(commentId: string): Promise<string | null> {
+  const ctx = createExecutionContext();
+  const hiddenAt = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ hidden_at: string | null }>(
+      "SELECT hidden_at::text AS hidden_at FROM comments WHERE id = $1",
+      [commentId],
+    );
+    return rows[0]?.hidden_at ?? null;
+  });
+  await waitOnExecutionContext(ctx);
+  return hiddenAt;
+}
+
+/** A moderator's Restore, through the one path that applies decisions. */
+async function restore(subject: "post" | "comment", subjectId: string): Promise<void> {
+  const ctx = createExecutionContext();
+  const result = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    applyDecision(c, { subject, subjectId, decision: "restore", reason: "Reviewed; no violation.", actorAdmin: "mod@test" }),
+  );
+  await waitOnExecutionContext(ctx);
+  expect(result?.hidden).toBe(false);
+}
+
+/** Reports `target` from `n` fresh verified accounts, asserting each 201s. */
+async function reportFromNewAccounts(n: number, body: Record<string, unknown>): Promise<void> {
+  for (let i = 0; i < n; i++) {
+    expect((await report(await createVerifiedActor(), body)).status).toBe(201);
+  }
 }
 
 let alice: Actor;
@@ -391,5 +422,55 @@ describe("auto-hide (>=3 distinct reporters within 24h)", () => {
     );
     expect(resp2.response.status).toBe(201);
     expect(resp2.purges).toHaveLength(0);
+  });
+});
+
+// Issue #55: auto-hide must count only reports a moderator has NOT yet ruled on,
+// or one new report re-hides a Restore for the rest of the 24h window.
+describe("auto-hide after a moderator's Restore (#55)", () => {
+  it("one new report does NOT re-hide a restored post; three new reporters do", async () => {
+    const postId = await createPublished(author);
+    await reportFromNewAccounts(3, { postId, reason: "spam" });
+    expect(await postHiddenAt(postId)).not.toBeNull();
+
+    await restore("post", postId);
+    expect(await postHiddenAt(postId)).toBeNull();
+
+    await reportFromNewAccounts(1, { postId, reason: "spam" });
+    expect(await postHiddenAt(postId)).toBeNull();
+    await reportFromNewAccounts(1, { postId, reason: "spam" });
+    expect(await postHiddenAt(postId)).toBeNull();
+
+    // Positive control: the threshold still applies to reports made AFTER the
+    // ruling, so the fix narrows the count rather than disabling auto-hide.
+    await reportFromNewAccounts(1, { postId, reason: "spam" });
+    expect(await postHiddenAt(postId)).not.toBeNull();
+  });
+
+  it("one new report does NOT re-hide a restored comment", async () => {
+    const postId = await createPublished(author);
+    const commentResp = await fetchWorker(
+      new Request("https://api.test/comments", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN,
+          Cookie: author.cookie,
+          "X-CSRF-Token": author.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, markdownSource: "restored comment" }),
+      }),
+    );
+    expect(commentResp.status).toBe(201);
+    const commentId = ((await commentResp.json()) as { id: string }).id;
+
+    await reportFromNewAccounts(3, { commentId, reason: "spam" });
+    expect(await commentHiddenAt(commentId)).not.toBeNull();
+
+    await restore("comment", commentId);
+    expect(await commentHiddenAt(commentId)).toBeNull();
+
+    await reportFromNewAccounts(1, { commentId, reason: "spam" });
+    expect(await commentHiddenAt(commentId)).toBeNull();
   });
 });
