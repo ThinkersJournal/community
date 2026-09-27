@@ -45,7 +45,7 @@ import { withClient } from "../db/client";
 import { isInvalidTextRepresentation, isUniqueViolation } from "../db/errors";
 import { errorResponse } from "../http/errors";
 import { applyMediaVisibilityChange } from "../media/visibility-hook";
-import { hidePost, unhidePost } from "../moderation/author-hide";
+import { hidePost, POST_NOT_UNDER_MODERATION_SQL, unhidePost } from "../moderation/author-hide";
 import { hiddenReasonCaseSql } from "../moderation/hidden-reason";
 import { purgeTagsFor } from "../moderation/purge-target";
 import { randomSuffix } from "../util/random";
@@ -353,17 +353,20 @@ export async function handleUpdatePost(
   const { title, markdownSource, status } = input;
   const authorId = result.session.userId;
 
-  let updated: {
-    id: string;
-    slug: string;
-    username: string;
-    oldSlugs: string[];
-    newSlugs: string[];
-  } | null;
+  let updated:
+    | {
+        id: string;
+        slug: string;
+        username: string;
+        oldSlugs: string[];
+        newSlugs: string[];
+      }
+    | "not_found"
+    | "under_moderation";
   try {
     updated = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       const { rows } = await c.query<{ id: string; slug: string }>(
-        `UPDATE posts
+        `UPDATE posts AS t
             SET title = $1,
                 markdown_source = $2,
                 status = $3,
@@ -374,16 +377,31 @@ export async function handleUpdatePost(
                 updated_at = now()
           -- ⚠️ OWNERSHIP IS THIS LINE. Not a preceding SELECT: under a
           -- transaction-mode pooler a check-then-act is a race by construction.
-          WHERE id = $4 AND author_id = $5
+          -- ⚠️ #58: SO IS THE EDIT FREEZE. While a moderator (or an auto-hide
+          -- pending review) controls the post's visibility, the author may not
+          -- change it — or the moderator rules on a version different from the
+          -- one reported. The predicate is author-hide.ts's own gate, so the
+          -- author's OWN self-hide stays editable; never re-derive it here.
+          WHERE t.id = $4 AND t.author_id = $5 AND ${POST_NOT_UNDER_MODERATION_SQL}
       RETURNING id, slug`,
         [title, markdownSource, status, params.id, authorId],
       );
       const row = rows[0];
-      // ⚠️ Only fetched on a HIT. A miss (wrong id, or not this author's) must
-      // stay a single query — see the purge-quota reasoning below: the same
-      // "don't spend anything extra on a request that turns out to be a 404"
-      // discipline applies to this SELECT as much as to the purge call.
-      if (row === undefined) return null;
+      if (row === undefined) {
+        // Zero rows is ambiguous: no such post / not this author's, or the
+        // author's own post under moderation. A probe SCOPED TO THE SAME
+        // author_id tells them apart, so a stranger still learns nothing (404)
+        // — same pattern as author-hide.ts and comments.ts's probes. It costs
+        // one PK read on the miss path and purges nothing: the purge-quota
+        // ordering below is untouched.
+        const { rows: mine } = await c.query(`SELECT 1 FROM posts WHERE id = $1 AND author_id = $2`, [
+          params.id,
+          authorId,
+        ]);
+        return mine[0] === undefined ? "not_found" : "under_moderation";
+      }
+      // ⚠️ Everything below runs only on a HIT, so a refused or missed edit
+      // spends nothing further (see the purge-quota reasoning below).
       // ⚠️ READ THE OLD SLUGS BEFORE writeTags — it DELETEs the join rows. The
       // edit purge must cover a REMOVED tag's page (old ∪ new), so a tag dropped
       // by this edit still gets its now-shorter page invalidated.
@@ -399,7 +417,15 @@ export async function handleUpdatePost(
     throw err;
   }
   // ⚠️ Zero rows means "no such post" OR "not yours" — answered identically.
-  if (updated === null) return notFound();
+  if (updated === "not_found") return notFound();
+  if (updated === "under_moderation") {
+    // Only reachable for the confirmed OWNER (the probe above is author-scoped),
+    // so the 403 leaks nothing a stranger could not already see. Same code and
+    // status as the author-hide routes refuse with for the same condition.
+    return errorResponse("POST_UNDER_MODERATION", 403, {
+      message: "This post is hidden pending review or by moderator decision, and cannot be edited.",
+    });
+  }
 
   // ⚠️ BELOW THE 404 ABOVE, AND THAT ORDER IS A SECURITY PROPERTY, not tidiness.
   // Purge quota is 5 requests/MINUTE for the whole zone. Purging before the

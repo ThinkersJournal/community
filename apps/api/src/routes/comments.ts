@@ -197,26 +197,41 @@ export async function handleUpdateComment(
   // that didn't happen. A 0-row result is then ambiguous — unchanged, or
   // not-the-caller's-live-comment — so a follow-up existence check (only on the
   // rare 0-row path) distinguishes a 200 no-op from a 404.
+  //
+  // ⚠️ #58: A HIDDEN COMMENT IS FROZEN. `hidden_at` on a comment is only ever
+  // moderation's (auto-hide.ts / decide.ts — there is no author self-hide for
+  // comments), and an edit while it is under review would let the moderator
+  // rule on a version different from the one reported. The same probe then
+  // answers 403 to the confirmed owner, and it is checked BEFORE the no-op
+  // case, so an identical resubmit on a hidden comment is refused too.
   type UpdateOutcome =
     | { kind: "changed"; postId: string }
     | { kind: "unchanged" }
+    | { kind: "underModeration" }
     | { kind: "notFound" };
   const outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c): Promise<UpdateOutcome> => {
     const { rows } = await c.query<{ postId: string }>(
       `UPDATE comments SET body_markdown = $3, edited_at = now()
-        WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL
+        WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL AND hidden_at IS NULL
           AND body_markdown IS DISTINCT FROM $3
        RETURNING post_id AS "postId"`,
       [id, userId, parsed.data.markdownSource],
     );
     if (rows[0]) return { kind: "changed", postId: rows[0].postId };
-    const { rows: live } = await c.query(
-      `SELECT 1 FROM comments WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL`,
+    const { rows: live } = await c.query<{ hidden: boolean }>(
+      `SELECT hidden_at IS NOT NULL AS hidden FROM comments WHERE id = $1 AND author_id = $2 AND deleted_at IS NULL`,
       [id, userId],
     );
-    return live[0] ? { kind: "unchanged" } : { kind: "notFound" };
+    if (live[0] === undefined) return { kind: "notFound" };
+    return live[0].hidden ? { kind: "underModeration" } : { kind: "unchanged" };
   });
   if (outcome.kind === "notFound") return errorResponse("COMMENT_NOT_FOUND", 404);
+  if (outcome.kind === "underModeration") {
+    // Only the confirmed owner reaches this (the probe is author-scoped).
+    return errorResponse("COMMENT_UNDER_MODERATION", 403, {
+      message: "This comment is hidden pending review or by moderator decision, and cannot be edited.",
+    });
+  }
   if (outcome.kind === "changed") {
     await purgeTags(env, [`post:${outcome.postId}`]);
     notifyPostLive(env, ctx, outcome.postId, "comment");
