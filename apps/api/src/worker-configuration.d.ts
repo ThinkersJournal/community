@@ -24,6 +24,11 @@ interface __BaseEnv_Env {
 	// a large, unrelated workerd-docstring-wording diff. A single hand-added
 	// line matches this file's own established pattern for exactly this case.
 	RESET_LIMITER: RateLimit;
+	// #SEARCH_LIMITER (spec-vs-code audit, 2026-09-27) — added by hand, same
+	// established pattern as RESET_LIMITER just above, for the same reason:
+	// a full `wrangler types` regeneration in this checkout pulls in an
+	// unrelated diff.
+	SEARCH_LIMITER: RateLimit;
 	IMAGES: ImagesBinding;
 	TURNSTILE_SECRET_KEY: string;
 	POSTMARK_SERVER_TOKEN: string;

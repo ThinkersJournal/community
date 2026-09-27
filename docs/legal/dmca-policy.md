@@ -66,10 +66,14 @@ action seeking to restrain the activity.
 ## 4. Repeat infringers
 
 Consistent with §512(i), we maintain a policy of **terminating, in appropriate
-circumstances, the accounts of users who are repeat infringers**. Copyright strikes
-are tracked against an account, and repeated valid complaints lead to suspension and
-then termination under the enforcement ladder in the
-[Community Guidelines](community-guidelines.md).
+circumstances, the accounts of users who are repeat infringers**. Valid
+copyright complaints are recorded against an account in our moderation log,
+and repeated valid complaints are weighed — along with the rest of an
+account's history — under the same human-reviewed warn → suspend → ban
+enforcement ladder described in the
+[Community Guidelines](community-guidelines.md). There is no separate,
+automatic strike counter: each step is a moderator decision informed by that
+record.
 
 ## 5. Trademark and other complaints
 

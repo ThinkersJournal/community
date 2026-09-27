@@ -68,9 +68,16 @@ public; and in a business transfer, subject to this policy.
 
 - **Unverified accounts** are automatically deleted after [[REAPER_WINDOW]] if the
   email is never verified.
-- **Content and accounts you delete** are removed from the live Service, and the
-  associated images are garbage-collected from storage. Reasonable backup and
-  legal-compliance copies may persist for a limited period.
+- **Individual content you delete** (a post or comment) is removed from the live
+  Service, and any images that become unreferenced as a result are
+  garbage-collected from storage.
+- **An account you delete is not erased.** After a 30-day grace period (during
+  which you can cancel the deletion), we anonymise it: your email, password,
+  and profile details are scrubbed and your handle is released. Your posts and
+  comments remain hosted and displayed, attributed to a generic "deleted user"
+  rather than your identity, so that conversations other people are part of
+  are not broken. Reasonable backup and legal-compliance copies of the
+  anonymised account may persist for a limited period.
 - **Security logs** are retained only as long as needed for abuse prevention.
 
 ## 6. Your choices and rights
