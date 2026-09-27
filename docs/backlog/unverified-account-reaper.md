@@ -1,8 +1,14 @@
 # Unverified-Account Handle Reaper — Requirements
 
-> **Status:** Backlog. Companion to the handle-at-signup decision
-> (`docs/pre-launch-fixes.md` #1, decided 2026-08-13). Pre-launch-vs-deferred is
-> a founder sub-decision.
+> **Status: SHIPPED** (the "Disposition" section below already said this would
+> ship; this badge hadn't been updated to match). See
+> `apps/api/src/auth/reap-unverified.ts` for the implementation — settled on
+> **hard delete** (`profiles` cascades via `ON DELETE CASCADE`, freeing both
+> the handle and the email), 7-day grace period as proposed, runs on the daily
+> `30 3 * * *` cron. Kept here for the requirements/rationale history, not as
+> an open item — spec-vs-code audit (2026-09-26) found this still marked
+> Backlog after shipping, which would mislead the next person planning work
+> from this file.
 
 ## Why
 
