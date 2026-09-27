@@ -194,12 +194,27 @@ export async function handleSignup(
   //   • no row          -> the INSERT wins    -> `inserted = true`, a new account
   //   • row, UNVERIFIED -> the DO UPDATE fires -> `inserted = false`, a re-signup
   //   • row, VERIFIED   -> the WHERE blocks it -> ZERO ROWS
+  //   • row, BARRED     -> the WHERE blocks it -> ZERO ROWS (issue #50, below)
   //
   // ⚠️ ZERO ROWS IS THE 409, AND ONLY THE DATABASE CAN DECIDE IT. `WHERE
   // users.email_verified_at IS NULL` on the DO UPDATE means a conflict with a
   // verified row updates NOTHING and returns NOTHING — so `rows.length === 0` is
-  // unambiguously "a verified account owns this address", decided atomically
-  // rather than by a read anything could have invalidated between check and act.
+  // unambiguously "a verified OR barred account owns this address", decided
+  // atomically rather than by a read anything could have invalidated between
+  // check and act.
+  //
+  // ⚠️ A BARRED ROW IS NEVER TAKEN OVER (issue #50, PM ruling Q3b). Without the
+  // `disabled_at`/`suspended_until` clauses, anyone who knew a barred UNVERIFIED
+  // address could rewrite its password and handle, bump its epoch and receive a
+  // session: a way around login's #35 refusal, and tampering with the row the
+  // bar exists to preserve as evidence. The clauses are `isBarred`'s exact
+  // complement (src/auth/account-status.ts): a LAPSED suspension bars nothing, so
+  // `<= now()` and not `IS NULL` (the reaper's predicate answers a different
+  // question). ORACLE, ACCEPTED: a barred unverified address now answers 409 like
+  // a verified one. That does not tell barred from verified, but it does show
+  // an address going from "unverified" to "taken". Accepted as the smaller leak
+  // than a barred row anyone can rewrite. test/barred-reentry.test.ts pins both
+  // sides.
   //
   // ⚠️ THE `WHERE` IS THE WHOLE SECURITY PROPERTY. M0 rejected an UNGUARDED
   // `ON CONFLICT DO UPDATE` precisely because it would let any stranger's signup
@@ -247,13 +262,15 @@ export async function handleSignup(
            ON CONFLICT (email) DO UPDATE
                    SET password_hash = EXCLUDED.password_hash
                  WHERE users.email_verified_at IS NULL
+                   AND users.disabled_at IS NULL
+                   AND (users.suspended_until IS NULL OR users.suspended_until <= now())
              RETURNING id, (xmax = 0) AS inserted`,
           [email, passwordHash],
         );
 
         const row = rows[0] ?? null;
         if (row === null) {
-          // A VERIFIED account owns this address. Nothing was written.
+          // A VERIFIED (or barred) account owns this address. Nothing was written.
           await c.query("ROLLBACK");
           return null;
         }
@@ -343,7 +360,7 @@ export async function handleSignup(
     throw err;
   }
 
-  // Zero rows came back: a VERIFIED account owns this address (see the guard).
+  // Zero rows came back: a VERIFIED or BARRED account owns this address (see the guard).
   if (upserted === null) {
     return errorResponse("EMAIL_TAKEN", 409);
   }

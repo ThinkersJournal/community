@@ -15,12 +15,14 @@
  *
  * ⚠️ NEITHER DO SIGNUP/LOGIN. See `runMutatingPipeline`'s own note.
  */
+import { isBarred } from "./account-status";
 import { checkCsrf, checkOrigin } from "./csrf";
 import { enforceRateLimit } from "./ratelimit";
 import { destroySession, readSession } from "./session";
 import { errorResponse } from "../http/errors";
 import { withClient } from "../db/client";
 
+import type { AccountStatusRow } from "./account-status";
 import type { SessionData } from "@thinkersjournal/shared";
 
 /**
@@ -49,42 +51,45 @@ function emailNotVerifiedResponse(): Response {
  * denying (or granting) access based on a stale `email_verified_at` for up
  * to 60s after `GET /verify-email` runs — a real security bug.
  *
- * ⚠️ RESIDUAL RISK (issue #35, not fixed here): design spec
- * `2026-09-06-m4-moderation-queue-design.md:174` binds BOTH login and this
- * mutating pipeline to refuse a barred user. This branch does login only —
- * the pipeline half is deliberately out of scope, a later module's work.
- * The intended cover in the meantime is `security_epoch`: bumping it kills
- * every live session. But nothing bumps it today — the only way to SET
- * `disabled_at`/`suspended_until`/`disabled_reason` right now is a human
- * running raw SQL, and that human will not also bump an epoch. So a
- * manually-disabled user is barred from RE-ENTRY (login refuses them) but
- * keeps acting on whatever session they already hold, indefinitely, until it
- * expires on its own. This `SELECT` already reads `users` by `session.userId`
- * on every mutating request — widening it to also select
- * `suspended_until`/`disabled_at` and refusing here is the near-free place to
- * close this gap.
- *
- * ⚠️ TRACKED AS ISSUE #50, which carries the fix and its acceptance criteria.
- * This paragraph used to end "when that work is scheduled" — and nothing
- * scheduled it. A deferral written only in a code comment has no scheduler:
- * it is visible to whoever next opens this function and to no board, no
- * tracker and no query. If #50 is closed without this SELECT widening, this
- * comment is wrong and should be deleted, not left standing.
+ * Inside `runMutatingPipeline` the pipeline does NOT call this: it reads the
+ * row once via `readAccountGate` (below), refuses a barred user from it, then
+ * applies `verifiedEmailGate` to the SAME row — one round trip for both.
  */
 export async function requireVerifiedEmail(
   env: Env,
   ctx: ExecutionContext,
   session: SessionData,
 ): Promise<Response | null> {
-  const verifiedAt = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    const { rows } = await c.query<{ email_verified_at: Date | null }>(
-      "SELECT email_verified_at FROM users WHERE id = $1",
-      [session.userId],
-    );
-    return rows[0]?.email_verified_at ?? null;
-  });
+  return verifiedEmailGate(await readAccountGate(env, ctx, session.userId));
+}
 
-  return verifiedAt === null ? emailNotVerifiedResponse() : null;
+/** What the pipeline needs from `users` for a session's user — one row, one read. */
+interface AccountGateRow extends AccountStatusRow {
+  readonly email_verified_at: Date | null;
+}
+
+/**
+ * The session user's barring + verification columns, via `HYPERDRIVE_FRESH`
+ * (see `requireVerifiedEmail` on why never CACHED — a cached read here would
+ * keep a just-barred user acting for up to 60s). `null` when the row is gone.
+ */
+async function readAccountGate(
+  env: Env,
+  ctx: ExecutionContext,
+  userId: string,
+): Promise<AccountGateRow | null> {
+  return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<AccountGateRow>(
+      "SELECT email_verified_at, suspended_until, disabled_at FROM users WHERE id = $1",
+      [userId],
+    );
+    return rows[0] ?? null;
+  });
+}
+
+/** `null` = verified, proceed. A missing row fails CLOSED (the 403). */
+function verifiedEmailGate(row: AccountGateRow | null): Response | null {
+  return (row?.email_verified_at ?? null) === null ? emailNotVerifiedResponse() : null;
 }
 
 /** The generic 403 for a rejected origin or a failed CSRF token. */
@@ -113,6 +118,21 @@ function forbidden(): Response {
  */
 function unauthorized(extraHeaders: Record<string, string> = {}): Response {
   return errorResponse("UNAUTHORIZED", 401, { headers: extraHeaders });
+}
+
+/**
+ * The refusal for a BARRED user's live session (issue #50) — today the same
+ * 401 as a revoked session, so a bar reads exactly like the epoch kill the spec
+ * pairs it with (`:174`) and tells the caller nothing new.
+ *
+ * ⚠️ THE ONE PLACE TO CHANGE if CireSnave rules that a barred user should be
+ * told WHY (a distinct 403 `ACCOUNT_BARRED` — a DSA Art. 17
+ * statement-of-reasons question, tied to #57's durable notices). Deliberately
+ * not pre-built: until that ruling, a distinct code would be an account-state
+ * signal nobody decided to send.
+ */
+function barred(extraHeaders: Record<string, string>): Response {
+  return unauthorized(extraHeaders);
 }
 
 /**
@@ -171,12 +191,12 @@ export async function readCurrentSession(
 export interface MutatingPipelineOptions {
   /**
    * Opt a CONTENT-mutation route into the soft email-verification gate
-   * (step 5). Auth routes (logout) leave this off: an unverified user must
+   * (step 6). Auth routes (logout) leave this off: an unverified user must
    * still be able to end their session.
    */
   requireVerifiedEmail?: boolean;
   /**
-   * Opt a SENSITIVE route into rate limiting (step 6). Modelled as one object
+   * Opt a SENSITIVE route into rate limiting (step 7). Modelled as one object
    * rather than the brief's separate `limiter`/`limiterKey` parameters so the
    * two cannot be supplied independently — a limiter with no key (or a key
    * with no limiter) is not a state a caller can reach, rather than one that
@@ -208,14 +228,18 @@ export interface MutatingPipelineOptions {
  *   4. checkSecurityEpoch-> 401 + cleared cookie. Before ANY authorization
  *                           decision: a revoked session must not be able to
  *                           act, so nothing downstream may run for one.
- *   5. requireVerifiedEmail (opt-in) -> its 403. Authorization, and the first
- *                           step that touches Postgres — deliberately last
- *                           among the checks, behind every cheaper rejection.
- *   6. rate limit (opt-in) -> its 429. Last: quota is spent only by a request
+ *   5. barred account    -> 401 + cleared cookie (issue #50). EVERY route, no
+ *                           opt-out. The first step that touches Postgres —
+ *                           behind every cheaper rejection — and BEFORE step 6,
+ *                           so a barred unverified user is logged out rather
+ *                           than sent into the verify-email flow.
+ *   6. requireVerifiedEmail (opt-in) -> its 403. Authorization, judged on the
+ *                           row step 5 already read (no second query).
+ *   7. rate limit (opt-in) -> its 429. Last: quota is spent only by a request
  *                           that is otherwise fully entitled to proceed, so
  *                           unauthenticated noise cannot burn a real user's
  *                           budget.
- *   7. hand the validated session to the handler.
+ *   8. hand the validated session to the handler.
  *
  * ⚠️ `POST /auth/signup` and `POST /auth/login` MUST NOT ROUTE THROUGH THIS.
  * They are how a session comes to EXIST, so they have none at request time:
@@ -269,15 +293,38 @@ export async function runMutatingPipeline(
     return unauthorized({ "Set-Cookie": cookie });
   }
 
-  // ---- 5. Verified email (content routes only) ------------------------------
+  // ---- 5. Barred account (issue #50) — EVERY route, no opt-out --------------
+  // Spec `:174`: login AND this pipeline refuse a user with `disabled_at` set or
+  // `suspended_until` in the future. Login refused re-entry since #35; this is
+  // the half that stops a session the user ALREADY held. Not an opt-in, by PM
+  // ruling on #50: a default-on refusal cannot be forgotten by a new route,
+  // where a per-route list would have to be kept complete by hand.
+  // test/pipeline-barred.test.ts enumerates ROUTES to hold every pipeline route
+  // to it.
+  //
+  // Destroyed, not merely refused — the same treatment as step 4's revocation.
+  // That is what makes "no opt-out" safe for logout (the user ends up logged
+  // out either way) and for notification housekeeping (email opt-out stays open
+  // through the tokened `POST /unsub`, which needs no session).
+  //
+  // ⚠️ `isBarred`, NOT the reaper's `suspended_until IS NULL`: a LAPSED
+  // suspension bars nothing here (see src/auth/account-status.ts). A missing
+  // row is not barred — step 6 still fails closed on it for content routes.
+  const account = await readAccountGate(env, ctx, session.userId);
+  if (account !== null && isBarred(account)) {
+    const { cookie } = await destroySession(env, request);
+    return barred({ "Set-Cookie": cookie });
+  }
+
+  // ---- 6. Verified email (content routes only) — same row as step 5 --------
   if (opts.requireVerifiedEmail === true) {
-    const gated = await requireVerifiedEmail(env, ctx, session);
+    const gated = verifiedEmailGate(account);
     if (gated !== null) {
       return gated;
     }
   }
 
-  // ---- 6. Rate limit (sensitive routes only) --------------------------------
+  // ---- 7. Rate limit (sensitive routes only) --------------------------------
   if (opts.rateLimit !== undefined) {
     const limited = await enforceRateLimit(
       opts.rateLimit.limiter,
@@ -288,6 +335,6 @@ export async function runMutatingPipeline(
     }
   }
 
-  // ---- 7. Hand off to the handler -------------------------------------------
+  // ---- 8. Hand off to the handler -------------------------------------------
   return { session };
 }

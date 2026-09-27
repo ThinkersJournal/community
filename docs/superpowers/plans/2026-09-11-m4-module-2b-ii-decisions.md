@@ -790,7 +790,7 @@ MSG
 
 - **Account actions** (warn / suspend / ban) are module **2c** (decision #3). The columns exist (issue #35, migration 0015) and `isBarred` refuses them at login; nothing writes them yet.
 - ⚠️ **Whatever first writes those columns must bump `security_epoch` in the same operation** — the column bars re-entry, the epoch kills live sessions, and neither alone is a ban. Recorded in the spec at `:174`, `:332`, `:335`.
-- **The mutating pipeline does not yet refuse a barred user** — [issue #50](https://github.com/ThinkersJournal/community/issues/50), with the fix written out.
+- **The mutating pipeline refuses a barred user** as of [issue #50](https://github.com/ThinkersJournal/community/issues/50): 401 plus a destroyed session on every pipeline route. The same change closed two session-minting side doors, `POST /auth/reset-password` and signup's re-signup of a barred unverified row.
 - **`/appeal`** is linked from the notice and the banner but is **not built here** — spec §6 puts the in-app appeal form in a later slice. ⚠️ **If that route does not exist when this ships, the link is a 404 and the notice promises something the product does not have.** Either land a stub page in Task 3 or file it before merge; do not ship a dead appeal link. Say which you did in your report.
 
 ## Self-Review

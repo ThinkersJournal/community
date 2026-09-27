@@ -55,12 +55,15 @@
  */
 import { ResetPasswordInput } from "@thinkersjournal/shared";
 
+import { isBarred } from "../auth/account-status";
 import { checkOrigin } from "../auth/csrf";
 import { base64urlEncode, sha256Hex } from "../auth/encoding";
 import { hashPassword } from "../auth/password";
 import { createSession } from "../auth/session";
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
+
+import type { AccountStatusRow } from "../auth/account-status";
 
 function invalidToken(): Response {
   return errorResponse("INVALID_RESET_TOKEN", 400);
@@ -104,7 +107,7 @@ export async function handleResetPassword(
   // ⚠️ INLINES the same UPDATE `consumeResetToken` runs, rather than calling
   // it, because it must run on THIS connection/transaction — see the file
   // header on why the consume and the password write must be atomic together.
-  const userId = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+  const redeemed = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     await c.query(BEGIN_BOUNDED_TX);
     try {
       const { rows } = await c.query<{ user_id: string }>(
@@ -120,11 +123,14 @@ export async function handleResetPassword(
         return null;
       }
 
-      await c.query(
+      // RETURNING the barring columns from the row just written, so step 5's
+      // bar check judges the same row state this transaction saw.
+      const { rows: updated } = await c.query<AccountStatusRow>(
         `UPDATE users
             SET password_hash = $1,
                 email_verified_at = COALESCE(email_verified_at, now())
-          WHERE id = $2`,
+          WHERE id = $2
+        RETURNING suspended_until, disabled_at`,
         [passwordHash, row.user_id],
       );
 
@@ -132,7 +138,7 @@ export async function handleResetPassword(
       await env.USER_SECURITY.getByName(row.user_id).bumpEpoch();
 
       await c.query("COMMIT");
-      return row.user_id;
+      return { userId: row.user_id, account: updated[0] ?? null };
     } catch (err) {
       try {
         await c.query("ROLLBACK");
@@ -143,8 +149,21 @@ export async function handleResetPassword(
     }
   });
 
-  if (userId === null) {
+  if (redeemed === null) {
     return invalidToken();
+  }
+  const { userId, account } = redeemed;
+
+  // ---- 3b. Barred account (issue #50) — NO session, the SAME 200 ------------
+  // Before this, forgot -> reset was a working way around #35's login refusal:
+  // it handed a barred account a fresh session. PM ruling on #50 (Q3): the
+  // password change above STANDS (the token proved control of the address, and
+  // the epoch bump killed every older session, which is only good here), but
+  // no session is minted. The status and body match the success path; only the
+  // cookie is missing. The caller holds the address's own token, so that
+  // absence tells them nothing about someone else.
+  if (account !== null && isBarred(account)) {
+    return new Response(null, { status: 200 });
   }
 
   // ---- 4. Security epoch — read AFTER the bump, same reasoning as signup ---

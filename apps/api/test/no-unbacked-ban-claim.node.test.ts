@@ -16,10 +16,11 @@ import { describe, expect, it } from "vitest";
  * `users`, and `src/routes/login.ts` refuses a barred row via `isBarred`.
  * The conjunction assertion below cannot by itself distinguish those two
  * "green"s — that is what the positive ratchet a few lines down is for.
+ * The mutating-pipeline half of the spec's binding
+ * (`2026-09-06-m4-moderation-queue-design.md:174`) landed with issue #50
+ * (`src/auth/pipeline.ts` step 5; `test/pipeline-barred.test.ts`).
  * **What remains open: nothing yet WRITES these columns (a human running raw
- * SQL is the only mechanism today), and the mutating-pipeline half of the
- * spec's binding (`2026-09-06-m4-moderation-queue-design.md:174`) is a later
- * module's scope.**
+ * SQL is the only mechanism today).**
  *
  * ⚠️ IF YOU ARE HERE BECAUSE YOU ARE SHIPPING THE CSAM TERMINATION HOOK, OR
  * ANYTHING ELSE THAT NEEDS A USER TO STAY OUT: THE PRIMITIVE NOW EXISTS
