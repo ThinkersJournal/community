@@ -137,14 +137,44 @@
     // `src/pages/404.astro` never renders. Cloudflare's default for a Worker
     // with static assets is `run_worker_first: false`: a request is checked
     // against the asset manifest FIRST, and a path that matches NOTHING there
-    // gets `not_found_handling`'s default ("none") — a bare 404, no body, no
-    // headers, THE WORKER SCRIPT NEVER INVOKED. Confirmed on the wire in CI's
-    // e2e (test-results/not-found-*): status 404 but `cache-control` came back
-    // `undefined`, not this app's `private, no-store` — proof no app code ran.
+    // gets `not_found_handling`'s default ("none") — a bare, empty-body 404,
+    // THE WORKER SCRIPT NEVER INVOKED. Confirmed on the wire in CI's e2e
+    // (test-results/not-found-*): status 404 but `cache-control` came back
+    // `undefined`, not this app's `private, no-store`.
     // `true` routes EVERY request through the Worker first; real static assets
     // still resolve, because Astro's own SSR handler falls back to `env.ASSETS`
     // for anything that IS a real built asset (only a path that is neither a
     // known route NOR a known asset reaches 404.astro).
+    //
+    // ⚠️ CORRECTION (2026-09-27) — a factual claim about what the CI
+    // observation above PROVES, not a change to the setting. The struck
+    // claim read *"a bare 404, no body, no headers, THE WORKER SCRIPT NEVER
+    // INVOKED"*, immediately followed by *"proof no app code ran."* That
+    // inference was used tonight to chase a routing/asset-layer explanation
+    // for a real production incident (`/`, `/authors`, `/rss.xml`,
+    // `/sitemap.xml` all 404ing with empty bodies) — for hours, across
+    // several dead-end hypotheses. The real cause was `column
+    // u.anonymised_at does not exist`: migration 0019 had never run against
+    // production, so those routes' own queries threw. **The Worker WAS
+    // invoked and DID run app code; it just threw before ever reaching the
+    // line that sets `private, no-store`.** An absent app-set header is
+    // therefore consistent with "the asset layer short-circuited before the
+    // Worker ran" but is NOT proof of it — a route that runs and throws
+    // produces the identical observable signature (empty body, no app
+    // headers) for a completely different reason. The CI e2e observation
+    // above is still real and still describes a genuine "no route matches
+    // at all" case; only the word "proof" as a *general* diagnostic
+    // inference was wrong, and it cost real time before anyone re-derived
+    // this the hard way. Do not re-cite "cache-control absent" as proof the
+    // Worker never ran — check application-level causes (a thrown query, an
+    // unapplied migration) first or alongside it.
+    //
+    // Whether `run_worker_first: true` is itself still NEEDED: unchanged by
+    // any of this, and not re-established either. Tonight's incident had a
+    // different, application-level cause — it neither confirms nor
+    // contradicts this setting's necessity, and nobody tested this Worker
+    // with it set to `false` to find out. Absent that test, this comment
+    // does not claim more than the CI e2e evidence above already supports.
     "run_worker_first": true
   },
   // ⚠️ THE POINT OF THIS WORKER'S TOPOLOGY.

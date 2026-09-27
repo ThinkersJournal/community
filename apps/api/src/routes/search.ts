@@ -11,6 +11,7 @@
  * effect (SET LOCAL is the only threshold mechanism that survives Hyperdrive
  * transaction-mode pooling — see src/db/client.ts).
  */
+import { enforceRateLimit } from "../auth/ratelimit";
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
 import { PEOPLE_SQL, POSTS_SQL } from "./search-sql";
@@ -57,6 +58,18 @@ export async function handlePublicSearch(
   if (!Number.isInteger(offset) || offset < 0 || offset > SEARCH_MAX_OFFSET) {
     return errorResponse("INVALID_INPUT", 400, { fields: ["offset"] });
   }
+
+  // ⚠️ Spec-vs-code audit, 2026-09-27: the one remaining anonymous read that
+  // is NOT edge-cached (every call runs a real pg_trgm query through
+  // HYPERDRIVE_FRESH) and had no rate limit at all. IP-keyed only — no
+  // session, no email, so there is no second dimension to bucket by the way
+  // login/forgot-password do. Runs AFTER the cheap, no-I/O validation above
+  // (same "spend quota only on requests that already passed the free
+  // checks" ordering as every other limiter in this codebase) and BEFORE any
+  // database work.
+  const clientIp = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const limited = await enforceRateLimit(env.SEARCH_LIMITER, clientIp);
+  if (limited !== null) return limited;
 
   const limit = SEARCH_PAGE_SIZE + 1;
   const page = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {

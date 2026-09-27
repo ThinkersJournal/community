@@ -312,4 +312,35 @@ describe("GET /public/search", () => {
     expect(page1.has(tailTitle)).toBe(false);
     expect(new Set([...page1, tailTitle]).size).toBe(n);
   });
+
+  /**
+   * Enumeration/DoS-hardening fix (spec-vs-code audit, 2026-09-27):
+   * SEARCH_LIMITER. IP-keyed only (no session on this route) — a DEDICATED
+   * `CF-Connecting-IP` (a TEST-NET-3 address, never a real one) so this
+   * test's own budget burn cannot pollute or be polluted by the rest of this
+   * file, which sends no `CF-Connecting-IP` at all and shares the "unknown"
+   * bucket among themselves (same convention as test/login.test.ts).
+   */
+  it("throttles a burst of searches from one IP (429 RATE_LIMITED)", async () => {
+    const ip = "203.0.113.50";
+    let sawRateLimited = false;
+    for (let i = 0; i < 35 && !sawRateLimited; i++) {
+      const ctx = createExecutionContext();
+      const response = await worker.fetch(
+        new Request(`${U}/public/search?q=ratelimittest&type=posts`, {
+          headers: { "CF-Connecting-IP": ip },
+        }),
+        env,
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+      if (response.status === 429) {
+        expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
+        sawRateLimited = true;
+      } else {
+        expect(response.status).toBe(200);
+      }
+    }
+    expect(sawRateLimited).toBe(true);
+  });
 });
