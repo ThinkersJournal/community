@@ -85,7 +85,7 @@ CREATE TRIGGER account_legal_holds_no_truncate BEFORE TRUNCATE ON account_legal_
   FOR EACH STATEMENT EXECUTE FUNCTION account_legal_holds_guard();
 ```
 
-(For TRUNCATE, `OLD` is unavailable, which is why that branch returns first.) The release-consistency and
+(For TRUNCATE, `OLD` is unavailable, which is why that branch **raises** first, before anything reads `OLD`.) The release-consistency and
 CSAM-never-released CHECKs apply on top.
 
 ## 3. Trigger points
@@ -140,17 +140,22 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 
 ## 4a. A banned account's email stays reserved (board item 93, option 2)
 
-- In `anonymise-accounts.ts`, when the account being scrubbed has `disabled_at IS NOT NULL` (a ban or a termination),
+- In `anonymise-accounts.ts`, when the account being scrubbed has `disabled_at IS NOT NULL` (in steady state that means a
+  ban, because a termination is always held by T2/7a or the backfill, so it never reaches the reaper),
   **keep `users.email` as it is**. Everything else is scrubbed exactly as today: password hash, display name, bio, the
   handle (released), and the other personal fields the function already clears. `anonymised_at` is set as usual.
 - Re-signup with that email is then refused by what already exists: `users.email` is `citext UNIQUE`, and the signup
-  upsert refuses to overwrite a barred row (`signup.ts`'s guard, unchanged). **Pin both with a test:** a deleted,
+  upsert's `ON CONFLICT … DO UPDATE … WHERE` is a conjunction that fails on **both** `email_verified_at IS NULL` (a
+  verified account) **and** the barred-row clauses (`signup.ts`, unchanged). So it updates 0 rows and answers
+  `EMAIL_TAKEN`, the response any taken email gets. **Pin both with a test:** a deleted,
   banned account's email cannot be used to sign up again, and gets the same response a taken email gets today.
 - **"While the ban stands":** if the ban is later lifted on an already-anonymised account (plan B's appeal grant, or
   any future unban), the email must be scrubbed **then**. Plan B's ban-lift path gains one statement: if `anonymised_at`
   is set, scrub `email` with the same sentinel `anonymise-accounts` uses. Until plan B lands there is no unban path in
-  the app, so this is recorded here for the plan-B implementer and pinned in this PR by a test of a helper
-  `scrubReservedEmailIfUnbanned(c, userId)`, which plan B calls.
+  the app. This PR builds and tests the helper `scrubReservedEmailIfUnbanned(c, userId)` (it checks `anonymised_at`
+  itself and is a no-op otherwise), **and plan B's plan (`2026-10-01-m4-2c-appeals.md`, Task 6, `resolveAppeal`'s
+  `user_ban` branch) is amended now to call it right after the ban is lifted**, so the obligation travels with the
+  plan its implementer reads.
 - The unverified reaper hard-DELETEs rows, so a banned unverified account with no hold is deleted outright, email
   included. That reopens the evasion only for an account that **never verified its email**, which couldn't post. It's
   accepted and stated, and it's consistent with the PM's AC-3 ruling (a hold, not a ban, protects).
