@@ -488,8 +488,35 @@ export async function handleDeletePost(
       const tagSlugs = await readTagSlugs(c, params.id!);
       // ⚠️ OWNERSHIP IS THIS LINE, not a preceding SELECT — same race-safety
       // reasoning as handleUpdatePost's WHERE clause above.
+      //
+      // ⚠️ #58 Q1 (CireSnave: "allow the author to delete the post which would
+      // hide it from all users. However, keep the content of it somewhere for
+      // legal use."): a post UNDER MODERATION is copied into
+      // moderation_snapshots by the SAME statement that deletes it, so the copy
+      // and the delete commit together or not at all. "Under moderation" is the
+      // edit freeze's own definition (POST_NOT_UNDER_MODERATION_SQL, negated),
+      // and that freeze is why the copy taken now is the version that was
+      // hidden. A visible or author-hidden post leaves no copy.
+      //
+      // ⚠️ `IS NOT TRUE`, NEVER `NOT (...)`: for an auto-hidden post with no
+      // visibility action yet, the predicate's subquery is NULL, so it
+      // evaluates to NULL — which the edit freeze correctly reads as "frozen",
+      // and which `NOT` would turn into NULL again and silently skip the copy
+      // for the commonest case of all. The snapshot CTE
+      // runs although nothing reads it — Postgres always executes
+      // data-modifying CTEs.
       const { rows } = await c.query<{ id: string }>(
-        `DELETE FROM posts WHERE id = $1 AND author_id = $2 RETURNING id`,
+        `WITH t AS (
+           SELECT id, author_id, title, markdown_source, hidden_at
+             FROM posts WHERE id = $1 AND author_id = $2
+              FOR UPDATE
+         ),
+         snapshot AS (
+           INSERT INTO moderation_snapshots (post_id, author_id, title, body_markdown)
+           SELECT t.id, t.author_id, t.title, t.markdown_source FROM t
+            WHERE (${POST_NOT_UNDER_MODERATION_SQL}) IS NOT TRUE
+         )
+         DELETE FROM posts p USING t WHERE p.id = t.id RETURNING p.id`,
         [params.id, authorId],
       );
       const row = rows[0];

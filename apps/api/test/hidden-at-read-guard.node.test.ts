@@ -108,13 +108,24 @@ const ALLOWLIST: readonly AllowEntry[] = [
       "Returns no content; not a public read.",
   },
   {
+    file: "posts.ts",
+    match: "INSERT INTO moderation_snapshots (post_id, author_id, title, body_markdown)",
+    why:
+      "handleDeletePost (#58 Q1): the author's OWN delete, scoped to author_id = session.userId. " +
+      "Its `t` CTE must see a HIDDEN post — copying a post under moderation into " +
+      "moderation_snapshots before deleting it is the whole point — and returns only the " +
+      "deleted id. A write path, not a public read.",
+  },
+  {
     file: "comments.ts",
     match: "SET deleted_at = now(), body_markdown = ''",
     why:
       "handleDeleteComment tombstone WRITE (UPDATE comments c ... FROM posts p). `posts p` is " +
       "joined only for the ownership predicate (comment author OR post author may delete) and " +
       "is not returned. A write, not a public read — and a delete must succeed even on an " +
-      "already-hidden comment or post.",
+      "already-hidden comment or post. #58: its `t` CTE reads the row (hidden included) only " +
+      "to copy a HIDDEN comment's body into moderation_snapshots before blanking it; nothing " +
+      "but post_id is returned.",
   },
   {
     file: "comments.ts",

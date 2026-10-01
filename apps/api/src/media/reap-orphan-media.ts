@@ -70,6 +70,12 @@ export async function reapOrphanMedia(
       `WITH referenced AS (
          SELECT DISTINCT (regexp_matches(markdown_source, 'media/post/([0-9a-f]{64})\\.webp', 'g'))[1] AS sha256
            FROM posts
+         -- ⚠️ #58: a moderation snapshot keeps a deleted post's source for at
+         -- least a year (0020), and the images it names are part of that
+         -- evidence. Without this arm they would be reclaimed the next morning.
+         UNION
+         SELECT (regexp_matches(body_markdown, 'media/post/([0-9a-f]{64})\\.webp', 'g'))[1]
+           FROM moderation_snapshots
        ),
        orphans AS (
          SELECT m.id FROM media m

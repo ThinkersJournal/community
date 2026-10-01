@@ -121,6 +121,28 @@ describe("reapOrphanMedia", () => {
     expect(await env.MEDIA.get(key)).not.toBeNull();
   });
 
+  // #58 — an author may delete a post while it is under moderation, and a
+  // moderation_snapshots row keeps its source for at least a year. The images
+  // that source names must survive with it, or the evidence loses them the
+  // next morning.
+  it("keeps a media row whose sha256 appears ONLY in a moderation snapshot (#58)", async () => {
+    const actor = await createVerifiedActor();
+    const { id, key } = await seedMedia(actor.userId, { ageHours: 25 });
+    await ctxRun((c) =>
+      c.query(
+        `INSERT INTO moderation_snapshots (post_id, author_id, title, body_markdown) VALUES ($1, $2, 't', $3)`,
+        [crypto.randomUUID(), actor.userId, `body ![](https://cdn.thinkersjournal.com/${key})`],
+      ),
+    );
+
+    const ctx = createExecutionContext();
+    await reapOrphanMedia(env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(await mediaExists(id)).toBe(true);
+    expect(await env.MEDIA.get(key)).not.toBeNull();
+  });
+
   it("keeps an unreferenced upload younger than 24h (grace)", async () => {
     const actor = await createVerifiedActor();
     const { id, key } = await seedMedia(actor.userId, { ageHours: 1 });
