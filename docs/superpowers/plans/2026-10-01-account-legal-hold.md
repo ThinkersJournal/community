@@ -12,6 +12,8 @@
 
 **Revised 2026-10-01:** PM ruling B (hashed email reservation, spec §4a) and the pre-flight audit's findings 1–11 and nits (`.superpowers/sdd/2026-10-01-account-legal-hold/preflight-audit.md`). Every new or changed TypeScript block below was typechecked with tsc 6.0.3 against the repo's real types, on a scratch copy outside the repo. Only the import paths differ from the scratch copy.
 
+**Revision round 2 (2026-10-01), the re-audit:** B1 (per-row epoch bump, skip-and-continue, and a fail-closed `anonymised_at` gate in the pipeline), S1 (lock-wait poll by `pg_blocking_pids`, fixture isolation), S2 (the manual hold's log row labels the handle; the constraint and privacy copy now say what the moderation log keeps), N3 (zod 4.6.5).
+
 ## Preconditions
 
 - ⚠️ **MERGE PRECONDITION (audit #4): #134 (migration 0020, `dsa_notices`) and #126 (0021, `moderation_snapshots`) are merged to `main` AND applied in production** (read `GET /health/schema` from #136) **before this PR merges.** Rebase this branch onto that `main` before Task 1. Why:
@@ -29,7 +31,8 @@
 - TypeScript **6.0.3**; `errorResponse` with the closed `ApiErrorCode` union; admin POSTs are `checkOrigin` → `requireAdmin` and are listed in `pipeline-exempt.ts`.
 - **Deletion eligibility = no active hold. Nothing else** (spec §4). `disabled_at`/`suspended_until` must not appear in either reaper's eligibility predicate afterwards. The only `disabled_at` read left in `anonymise-accounts.ts` is the `CASE` that decides the hash.
 - **`signup.ts`'s barred-row guard (the upsert's `WHERE`) is unchanged** (spec §1; AH-6). Signup's only change is the reserved-hash refusal after the upsert (spec §4a).
-- **No real email survives deletion** (PM ruling B). Every anonymised row's `email` is the sentinel. A banned one also gets `reserved_email_sha256`, and nothing else stores the address.
+- **No mail or authentication path can reach a deleted account's address** (PM ruling B). Every anonymised row's `email` is the sentinel, and a banned one also gets `reserved_email_sha256`. ⚠️ The address is **not** gone everywhere: `moderation_actions.subject_label` keeps the author's email recorded at each content decision (`decide.ts:128`), as the append-only legal record, and nothing in this plan changes that (spec §4a). Don't write any new copy of it: label new log rows with the handle.
+- **A deleted account can't authenticate** (spec §4, re-audit B1). The reaper bumps each row's epoch right after its own COMMIT, and the mutating pipeline refuses any session whose user has `anonymised_at` set.
 - CSAM holds are never released by app code (DB CHECK and route refusal).
 - A non-CSAM hold is released only by a **different** admin than the one who imposed it: compare with `sameAdminHand` (`@thinkersjournal/shared`, #98).
 - T1's account hold is written **inside** the decision transaction (spec §3 T1), never post-commit.
@@ -46,6 +49,7 @@
 4. **An admin releasing a hold they imposed, with different email casing.** Refused (`sameAdminHand`) (AH-4). Pinned in Task 2.
 5. **A second impose of the same category while one is active.** No duplicate and no error (`ON CONFLICT … WHERE released_at IS NULL DO NOTHING` through partial-index inference). The manual route writes no log row for it. Pinned in Task 2 and Task 5.
 6. **The reaper's batch goes stale before it writes.** A hold imposed, a ban lifted or a request cancelled after the SELECT is honoured, because each scrub locks the row and re-checks inside its `UPDATE`. Pinned in Task 3.
+7. **A row locked past the 5 s `lock_timeout` mid-batch** (re-audit B1). That row is skipped and logged, and the job doesn't throw. Every other row is scrubbed **and** its sessions revoked. A session that somehow survives anonymisation is refused by the pipeline (401). Pinned in Task 3, the gate with a mutation.
 
 ---
 
@@ -122,14 +126,15 @@ export interface AdminAccountHold {
 }
 ```
 
-In `packages/shared/src/schemas.ts`, replace `const NormalizedEmail = z.email().toLowerCase();` (line 33) with the following. The behaviour is identical: zod 4's `toLowerCase()` is `_overwrite((input) => input.toLowerCase())` (`zod/v4/core/api.js`).
+In `packages/shared/src/schemas.ts`, replace `const NormalizedEmail = z.email().toLowerCase();` (line 33) with the following. The behaviour is identical: in zod **4.6.5** (the version `packages/shared` resolves; `node_modules/.pnpm/zod@4.6.5/.../v4/core/api.js:714`), `toLowerCase()` is `_overwrite((input) => input.toLowerCase())`. In the same edit, correct the existing doc comment above it (line 29) from "Verified against the installed zod 4.4.3" to "zod 4.6.5", and make it describe `.overwrite(normalizeEmail)` rather than `toLowerCase()`.
 ```ts
 /**
  * THE email normaliser. `NormalizedEmail` applies it (so signup, login and
  * forgot-password all store and look up its output), and the reserved-email
  * hash (apps/api/src/auth/reserved-email.ts, account-legal-hold spec §4a)
  * hashes its output. One function, so the two can never disagree about which
- * addresses are "the same".
+ * addresses are "the same". Identical to the zod 4.6.5 `toLowerCase()` it
+ * replaces, which is `_overwrite((input) => input.toLowerCase())`.
  */
 export function normalizeEmail(email: string): string {
   return email.toLowerCase();
@@ -147,7 +152,9 @@ const NormalizedEmail = z.email().overwrite(normalizeEmail);
  * (anonymise-accounts.ts). For an account that is BANNED at that moment, the
  * reaper also stores `users.reserved_email_sha256` = the sha256 hex of the
  * normalised email, and signup refuses any address whose hash matches. The
- * real address is stored nowhere, so no mail path can reach the deleted user.
+ * real address is no longer on the account row, which is all any mail or
+ * authentication path reads (the moderation log's subject_label keeps the
+ * email recorded at a content decision, but nothing mails from it).
  * The reservation ends when the ban does (`releaseReservedEmail`, called by
  * plan B's ban-lift path).
  */
@@ -242,19 +249,26 @@ export type ManualImposeOutcome =
  * active hold of this category, and only then log and insert. A duplicate
  * therefore writes no log row, and two concurrent imposes serialise on the
  * lock (the second sees the first's hold and answers `exists`).
+ * `subjectLabel` is the HANDLE (as plan A's account actions use), never the
+ * email: the log is append-only, so an email written here outlives deletion.
  */
 export async function imposeManualAccountHold(
   c: Client,
-  input: { readonly userId: string; readonly category: "dmca" | "other"; readonly imposedBy: string; readonly reason: string },
+  input: {
+    readonly userId: string;
+    readonly subjectLabel: string;
+    readonly category: "dmca" | "other";
+    readonly imposedBy: string;
+    readonly reason: string;
+  },
 ): Promise<ManualImposeOutcome> {
   await c.query(BEGIN_BOUNDED_TX);
   try {
-    const { rows: users } = await c.query<{ email: string }>(
-      "SELECT email FROM users WHERE id = $1 FOR NO KEY UPDATE",
+    const { rowCount: found } = await c.query(
+      "SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE",
       [input.userId],
     );
-    const user = users[0];
-    if (user === undefined) {
+    if ((found ?? 0) === 0) {
       await rollbackQuietly(c);
       return { kind: "not_found" };
     }
@@ -271,7 +285,7 @@ export async function imposeManualAccountHold(
       action: "account_hold",
       reason: input.reason,
       subjectUserId: input.userId,
-      subjectLabel: user.email,
+      subjectLabel: input.subjectLabel,
       internalNote: `category ${input.category}`,
     });
     const { rows } = await c.query<{ id: string }>(
@@ -384,7 +398,7 @@ async function rollbackQuietly(c: Client): Promise<void> {
 
 - [ ] **Step 1: Failing tests** (write each in full; seeded ids only):
   - `imposeAccountHoldInTx` (inside a `BEGIN`/`COMMIT` the test owns) creates a hold, and a second impose of the same category returns `created: false` with no new row (**RF5**);
-  - `imposeManualAccountHold`: `created` with exactly one `account_hold` log row; the same category again → `exists`, with **still one** log row (**RF5**); an unknown user id → `not_found`; **concurrent:** two calls on two clients (`Promise.all`) → exactly one `created`, one `exists`, one hold, one log row (audit #8);
+  - `imposeManualAccountHold`: `created` with exactly one `account_hold` log row, whose `subject_label` is the handle passed in and **not** the user's email; the same category again → `exists`, with **still one** log row (**RF5**); an unknown user id → `not_found`; **concurrent:** two calls on two clients (`Promise.all`) → exactly one `created`, one `exists`, one hold, one log row (audit #8);
   - `hasActiveAccountHold` is true, then false after a release;
   - **release:** by a different admin → `released`, with a `moderation_actions` row of kind `account_hold_release`. **RF4:** release by the imposer in different case (`Mod@X` imposed, `mod@x ` releases) → `same_admin`, with no change and no log row. A `csam` hold → `csam`. An unknown id → `not_found`. **A real hold id passed with a different `userId` → `not_found`, and the hold is unchanged** (audit #7). A second release → `already_released`;
   - `listAccountHolds`: newest first, with released rows included;
@@ -400,17 +414,22 @@ async function rollbackQuietly(c: Client): Promise<void> {
 
 ### Task 3: The reapers gate on the hold; a banned account's address is reserved by hash; signup refuses it
 
-**Files:** modify `apps/api/src/auth/anonymise-accounts.ts`, `apps/api/src/auth/reap-unverified.ts`, `apps/api/src/routes/signup.ts`; **rewrite** the two named blocks in `apps/api/test/anonymise-accounts.test.ts` (`describe("anonymiseExpiredAccounts — a barred account is never scrubbed")`) and `apps/api/test/reap-unverified.test.ts` (`describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)")`); append to `apps/api/test/barred-reentry.test.ts` (it has the signup harness: `resignup`, `stubFetch`, `ALLOWED_ORIGIN`, from :140) and `apps/api/test/forgot-password.test.ts` (it has `stubFetch(true)`, which returns the Postmark calls).
+**Files:** modify `apps/api/src/auth/anonymise-accounts.ts`, `apps/api/src/auth/reap-unverified.ts`, `apps/api/src/routes/signup.ts`, `apps/api/src/auth/pipeline.ts` (re-audit B1b); append to `apps/api/test/pipeline-barred.test.ts` (it has the session harness and the `ROUTES` table of every pipeline route); **rewrite** the two named blocks in `apps/api/test/anonymise-accounts.test.ts` (`describe("anonymiseExpiredAccounts — a barred account is never scrubbed")`) and `apps/api/test/reap-unverified.test.ts` (`describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)")`); append to `apps/api/test/barred-reentry.test.ts` (it has the signup harness: `resignup`, `stubFetch`, `ALLOWED_ORIGIN`, from :140) and `apps/api/test/forgot-password.test.ts` (it has `stubFetch(true)`, which returns the Postmark calls).
 
 ⚠️ **Rewrite those two blocks for the NEW rule. Do NOT make them pass by putting the ban checks back** (spec §4).
 
-- [ ] **Step 1: Rewritten and new tests** (write each in full; call `anonymiseExpiredAccounts(env, ctx)` with a fresh execution context and `waitOnExecutionContext`, as `anonymise-accounts.test.ts` does):
+- [ ] **Step 1: Rewritten and new tests** (write each in full; call `anonymiseExpiredAccounts(env, ctx)` with a fresh execution context and `waitOnExecutionContext`, as `anonymise-accounts.test.ts` does).
+
+  ⚠️ **Cross-file flake, and how these tests avoid it (re-audit S1).** The reaper takes the oldest 500 eligible rows from the **shared** test DB, and several files (`anonymise-accounts`, `barred-reentry`, `forgot-password`) run it in parallel. So another file's run can scrub your fixture, and yours can scrub theirs. The module has no test-seam idiom (none of the reapers takes a filter, and `/__test/anonymise-accounts` calls it bare), so **don't add a candidate-id parameter.** Instead:
+  - seed every fixture's `deletion_requested_at` at a **unique far-past** timestamp, e.g. `timestamptz '2000-01-01' + (random() * interval '1000 days')`, so it sorts into the head of every run's batch whatever else the DB holds;
+  - assert on **each fixture row's final state**, never on the reaper's return value or on a log line: which run scrubbed a row is not deterministic, but its end state is;
+  - only `anonymise-accounts.test.ts` holds row locks (RF6, RF7), and vitest runs one file's tests sequentially, so no other file blocks on them for long.
   - **anonymise, AH-2:** banned, suspended and lapsed-suspended accounts with **no** hold and a 31-day-old deletion request **are** anonymised.
   - **anonymise, AH-1 / RF2:** a held account (any category) that is not banned, a held **banned** account, and a held suspended account are **not** anonymised. After releasing a `dmca` hold, the next run anonymises that account.
   - **anonymise, AH-7 / RF1:**
     - a banned, unheld account is anonymised with `email` = `deleted-<id>@invalid.thinkersjournal.local`, `password_hash` = `!anonymised!`, `username`, `display_name` and `bio` scrubbed, and `reserved_email_sha256` = the sha256 hex of its original (lowercased) email;
     - a **non-banned** account is anonymised the same way with `reserved_email_sha256` **NULL** (control);
-  - **anonymise, RF6 (audit #3), each a row the batch SELECT returns but the UPDATE must re-check.** Drive each with a lock held from a second client: `BEGIN; SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, then start the reaper (don't await it). ⚠️ **Before making the change, poll until the reaper is actually blocked** (bounded, ~5 s): `SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'SELECT 1 FROM users WHERE id = $1 FOR UPDATE%'`. Otherwise the change can commit before the reaper's SELECT and the test passes vacuously. Then make the change on the locking client, `COMMIT`, and await the reaper:
+  - **anonymise, RF6 (audit #3), each a row the batch SELECT returns but the UPDATE must re-check.** Drive each with a lock held from a second client: `BEGIN; SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, then start the reaper (don't await it). ⚠️ **Before making the change, poll until the reaper is actually blocked on THIS lock** (re-audit S1). Read the locking client's backend pid first (`SELECT pg_backend_pid()`), then poll `SELECT 1 FROM pg_stat_activity WHERE pg_blocking_pids(pid) @> ARRAY[$1::int]` with that pid, every 50 ms, for **at most 2 s** (well under the 5 s `lock_timeout`, after which the reaper would skip the row). If the poll times out, fail the test. Don't match on query text. Without the poll, the change can commit before the reaper's SELECT and the test passes vacuously. Then make the change on the locking client, `COMMIT`, and await the reaper:
     - a `dmca` hold inserted while the reaper waits → the row is **not** anonymised, and its profile is untouched;
     - `disabled_at` cleared while the reaper waits (it was banned at SELECT time) → anonymised with `reserved_email_sha256` **NULL**;
     - `disabled_at` set while the reaper waits (not banned at SELECT time) → anonymised with the hash **set**;
@@ -421,12 +440,15 @@ async function rollbackQuietly(c: Client): Promise<void> {
     - **control:** the same flow with an **unbanned** account → `resignup(email)` → 201 (track the new user's id for cleanup);
     - after `UPDATE users SET disabled_at = NULL, disabled_reason = NULL` plus `releaseReservedEmail(c, id)` → `resignup(email)` → 201.
   - **forgot-password, AH-7 structural (`forgot-password.test.ts`):** a banned account anonymised by the reaper; `forgotPassword(validBody(originalEmail))` → 202 with **0** Postmark calls and no `password_reset_tokens` row for that user. **Control:** the same request before the reaper runs → 1 Postmark call.
+  - **anonymise, RF7 (re-audit B1a):** seed two eligible accounts, X and Y, and mint a session for Y (`createSession` with its current epoch). Lock X from a second client (`FOR UPDATE`) and **hold the lock for 7 s**, past the 5 s `lock_timeout`. Run the reaper (test timeout ≥ 20 s). It **resolves without throwing**; X is unscrubbed (`anonymised_at IS NULL`); Y is anonymised **and** its epoch has moved (`getEpoch()` ≠ the session's). Release X's lock, run the reaper again, and X is now anonymised. Control for the bump: Y's epoch before the run equals the session's.
+  - **pipeline, RF7 (re-audit B1b, `pipeline-barred.test.ts`):** mint a session for a verified user, then set `anonymised_at = now()` **directly in SQL** (no reaper, so no epoch bump). Every route in `ROUTES` answers **401** with a cleared `tj_session` cookie, not `ACCOUNT_BARRED`. **Control:** the same session before the UPDATE passes the pipeline. **Mutation:** delete the step-5a block in `pipeline.ts` → the 401 assertions fail. Record that, then restore it.
   - **reap-unverified, AH-1/AH-2:** unverified, 8-day-old accounts that are banned or suspended **without** a hold are deleted; with a hold (banned or not) they survive.
   - **Mutation (AH-1):** remove the NOT-EXISTS clause from the anonymise `UPDATE` **and** the SELECT → the held-account test fails. Restore it.
   - **Mutation (AH-7):** change the `CASE` to `ELSE NULL` on both arms (store NULL always) → the signup 409 test and the hash assertion fail. Restore it.
   - **Mutation (RF6):** remove the `FOR UPDATE` lock statement → the "hold inserted while the reaper waits" test fails. (The blocked `UPDATE`'s `NOT EXISTS` uses its old snapshot.) Restore it. If it does not fail, say so in the report rather than weakening the test.
+  - **Mutation (RF7a):** move the epoch bump back to after the loop and rethrow from the per-row `catch` → the RF7 reaper test fails (it throws, and Y's epoch hasn't moved). Restore it.
 - [ ] **Step 2: Implement.**
-  - **anonymise-accounts.ts.** Replace `anonymiseExpiredAccounts` with the following. Change the import to `import { BEGIN_BOUNDED_TX, withClient } from "../db/client";`, and add `import { reservedEmailSha256 } from "./reserved-email";`. `scrubbedEmail`, `SCRUBBED_PASSWORD_HASH` and `scrubbedUsername` are unchanged.
+  - **anonymise-accounts.ts.** Replace `anonymiseExpiredAccounts` with the following two functions. Change the import to `import { BEGIN_BOUNDED_TX, withClient } from "../db/client";`, and add `import type { Client } from "pg";` and `import { reservedEmailSha256 } from "./reserved-email";`. `scrubbedEmail`, `SCRUBBED_PASSWORD_HASH` and `scrubbedUsername` are unchanged.
 
 ```ts
 export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext): Promise<number> {
@@ -445,73 +467,114 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
   });
   if (candidates.length === 0) return 0;
 
-  const scrubbed: string[] = [];
+  let scrubbed = 0;
   await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     for (const { id, email } of candidates) {
-      // Computed for every candidate; the UPDATE's CASE decides whether to store it.
-      const emailSha256 = await reservedEmailSha256(email);
-      await c.query(BEGIN_BOUNDED_TX);
+      // ⚠️ ONE ROW'S FAILURE NEVER STOPS THE BATCH (spec §4). A lock timeout
+      // (BEGIN_BOUNDED_TX's 5s) or any other error leaves THAT row unscrubbed,
+      // which is safe, and the next nightly run retries it. Rethrowing would
+      // strand every row already committed in this run without its epoch
+      // bump: main's reaper had exactly that shape (bumps after the loop).
+      let changed: boolean;
       try {
-        // ⚠️ LOCK, THEN RE-CHECK (spec §4). The SELECT above may be minutes
-        // old by now: a hold may have been imposed (T1/T2/T3), a ban imposed or
-        // lifted (plan A/B), or the request cancelled. Every hold imposer locks
-        // this row first (imposeAccountHoldInTx), so after this lock the
-        // UPDATE below — a NEW statement, hence a NEW snapshot — sees any hold
-        // that committed while we waited. A NOT EXISTS evaluated inside a
-        // blocked UPDATE alone would not: READ COMMITTED's re-check re-reads
-        // the target row, not the subquery.
-        await c.query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE", [id]);
-        const { rowCount } = await c.query(
-          `UPDATE users
-              SET email = $2, password_hash = $3, anonymised_at = now(),
-                  -- PM ruling B (spec §4a): a BANNED account's address is
-                  -- reserved by hash; the address itself is replaced, as for
-                  -- every account.
-                  reserved_email_sha256 = CASE WHEN disabled_at IS NOT NULL THEN $4 ELSE NULL END
-            WHERE id = $1
-              AND email = $5
-              AND anonymised_at IS NULL
-              AND deletion_requested_at < now() - interval '30 days'
-              AND NOT EXISTS (SELECT 1 FROM account_legal_holds h
-                               WHERE h.user_id = users.id AND h.released_at IS NULL)`,
-          [id, scrubbedEmail(id), SCRUBBED_PASSWORD_HASH, emailSha256, email],
-        );
-        if ((rowCount ?? 0) === 1) {
-          await c.query(
-            `UPDATE profiles
-                SET username = $2, display_name = NULL, bio = NULL
-              WHERE user_id = $1`,
-            [id, scrubbedUsername(id)],
-          );
-          await c.query("DELETE FROM password_reset_tokens WHERE user_id = $1", [id]);
-          scrubbed.push(id);
-        }
-        await c.query("COMMIT");
+        changed = await scrubOne(c, id, email);
       } catch (err) {
-        try {
-          await c.query("ROLLBACK");
-        } catch {
-          // A failed ROLLBACK must not replace the root error (decide.ts).
-        }
-        throw err;
+        console.error(`anonymise-accounts: skipped ${id} (retried next run)`, err);
+        continue;
+      }
+      if (!changed) continue;
+      scrubbed += 1;
+      // Kill every live session RIGHT AFTER this row's COMMIT, not after the
+      // loop. The scrub makes password_hash unable to authenticate a FUTURE
+      // login, but does nothing about a session issued before it. Same
+      // mechanism as logout-all (src/routes/logout.ts). If the bump itself
+      // fails, the pipeline's anonymised_at gate (auth/pipeline.ts step 5a)
+      // still refuses the session: fail closed.
+      try {
+        await env.USER_SECURITY.getByName(id).bumpEpoch();
+      } catch (err) {
+        console.error(`anonymise-accounts: epoch bump failed for ${id}; the pipeline gate still refuses it`, err);
       }
     }
   });
 
-  // Kill every live session for each scrubbed account — the scrub makes
-  // password_hash unable to authenticate a FUTURE login, but does nothing
-  // about a session issued before it. Same mechanism as logout-all
-  // (src/routes/logout.ts): bumping security_epoch revokes existing sessions.
-  for (const id of scrubbed) {
-    ctx.waitUntil(env.USER_SECURITY.getByName(id).bumpEpoch());
-  }
+  console.log(`anonymise-accounts: anonymised ${scrubbed} of ${candidates.length} candidate(s)`);
+  return scrubbed;
+}
 
-  console.log(`anonymise-accounts: anonymised ${scrubbed.length} account(s)`);
-  return scrubbed.length;
+/**
+ * One account, one transaction. Returns whether the row was scrubbed (false:
+ * a re-check failed — a hold, a cancelled request, or an already-anonymised
+ * or changed row). Throws on a DB error, after rolling back.
+ */
+async function scrubOne(c: Client, id: string, email: string): Promise<boolean> {
+  // Computed for every candidate; the UPDATE's CASE decides whether to store it.
+  const emailSha256 = await reservedEmailSha256(email);
+  await c.query(BEGIN_BOUNDED_TX);
+  try {
+    // ⚠️ LOCK, THEN RE-CHECK (spec §4). The batch SELECT may be minutes old
+    // by now: a hold may have been imposed (T1/T2/T3), a ban imposed or lifted
+    // (plan A/B), or the request cancelled. Every hold imposer locks this row
+    // first (imposeAccountHoldInTx), so after this lock the UPDATE below — a
+    // NEW statement, hence a NEW snapshot — sees any hold that committed while
+    // we waited. A NOT EXISTS evaluated inside a blocked UPDATE alone would
+    // not: READ COMMITTED's re-check re-reads the target row, not the subquery.
+    await c.query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE", [id]);
+    const { rowCount } = await c.query(
+      `UPDATE users
+          SET email = $2, password_hash = $3, anonymised_at = now(),
+              -- PM ruling B (spec §4a): a BANNED account's address is
+              -- reserved by hash; the address itself is replaced, as for
+              -- every account.
+              reserved_email_sha256 = CASE WHEN disabled_at IS NOT NULL THEN $4 ELSE NULL END
+        WHERE id = $1
+          AND email = $5
+          AND anonymised_at IS NULL
+          AND deletion_requested_at < now() - interval '30 days'
+          AND NOT EXISTS (SELECT 1 FROM account_legal_holds h
+                           WHERE h.user_id = users.id AND h.released_at IS NULL)`,
+      [id, scrubbedEmail(id), SCRUBBED_PASSWORD_HASH, emailSha256, email],
+    );
+    const changed = (rowCount ?? 0) === 1;
+    if (changed) {
+      await c.query(
+        `UPDATE profiles
+            SET username = $2, display_name = NULL, bio = NULL
+          WHERE user_id = $1`,
+        [id, scrubbedUsername(id)],
+      );
+      await c.query("DELETE FROM password_reset_tokens WHERE user_id = $1", [id]);
+    }
+    await c.query("COMMIT");
+    return changed;
+  } catch (err) {
+    try {
+      await c.query("ROLLBACK");
+    } catch {
+      // A failed ROLLBACK must not replace the root error (decide.ts).
+    }
+    throw err;
+  }
 }
 ```
 
-  `AND email = $5` keeps the stored hash tied to the address actually replaced. No route changes `users.email` today (the only writer is this file), so it only matters if one is ever added. Rewrite the header comment: the hold, not a ban, is the gate (CireSnave's ruling, quoted verbatim from spec §0); a banned account's address is reserved by hash (PM ruling B, quoted from spec §0); and each scrub locks and re-checks.
+  `AND email = $5` keeps the stored hash tied to the address actually replaced. No route changes `users.email` today (the only writer is this file), so it only matters if one is ever added. Rewrite the header comment: the hold, not a ban, is the gate (CireSnave's ruling, quoted verbatim from spec §0); a banned account's address is reserved by hash (PM ruling B, quoted from spec §0); each scrub locks and re-checks; and each row is revoked right after its own commit, with a failed row skipped and retried next run (spec §4; `main`'s reaper bumped after the loop, which this closes).
+  - **pipeline.ts (re-audit B1b).** `AccountGateRow` gains `readonly anonymised_at: Date | null;`, and `readAccountGate`'s SELECT reads it: `"SELECT email_verified_at, suspended_until, disabled_at, disabled_reason, anonymised_at FROM users WHERE id = $1"`. In `runMutatingPipeline`, right after `const account = await readAccountGate(env, ctx, session.userId);` and **before** the barred check, insert:
+
+```ts
+  // ---- 5a. Deleted account — FAIL CLOSED (account-legal-hold spec §4) ------
+  // The anonymise reaper bumps the epoch right after each row's scrub, which
+  // step 4 then catches. This is the backstop for a missed bump: a session
+  // whose user has been anonymised is UNAUTHENTICATED — the same 401 and
+  // cleared cookie as step 4's revocation, deliberately not step 5's
+  // ACCOUNT_BARRED (a deleted account has no one to tell why).
+  if (account !== null && account.anonymised_at !== null) {
+    const { cookie } = await destroySession(env, request);
+    return unauthorized({ "Set-Cookie": cookie });
+  }
+```
+
+  Update the step list in `runMutatingPipeline`'s header comment to add 5a.
   - **reap-unverified.ts:** in its inner SELECT, replace `AND disabled_at IS NULL AND suspended_until IS NULL` with the same NOT-EXISTS-hold clause, and rewrite the header comment to match the reworded AC-3. (It deletes in one statement, so it needs no lock: a deleted row has no hash and no profile left to scrub.)
   - **signup.ts:** add `import { isEmailReserved } from "../auth/reserved-email";`, and insert this right after the existing `if (row === null) { … return null; }` block, before the epoch bump:
 
@@ -532,7 +595,7 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
 ```
 
   Update the comment above `if (upserted === null)` to read "a VERIFIED or BARRED account owns this address, or a deleted banned account reserves it". The upsert and its `WHERE` don't change (AH-6).
-- [ ] **Step 3:** run `anonymise-accounts`, `reap-unverified`, `signup`, `barred-reentry` (**AH-6**: the barred-row guard's existing tests at :171 still pass) and `forgot-password` → PASS. Run the three mutations and record each result. Commit `feat(auth): deletion gated on an account legal hold, not on ban/suspension; a banned account's address reserved by hash`.
+- [ ] **Step 3:** run `anonymise-accounts`, `reap-unverified`, `signup`, `barred-reentry` (**AH-6**: the barred-row guard's existing tests at :171 still pass), `forgot-password` and `pipeline-barred` → PASS. Run the five mutations and record each result. Commit `feat(auth): deletion gated on an account legal hold, not on ban/suspension; a banned account's address reserved by hash`.
 
 ---
 
@@ -634,7 +697,7 @@ it("AH-3: a commit-time failure after the account-hold insert leaves neither the
 **Files:** modify `apps/api/src/routes/admin-accounts.ts`, `apps/api/src/routes.ts`, `apps/api/test/helpers/pipeline-exempt.ts`, `packages/shared/src/admin.ts` (`AdminAccountResponse` gains `holds: readonly AdminAccountHold[]`; the type itself is declared in Task 2), `apps/web/src/pages/admin/accounts/[handle].astro`; tests `apps/api/test/admin-account-holds-route.test.ts` (copy the harness of `admin-accounts-route.test.ts` lines 1-104 (through `act`) **by symbol**: imports, `TEAM`/`AUD`/`KID`, **`ALLOWED_ORIGIN`**, `b64url`, `b64urlJson`, the module-scope `let`s, `makeJwt`, `ctxRun`, `call`, the module-level `beforeEach`/`afterEach`, and `seedHandle`), `apps/web/test/admin-account-page.test.ts` (append).
 
 **Routes:**
-- `POST /admin/accounts/:handle/holds` `{ category: "dmca" | "other", reason }`. `csam` → `400 INVALID_INPUT`; a blank reason → 400. Resolve `:handle` with `findByHandle`, then call `imposeManualAccountHold` (Task 2: one transaction, lock, check, log, insert). `created` → `200 { created: true, holdId }`; `exists` → `200 { created: false }`, with **no** log row; `not_found` → 404.
+- `POST /admin/accounts/:handle/holds` `{ category: "dmca" | "other", reason }`. `csam` → `400 INVALID_INPUT`; a blank reason → 400. Resolve `:handle` with `findByHandle`, then call `imposeManualAccountHold` with `subjectLabel: account.username` (Task 2: one transaction, lock, check, log, insert). `created` → `200 { created: true, holdId }`; `exists` → `200 { created: false }`, with **no** log row; `not_found` → 404.
 - `POST /admin/accounts/:handle/holds/:id/release` `{ reason }`. A non-UUID `:id` → 404 before any query. Resolve `:handle`, then call `releaseAccountHold` with **`userId` = the handle's account id** and `subjectLabel` = the handle. The handle check is enforced inside the transaction (audit #7). Mapping:
   - `same_admin` → 403 `FORBIDDEN` with message "a different admin must release this hold";
   - `csam` → 409 with a new code `HOLD_NOT_RELEASABLE` (added to the closed union with a comment);
@@ -672,12 +735,12 @@ it("AH-3: a commit-time failure after the account-hold insert leaves neither the
 
 - [ ] In the #114 plan's Task 6, add **step 7a**: `for EVERY uploader in step 3's set, in id order (lock order): imposeAccountHoldInTx(c, { userId, category: "csam", imposedBy: actorAdmin, reason: <case text>, moderationActionId: holdActionId })`, plus a test that an **unbarred** uploader (`cloudflare_match`, flag false) is held. Its Interfaces line now consumes `imposeAccountHoldInTx` from this work.
 - [ ] **Plan B's dependency is already wired** (spec §4a): `docs/superpowers/plans/2026-10-01-m4-2c-appeals.md` Task 6 calls `releaseReservedEmail` after lifting a ban, and its Interfaces line cites `apps/api/src/auth/reserved-email.ts`. Both were revised in the spec/plan revision commit, per PM ruling B. Confirm they still read that way, and correct them if not.
-- [ ] Privacy §5, account-deletion bullet: add *"A deletion request is delayed, not refused, while the account is subject to a legal hold (for example, during a legal or safety investigation). If an account was banned when its deletion took effect, we keep a one-way hash of its email address (not the address itself) while the ban stands, so the address can't be used to create a new account."*
+- [ ] Privacy §5, account-deletion bullet (⚠️ **draft for attorney review**: mark it so in the PR body, and don't present it as final): add *"A deletion request is delayed, not refused, while the account is subject to a legal hold (for example, during a legal or safety investigation). If an account was banned when its deletion took effect, we keep a one-way hash of its email address while the ban stands, so the address can't be used to create a new account. Our moderation log, which is append-only and kept as the legal record of moderation decisions, keeps the email address recorded at the time of any moderation decision about that account's content; it is not used to contact you."*
 - [ ] Grep check: `grep -n "disabled_at\|suspended_until" apps/api/src/auth/anonymise-accounts.ts apps/api/src/auth/reap-unverified.ts` returns only the `CASE WHEN disabled_at IS NOT NULL` hash decision in anonymise (comments excepted). **Control:** the same grep on `login.ts` still finds its bar read.
 - [ ] Commit `docs: AC-3 reworded to the hold; #114 gains step 7a; privacy discloses hold-delayed deletion and the hashed email reservation`.
 
 ## Whole-branch checks
 
 - [ ] `pnpm typecheck`; the full suites green except the known local `media-backfill` timeouts; e2e green in CI.
-- [ ] The PR body lists AH-1…AH-7, each with the test that shows it, plus the three Task 3 mutations' results.
+- [ ] The PR body lists AH-1…AH-7, each with the test that shows it, plus the five Task 3 mutations' results.
 - [ ] Deploy note: the migration (0022, applied after 0020 and 0021 in production, per the precondition) runs before the code.

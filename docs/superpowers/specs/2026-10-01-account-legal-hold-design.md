@@ -2,7 +2,9 @@
 
 **Status:** Approved in sections by the PM, 2026-10-01 (design note + rulings below), and written here for audit, then plan.
 **Revised 2026-10-01** after the pre-flight audit: PM ruling B replaces §4a's "keep the real email" with a hashed
-reservation, and the audit's mechanical findings are folded into §3, §4, §5 and §6.
+reservation, and the audit's mechanical findings are folded into §3, §4, §5 and §6. **Revision round 2 (2026-10-01):**
+the re-audit's B1 (per-row revocation and a fail-closed pipeline gate, §4), S2 (what the moderation log keeps, §4a),
+S3, N1 and N3.
 **Author:** Community controller agent, 2026-10-01. Board item 91 (superseded by this).
 
 ## 0. Rulings
@@ -166,6 +168,18 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   Every hold imposer locks the same row first, so a hold that commits while the reaper waits is visible to the reaper's
   next statement. (A `NOT EXISTS` inside a blocked `UPDATE` alone isn't enough: READ COMMITTED's re-check re-reads the
   target row, not the subquery.)
+- **Revoked per row, and one row's failure never stops the batch (re-audit B1).** Each scrub's `BEGIN_BOUNDED_TX` has
+  a 5 s `lock_timeout` (`db/client.ts:51-53`), so a scrub can fail on a locked row. The reaper:
+  - bumps each row's security epoch right after **that row's** COMMIT, inside the loop;
+  - on any per-row failure (a lock timeout or any other error), logs the user id, skips the row and continues. A
+    failed row is still unscrubbed, so skipping it is safe, and the next nightly run retries it.
+
+  ⚠️ `main`'s current reaper has the same latent shape: it bumps epochs only **after** the loop, so an error mid-batch
+  leaves every already-scrubbed account with its sessions live. This task closes that.
+- **Defence in depth, fail closed (re-audit B1).** The mutating session pipeline (`runMutatingPipeline`,
+  `auth/pipeline.ts`) already reads the session user's `users` row (`readAccountGate`, ~:83). It also reads
+  `anonymised_at`, and treats `anonymised_at IS NOT NULL` as unauthenticated: the same 401 and cleared cookie a revoked
+  session gets, before the barred check. So a missed epoch bump can never act as a deleted account.
 - ⚠️ **Two existing test blocks assert the OLD rule and must be REWRITTEN, not made to pass by putting the ban checks
   back:**
   - `apps/api/test/reap-unverified.test.ts`, `describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)")`;
@@ -180,12 +194,12 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 - **At deletion, every account loses its real email, banned or not.** `anonymise-accounts.ts` replaces `users.email`
   with the undeliverable sentinel `deleted-<id>@invalid.thinkersjournal.local` and `password_hash` with the unusable
   sentinel `!anonymised!`, exactly as today, along with the rest of its scrub. If the account is banned at that moment
-  (`disabled_at IS NOT NULL`; in steady state that means a ban, because a termination is always held by T2/7a or the
-  backfill and never reaches the reaper), the same `UPDATE` also stores `users.reserved_email_sha256`, the
+  (`disabled_at IS NOT NULL`; in steady state, once #114 lands, that means a ban, because a termination is always
+  held by T2/7a or the backfill and never reaches the reaper), the same `UPDATE` also stores `users.reserved_email_sha256`, the
   lowercase-hex SHA-256 of the normalised email (§2). A suspended account reserves nothing.
 - **The normalisation is signup's own.** `packages/shared/src/schemas.ts:33` is
   `const NormalizedEmail = z.email().toLowerCase();`, and signup, login and forgot-password all parse `email` with it.
-  zod 4's `toLowerCase()` is `_overwrite((input) => input.toLowerCase())`. The plan exports that transform as
+  zod 4.6.5's `toLowerCase()` (the version `packages/shared` resolves) is `_overwrite((input) => input.toLowerCase())`. The plan exports that transform as
   `normalizeEmail` and has `NormalizedEmail` apply it with `.overwrite(normalizeEmail)`, so the hash and signup run the
   same function and can't disagree. The hash is `sha256Hex` (`apps/api/src/auth/encoding.ts:40`).
 - **Signup refuses a reserved address with the response it already gives a barred one.** Today a barred row's address is
@@ -201,16 +215,17 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   - the notification email drain (`email-drain.ts:29-44`, which has no `anonymised_at` filter);
   - forgot-password → reset-password (`forgot-password.ts:111` → `reset-password.ts:129-133`, which would also have
     written a working password);
-  - the decision notice (`result.authorEmail`, `admin.ts:183` ← `decide.ts:89`).
+  - the decision notice (`sendModerationNotice(env, result.authorEmail, …)`, `admin.ts:183` ← `decide.ts:89`).
 
-  Under ruling B the real address isn't stored anywhere, so each of them can only address the sentinel, whose domain is
-  never registered. Every anonymised account is already in that state today, so none of the three gains a guard. Pinned
+  Under ruling B the real address is no longer on the account row, and those paths read only `users.email`. Each of
+  them can therefore only address the sentinel, whose domain is never registered. Every anonymised account is already in
+  that state today, so none of the three gains a guard. Pinned
   structurally (AH-7): after a banned account is anonymised, its `email` is the sentinel, its `password_hash` is
   unusable, and forgot-password for the original address sends nothing.
 - **"While the ban stands":** lifting the ban ends the reservation. `releaseReservedEmail(c, userId)`
   (`apps/api/src/auth/reserved-email.ts`) sets `reserved_email_sha256 = NULL` once `disabled_at` is NULL, and does
-  nothing otherwise. There's nothing to scrub, because the address is already gone, so after the release it's simply
-  free for a new signup. The app has no unban path until plan B lands. This PR builds and tests the helper, and amends
+  nothing otherwise. There's nothing to scrub, because the address is already gone from the account row, so after the
+  release it's simply free for a new signup. The app has no unban path until plan B lands. This PR builds and tests the helper, and amends
   plan B's plan (`2026-10-01-m4-2c-appeals.md`, Task 6, `resolveAppeal`'s `user_ban` branch) to call it right after the
   ban is lifted, so the obligation travels with the plan its implementer reads.
 - **The index is not unique.** `users.email` is `citext UNIQUE` (0001), so only one live row holds an address at a
@@ -218,6 +233,13 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   `EXISTS`, which needs no uniqueness. A UNIQUE index would protect nothing anything reads. And if a future path (an
   email-change route, say) ever reserved a hash twice, the violation would abort the reaper's scrub, and because the
   reaper rethrows, the rest of that night's batch with it.
+- ⚠️ **What still holds the address (re-audit S2).** The moderation log keeps it. `moderation_actions.subject_label`
+  records the author's email at the time of each content decision about their posts or comments (`decide.ts:128`,
+  `subjectLabel: row.email`). Plan A's account actions label with the handle (`admin-accounts.ts:144`). That table is append-only and is kept as the legal record,
+  so anonymisation doesn't touch it. No mail or authentication path reads it. The guarantee this design makes is
+  therefore that **no mail or authentication path can reach a deleted account's address**, not that the address
+  exists nowhere. A manual hold (T3) labels its log row with the handle, not the email, so it adds no new copy. The
+  privacy policy says this (plan Task 6, for attorney review).
 - **Privacy.** A SHA-256 of an email isn't anonymous: anyone holding the table can test a guessed address. It's kept
   only for a banned account, only while the ban stands, and in place of the address itself. That's the data-minimising
   choice the PM ruled. The privacy policy discloses it (plan Task 6).
