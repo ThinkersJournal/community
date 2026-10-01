@@ -135,9 +135,13 @@ export async function handleDsaNotice(
 
 /**
  * `GET /dsa-notice/confirm?token=` — a safe-to-retry PEEK: does it exist,
- * unconfirmed, inside the `DSA_CONFIRM_WINDOW_DAYS` window? Never mutates, so
- * a reporter's mail client prefetching the link (or a user clicking it twice)
- * costs nothing and burns nothing. The actual confirmation is the POST below.
+ * inside the `DSA_CONFIRM_WINDOW_DAYS` window? Never mutates, so a reporter's
+ * mail client prefetching the link (or a user clicking it twice) costs
+ * nothing and burns nothing. ⚠️ M1 (final-review fix): a hash that is already
+ * CONFIRMED but still inside the window is also "valid" here — see
+ * `peekDsaToken`'s own header — so a double submit/refresh/re-opened link
+ * after a successful confirm shows the same success page, not
+ * `INVALID_TOKEN`. The actual confirmation is the POST below.
  */
 export async function handlePeekDsaToken(
   request: Request,

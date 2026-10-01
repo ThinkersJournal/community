@@ -112,6 +112,23 @@ describe("GET /dsa-notice/confirm", () => {
     expect(await noticeEmailVerifiedAt(id)).toBeNull();
   });
 
+  // M1 (final-review fix): a peek of an ALREADY-CONFIRMED hash, still inside
+  // the window, is also "valid" — not INVALID_TOKEN — so a mail client
+  // prefetch or a re-opened link after a successful confirm never shows the
+  // wrong page.
+  it("200s { ok: true } for an already-confirmed hash inside the window", async () => {
+    const author = await createVerifiedActor();
+    const postId = await createPublished(author);
+    const { id, token } = await seedNotice({ postId, ageDays: 1, confirmed: true });
+
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(getConfirmRequest(token), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(await noticeEmailVerifiedAt(id)).not.toBeNull();
+  });
+
   it("400s INVALID_TOKEN for an unknown token", async () => {
     const ctx = createExecutionContext();
     const response = await worker.fetch(getConfirmRequest(crypto.randomUUID()), env, ctx);
@@ -138,7 +155,7 @@ describe("GET /dsa-notice/confirm", () => {
 });
 
 describe("POST /dsa-notice/confirm", () => {
-  it("confirms once; a second POST 400s INVALID_TOKEN; reports/hidden_at are unchanged (AC-1, confirm half)", async () => {
+  it("confirms once; a second POST ALSO 200s (idempotent, M1); reports/hidden_at are unchanged (AC-1, confirm half)", async () => {
     const author = await createVerifiedActor();
     const postId = await createPublished(author);
     const { id, token } = await seedNotice({ postId, ageDays: 1 });
@@ -148,13 +165,23 @@ describe("POST /dsa-notice/confirm", () => {
     await waitOnExecutionContext(ctx1);
     expect(first.status).toBe(200);
     expect(await first.json()).toEqual({});
-    expect(await noticeEmailVerifiedAt(id)).not.toBeNull();
+    const firstVerifiedAt = await noticeEmailVerifiedAt(id);
+    expect(firstVerifiedAt).not.toBeNull();
 
+    // M1 (final-review fix): a double submit/refresh/re-opened link after a
+    // successful confirm must ALSO 200 — the same success page, not
+    // INVALID_TOKEN — and must not move the stamp or create a second row.
     const ctx2 = createExecutionContext();
     const second = await worker.fetch(postConfirmRequest({ token }), env, ctx2);
     await waitOnExecutionContext(ctx2);
-    expect(second.status).toBe(400);
-    expect(await second.json()).toMatchObject({ code: "INVALID_TOKEN" });
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual({});
+    expect(await noticeEmailVerifiedAt(id)).toEqual(firstVerifiedAt);
+
+    const rowCount = await ctxRun(
+      async (c) => (await c.query(`SELECT 1 FROM dsa_notices WHERE id = $1`, [id])).rowCount,
+    );
+    expect(rowCount).toBe(1);
 
     // AC-1, confirm half: confirming a notice never writes `reports` or
     // `hidden_at` — see src/moderation/dsa-notices.ts's confirmDsaNotice header.

@@ -67,21 +67,40 @@ export const DSA_CONFIRM_WINDOW_DAYS = 7;
  */
 export const TEST_LAST_DSA_TOKEN_KEY = "__test:last-dsa-token";
 
+/**
+ * M1 (final-review fix): a hash inside the window is a valid PEEK whether or
+ * not it has already been confirmed — NOT `email_verified_at IS NULL` — so a
+ * mail client prefetching the link, or a reporter re-opening/refreshing it
+ * AFTER a successful confirm, still sees "valid" instead of the misleading
+ * `INVALID_TOKEN` this used to return. A hash that doesn't exist, or is past
+ * `DSA_CONFIRM_WINDOW_DAYS`, still fails either way.
+ */
 export async function peekDsaToken(c: Client, token: string): Promise<boolean> {
   const { rowCount } = await c.query(
     `SELECT 1 FROM dsa_notices
-      WHERE verify_token_hash = $1 AND email_verified_at IS NULL
+      WHERE verify_token_hash = $1
         AND created_at > now() - make_interval(days => $2::int)`,
     [await sha256Hex(token), DSA_CONFIRM_WINDOW_DAYS],
   );
   return (rowCount ?? 0) > 0;
 }
 
-/** ⚠️ Confirms ONLY. AC-1: it does not count, report, or hide anything. */
+/**
+ * ⚠️ Confirms ONLY. AC-1: it does not count, report, or hide anything.
+ *
+ * M1 (final-review fix): IDEMPOTENT — a hash already confirmed, still inside
+ * the window, matches this UPDATE too (no `email_verified_at IS NULL` guard),
+ * so a double submit/refresh/re-opened link after a successful confirm
+ * returns `true` again instead of failing. `COALESCE(email_verified_at,
+ * now())` is what makes it idempotent: it sets the timestamp the FIRST time
+ * and leaves an already-set one untouched on every call after, so repeating
+ * this never moves the stamp. A hash that doesn't exist, or is outside the
+ * window, still fails.
+ */
 export async function confirmDsaNotice(c: Client, token: string): Promise<boolean> {
   const { rowCount } = await c.query(
-    `UPDATE dsa_notices SET email_verified_at = now()
-      WHERE verify_token_hash = $1 AND email_verified_at IS NULL
+    `UPDATE dsa_notices SET email_verified_at = COALESCE(email_verified_at, now())
+      WHERE verify_token_hash = $1
         AND created_at > now() - make_interval(days => $2::int)`,
     [await sha256Hex(token), DSA_CONFIRM_WINDOW_DAYS],
   );
