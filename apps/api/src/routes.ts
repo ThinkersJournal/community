@@ -466,4 +466,13 @@ export const ROUTES: readonly RouteDef[] = [
     handler: async (request, env, ctx) =>
       (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },
+
+  // TEST-ONLY (Part of #113). Same null-means-404 contract and same handler
+  // as /__test/last-reset-token above.
+  {
+    method: "GET",
+    pattern: "/__test/last-dsa-token",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
 ];

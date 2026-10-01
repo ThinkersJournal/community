@@ -359,6 +359,18 @@ if (post !== null) {
           every successful submit, by construction, not by care taken here. */}
       <div class="post-report" data-post-report data-post-id={post.id} hidden></div>
 
+      {/* THE DSA NOTICE LINK (Part of #113) — a PLAIN link, visible to EVERY
+          reader including signed-out ones: that's the point (DSA Art. 16
+          notice-and-action must not require an account). Unlike
+          `.post-report` above, this is not SSR-hidden and reveals nothing
+          client-side — it is static markup in this anonymous, edge-cached
+          render, same as the tags list just below. */}
+      <p class="dsa-notice-link">
+        <a class="link" href={`/dsa-notice?post=${encodeURIComponent(post.id)}`}>
+          Report illegal content (no account needed)
+        </a>
+      </p>
+
       {/* Freeform tags (M2.4c). encodeURIComponent on the slug in the href — a URL
           needs percent-encoding; Astro `{}` only HTML-escapes. The label is an
           Astro `{}` expression (escaped), never set:html. */}
@@ -424,6 +436,13 @@ if (post !== null) {
                 <div class="comment-body" set:html={c.html} />
                 <ReactionChips commentId={c.id} />
                 <div data-comment-actions></div>
+                {/* Same plain, always-visible DSA notice link as the post
+                    itself above — see its comment. */}
+                <p class="dsa-notice-link">
+                  <a class="link" href={`/dsa-notice?comment=${encodeURIComponent(c.id)}`}>
+                    Report illegal content (no account needed)
+                  </a>
+                </p>
               </>
             )}
           </li>
@@ -493,6 +512,8 @@ if (post !== null) {
      display:flex beats the UA [hidden] rule) — same fix, applied here too. */
   .post-report{display:flex;align-items:center;gap:10px;margin:16px 0 0}
   .post-report[hidden]{display:none}
+  .dsa-notice-link{margin:8px 0 0;font-size:.85em}
+  .dsa-notice-link .link{color:var(--dim)}
   .report-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .report-note{color:var(--dim);font-size:.9em}
   .post-visibility-error{color:var(--dim);margin:6px 0 0;font-size:.9em}

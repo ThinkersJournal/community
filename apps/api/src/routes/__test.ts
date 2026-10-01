@@ -33,7 +33,15 @@
  * `{ anonymised }`. It only scrubs accounts whose deletion request is
  * ALREADY 30+ days old and were never cancelled, same shape as the other two.
  *
- * Three layers keep all four from reaching production:
+ * `GET /__test/last-dsa-token` (Part of #113) is the identical seam to
+ * `last-reset-token` above, for DSA Art. 16 notice confirmation: returns the
+ * last RAW confirmation token issued, standing in for reading the email
+ * E2E's dummy Postmark token prevents from actually sending. That token only
+ * confirms a notice (stamps `email_verified_at`) — it grants no account
+ * access — but it gets the same gate as every other test-only token route
+ * on principle: there is no reason for this to be the one exception.
+ *
+ * Three layers keep all five from reaching production:
  *   1. `TEST_ROUTES` is set ONLY in the gitignored `.dev.vars` (local dev) and
  *      in `miniflare.bindings` in vitest.config.ts (tests). It is deliberately
  *      NOT in wrangler.jsonc's `vars`, so a deploy cannot carry it along.
@@ -41,9 +49,9 @@
  *      `"1"`, returning `null` so the caller falls through to its ordinary 404 —
  *      making the route byte-for-byte indistinguishable from a path that does
  *      not exist. It does not 403, which would confirm the route exists.
- *   3. `createVerificationToken` only writes the stash under the same `=== "1"`
- *      condition, so in production the KV key the token route reads never
- *      exists.
+ *   3. `createVerificationToken` / `createResetToken` / `handleDsaNotice` only
+ *      write their respective stashes under the same `=== "1"` condition, so
+ *      in production the KV key each token route reads never exists.
  *
  * test/email-verify.test.ts covers both states for the token route, including
  * the unset-TEST_ROUTES 404. `POST /__test/reap-unverified`, `POST
@@ -60,6 +68,7 @@ import { TEST_LAST_RESET_TOKEN_KEY } from "../auth/password-reset";
 import { reapUnverifiedAccounts } from "../auth/reap-unverified";
 import { errorResponse, notFoundResponse } from "../http/errors";
 import { reapOrphanMedia } from "../media/reap-orphan-media";
+import { TEST_LAST_DSA_TOKEN_KEY } from "../moderation/dsa-notices";
 
 /**
  * Handle a `/__test/*` request, or return `null` to mean "no such route" —
@@ -99,6 +108,20 @@ export async function handleTestRoute(
   // #70 — identical shape to last-verify-token above.
   if (request.method === "GET" && pathname === "/__test/last-reset-token") {
     const token = await env.SESSIONS.get(TEST_LAST_RESET_TOKEN_KEY);
+    if (token === null) {
+      return notFoundResponse();
+    }
+    return new Response(token, {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
+  }
+
+  // Part of #113 — identical shape to last-reset-token above: a GET peek,
+  // test-only, standing in for reading the confirmation email E2E's dummy
+  // Postmark token prevents from actually sending.
+  if (request.method === "GET" && pathname === "/__test/last-dsa-token") {
+    const token = await env.SESSIONS.get(TEST_LAST_DSA_TOKEN_KEY);
     if (token === null) {
       return notFoundResponse();
     }

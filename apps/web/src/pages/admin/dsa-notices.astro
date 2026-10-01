@@ -1,38 +1,26 @@
 ---
 /**
- * `/admin/queue` — the moderation review queue + the decision action, in one
- * page (M4 2b; PM ruling on module 2a: "API-first, with a thin server-rendered
- * admin on top. No SPA" — this follows that exactly, no client JS at all).
+ * `/admin/dsa-notices` — the DSA Art. 16 notice queue + the decision action,
+ * in one page (Part of #113). Modelled byte-for-byte on `admin/queue.astro`'s
+ * guard-first/markPrivate/CSP/decision shape — see that file's header for the
+ * full reasoning this page reuses without repeating.
  *
- * ⚠️⚠️ THE PROPERTY THIS FILE MUST NEVER LOSE: no queue content (a post title,
- * a comment excerpt, a report count — anything from a hidden/reported item)
- * reaches the HTML on any request that does not carry a verified Access JWT.
- * The guard below is therefore the FIRST statement in this file's
- * frontmatter, before markPrivate, before the CSP, before ANY api call — an
- * early `return` there means NOTHING below it ever executes, so there is no
- * later code path that could fetch queue data and then merely fail to render
- * it. Verified live against a real `wrangler dev` instance with no Access
- * header sent at all: the response was a bare 401 with an empty body, before
- * any Service-Binding call to the api ran (see this PR's description for the
- * literal request/response).
+ * ⚠️⚠️ THE PROPERTY THIS FILE MUST NEVER LOSE: no notice content (a reporter's
+ * name/email, a statement, an excerpt of hidden/reported content) reaches the
+ * HTML on any request that does not carry a verified Access JWT. The guard
+ * below is therefore the FIRST statement in this file's frontmatter, before
+ * markPrivate, before the CSP, before ANY api call — see admin/queue.astro's
+ * header for why that ordering is load-bearing, not stylistic.
  *
- * ⚠️ THIS PAGE IS SAFE-BUT-INERT UNTIL A REAL CLOUDFLARE ACCESS APPLICATION
- * EXISTS, SCOPED TO THIS PATH (a dashboard action, not a code change — see
- * docs/superpowers/plans/2026-09-08-m4-module-2a-admin-foundation.md's own
- * closing note on `/admin/whoami`). Without it, Cloudflare never injects the
- * Access header at all, this guard fires on every request, and the page
- * answers 401 to everyone — the correct default, not a bug to work around.
+ * ⚠️ THE ONLY DECISION PATH IS `/admin/decision` (PM ruling, Part of #113) —
+ * a DSA notice is queue INPUT for a human only (AC-1); resolving it goes
+ * through the SAME moderation decision the ordinary queue uses, not a
+ * separate "DSA decision" endpoint. This page calls no other mutating admin
+ * route.
  *
- * ⚠️ THE EDGE ACCESS APPLICATION IS THE PRIMARY CONTROL; THIS GUARD IS WHAT
- * KEEPS "never SSR-then-hide" TRUE EVEN IF THAT APPLICATION IS MISCONFIGURED
- * OR ABSENT — not defence-in-depth as decoration, but the thing that makes
- * the guarantee hold unconditionally rather than "as long as the dashboard
- * is set up correctly".
- *
- * ⚠️ NO GENERIC PROXY. This page's own frontmatter is the only caller of the
- * api's `/admin/*` routes for this page — there is no `/api/admin/*` browser-
- * facing endpoint a member's session could ever reach. See
- * src/lib/admin-api.ts's header for the full reasoning.
+ * ⚠️ NO GENERIC PROXY, same reasoning as admin/queue.astro: this page's own
+ * frontmatter is the only caller of the api's `/admin/*` routes for this
+ * page.
  */
 import BaseLayout from "../../components/BaseLayout.astro";
 import { adminApiErrorCode, adminApiFetch } from "../../lib/admin-api";
@@ -44,7 +32,7 @@ import {
   ADMIN_DECISIONS,
   LEGAL_HOLD_CATEGORIES,
   type AdminDecisionKind,
-  type AdminQueueResponse,
+  type AdminDsaNoticesResponse,
   type LegalHoldCategoryWire,
 } from "@thinkersjournal/shared";
 
@@ -86,35 +74,33 @@ if (Astro.request.method === "POST") {
   }
 }
 
-const queueResp = await adminApiFetch<AdminQueueResponse>("/admin/queue", { accessJwt });
-const items = queueResp.status === 200 && queueResp.data ? queueResp.data.items : [];
-const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "QUEUE_LOAD_FAILED") : null;
+const noticesResp = await adminApiFetch<AdminDsaNoticesResponse>("/admin/dsa-notices", { accessJwt });
+const notices = noticesResp.status === 200 && noticesResp.data ? noticesResp.data.notices : [];
+const noticesError =
+  noticesResp.status !== 200 ? (adminApiErrorCode(noticesResp) ?? "NOTICES_LOAD_FAILED") : null;
 ---
-<BaseLayout title="Moderation queue">
+<BaseLayout title="DSA notices">
   <div class="wrap admin-page">
-    <h1>Moderation queue</h1>
-    <p class="admin-nav"><a class="link" href="/admin/media-access">Media access requests →</a></p>
-    <p class="admin-nav"><a class="link" href="/admin/dsa-notices">DSA notices →</a></p>
+    <h1>DSA notices</h1>
+    <p class="admin-nav"><a class="link" href="/admin/queue">Moderation queue →</a></p>
     {decisionError && <p class="err">Decision failed: {decisionError}</p>}
-    {queueError && <p class="err">Could not load the queue: {queueError}</p>}
+    {noticesError && <p class="err">Could not load the notices: {noticesError}</p>}
     {
-      items.length === 0 ? (
+      notices.length === 0 ? (
         <p id="no-items">Nothing open.</p>
       ) : (
         <ul class="queue">
-          {items.map((item) => (
+          {notices.map((n) => (
             <li class="queue-item">
-              <p class="excerpt">{item.excerpt}</p>
+              <p class="excerpt">{n.excerpt}</p>
               <p class="meta">
-                {item.kind} · {item.reportCount} report{item.reportCount === 1 ? "" : "s"} ·
-                {" "}{item.hiddenAt ? "hidden" : "not hidden"} · oldest report {item.oldestReportAt}
-                {item.authorHandle && (
-                  <> · <a class="link" href={`/admin/accounts/${encodeURIComponent(item.authorHandle)}`}>@{item.authorHandle} — account</a></>
-                )}
+                {n.kind} · {n.reason} · reported by {n.reporterName} ({n.reporterEmail}) ·
+                {" "}{n.createdAt}
               </p>
+              <p class="statement">{n.statement}</p>
               <form method="POST" class="decision-form">
-                <input type="hidden" name="subject" value={item.kind} />
-                <input type="hidden" name="subjectId" value={item.targetId} />
+                <input type="hidden" name="subject" value={n.kind} />
+                <input type="hidden" name="subjectId" value={n.targetId} />
                 <label>
                   Statement of reasons (shown to the author)
                   <textarea name="reason" required maxlength="2000" />
@@ -151,6 +137,7 @@ const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "
   .queue-item{border:1px solid var(--line);border-radius:8px;padding:16px}
   .queue-item .excerpt{font-weight:600}
   .queue-item .meta{color:var(--muted);font-size:13px;margin:6px 0 12px}
+  .queue-item .statement{color:var(--text);margin:0 0 12px;white-space:pre-wrap}
   .decision-form{display:flex;flex-direction:column;gap:10px}
   .decision-form textarea{width:100%;background:var(--ink2);border:1px solid var(--line);
     border-radius:8px;padding:9px 11px;color:var(--text);font:inherit;margin-top:4px}

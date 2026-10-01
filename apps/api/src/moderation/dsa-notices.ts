@@ -51,6 +51,22 @@ export async function createDsaNotice(
 /** Confirmation links stop working, and unconfirmed notices are reaped, after this. */
 export const DSA_CONFIRM_WINDOW_DAYS = 7;
 
+/**
+ * The fixed KV key under which the most recently issued RAW DSA confirmation
+ * token is stashed for `GET /__test/last-dsa-token` (src/routes/__test.ts) to
+ * hand back to the E2E suite — the SAME test-seam shape
+ * `TEST_LAST_RESET_TOKEN_KEY` (src/auth/password-reset.ts) uses for
+ * password-reset tokens, for the identical reason: E2E's Postmark is
+ * configured with a dummy token so the real send fails by design, and this
+ * stash stands in for reading the inbox. The stash itself lives in KV even
+ * though the token's REAL storage is `dsa_notices.verify_token_hash`
+ * (Postgres) — this is test scaffolding only, not a second source of truth.
+ *
+ * Written ONLY when `env.TEST_ROUTES === "1"` — see routes/dsa-notice.ts's
+ * `handleDsaNotice`, which is the sole writer.
+ */
+export const TEST_LAST_DSA_TOKEN_KEY = "__test:last-dsa-token";
+
 export async function peekDsaToken(c: Client, token: string): Promise<boolean> {
   const { rowCount } = await c.query(
     `SELECT 1 FROM dsa_notices

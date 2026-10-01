@@ -26,7 +26,13 @@ import { enforceRateLimit } from "../auth/ratelimit";
 import { verifyTurnstile } from "../auth/turnstile";
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
-import { confirmDsaNotice, createDsaNotice, peekDsaToken } from "../moderation/dsa-notices";
+import {
+  confirmDsaNotice,
+  createDsaNotice,
+  DSA_CONFIRM_WINDOW_DAYS,
+  peekDsaToken,
+  TEST_LAST_DSA_TOKEN_KEY,
+} from "../moderation/dsa-notices";
 
 /** The single failure response for EVERY unhappy TOKEN path on either route
  * below: missing, unknown, already-confirmed and expired all look identical —
@@ -84,6 +90,14 @@ export async function handleDsaNotice(
   const result = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => createDsaNotice(c, input));
   if (result === null) {
     return errorResponse("NOT_FOUND", 404);
+  }
+
+  // TEST-ONLY — see TEST_LAST_DSA_TOKEN_KEY's own comment. Identical gate and
+  // shape to createResetToken's stash (src/auth/password-reset.ts).
+  if (env.TEST_ROUTES === "1") {
+    await env.SESSIONS.put(TEST_LAST_DSA_TOKEN_KEY, result.token, {
+      expirationTtl: DSA_CONFIRM_WINDOW_DAYS * 24 * 60 * 60,
+    });
   }
 
   // ---- 6. Mail the confirmation link — DISPATCHED, not awaited ---------------
