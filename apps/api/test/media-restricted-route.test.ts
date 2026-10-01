@@ -1,5 +1,6 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SAME_ADMIN_HAND_CASES } from "@thinkersjournal/shared";
 
 import worker from "../src/index";
 import { __resetJwksCacheForTests } from "../src/admin/access-jwt";
@@ -278,5 +279,34 @@ describe("GET /media/restricted/:sha256 — legal hold", () => {
     );
     const approved = await ctxRun((c) => approveMediaAccess(c, requestId, "  alice@example.test  "));
     expect(approved).toBe(false);
+  });
+
+  // #98 — the SQL side of the two-person rule, driven by the SAME table the
+  // JS side (sameAdminHand: the admin UI + this route's read-side re-check)
+  // is tested against in packages/shared/test/admin.test.ts. Every copy of
+  // the normalization must agree with one table, so drift in any of them
+  // fails a test — not only drift in the copy least likely to change.
+  describe("#98: the SQL guards agree with sameAdminHand on the shared case table", () => {
+    const orders = SAME_ADMIN_HAND_CASES.flatMap(({ a, b, same }) => [
+      { requestedBy: a, approvedBy: b, same },
+      { requestedBy: b, approvedBy: a, same },
+    ]);
+
+    for (const { requestedBy, approvedBy, same } of orders) {
+      const label = `${JSON.stringify(approvedBy)} approving ${JSON.stringify(requestedBy)}`;
+
+      it(`approveMediaAccess: ${label} → ${same ? "refused" : "approved"}`, async () => {
+        const sha = randomSha();
+        const requestId = await ctxRun((c) => requestMediaAccess(c, { r2Key: keyFor(sha), requestedBy, reason: "review" }));
+        const approved = await ctxRun((c) => approveMediaAccess(c, requestId, approvedBy));
+        expect(approved).toBe(!same);
+      });
+
+      it(`the 0016 CHECK: ${label} → ${same ? "rejected" : "accepted"}`, async () => {
+        const inserted = grant(randomSha(), requestedBy, approvedBy);
+        if (same) await expect(inserted).rejects.toThrow(/violates check constraint/);
+        else await expect(inserted).resolves.toMatch(/^[0-9a-f-]{36}$/);
+      });
+    }
   });
 });
