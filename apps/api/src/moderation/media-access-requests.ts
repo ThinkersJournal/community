@@ -32,7 +32,10 @@ export async function requestMediaAccess(
  * hand. The 0016 CHECK constraint enforces this same rule at the row level
  * (belt-and-braces: even a future caller that skips this function cannot
  * write a self-approved row), and `routes/media-restricted.ts`'s read-side
- * check re-normalizes the same way — all three must agree.
+ * check and the admin UI use the shared `sameAdminHand` — all of them must
+ * agree. `SAME_ADMIN_HAND_CASES` (packages/shared/src/admin.ts) is run
+ * through this SQL and the CHECK in test/media-restricted-route.test.ts, so a
+ * change to this `WHERE` that the JS side doesn't share fails a test (#98).
  */
 export async function approveMediaAccess(
   c: Client,
