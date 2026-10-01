@@ -36,12 +36,26 @@ export function isBarred(row: AccountStatusRow, now: Date = new Date()): boolean
  * user_ban (if banned) or user_suspend (if suspended) row. ⚠️ NEVER for a
  * terminated account (#114). Called ONLY on the already-barred path, so a
  * normal login pays nothing.
+ *
+ * ⚠️ THE TERMINATE EXCLUSION IS ENFORCED TWICE, IN-MEMORY AND IN THE QUERY.
+ * The in-memory `row.disabled_reason === "terminate"` check is only as good
+ * as the caller's `row` — `AccountStatusRow.disabled_reason` is OPTIONAL (see
+ * that interface's own comment: "so existing isBarred callers need no
+ * change"), so a caller that builds `row` from a narrower SELECT, or re-reads
+ * it fresh without that column, silently omits the field rather than failing
+ * to compile — and `undefined !== "terminate"` lets the in-memory guard fall
+ * through. The `NOT EXISTS` below re-derives the same fact from the row's
+ * OWN id, independent of whatever the caller happened to pass, so a #114
+ * reason never leaks even when the in-memory check is defeated this way.
  */
 export async function loadBarReason(c: Client, userId: string, row: AccountStatusRow): Promise<string | null> {
   if (row.disabled_reason === "terminate") return null;
   const action = row.disabled_at !== null ? "user_ban" : "user_suspend";
   const { rows } = await c.query<{ reason: string }>(
-    `SELECT reason FROM moderation_actions WHERE subject_user_id = $1 AND action = $2 ORDER BY created_at DESC LIMIT 1`,
+    `SELECT reason FROM moderation_actions
+      WHERE subject_user_id = $1 AND action = $2
+        AND NOT EXISTS (SELECT 1 FROM users WHERE id = $1 AND disabled_reason = 'terminate')
+      ORDER BY created_at DESC LIMIT 1`,
     [userId, action],
   );
   return rows[0]?.reason ?? null;

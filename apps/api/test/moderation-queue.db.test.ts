@@ -254,4 +254,69 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
     expect(item.authorHandle).toBe(handle);
   });
+
+  // ⚠️ Fix: `profiles.username` is RELEASED and reassignable the instant an
+  // account is anonymised — showing it to a moderator here would risk naming
+  // a completely different, later user. `authorHandle` must be NULL once
+  // `users.anonymised_at` is set, for a post AND a comment author alike.
+  it("#113 fix: authorHandle is NULL for an anonymised post author (handle row still present)", async () => {
+    const author = await mkUser();
+    const handle = `h${author.replace(/-/g, "").slice(0, 16)}`;
+    await client.query(`INSERT INTO profiles (user_id, username) VALUES ($1, $2)`, [author, handle]);
+    await client.query(`UPDATE users SET anonymised_at = now() WHERE id = $1`, [author]);
+    const r1 = await mkUser();
+    const post = await mkPost(author, "Anon-authored");
+    await report(r1, post, "spam");
+    const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
+    expect(item.authorHandle).toBeNull();
+  });
+
+  it("#113 fix: authorHandle is NULL for an anonymised comment author", async () => {
+    const author = await mkUser();
+    const handle = `h${author.replace(/-/g, "").slice(0, 16)}`;
+    await client.query(`INSERT INTO profiles (user_id, username) VALUES ($1, $2)`, [author, handle]);
+    await client.query(`UPDATE users SET anonymised_at = now() WHERE id = $1`, [author]);
+    const postOwner = await mkUser();
+    const post = await mkPost(postOwner, "Comment-host-anon");
+    const comment = randomUUID();
+    await client.query(
+      `INSERT INTO comments (id, post_id, author_id, parent_id, path, depth, body_markdown)
+       VALUES ($1, $2, $3, NULL, $4, 0, 'a comment')`,
+      [comment, post, author, comment],
+    );
+    const r1 = await mkUser();
+    await client.query(`INSERT INTO reports (reporter_id, comment_id, reason) VALUES ($1, $2, 'spam')`, [r1, comment]);
+    const item = (await listOpenQueue(client)).find((i) => i.targetId === comment)!;
+    expect(item.authorHandle).toBeNull();
+  });
+
+  // CONTROL (both arms, same pass): a NON-anonymised author on each kind still
+  // surfaces its handle — without this, "null" above is indistinguishable
+  // from "authorHandle is always null now".
+  it("CONTROL: a non-anonymised author's handle still appears for both kinds", async () => {
+    const postAuthor = await mkUser();
+    const postHandle = `h${postAuthor.replace(/-/g, "").slice(0, 16)}`;
+    await client.query(`INSERT INTO profiles (user_id, username) VALUES ($1, $2)`, [postAuthor, postHandle]);
+    const r1 = await mkUser();
+    const post = await mkPost(postAuthor, "Control-post");
+    await report(r1, post, "spam");
+
+    const commentAuthor = await mkUser();
+    const commentHandle = `h${commentAuthor.replace(/-/g, "").slice(0, 16)}`;
+    await client.query(`INSERT INTO profiles (user_id, username) VALUES ($1, $2)`, [commentAuthor, commentHandle]);
+    const commentPostOwner = await mkUser();
+    const hostPost = await mkPost(commentPostOwner, "Control-comment-host");
+    const comment = randomUUID();
+    await client.query(
+      `INSERT INTO comments (id, post_id, author_id, parent_id, path, depth, body_markdown)
+       VALUES ($1, $2, $3, NULL, $4, 0, 'a comment')`,
+      [comment, hostPost, commentAuthor, comment],
+    );
+    const r2 = await mkUser();
+    await client.query(`INSERT INTO reports (reporter_id, comment_id, reason) VALUES ($1, $2, 'spam')`, [r2, comment]);
+
+    const items = await listOpenQueue(client);
+    expect(items.find((i) => i.targetId === post)!.authorHandle).toBe(postHandle);
+    expect(items.find((i) => i.targetId === comment)!.authorHandle).toBe(commentHandle);
+  });
 });

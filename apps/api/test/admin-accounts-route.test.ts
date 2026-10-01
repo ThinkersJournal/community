@@ -5,6 +5,8 @@ import worker from "../src/index";
 import { __resetJwksCacheForTests } from "../src/admin/access-jwt";
 import { withClient } from "../src/db/client";
 
+import { createVerifiedActor, deleteCreatedUsers } from "./actor";
+
 const TEAM = "testteam.cloudflareaccess.com";
 const AUD = "test-aud-tag";
 const KID = "test-key-1";
@@ -16,7 +18,6 @@ const b64urlJson = (o: unknown): string => b64url(new TextEncoder().encode(JSON.
 
 let keyPair: CryptoKeyPair;
 let sentEmails: Array<Record<string, unknown>> = [];
-let capturedPurges: string[][] = [];
 let createdUserIds: string[] = [];
 let adminEmail: string;
 
@@ -48,7 +49,6 @@ async function call(path: string, init: RequestInit = {}): Promise<Response> {
 
 beforeEach(async () => {
   sentEmails = [];
-  capturedPurges = [];
   createdUserIds = [];
   adminEmail = `mod-${crypto.randomUUID()}@example.test`;
   keyPair = (await crypto.subtle.generateKey(
@@ -79,6 +79,7 @@ afterEach(async () => {
       await c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [createdUserIds]);
     });
   }
+  await deleteCreatedUsers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -125,11 +126,30 @@ describe("POST /admin/accounts/:handle/actions", () => {
     [{ action: "warn", reason: "   " }],
     [{ action: "suspend", reason: "r", suspensionHours: 48 }],
     [{ action: "warn", reason: "r", violationCategory: "nonsense" }],
+    [{ action: "ban", reason: "r" }],
+    [{ action: "ban", reason: "r", confirmBan: false }],
   ])("400 INVALID_INPUT for %j", async (body) => {
     const { handle } = await seedHandle();
     const res = await act(handle, body);
     expect(res.status).toBe(400);
     expect(((await res.json()) as { code: string }).code).toBe("INVALID_INPUT");
+  });
+
+  // CONTROL for the two `ban` rows just above: the identical body, PLUS
+  // confirmBan: true, succeeds — without this, "400" is indistinguishable
+  // from "ban is broken outright".
+  it("CONTROL: ban with confirmBan: true is NOT rejected for lacking confirmation", async () => {
+    const { handle } = await seedHandle();
+    const res = await act(handle, { action: "ban", reason: "r", confirmBan: true });
+    expect(res.status).toBe(200);
+  });
+
+  // warn/suspend need no confirmBan at all — only `ban` is gated.
+  it("warn and suspend are unaffected by the confirmBan gate", async () => {
+    const warnTarget = await seedHandle();
+    const suspendTarget = await seedHandle();
+    expect((await act(warnTarget.handle, { action: "warn", reason: "r" })).status).toBe(200);
+    expect((await act(suspendTarget.handle, { action: "suspend", reason: "r" })).status).toBe(200);
   });
 
   it("⚠️ Review Focus 4: the handle is case-insensitive", async () => {
@@ -153,7 +173,7 @@ describe("POST /admin/accounts/:handle/actions", () => {
   it("⚠️ Review Focus 3: the epoch is bumped BEFORE the commit as well as after (two increments)", async () => {
     const { handle, userId } = await seedHandle();
     const before = await env.USER_SECURITY.getByName(userId).getEpoch();
-    await act(handle, { action: "ban", reason: "r" });
+    await act(handle, { action: "ban", reason: "r", confirmBan: true });
     expect(await env.USER_SECURITY.getByName(userId).getEpoch()).toBe(before + 2);
   });
 
@@ -166,8 +186,8 @@ describe("POST /admin/accounts/:handle/actions", () => {
 
   it("409 ACCOUNT_ALREADY_DISABLED on a second ban", async () => {
     const { handle } = await seedHandle();
-    expect((await act(handle, { action: "ban", reason: "r" })).status).toBe(200);
-    const res = await act(handle, { action: "ban", reason: "again" });
+    expect((await act(handle, { action: "ban", reason: "r", confirmBan: true })).status).toBe(200);
+    const res = await act(handle, { action: "ban", reason: "again", confirmBan: true });
     expect(res.status).toBe(409);
     expect(((await res.json()) as { code: string }).code).toBe("ACCOUNT_ALREADY_DISABLED");
   });
@@ -193,10 +213,86 @@ describe("GET /admin/accounts/:handle", () => {
     expect(body.handle).toBe(handle);
     expect(body.history.map((h) => h.reason)).toEqual(["first"]);
     expect(body.suggestedNext).toBe("suspend");
+    expect(body.disabledReason).toBeNull();
   });
 
   it("401s without an Access assertion", async () => {
     const { handle } = await seedHandle();
     expect((await call(`/admin/accounts/${handle}`)).status).toBe(401);
+  });
+
+  it("disabledReason mirrors users.disabled_reason once the account is banned", async () => {
+    const { handle } = await seedHandle();
+    expect((await act(handle, { action: "ban", reason: "r", confirmBan: true })).status).toBe(200);
+    const res = await call(`/admin/accounts/${handle}`, { headers: { "Cf-Access-Jwt-Assertion": await makeJwt() } });
+    const body = (await res.json()) as import("@thinkersjournal/shared").AdminAccountResponse;
+    expect(body.disabledReason).toBe("ban");
+  });
+});
+
+describe("POST /admin/accounts/:handle/actions — notice emails (Review Focus 2)", () => {
+  it.each(["warn", "suspend", "ban"] as const)(
+    "%s sends exactly one notice email, To the seeded address, on the outbound stream",
+    async (action) => {
+      const { handle, email } = await seedHandle();
+      const res = await act(handle, { action, reason: "r", confirmBan: true });
+      expect(res.status).toBe(200);
+      expect(sentEmails).toHaveLength(1);
+      expect(sentEmails[0]).toMatchObject({ To: email, MessageStream: "outbound" });
+    },
+  );
+
+  it("a suspend notice's TextBody carries the suspension's end date (UTC string)", async () => {
+    const { handle, userId } = await seedHandle();
+    expect((await act(handle, { action: "suspend", reason: "r" })).status).toBe(200);
+    expect(sentEmails).toHaveLength(1);
+    const until = await ctxRun(
+      async (c) => (await c.query<{ s: Date }>(`SELECT suspended_until AS s FROM users WHERE id = $1`, [userId])).rows[0]!.s,
+    );
+    expect(String(sentEmails[0]!.TextBody)).toContain(until.toUTCString());
+  });
+
+  it("a 409 ACCOUNT_ALREADY_DISABLED (second ban) sends zero emails for that call", async () => {
+    const { handle } = await seedHandle();
+    expect((await act(handle, { action: "ban", reason: "r", confirmBan: true })).status).toBe(200);
+    expect(sentEmails).toHaveLength(1);
+    sentEmails.length = 0;
+    const res = await act(handle, { action: "ban", reason: "again", confirmBan: true });
+    expect(res.status).toBe(409);
+    expect(sentEmails).toHaveLength(0);
+  });
+
+  it("⚠️ Review Focus 5: an anonymised account (still-present handle) 404s and sends zero emails", async () => {
+    const { handle, userId } = await seedHandle();
+    // The handle is STILL PRESENT in profiles (anonymise-accounts only
+    // releases it 30 days later) — anonymised_at alone is what 404s it.
+    await ctxRun((c) => c.query(`UPDATE users SET anonymised_at = now() WHERE id = $1`, [userId]));
+    const res = await act(handle, { action: "warn", reason: "r" });
+    expect(res.status).toBe(404);
+    expect(sentEmails).toHaveLength(0);
+  });
+});
+
+describe("⚠️ a member session grants no admin authority (Review Focus 3 scope)", () => {
+  afterEach(async () => {
+    await deleteCreatedUsers();
+  });
+
+  it("GET /admin/accounts/:handle — a verified member's own session Cookie, no Access header, 401s", async () => {
+    const { handle } = await seedHandle();
+    const member = await createVerifiedActor();
+    const res = await call(`/admin/accounts/${handle}`, { headers: { Cookie: member.cookie } });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /admin/accounts/:handle/actions — same session + Origin, no Access header, 401s", async () => {
+    const { handle } = await seedHandle();
+    const member = await createVerifiedActor();
+    const res = await call(`/admin/accounts/${handle}/actions`, {
+      method: "POST",
+      headers: { Origin: ALLOWED_ORIGIN, "content-type": "application/json", Cookie: member.cookie },
+      body: JSON.stringify({ action: "warn", reason: "r" }),
+    });
+    expect(res.status).toBe(401);
   });
 });

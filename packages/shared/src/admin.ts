@@ -159,6 +159,8 @@ export interface AdminAccountResponse {
   readonly handle: string;
   readonly suspendedUntil: string | null;
   readonly disabledAt: string | null;
+  /** 'ban' | 'terminate' | null — mirrors `users.disabled_reason`. Null when not disabled. */
+  readonly disabledReason: string | null;
   readonly history: readonly AdminAccountHistoryEntry[];
   readonly suggestedNext: AdminAccountActionKind;
 }
@@ -170,4 +172,6 @@ export interface AdminAccountActionRequest {
   readonly violationCategory?: string;
   /** Only for `suspend`; must be one of SUSPENSION_HOURS. Defaults to DEFAULT_SUSPENSION_HOURS. */
   readonly suspensionHours?: number;
+  /** Only for `ban`; must be `true` or the route 400s INVALID_INPUT — a ban is permanent. */
+  readonly confirmBan?: boolean;
 }

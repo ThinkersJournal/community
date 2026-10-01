@@ -8,12 +8,18 @@
  * Run daily by src/index.ts's `scheduled`, its own branch, same shape as
  * reap-unverified.ts/reap-orphan-media.ts.
  *
- * ⚠️ EXCLUDES `disabled_at`/`suspended_until` accounts, same as
- * reap-unverified.ts's own DELETE — a barred account is never reaped, even
- * once its 30-day window has passed, because scrubbing `email` would destroy
- * an identifying detail a live moderation/legal hold (CSAM/NCMEC
- * preservation) may still need. This means a barred user's deletion request
- * never matures while the bar is in effect; that is intentional, not a bug.
+ * ⚠️ EXCLUDES `disabled_at` AND A CURRENTLY-SUSPENDED account, same bar as
+ * src/auth/account-status.ts's `isBarred` (not the same as reap-unverified.ts's
+ * own DELETE, which excludes `suspended_until IS NOT NULL` outright) — a
+ * barred account is never reaped, even once its 30-day window has passed,
+ * because scrubbing `email` would destroy an identifying detail a live
+ * moderation/legal hold (CSAM/NCMEC preservation) may still need. This means
+ * a barred user's deletion request never matures while the bar is in effect;
+ * that is intentional, not a bug. ⚠️ A LAPSED suspension (`suspended_until` in
+ * the past) is NOT a bar — exactly as login treats it — so it does not block
+ * deletion; only `suspended_until > now()` does. Deliberately diverges from
+ * reap-unverified.ts here: that reaper's AC-3 binds its own exclusion as-is
+ * and must not change for this.
  */
 import { withClient } from "../db/client";
 
@@ -66,7 +72,7 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
         WHERE deletion_requested_at < now() - interval '30 days'
           AND anonymised_at IS NULL
           AND disabled_at IS NULL
-          AND suspended_until IS NULL
+          AND (suspended_until IS NULL OR suspended_until <= now())
         ORDER BY deletion_requested_at
         LIMIT $1`,
       [REAP_BATCH],

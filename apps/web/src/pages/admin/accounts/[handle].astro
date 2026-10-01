@@ -56,6 +56,7 @@ if (Astro.request.method === "POST") {
       reason: form.get("reason"),
       ...(form.get("violationCategory") ? { violationCategory: form.get("violationCategory") } : {}),
       ...(action === "suspend" ? { suspensionHours: Number(form.get("suspensionHours")) } : {}),
+      ...(action === "ban" ? { confirmBan: form.get("confirmBan") === "on" } : {}),
     },
   });
   if (res.status === 200) actionOk = true;
@@ -71,6 +72,28 @@ function suspensionLabel(hours: number): string {
   if (hours === 720) return "30 days";
   return "7 days";
 }
+
+/**
+ * The account-state line (Review Focus 7). THREE disjoint states, not two:
+ * a `disabledAt` is either the permanent ban rung or the CSAM `terminate`
+ * path (#114 — never offered by this page's own form, but a moderator can
+ * still be looking at an account terminated elsewhere), and a `suspendedUntil`
+ * in the past is a LAPSED suspension, not a current one — the account is free,
+ * and saying "Suspended until <past date>" would read as still in force.
+ */
+function stateLine(account: AdminAccountResponse): string {
+  if (account.disabledAt) {
+    return account.disabledReason === "terminate"
+      ? `Terminated (CSAM path) since ${account.disabledAt}`
+      : `Banned since ${account.disabledAt}`;
+  }
+  if (account.suspendedUntil) {
+    return new Date(account.suspendedUntil).getTime() <= Date.now()
+      ? `Suspension ended ${account.suspendedUntil}`
+      : `Suspended until ${account.suspendedUntil}`;
+  }
+  return "In good standing";
+}
 ---
 <BaseLayout title={`Account — ${handle}`}>
   <div class="wrap admin-page">
@@ -82,14 +105,10 @@ function suspensionLabel(hours: number): string {
     {
       account && (
         <>
-          <p class="state">
-            {account.disabledAt
-              ? `Banned since ${account.disabledAt}`
-              : account.suspendedUntil
-                ? `Suspended until ${account.suspendedUntil}`
-                : "In good standing"}
-          </p>
-          <p class="suggested">Suggested next step: {account.suggestedNext} (advisory)</p>
+          <p class="state">{stateLine(account)}</p>
+          {!account.disabledAt && (
+            <p class="suggested">Suggested next step: {account.suggestedNext} (advisory)</p>
+          )}
 
           <h2>History</h2>
           {
@@ -138,6 +157,10 @@ function suspensionLabel(hours: number): string {
                     ))}
                   </select>
                 </label>
+                <label class="confirm-ban">
+                  <input type="checkbox" name="confirmBan" />
+                  I confirm a permanent ban
+                </label>
                 <div class="action-buttons">
                   {ADMIN_ACCOUNT_ACTIONS.map((a: AdminAccountActionKind) => (
                     <button type="submit" name="action" value={a} class="btn btn-ghost">
@@ -168,6 +191,7 @@ function suspensionLabel(hours: number): string {
   .action-form{display:flex;flex-direction:column;gap:10px;max-width:480px;margin:20px 0 32px;
     padding:16px;border:1px solid var(--line);border-radius:8px}
   .action-form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .action-form label.confirm-ban{flex-direction:row;align-items:center;gap:8px}
   .action-form input,.action-form textarea,.action-form select{background:var(--ink2);border:1px solid var(--line);
     border-radius:8px;padding:9px 11px;color:var(--text);font:inherit}
   .action-buttons{display:flex;gap:10px;flex-wrap:wrap}

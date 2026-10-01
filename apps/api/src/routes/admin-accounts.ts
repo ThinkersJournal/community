@@ -32,13 +32,14 @@ interface AccountRow {
   username: string;
   suspended_until: Date | null;
   disabled_at: Date | null;
+  disabled_reason: string | null;
 }
 
 /** ⚠️ `username` is citext (Review Focus 4). An anonymised account's handle is released, so it 404s (Review Focus 5). */
 async function findByHandle(env: Env, ctx: ExecutionContext, handle: string): Promise<AccountRow | null> {
   return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<AccountRow>(
-      `SELECT u.id, pr.username, u.suspended_until, u.disabled_at
+      `SELECT u.id, pr.username, u.suspended_until, u.disabled_at, u.disabled_reason
          FROM profiles pr JOIN users u ON u.id = pr.user_id
         WHERE pr.username = $1 AND u.anonymised_at IS NULL`,
       [handle],
@@ -65,6 +66,7 @@ export async function handleAdminGetAccount(
     handle: account.username,
     suspendedUntil: account.suspended_until?.toISOString() ?? null,
     disabledAt: account.disabled_at?.toISOString() ?? null,
+    disabledReason: account.disabled_reason,
     history,
     suggestedNext: suggestNextRung(history),
   };
@@ -94,12 +96,18 @@ export async function handleAdminAccountAction(
   const reason = b["reason"];
   const category = b["violationCategory"];
   const hours = b["suspensionHours"] ?? DEFAULT_SUSPENSION_HOURS;
+  const confirmBan = b["confirmBan"];
 
   if (
     typeof action !== "string" || !(ADMIN_ACCOUNT_ACTIONS as readonly string[]).includes(action) ||
     typeof reason !== "string" || reason.trim() === "" ||
     (category !== undefined && !(REPORT_REASONS as readonly unknown[]).includes(category)) ||
-    (action === "suspend" && !(SUSPENSION_HOURS as readonly unknown[]).includes(hours))
+    (action === "suspend" && !(SUSPENSION_HOURS as readonly unknown[]).includes(hours)) ||
+    // ⚠️ A ban is permanent (barring the CSAM `terminate` path, which has no
+    // admin button at all). Require an explicit, separate confirmation on top
+    // of the reason text, so a moderator cannot ban by the same one click
+    // that would warn or suspend.
+    (action === "ban" && confirmBan !== true)
   ) {
     return errorResponse("INVALID_INPUT", 400);
   }
@@ -114,6 +122,16 @@ export async function handleAdminAccountAction(
   // completed between the first bump and the commit (the DB did not bar it
   // yet) got a session carrying the new epoch, and this kills it. GET routes
   // check only the epoch, so without the bump a ban would not stick on reads.
+  // ⚠️ THE DOUBLE BUMP ALONE DOES NOT CLOSE THE RACE — a login whose own
+  // lookup (its step 4) ran before this commit, but whose epoch read (its
+  // step 8) also ran before the first bump above, would still mint a session
+  // nothing here ever revokes, because mutating-route protection only compares
+  // against the epoch, and that session's stamped epoch is already current.
+  // What closes it is src/routes/login.ts's own re-read of suspended_until/
+  // disabled_at AFTER its epoch read (that file's step 8b) — the double bump
+  // here is what makes a session minted ANY time after this commit immediately
+  // stale, and the login-side re-read is what catches the narrower window
+  // before this commit lands at all. Both are required; neither alone is.
   const bars = kind === "suspend" || kind === "ban";
   if (bars) await env.USER_SECURITY.getByName(account.id).bumpEpoch();
 

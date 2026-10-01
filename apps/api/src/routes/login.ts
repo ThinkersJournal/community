@@ -309,6 +309,32 @@ export async function handleLogin(
   // value that might already be stale (e.g. a concurrent "log out everywhere").
   const securityEpoch = await env.USER_SECURITY.getByName(row.id).getEpoch();
 
+  // ---- 8b. Re-check the bar after the epoch read (ban/login race) ------------
+  // ⚠️ THE RACE: a moderator's ban (src/routes/admin-accounts.ts) bumps the
+  // epoch TWICE — once before its DB commit, once after — specifically so a
+  // login that read its epoch BETWEEN those two bumps still gets a session
+  // that is immediately stale (see that file's Review Focus 3 comment). That
+  // closes the race for every route guarded by the MUTATING pipeline, which
+  // compares the stamped epoch against the DO on every later request. Login
+  // itself is not such a route: step 4's lookup happened before any of this,
+  // so a ban committed after step 4 but before this point would otherwise
+  // slip a live, barred session out the door on THIS request, not merely on
+  // its next one. So: re-read the barring columns fresh, right after the
+  // epoch read that would otherwise be the last thing standing between a
+  // concurrent ban and a minted session, and refuse here too if the account
+  // is now barred. No session is minted on this path.
+  const freshRow = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query(
+      "SELECT suspended_until, disabled_at, disabled_reason FROM users WHERE id = $1",
+      [row.id],
+    );
+    return (rows[0] ?? null) as Pick<UserRow, "suspended_until" | "disabled_at" | "disabled_reason"> | null;
+  });
+  if (freshRow !== null && isBarred(freshRow)) {
+    const reason = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => loadBarReason(c, row.id, freshRow));
+    return accountBarredResponse(freshRow, {}, reason);
+  }
+
   // ---- 9. Session ---------------------------------------------------------
   const { cookie } = await createSession(env, {
     userId: row.id,
