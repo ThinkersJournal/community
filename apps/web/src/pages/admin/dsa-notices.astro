@@ -12,11 +12,14 @@
  * markPrivate, before the CSP, before ANY api call — see admin/queue.astro's
  * header for why that ordering is load-bearing, not stylistic.
  *
- * ⚠️ THE ONLY DECISION PATH IS `/admin/decision` (PM ruling, Part of #113) —
- * a DSA notice is queue INPUT for a human only (AC-1); resolving it goes
- * through the SAME moderation decision the ordinary queue uses, not a
- * separate "DSA decision" endpoint. This page calls no other mutating admin
- * route.
+ * ⚠️ THE ONLY DECISION PATH FOR A LIVE TARGET IS `/admin/decision` (PM
+ * ruling, Part of #113) — a DSA notice is queue INPUT for a human only
+ * (AC-1); resolving it goes through the SAME moderation decision the
+ * ordinary queue uses, not a separate "DSA decision" endpoint. The ONE other
+ * mutating route this page calls is `/admin/dsa-notices/:id/close`
+ * (addendum, PM ruling 2026-10-01), and ONLY for a notice whose
+ * `contentDeleted` is true — `/admin/decision` can never resolve one (it
+ * resolves by post/comment id, which are NULL on an orphaned row).
  *
  * ⚠️ NO GENERIC PROXY, same reasoning as admin/queue.astro: this page's own
  * frontmatter is the only caller of the api's `/admin/*` routes for this
@@ -50,27 +53,43 @@ let decisionError: string | null = null;
 
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
-  const subject = form.get("subject");
-  const subjectId = form.get("subjectId");
-  const decision = form.get("decision");
-  const reason = form.get("reason");
-  const legalHold = form.get("legalHold") === "on";
-  const legalHoldCategory = form.get("legalHoldCategory");
+  const action = form.get("action");
 
-  const res = await adminApiFetch("/admin/decision", {
-    method: "POST",
-    accessJwt,
-    origin: Astro.request.headers.get("Origin") ?? "",
-    body: {
-      subject,
-      subjectId,
-      decision,
-      reason,
-      ...(legalHold ? { legalHold: true, legalHoldCategory } : {}),
-    },
-  });
-  if (res.status !== 200) {
-    decisionError = adminApiErrorCode(res) ?? "DECISION_FAILED";
+  if (action === "close") {
+    // Addendum (PM ruling, 2026-10-01): closes an ORPHANED notice — the one
+    // path besides /admin/decision this page calls. See this file's header.
+    const noticeId = form.get("noticeId");
+    const res = await adminApiFetch(`/admin/dsa-notices/${noticeId}/close`, {
+      method: "POST",
+      accessJwt,
+      origin: Astro.request.headers.get("Origin") ?? "",
+    });
+    if (res.status !== 204) {
+      decisionError = adminApiErrorCode(res) ?? "CLOSE_FAILED";
+    }
+  } else {
+    const subject = form.get("subject");
+    const subjectId = form.get("subjectId");
+    const decision = form.get("decision");
+    const reason = form.get("reason");
+    const legalHold = form.get("legalHold") === "on";
+    const legalHoldCategory = form.get("legalHoldCategory");
+
+    const res = await adminApiFetch("/admin/decision", {
+      method: "POST",
+      accessJwt,
+      origin: Astro.request.headers.get("Origin") ?? "",
+      body: {
+        subject,
+        subjectId,
+        decision,
+        reason,
+        ...(legalHold ? { legalHold: true, legalHoldCategory } : {}),
+      },
+    });
+    if (res.status !== 200) {
+      decisionError = adminApiErrorCode(res) ?? "DECISION_FAILED";
+    }
   }
 }
 
@@ -98,31 +117,42 @@ const noticesError =
                 {n.kind} · {n.reason} · reported by {n.reporterName} ({n.reporterEmail}) ·
                 {" "}{n.createdAt}
               </p>
+              {n.contentDeleted && (
+                <p class="orphan-flag">Content deleted by its author — there is nothing left to decide on.</p>
+              )}
               <p class="statement">{n.statement}</p>
-              <form method="POST" class="decision-form">
-                <input type="hidden" name="subject" value={n.kind} />
-                <input type="hidden" name="subjectId" value={n.targetId} />
-                <label>
-                  Statement of reasons (shown to the author and to anyone who filed a DSA notice about this content)
-                  <textarea name="reason" required maxlength="2000" />
-                </label>
-                <label class="legal-hold-row">
-                  <input type="checkbox" name="legalHold" />
-                  Legal hold
-                  <select name="legalHoldCategory">
-                    {LEGAL_HOLD_CATEGORIES.map((cat: LegalHoldCategoryWire) => (
-                      <option value={cat}>{cat}</option>
+              {n.contentDeleted ? (
+                <form method="POST" class="close-form">
+                  <input type="hidden" name="action" value="close" />
+                  <input type="hidden" name="noticeId" value={n.id} />
+                  <button type="submit" class="btn btn-ghost">Close (content already deleted)</button>
+                </form>
+              ) : (
+                <form method="POST" class="decision-form">
+                  <input type="hidden" name="subject" value={n.kind} />
+                  <input type="hidden" name="subjectId" value={n.targetId} />
+                  <label>
+                    Statement of reasons (shown to the author and to anyone who filed a DSA notice about this content)
+                    <textarea name="reason" required maxlength="2000" />
+                  </label>
+                  <label class="legal-hold-row">
+                    <input type="checkbox" name="legalHold" />
+                    Legal hold
+                    <select name="legalHoldCategory">
+                      {LEGAL_HOLD_CATEGORIES.map((cat: LegalHoldCategoryWire) => (
+                        <option value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <div class="decision-buttons">
+                    {ADMIN_DECISIONS.map((d: AdminDecisionKind) => (
+                      <button type="submit" name="decision" value={d} class="btn btn-ghost">
+                        {d.replace("_", " ")}
+                      </button>
                     ))}
-                  </select>
-                </label>
-                <div class="decision-buttons">
-                  {ADMIN_DECISIONS.map((d: AdminDecisionKind) => (
-                    <button type="submit" name="decision" value={d} class="btn btn-ghost">
-                      {d.replace("_", " ")}
-                    </button>
-                  ))}
-                </div>
-              </form>
+                  </div>
+                </form>
+              )}
             </li>
           ))}
         </ul>
@@ -140,6 +170,8 @@ const noticesError =
   .queue-item .excerpt{font-weight:600}
   .queue-item .meta{color:var(--muted);font-size:13px;margin:6px 0 12px}
   .queue-item .statement{color:var(--text);margin:0 0 12px;white-space:pre-wrap}
+  .orphan-flag{color:var(--red, #e5484d);font-size:13px;margin:0 0 12px}
+  .close-form{display:flex}
   .decision-form{display:flex;flex-direction:column;gap:10px}
   .decision-form textarea{width:100%;background:var(--ink2);border:1px solid var(--line);
     border-radius:8px;padding:9px 11px;color:var(--text);font:inherit;margin-top:4px}

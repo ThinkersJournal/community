@@ -185,8 +185,11 @@ export interface AdminAccountActionRequest {
 export interface AdminDsaNotice {
   id: string;
   kind: "post" | "comment";
-  targetId: string;
+  /** `null` once the target has been deleted by its author (addendum, 2026-10-01). */
+  targetId: string | null;
   excerpt: string;
+  /** Addendum (2026-10-01): true once `targetId` is `null` — see `/admin/dsa-notices/:id/close`. */
+  contentDeleted: boolean;
   reason: string;
   statement: string;
   reporterName: string;

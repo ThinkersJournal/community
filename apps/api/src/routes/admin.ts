@@ -9,8 +9,8 @@ import { checkOrigin } from "../auth/csrf";
 import { errorResponse } from "../http/errors";
 import { applyDecision, type DecisionKind } from "../moderation/decide";
 import { sendModerationNotice } from "../moderation/notify-author";
-import { sendDsaOutcome } from "../moderation/notify-reporter";
-import { listOpenDsaNotices } from "../moderation/dsa-notices";
+import { sendDsaOutcome, sendDsaOrphanedOutcome } from "../moderation/notify-reporter";
+import { closeOrphanedDsaNotice, listOpenDsaNotices, orphanedDsaNoticeCandidate } from "../moderation/dsa-notices";
 import { purgeTags } from "../cache/purge";
 import { purgeTagsFor } from "../moderation/purge-target";
 import { requireAdmin } from "../admin/require-admin";
@@ -339,6 +339,7 @@ export async function handleListDsaNotices(request: Request, env: Env, ctx: Exec
         kind: n.kind,
         targetId: n.targetId,
         excerpt: n.excerpt,
+        contentDeleted: n.contentDeleted,
         reason: n.reason,
         statement: n.statement,
         reporterName: n.reporterName,
@@ -348,4 +349,49 @@ export async function handleListDsaNotices(request: Request, env: Env, ctx: Exec
     }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
+}
+
+/**
+ * `POST /admin/dsa-notices/:id/close` — addendum (PM ruling, 2026-10-01): the
+ * only way to resolve a notice whose target was deleted by its author before
+ * a decision. `decide.ts` resolves by `post_id`/`comment_id`, both NULL on an
+ * orphaned row by construction, so it can never reach one. Same Access trust
+ * domain, inline `checkOrigin`, and admin error-envelope conventions as
+ * `/admin/decision` and the media-access-requests routes above.
+ */
+export async function handleCloseOrphanedDsaNotice(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  const id = params.id;
+  if (typeof id !== "string" || !UUID_RE.test(id)) return errorResponse("NOT_FOUND", 404);
+
+  const closed = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => closeOrphanedDsaNotice(c, id));
+  if (closed === null) {
+    // ⚠️ The UPDATE's own WHERE already decided eligibility atomically — this
+    // second read exists ONLY to pick 404 (no such notice) vs 409 (exists,
+    // but its target is still live or it is already resolved), never to gate
+    // the mutation (which already ran, or didn't, above).
+    const candidate = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => orphanedDsaNoticeCandidate(c, id));
+    return candidate.exists ? errorResponse("DSA_NOTICE_NOT_ORPHANED", 409) : errorResponse("NOT_FOUND", 404);
+  }
+
+  // ⚠️ AFTER the commit, same waitUntil discipline as the author/reporter
+  // notices in handleAdminDecision above — a lost Postmark send must not turn
+  // an already-durable close into a 500.
+  ctx.waitUntil(
+    sendDsaOrphanedOutcome(env, closed.reporterEmail, { kind: closed.kind, targetLabel: closed.targetLabel }).then(
+      (sent) => {
+        if (!sent) console.error("dsa orphaned-notice outcome not sent", { noticeId: id });
+      },
+    ),
+  );
+
+  return new Response(null, { status: 204 });
 }

@@ -19,6 +19,11 @@ let keyPair: CryptoKeyPair;
 let sentEmails: Array<Record<string, unknown>> = [];
 let capturedPurges: string[][] = [];
 let createdUserIds: string[] = [];
+// Addendum (2026-10-01): tracked explicitly because `ON DELETE SET NULL`
+// (migration 0020) means deleting a seeded user/post no longer cascades away
+// a notice row the way CASCADE used to — an orphaned notice SURVIVES its
+// target's deletion by design, so this suite must clean its own rows up.
+let createdNoticeIds: string[] = [];
 let adminEmail: string;
 
 async function makeJwt(claims: Record<string, unknown> = {}): Promise<string> {
@@ -55,6 +60,7 @@ beforeEach(async () => {
   sentEmails = [];
   capturedPurges = [];
   createdUserIds = [];
+  createdNoticeIds = [];
   adminEmail = `mod-${crypto.randomUUID()}@example.test`;
   keyPair = (await crypto.subtle.generateKey(
     { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
@@ -77,6 +83,13 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Notices FIRST: an orphaned one (SET NULL, migration 0020) no longer gets
+  // cleaned up for free by deleting its user/post below.
+  if (createdNoticeIds.length > 0) {
+    await ctxRun(async (c) => {
+      await c.query(`DELETE FROM dsa_notices WHERE id = ANY($1::uuid[])`, [createdNoticeIds]);
+    });
+  }
   if (createdUserIds.length > 0) {
     await ctxRun(async (c) => {
       await c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [createdUserIds]);
@@ -114,7 +127,12 @@ async function seedPost(userId: string, hiddenAt?: Date): Promise<{ id: string; 
   });
 }
 
-/** Inserts a dsa_notices row directly, bypassing createDsaNotice's intake flow. */
+/**
+ * Inserts a dsa_notices row directly, bypassing createDsaNotice's intake
+ * flow. Addendum (PM ruling, 2026-10-01): `target_kind`/`target_label` are
+ * NOT NULL as of migration 0020's SET NULL ruling — defaulted to the
+ * post-notice shape used throughout this file's existing tests.
+ */
 async function seedDsaNotice(opts: {
   postId: string;
   confirmed?: boolean;
@@ -122,6 +140,7 @@ async function seedDsaNotice(opts: {
   reporterName?: string;
   reason?: string;
   statement?: string;
+  targetLabel?: string;
 }): Promise<{ id: string; reporterEmail: string }> {
   const reporterEmail = opts.reporterEmail ?? `reporter-${crypto.randomUUID()}@example.test`;
   const reporterName = opts.reporterName ?? "A Reporter";
@@ -129,13 +148,14 @@ async function seedDsaNotice(opts: {
   const id = await ctxRun(async (c) => {
     const { rows } = await c.query<{ id: string }>(
       `INSERT INTO dsa_notices
-         (reporter_email, reporter_name, good_faith, verify_token_hash, post_id, reason, statement, email_verified_at)
-       VALUES ($1, $2, true, $3, $4, $5, $6, ${confirmed ? "now()" : "NULL"})
+         (reporter_email, reporter_name, good_faith, verify_token_hash, target_kind, target_label, post_id, reason, statement, email_verified_at)
+       VALUES ($1, $2, true, $3, 'post', $4, $5, $6, $7, ${confirmed ? "now()" : "NULL"})
        RETURNING id`,
       [
         reporterEmail,
         reporterName,
         `hash-${crypto.randomUUID()}`,
+        opts.targetLabel ?? "a target label",
         opts.postId,
         opts.reason ?? "spam",
         opts.statement ?? "This content violates the rules.",
@@ -143,6 +163,7 @@ async function seedDsaNotice(opts: {
     );
     return rows[0]!.id;
   });
+  createdNoticeIds.push(id);
   return { id, reporterEmail };
 }
 
@@ -153,6 +174,54 @@ async function dsaNoticeRow(id: string): Promise<{ resolved_at: Date | null; res
       [id],
     );
     return rows[0]!;
+  });
+}
+
+/** Addendum (2026-10-01) helper: a comment, for the orphaned-comment-notice control. */
+async function seedComment(postId: string, authorId: string): Promise<{ id: string; body: string }> {
+  return ctxRun(async (c) => {
+    const body = `comment body ${crypto.randomUUID().slice(0, 8)}`;
+    const { rows } = await c.query<{ id: string }>(
+      `WITH ids AS (SELECT uuidv7() AS id)
+       INSERT INTO comments (id, post_id, author_id, parent_id, path, depth, body_markdown)
+       SELECT ids.id, $1, $2, NULL, ids.id::text, 0, $3
+         FROM ids
+       RETURNING id`,
+      [postId, authorId, body],
+    );
+    return { id: rows[0]!.id, body };
+  });
+}
+
+/** Addendum (2026-10-01) helper: seeds a CONFIRMED comment-target notice directly. */
+async function seedDsaNoticeForComment(opts: {
+  commentId: string;
+  reporterEmail?: string;
+  targetLabel?: string;
+}): Promise<{ id: string; reporterEmail: string }> {
+  const reporterEmail = opts.reporterEmail ?? `reporter-${crypto.randomUUID()}@example.test`;
+  const id = await ctxRun(async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `INSERT INTO dsa_notices
+         (reporter_email, reporter_name, good_faith, verify_token_hash, target_kind, target_label, comment_id, reason, statement, email_verified_at)
+       VALUES ($1, 'A Reporter', true, $2, 'comment', $3, $4, 'spam', 'This content violates the rules.', now())
+       RETURNING id`,
+      [reporterEmail, `hash-${crypto.randomUUID()}`, opts.targetLabel ?? "a comment label", opts.commentId],
+    );
+    return rows[0]!.id;
+  });
+  createdNoticeIds.push(id);
+  return { id, reporterEmail };
+}
+
+/** `true` once a notice has NULL for both post_id and comment_id (orphaned by author deletion). */
+async function dsaNoticeOrphaned(id: string): Promise<boolean> {
+  return ctxRun(async (c) => {
+    const { rows } = await c.query<{ post_id: string | null; comment_id: string | null }>(
+      `SELECT post_id, comment_id FROM dsa_notices WHERE id = $1`,
+      [id],
+    );
+    return rows[0]!.post_id === null && rows[0]!.comment_id === null;
   });
 }
 
@@ -198,10 +267,41 @@ describe("GET /admin/dsa-notices", () => {
       kind: "post",
       targetId: post.id,
       excerpt: post.title,
+      contentDeleted: false,
       reason: "spam",
       statement: "This is spam.",
       reporterName: "Older Reporter",
       reporterEmail: "older@example.test",
+    });
+  });
+
+  /**
+   * Addendum (PM ruling, 2026-10-01): an orphaned notice (its post deleted by
+   * its author) must still be LISTED — LEFT JOIN, not JOIN — with `targetId:
+   * null`, `contentDeleted: true`, and an excerpt that falls back to the
+   * `target_label` snapshot taken at intake.
+   */
+  it("lists a notice whose post has been deleted, with targetId null, contentDeleted true, and the target_label excerpt", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const notice = await seedDsaNotice({
+      postId: post.id,
+      confirmed: true,
+      reporterEmail: "orphan-post@example.test",
+      targetLabel: "the deleted post's title",
+    });
+
+    await ctxRun((c) => c.query(`DELETE FROM posts WHERE id = $1`, [post.id]));
+
+    const res = await call("/admin/dsa-notices", { headers: await adminHeaders() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { notices: Array<Record<string, unknown>> };
+    const entry = body.notices.find((n) => n["id"] === notice.id)!;
+    expect(entry).toMatchObject({
+      kind: "post",
+      targetId: null,
+      contentDeleted: true,
+      excerpt: "the deleted post's title",
     });
   });
 });
@@ -397,5 +497,120 @@ describe("POST /admin/decision resolves DSA notices", () => {
         await c.query(`DROP FUNCTION IF EXISTS ${fnName}()`);
       });
     }
+  });
+});
+
+/**
+ * Addendum (PM ruling, 2026-10-01): `POST /admin/dsa-notices/:id/close` — the
+ * ONLY way to resolve a notice whose target was deleted by its author before
+ * a decision (`decide.ts` resolves by post_id/comment_id, both NULL here).
+ */
+describe("POST /admin/dsa-notices/:id/close", () => {
+  it("closes an orphaned post notice: 204, resolved_at set, exactly one reporter email naming the target_label", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const notice = await seedDsaNotice({
+      postId: post.id,
+      confirmed: true,
+      reporterEmail: "orphan-close@example.test",
+      targetLabel: "the deleted post's title",
+    });
+    await ctxRun((c) => c.query(`DELETE FROM posts WHERE id = $1`, [post.id]));
+    expect(await dsaNoticeOrphaned(notice.id)).toBe(true);
+
+    sentEmails = [];
+    const res = await call(`/admin/dsa-notices/${notice.id}/close`, {
+      method: "POST",
+      headers: { ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+    });
+    expect(res.status).toBe(204);
+
+    const row = await dsaNoticeRow(notice.id);
+    expect(row.resolved_at).not.toBeNull();
+
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({ To: "orphan-close@example.test" });
+    expect(String(sentEmails[0]!["TextBody"])).toContain("the deleted post's title");
+  });
+
+  // CONTROL: the same shape works for a comment-target orphan, not just post.
+  it("closes an orphaned COMMENT notice too (control)", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const comment = await seedComment(post.id, userId);
+    const notice = await seedDsaNoticeForComment({
+      commentId: comment.id,
+      reporterEmail: "orphan-comment@example.test",
+      targetLabel: "the deleted comment's body",
+    });
+    await ctxRun((c) => c.query(`DELETE FROM comments WHERE id = $1`, [comment.id]));
+    expect(await dsaNoticeOrphaned(notice.id)).toBe(true);
+
+    sentEmails = [];
+    const res = await call(`/admin/dsa-notices/${notice.id}/close`, {
+      method: "POST",
+      headers: { ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+    });
+    expect(res.status).toBe(204);
+
+    const row = await dsaNoticeRow(notice.id);
+    expect(row.resolved_at).not.toBeNull();
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({ To: "orphan-comment@example.test" });
+  });
+
+  it("409s DSA_NOTICE_NOT_ORPHANED when the target is still live", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const notice = await seedDsaNotice({ postId: post.id, confirmed: true });
+
+    sentEmails = [];
+    const res = await call(`/admin/dsa-notices/${notice.id}/close`, {
+      method: "POST",
+      headers: { ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "DSA_NOTICE_NOT_ORPHANED" });
+
+    const row = await dsaNoticeRow(notice.id);
+    expect(row.resolved_at).toBeNull();
+    expect(sentEmails).toHaveLength(0);
+  });
+
+  it("409s DSA_NOTICE_NOT_ORPHANED for an orphaned notice that is already resolved", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const notice = await seedDsaNotice({ postId: post.id, confirmed: true });
+    await ctxRun((c) => c.query(`DELETE FROM posts WHERE id = $1`, [post.id]));
+    await ctxRun((c) => c.query(`UPDATE dsa_notices SET resolved_at = now() WHERE id = $1`, [notice.id]));
+
+    const res = await call(`/admin/dsa-notices/${notice.id}/close`, {
+      method: "POST",
+      headers: { ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "DSA_NOTICE_NOT_ORPHANED" });
+  });
+
+  it("404s NOT_FOUND for a nonexistent notice id", async () => {
+    const res = await call(`/admin/dsa-notices/${crypto.randomUUID()}/close`, {
+      method: "POST",
+      headers: { ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("401s without a Cloudflare Access assertion", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const notice = await seedDsaNotice({ postId: post.id, confirmed: true });
+    await ctxRun((c) => c.query(`DELETE FROM posts WHERE id = $1`, [post.id]));
+
+    const res = await call(`/admin/dsa-notices/${notice.id}/close`, {
+      method: "POST",
+      headers: { Origin: ALLOWED_ORIGIN },
+    });
+    expect(res.status).toBe(401);
   });
 });

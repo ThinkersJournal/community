@@ -28,6 +28,7 @@ import {
   handleAdminWhoami,
   handleApproveMediaAccess,
   handleBackfillHiddenMedia,
+  handleCloseOrphanedDsaNotice,
   handleListDsaNotices,
   handleListMediaAccessRequests,
   handleRequestMediaAccess,
@@ -406,6 +407,13 @@ export const ROUTES: readonly RouteDef[] = [
   // /admin/decision (src/moderation/decide.ts), in the same transaction as
   // the ruling.
   { method: "GET", pattern: "/admin/dsa-notices", handler: handleListDsaNotices },
+
+  // `POST /admin/dsa-notices/:id/close` — addendum (PM ruling, 2026-10-01):
+  // closes ONE notice whose target was deleted by its author before a
+  // decision (schema option B — SET NULL + target_kind + target_label,
+  // migration 0020). Same Access trust domain/inline-checkOrigin shape as
+  // /admin/decision and the media-access-requests routes above.
+  { method: "POST", pattern: "/admin/dsa-notices/:id/close", handler: handleCloseOrphanedDsaNotice },
 
   // #61 — the one-off backfill for media already public despite belonging to
   // already-hidden content. Same Access trust domain/shape as the routes

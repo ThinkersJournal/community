@@ -64,3 +64,41 @@ export async function sendDsaOutcome(
     stream: "outbound",
   });
 }
+
+export interface DsaOrphanedOutcome {
+  readonly kind: "post" | "comment";
+  /** The `target_label` snapshot taken at intake — the only name left for the content. */
+  readonly targetLabel: string;
+}
+
+/**
+ * Addendum (PM ruling, 2026-10-01): the outcome email for a notice closed via
+ * `closeOrphanedDsaNotice` — the author deleted the content before a
+ * moderator ruled on it. Same transport/never-throw/no-appeal-link discipline
+ * as `sendDsaOutcome` above; a DIFFERENT function (not a fourth `DecisionKind`)
+ * because this is not a moderation decision at all — no `content_*` action
+ * backs it, and `applyDecision`'s `LEAD` table is keyed on decisions that
+ * never happened here.
+ */
+export async function sendDsaOrphanedOutcome(
+  env: Env,
+  to: string,
+  outcome: DsaOrphanedOutcome,
+): Promise<boolean> {
+  const lead = "The content you reported was deleted by its author before a moderator reviewed it.";
+  const contentLine =
+    outcome.kind === "post"
+      ? `This is about the post you reported, "${outcome.targetLabel}".`
+      : `This is about the comment you reported, on "${outcome.targetLabel}".`;
+  const transparencyLine =
+    "This notice has been closed because there is no longer any content to review, in keeping with the Digital Services Act.";
+
+  return await postmarkSend(env, {
+    from: "noreply@thinkersjournal.com",
+    to,
+    subject: "The content you reported has been removed",
+    textBody: `${lead}\n\n${contentLine}\n\n${transparencyLine}\n`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p>${escapeHtml(transparencyLine)}</p>`,
+    stream: "outbound",
+  });
+}
