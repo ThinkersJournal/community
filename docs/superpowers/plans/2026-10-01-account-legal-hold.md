@@ -82,7 +82,22 @@ Write the Down migration in full: drop the triggers, the function and the table,
 
 ### Task 2: The hold module
 
-**Files:** create/extend `apps/api/src/moderation/account-holds.ts`; test `apps/api/test/account-holds.test.ts` (pool: the module imports `db/client`).
+**Files:** create/extend `apps/api/src/moderation/account-holds.ts`; modify `packages/shared/src/admin.ts` (**declare `AdminAccountHold` here**; Task 5 only adds it to `AdminAccountResponse`); test `apps/api/test/account-holds.test.ts` (pool: the module imports `db/client`).
+
+Declare in `packages/shared/src/admin.ts`:
+```ts
+/** One row of an account's legal-hold history (account-legal-hold spec §2). ISO strings. */
+export interface AdminAccountHold {
+  readonly id: string;
+  readonly category: "csam" | "dmca" | "other";
+  readonly reason: string;
+  readonly imposedBy: string;
+  readonly imposedAt: string;
+  readonly releasedAt: string | null;
+  readonly releasedBy: string | null;
+  readonly releaseReason: string | null;
+}
+```
 
 **Produces:**
 ```ts
@@ -170,7 +185,7 @@ export function scrubReservedEmailIfUnbanned(c: Client, userId: string): Promise
 
 ### Task 5: T3, manual impose/release, and the admin page
 
-**Files:** modify `apps/api/src/routes/admin-accounts.ts`, `apps/api/src/routes.ts`, `apps/api/test/helpers/pipeline-exempt.ts`, `packages/shared/src/admin.ts` (`AdminAccountHold`, `AdminAccountResponse.holds`), `apps/web/src/pages/admin/accounts/[handle].astro`; tests `apps/api/test/admin-account-holds-route.test.ts` (the admin JWT harness copied **by symbol** from `admin-decision-route.test.ts`: imports, `TEAM`/`AUD`/`KID`, `b64url`, `b64urlJson`, all five module-scope `let`s, `makeJwt`, `ctxRun`, `call`, and the module-level `beforeEach`/`afterEach`), `apps/web/test/admin-account-page.test.ts` (append).
+**Files:** modify `apps/api/src/routes/admin-accounts.ts`, `apps/api/src/routes.ts`, `apps/api/test/helpers/pipeline-exempt.ts`, `packages/shared/src/admin.ts` (`AdminAccountResponse` gains `holds: readonly AdminAccountHold[]`; the type itself is declared in Task 2), `apps/web/src/pages/admin/accounts/[handle].astro`; tests `apps/api/test/admin-account-holds-route.test.ts` (the admin JWT harness copied **by symbol** from `admin-decision-route.test.ts`: imports, `TEAM`/`AUD`/`KID`, `b64url`, `b64urlJson`, all five module-scope `let`s, `makeJwt`, `ctxRun`, `call`, and the module-level `beforeEach`/`afterEach`), `apps/web/test/admin-account-page.test.ts` (append).
 
 **Routes:**
 - `POST /admin/accounts/:handle/holds` `{ category: "dmca" | "other", reason }`. `csam` → `400 INVALID_INPUT`; a blank reason → 400. In one transaction: `recordModerationAction(account_hold)`, then `imposeAccountHoldInTx`. A duplicate active category → `200 { created: false }`, with **no** log row (check first, inside the transaction).
@@ -203,6 +218,7 @@ export function scrubReservedEmailIfUnbanned(c: Client, userId: string): Promise
 **Files:** modify `docs/superpowers/specs/2026-09-06-m4-moderation-queue-design.md` (§12 AC-3 and the §3.2 reaper bullet, exact text from spec §6), `docs/superpowers/specs/2026-10-01-csam-reporting-pipeline-design.md` (§3.3: add step **7a**, exact text from the account-hold spec §3 T2), `docs/superpowers/plans/2026-10-01-csam-ncmec-pipeline.md` (Task 6, plus the two `#126 … 0020` references → `0021`), and `docs/legal/privacy-policy.md` §5.
 
 - [ ] In the #114 plan's Task 6, add **step 7a**: `for EVERY uploader in step 3's set: imposeAccountHoldInTx(c, { userId, category: "csam", imposedBy: actorAdmin, reason: <case text>, moderationActionId: holdActionId })`, plus a test that an **unbarred** uploader (`cloudflare_match`, flag false) is held. Its Interfaces line now consumes `imposeAccountHoldInTx` from this work.
+- [ ] **Plan B's dependency is already wired** (spec §4a): `docs/superpowers/plans/2026-10-01-m4-2c-appeals.md` Task 6 calls `scrubReservedEmailIfUnbanned` after lifting a ban (PR #128). Confirm its Interfaces line cites `apps/api/src/moderation/account-holds.ts`; correct it there if it doesn't.
 - [ ] Privacy §5, account-deletion bullet: add *"A deletion request is delayed, not refused, while the account is subject to a legal hold (for example, during a legal or safety investigation). If an account was banned when its deletion took effect, its email address stays reserved while the ban stands, so it can't be used to create a new account."*
 - [ ] Grep check: `grep -n "disabled_at\|suspended_until" apps/api/src/auth/anonymise-accounts.ts apps/api/src/auth/reap-unverified.ts` returns only the email-keep `banned` read in anonymise (comments excepted). **Control:** the same grep on `login.ts` still finds its bar read.
 - [ ] Commit `docs: AC-3 reworded to the hold; #114 gains step 7a; privacy discloses hold-delayed deletion and the reserved email`.
