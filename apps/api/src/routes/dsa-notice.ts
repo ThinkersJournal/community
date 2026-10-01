@@ -69,22 +69,36 @@ export async function handleDsaNotice(
     parsed.data;
   const input = { postId, commentId, reason, statement, reporterName, reporterEmail };
 
-  // ---- 3. Rate limit — keyed `ip:email`, same reasoning as signup.ts/
-  // forgot-password.ts's (a) bucket: it runs AFTER parsing because the email
-  // is the key, and it bounds one IP spraying many reporter emails. Every real
-  // request arrives over the web→api Service Binding, where whether
-  // `CF-Connecting-IP` survives the hop is unverified — same `?? "unknown"`
-  // placeholder as signup, so an absent header still gives every (ip, email)
-  // pair its own bucket rather than collapsing all reporters into one.
+  // ---- 3. Rate limit — TWO buckets, same reasoning as signup.ts's (a)/(b)
+  // pair (see its own comment, which this mirrors): it runs AFTER parsing
+  // because both keys need the email. Every real request arrives over the
+  // web→api Service Binding, where whether `CF-Connecting-IP` survives the
+  // hop is unverified — same `?? "unknown"` placeholder as signup, so an
+  // absent header still gives every (ip, email) pair its own bucket rather
+  // than collapsing all reporters into one.
+  //
+  //   (a) `ip:email` — one IP cannot spray/confirmation-mail-bomb many
+  //       reporter addresses.
+  //   (b) `email`    — one ADDRESS has a ceiling no matter how many IPs send
+  //       notices naming it as the reporter. (a) alone does NOT buy this: N
+  //       IPs each get their OWN bucket against the same email, so N IPs
+  //       trivially defeat (a) and can still flood one victim's inbox with
+  //       confirmation mail (round-1 fix wrongly claimed the ip:email key
+  //       "bounds one IP spraying many reporter emails" and stopped there —
+  //       that sentence was never a claim about MANY IPs against ONE email,
+  //       and round 2 adds the bucket that actually bounds that).
+  //
   // `reporterEmail` is the PARSED value (DsaNoticeInput already lowercases
-  // it) — do NOT rebuild the key from the raw request body, for the same
+  // it) — do NOT rebuild either key from the raw request body, for the same
   // case-folding reason signup.ts documents.
   const clientIp = request.headers.get("CF-Connecting-IP");
-  const limited = await enforceRateLimit(
+  const ipLimited = await enforceRateLimit(
     env.DSA_LIMITER,
     `${clientIp ?? "unknown"}:${reporterEmail}`,
   );
-  if (limited !== null) return limited;
+  if (ipLimited !== null) return ipLimited;
+  const emailLimited = await enforceRateLimit(env.DSA_LIMITER, `email:${reporterEmail}`);
+  if (emailLimited !== null) return emailLimited;
 
   // ---- 4. Turnstile ----------------------------------------------------------
   let turnstileOk: boolean;

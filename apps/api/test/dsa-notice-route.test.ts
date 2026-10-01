@@ -534,4 +534,36 @@ describe("POST /dsa-notice", () => {
     },
     60_000,
   );
+
+  /**
+   * I1 completion (round 2): the `email`-only bucket. Without it, N different
+   * IPs each get their OWN `ip:email` bucket against the SAME reporter email,
+   * so an attacker spread across IPs can confirmation-mail-bomb one victim
+   * address unboundedly. 5 requests split across 2 DIFFERENT IPs, same email,
+   * must still 429 on the 6th — this FAILS against the ip:email-only key (see
+   * the final-fix-report for the recorded RED→GREEN run).
+   */
+  it(
+    "the same email from TWO DIFFERENT IPs IS limited after the threshold (email-only bucket)",
+    async () => {
+      stubFetch(false);
+      const email = `two-ips-one-email-${crypto.randomUUID()}@example.com`;
+      const ips = ["203.0.113.80", "203.0.113.81"];
+      await awaitLimiterBurstWindow();
+
+      for (let i = 0; i < 5; i++) {
+        const response = await dsaNotice(
+          { ...validBody({ postId: crypto.randomUUID() }), reporterEmail: email },
+          { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": ips[i % 2]! },
+        );
+        expect(response.status).toBe(403);
+      }
+      const limited = await dsaNotice(
+        { ...validBody({ postId: crypto.randomUUID() }), reporterEmail: email },
+        { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": ips[0]! },
+      );
+      expect(limited.status).toBe(429);
+    },
+    60_000,
+  );
 });
