@@ -372,12 +372,14 @@ export async function handleCloseOrphanedDsaNotice(
   const id = params.id;
   if (typeof id !== "string" || !UUID_RE.test(id)) return errorResponse("NOT_FOUND", 404);
 
-  const closed = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => closeOrphanedDsaNotice(c, id));
+  const closed = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => closeOrphanedDsaNotice(c, id, admin.email));
   if (closed === null) {
     // ⚠️ The UPDATE's own WHERE already decided eligibility atomically — this
-    // second read exists ONLY to pick 404 (no such notice) vs 409 (exists,
-    // but its target is still live or it is already resolved), never to gate
-    // the mutation (which already ran, or didn't, above).
+    // second read exists ONLY to pick 404 (no such CONFIRMED notice — that
+    // covers both "doesn't exist" and "exists but unconfirmed", round 2 item
+    // 3) vs 409 (confirmed, but its content is still live or it is already
+    // resolved), never to gate the mutation (which already ran, or didn't,
+    // above).
     const candidate = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => orphanedDsaNoticeCandidate(c, id));
     return candidate.exists ? errorResponse("DSA_NOTICE_NOT_ORPHANED", 409) : errorResponse("NOT_FOUND", 404);
   }

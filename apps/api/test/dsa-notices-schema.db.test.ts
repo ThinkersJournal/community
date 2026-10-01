@@ -39,6 +39,8 @@ async function insertNotice(overrides: Partial<{
   commentId: string | null;
   reason: string;
   statement: string;
+  resolvedAt: Date | null;
+  closedBy: string | null;
 }> = {}): Promise<string> {
   const opts = {
     reporterEmail: `notice-${crypto.randomUUID()}@example.com`,
@@ -54,13 +56,17 @@ async function insertNotice(overrides: Partial<{
     commentId: null as string | null,
     reason: "spam",
     statement: "This infringes my copyright.",
+    // Round 2 item 4: closed_by is only legal alongside a set resolved_at.
+    resolvedAt: null as Date | null,
+    closedBy: null as string | null,
     ...overrides,
   };
   const { rows } = await client.query<{ id: string }>(
     `INSERT INTO dsa_notices
        (reporter_email, reporter_name, good_faith, verify_token_hash,
-        target_kind, target_label, post_id, comment_id, reason, statement)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        target_kind, target_label, post_id, comment_id, reason, statement,
+        resolved_at, closed_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      RETURNING id`,
     [
       opts.reporterEmail,
@@ -73,6 +79,8 @@ async function insertNotice(overrides: Partial<{
       opts.commentId,
       opts.reason,
       opts.statement,
+      opts.resolvedAt,
+      opts.closedBy,
     ],
   );
   return rows[0]!.id;
@@ -133,6 +141,18 @@ describe("dsa_notices schema", () => {
 
     await expect(
       insertNotice({ targetKind: "post", postId: null, commentId }),
+    ).rejects.toMatchObject({ code: "23514", constraint: "dsa_notices_one_target" });
+  });
+
+  // Round 2 item 5 (minor): the untested mirror — target_kind='comment' with
+  // post_id set, same constraint, opposite kind from the test above.
+  it("rejects target_kind='comment' with post_id set (dsa_notices_one_target)", async () => {
+    const author = await makeUser();
+    createdUserIds.push(author);
+    const postId = await makePost(author);
+
+    await expect(
+      insertNotice({ targetKind: "comment", postId, commentId: null }),
     ).rejects.toMatchObject({ code: "23514", constraint: "dsa_notices_one_target" });
   });
 
@@ -230,5 +250,30 @@ describe("dsa_notices schema", () => {
     );
     expect(survivingRows).toHaveLength(1);
     expect(survivingRows[0]!.post_id).toBe(survivingPost);
+  });
+
+  // Round 2 item 4: closed_by is evidence of WHO resolved a notice, so it can
+  // never be set on a row that isn't resolved at all.
+  it("rejects closed_by set with resolved_at NULL (dsa_notices_closed_by_requires_resolved)", async () => {
+    const author = await makeUser();
+    createdUserIds.push(author);
+    const postId = await makePost(author);
+
+    await expect(
+      insertNotice({ postId, resolvedAt: null, closedBy: "mod@example.test" }),
+    ).rejects.toMatchObject({ code: "23514", constraint: "dsa_notices_closed_by_requires_resolved" });
+  });
+
+  it("accepts closed_by set alongside a set resolved_at", async () => {
+    const author = await makeUser();
+    createdUserIds.push(author);
+    const postId = await makePost(author);
+
+    const id = await insertNotice({ postId, resolvedAt: new Date(), closedBy: "mod@example.test" });
+    const { rows } = await client.query<{ closed_by: string | null }>(
+      "SELECT closed_by FROM dsa_notices WHERE id = $1",
+      [id],
+    );
+    expect(rows[0]!.closed_by).toBe("mod@example.test");
   });
 });

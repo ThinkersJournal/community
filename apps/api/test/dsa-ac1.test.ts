@@ -27,9 +27,13 @@ afterEach(async () => {
 async function confirmedNotices(postId: string, n: number): Promise<void> {
   await ctxRun(async (c) => {
     for (let i = 0; i < n; i++) {
+      // target_kind/target_label are NOT NULL as of migration 0020's
+      // round-1 addendum (SET NULL ruling) — this helper predates that
+      // schema change and was missed until a round-2 full-suite run
+      // surfaced it (23502 not-null violation).
       await c.query(
-        `INSERT INTO dsa_notices (reporter_email, reporter_name, good_faith, email_verified_at, verify_token_hash, post_id, reason, statement)
-         VALUES ($1, 'Throwaway', true, now(), $2, $3, 'sexual', 'illegal')`,
+        `INSERT INTO dsa_notices (reporter_email, reporter_name, good_faith, email_verified_at, verify_token_hash, target_kind, target_label, post_id, reason, statement)
+         VALUES ($1, 'Throwaway', true, now(), $2, 'post', 'a target label', $3, 'sexual', 'illegal')`,
         [`throwaway${i}-${crypto.randomUUID()}@example.test`, crypto.randomUUID(), postId],
       );
     }

@@ -37,6 +37,14 @@ CREATE TABLE dsa_notices (
   created_at           timestamptz NOT NULL DEFAULT now(),
   resolved_at          timestamptz,
   resolution_action_id uuid,                 -- bare: the content_* decision that resolved it
+  -- Round 2 item 4 (PM ruling, 2026-10-01): WHO closed an orphaned notice via
+  -- POST /admin/dsa-notices/:id/close — the same identity decide.ts stores as
+  -- `actor_admin` (an Access email), read here as a bare text column for the
+  -- SAME "no FK to lose on account deletion" reasoning moderation_actions'
+  -- own actor_admin uses. NULL for every notice `decide.ts` resolves instead
+  -- (that path already has its own audit row — moderation_actions — so this
+  -- column exists ONLY for the one resolution path that writes none).
+  closed_by            text,
   -- At most the kind's OWN column may be set, and — because of SET NULL
   -- above — it may be NULL after the target is deleted even though the row
   -- is still "a post notice" or "a comment notice" by `target_kind`.
@@ -46,7 +54,10 @@ CREATE TABLE dsa_notices (
     ('spam','harassment','hate','sexual','violence','ip_infringement','other')),
   CONSTRAINT dsa_notices_statement_check CHECK (length(btrim(statement)) > 0 AND length(statement) <= 5000),
   CONSTRAINT dsa_notices_reporter_name_check CHECK (length(btrim(reporter_name)) > 0 AND length(reporter_name) <= 200),
-  CONSTRAINT dsa_notices_good_faith_check CHECK (good_faith)
+  CONSTRAINT dsa_notices_good_faith_check CHECK (good_faith),
+  -- Round 2 item 4: `closed_by` is evidence of WHO resolved it — it cannot be
+  -- set on a row that isn't resolved at all.
+  CONSTRAINT dsa_notices_closed_by_requires_resolved CHECK (closed_by IS NULL OR resolved_at IS NOT NULL)
 );
 CREATE INDEX dsa_notices_open_idx ON dsa_notices (created_at)
   WHERE email_verified_at IS NOT NULL AND resolved_at IS NULL;

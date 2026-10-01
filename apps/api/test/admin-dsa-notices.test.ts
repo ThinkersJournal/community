@@ -5,6 +5,9 @@ import worker from "../src/index";
 import { __resetJwksCacheForTests } from "../src/admin/access-jwt";
 import { withClient } from "../src/db/client";
 import { applyDecision } from "../src/moderation/decide";
+import { createVerifiedActor, createPublished } from "./actor";
+
+import type { Actor } from "./actor";
 
 const TEAM = "testteam.cloudflareaccess.com";
 const AUD = "test-aud-tag";
@@ -225,6 +228,43 @@ async function dsaNoticeOrphaned(id: string): Promise<boolean> {
   });
 }
 
+async function dsaNoticeClosedBy(id: string): Promise<string | null> {
+  return ctxRun(async (c) => {
+    const { rows } = await c.query<{ closed_by: string | null }>(`SELECT closed_by FROM dsa_notices WHERE id = $1`, [id]);
+    return rows[0]!.closed_by;
+  });
+}
+
+/** Round 2 item 2: the REAL comment create/delete routes, mirroring
+ * comments.test.ts's helpers — this file otherwise seeds rows directly, but
+ * item 2's own tests need the genuine TOMBSTONE path (deleted_at + emptied
+ * body_markdown), not a hand-written approximation of it. */
+function realCommentHeaders(actor: Actor): Record<string, string> {
+  return {
+    Origin: ALLOWED_ORIGIN,
+    Cookie: actor.cookie,
+    "X-CSRF-Token": actor.csrfToken,
+    "content-type": "application/json",
+  };
+}
+
+async function createRealComment(actor: Actor, postId: string, markdownSource: string): Promise<string> {
+  const res = await call("/comments", {
+    method: "POST",
+    headers: realCommentHeaders(actor),
+    body: JSON.stringify({ postId, markdownSource }),
+  });
+  if (res.status !== 201) throw new Error(`fixture comment create failed: ${res.status} ${await res.text()}`);
+  return ((await res.json()) as { id: string }).id;
+}
+
+async function deleteRealComment(actor: Actor, id: string): Promise<Response> {
+  return call(`/comments/${id}`, {
+    method: "DELETE",
+    headers: { Origin: ALLOWED_ORIGIN, Cookie: actor.cookie, "X-CSRF-Token": actor.csrfToken },
+  });
+}
+
 describe("GET /admin/dsa-notices", () => {
   it("401s without a Cloudflare Access assertion", async () => {
     const res = await call("/admin/dsa-notices");
@@ -304,6 +344,38 @@ describe("GET /admin/dsa-notices", () => {
       excerpt: "the deleted post's title",
     });
   });
+
+  /**
+   * Round 2 item 2: a TOMBSTONED comment (`deleted_at` set, `body_markdown`
+   * emptied) must list as deleted too, even though `comment_id` stays
+   * non-NULL — through the real `DELETE /comments/:id` route, not a
+   * hand-written UPDATE, so this proves the genuine tombstone shape.
+   */
+  it("lists a notice on a TOMBSTONED comment as deleted, with the live (non-null) targetId but the target_label excerpt", async () => {
+    const author = await createVerifiedActor();
+    createdUserIds.push(author.userId);
+    const postId = await createPublished(author);
+    const commentId = await createRealComment(author, postId, "a comment that will be deleted");
+    const notice = await seedDsaNoticeForComment({
+      commentId,
+      reporterEmail: "tombstone-list@example.test",
+      targetLabel: "a comment that will be deleted",
+    });
+
+    const del = await deleteRealComment(author, commentId);
+    expect(del.status).toBe(200);
+
+    const res = await call("/admin/dsa-notices", { headers: await adminHeaders() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { notices: Array<Record<string, unknown>> };
+    const entry = body.notices.find((n) => n["id"] === notice.id)!;
+    expect(entry).toMatchObject({
+      kind: "comment",
+      targetId: commentId, // still set — tombstoned, not deleted
+      contentDeleted: true,
+      excerpt: "a comment that will be deleted", // falls back to target_label; live body is now ''
+    });
+  });
 });
 
 describe("POST /admin/decision resolves DSA notices", () => {
@@ -340,6 +412,40 @@ describe("POST /admin/decision resolves DSA notices", () => {
     for (const e of reporterEmails) {
       expect(String(e["TextBody"])).toContain("Confirmed violation.");
     }
+  });
+
+  /**
+   * Round 2 item 2 — DOCUMENTATION, not a fix: `decide.ts`'s comment UPDATE
+   * (`WHERE t.id = $1 AND u.id = t.author_id AND p.id = t.post_id`) carries NO
+   * `deleted_at` predicate, so it matches a TOMBSTONED comment exactly like a
+   * live one, and `handleAdminDecision` unconditionally `ctx.waitUntil`s
+   * `sendModerationNotice` for any non-dismissal outcome. CURRENT BEHAVIOUR,
+   * confirmed here: deciding on a tombstoned comment DOES email its author
+   * "your content has been removed/hidden", about content that is already a
+   * tombstone with an emptied body. Per the brief, this is ruled out at the
+   * UI instead (dsa-notices.astro no longer offers the decision form for a
+   * `contentDeleted` row — see `listOpenDsaNotices`'s tombstone predicate,
+   * this round) rather than by changing `decide.ts`'s semantics.
+   */
+  it("CURRENT BEHAVIOUR: a decision on a tombstoned comment still emails its author (decide.ts has no deleted_at guard)", async () => {
+    const author = await createVerifiedActor();
+    createdUserIds.push(author.userId);
+    const postId = await createPublished(author);
+    const commentId = await createRealComment(author, postId, "will be tombstoned");
+    const del = await deleteRealComment(author, commentId);
+    expect(del.status).toBe(200);
+
+    sentEmails = [];
+    const res = await call("/admin/decision", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+      body: JSON.stringify({ subject: "comment", subjectId: commentId, decision: "remove", reason: "x" }),
+    });
+    expect(res.status).toBe(200);
+
+    const authorEmails = sentEmails.filter((e) => e["To"] !== undefined);
+    expect(authorEmails.length).toBeGreaterThan(0);
+    expect(String(authorEmails[0]!["TextBody"])).toContain("removed");
   });
 
   it("a restore of never-hidden content (a dismissal) still resolves the notices and tells each reporter 'no action was taken'; the author gets nothing", async () => {
@@ -527,6 +633,8 @@ describe("POST /admin/dsa-notices/:id/close", () => {
 
     const row = await dsaNoticeRow(notice.id);
     expect(row.resolved_at).not.toBeNull();
+    // Round 2 item 4: closed_by records the acting admin's identity.
+    expect(await dsaNoticeClosedBy(notice.id)).toBe(adminEmail);
 
     expect(sentEmails).toHaveLength(1);
     expect(sentEmails[0]).toMatchObject({ To: "orphan-close@example.test" });
@@ -555,6 +663,7 @@ describe("POST /admin/dsa-notices/:id/close", () => {
 
     const row = await dsaNoticeRow(notice.id);
     expect(row.resolved_at).not.toBeNull();
+    expect(await dsaNoticeClosedBy(notice.id)).toBe(adminEmail);
     expect(sentEmails).toHaveLength(1);
     expect(sentEmails[0]).toMatchObject({ To: "orphan-comment@example.test" });
   });
@@ -601,6 +710,33 @@ describe("POST /admin/dsa-notices/:id/close", () => {
     expect(await res.json()).toMatchObject({ code: "NOT_FOUND" });
   });
 
+  /**
+   * Round 2 item 3: closing requires a CONFIRMED notice. Chose 404 (not 409)
+   * for an unconfirmed-but-orphaned notice — `listOpenDsaNotices` already
+   * hides every unconfirmed notice entirely, so from the admin's perspective
+   * one never existed; 409 would imply "I can see it, but it's in the wrong
+   * state", which is not true here (requireAdmin can't even list it).
+   */
+  it("404s NOT_FOUND (not 409) for an UNCONFIRMED orphaned notice", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const notice = await seedDsaNotice({ postId: post.id, confirmed: false });
+    await ctxRun((c) => c.query(`DELETE FROM posts WHERE id = $1`, [post.id]));
+    expect(await dsaNoticeOrphaned(notice.id)).toBe(true);
+
+    sentEmails = [];
+    const res = await call(`/admin/dsa-notices/${notice.id}/close`, {
+      method: "POST",
+      headers: { ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: "NOT_FOUND" });
+
+    const row = await dsaNoticeRow(notice.id);
+    expect(row.resolved_at).toBeNull();
+    expect(sentEmails).toHaveLength(0);
+  });
+
   it("401s without a Cloudflare Access assertion", async () => {
     const userId = await seedUser();
     const post = await seedPost(userId);
@@ -612,5 +748,48 @@ describe("POST /admin/dsa-notices/:id/close", () => {
       headers: { Origin: ALLOWED_ORIGIN },
     });
     expect(res.status).toBe(401);
+  });
+
+  /**
+   * Round 2 item 2: a TOMBSTONED comment (deleted_at set, body_markdown
+   * emptied — `comment_id` never goes NULL on this path, unlike a post) must
+   * ALSO be closable, through the real `DELETE /comments/:id` route.
+   */
+  it("closes a notice on a TOMBSTONED comment (comment_id still non-NULL) via the real delete route", async () => {
+    const author = await createVerifiedActor();
+    createdUserIds.push(author.userId);
+    const postId = await createPublished(author);
+    const commentId = await createRealComment(author, postId, "a comment that will be deleted");
+    const notice = await seedDsaNoticeForComment({
+      commentId,
+      reporterEmail: "tombstone-close@example.test",
+      targetLabel: "a comment that will be deleted",
+    });
+
+    const del = await deleteRealComment(author, commentId);
+    expect(del.status).toBe(200);
+
+    // comment_id is STILL set — the row was tombstoned, not deleted.
+    const beforeClose = await ctxRun(async (c) => {
+      const { rows } = await c.query<{ comment_id: string | null }>(
+        `SELECT comment_id FROM dsa_notices WHERE id = $1`,
+        [notice.id],
+      );
+      return rows[0]!.comment_id;
+    });
+    expect(beforeClose).toBe(commentId);
+
+    sentEmails = [];
+    const res = await call(`/admin/dsa-notices/${notice.id}/close`, {
+      method: "POST",
+      headers: { ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+    });
+    expect(res.status).toBe(204);
+
+    const row = await dsaNoticeRow(notice.id);
+    expect(row.resolved_at).not.toBeNull();
+    expect(await dsaNoticeClosedBy(notice.id)).toBe(adminEmail);
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({ To: "tombstone-close@example.test" });
   });
 });

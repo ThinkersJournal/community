@@ -198,6 +198,19 @@ export interface OpenDsaNotice {
  * open input for a human), so `target_kind` (never `post_id IS NOT NULL`,
  * which is no longer reliable once the FK can SET NULL) selects which half of
  * the UNION a row belongs to.
+ *
+ * ⚠️ Round 2 fix: a POST is hard-deleted (`DELETE FROM posts`, routes/posts.ts
+ * `handleDeletePost`) — checked for a soft-delete column and found none (no
+ * `deleted_at` on `posts`, only `hidden_at`, which is MODERATION state, not
+ * author deletion) — so `content_deleted` for the post half is unchanged:
+ * `p.id IS NULL` is the only "gone" signal there is.
+ *
+ * A COMMENT is a TOMBSTONE, never a real delete (`routes/comments.ts`'s
+ * `handleDeleteComment` sets `deleted_at` + `body_markdown = ''`;
+ * `comment_id` never goes NULL on that path) — so `content_deleted` for the
+ * comment half is `c.id IS NULL OR c.deleted_at IS NOT NULL`, and the
+ * excerpt falls back to `target_label` the moment the live body is EMPTY
+ * (`NULLIF(..., '')`), not only when the row itself is gone.
  */
 export async function listOpenDsaNotices(c: Client): Promise<OpenDsaNotice[]> {
   const { rows } = await c.query<{
@@ -218,8 +231,9 @@ export async function listOpenDsaNotices(c: Client): Promise<OpenDsaNotice[]> {
        FROM dsa_notices n LEFT JOIN posts p ON p.id = n.post_id
       WHERE n.target_kind = 'post' AND n.email_verified_at IS NOT NULL AND n.resolved_at IS NULL
      UNION ALL
-     SELECT n.id, 'comment' AS kind, c.id AS target_id, COALESCE(left(c.body_markdown, 120), n.target_label) AS excerpt,
-            (c.id IS NULL) AS content_deleted,
+     SELECT n.id, 'comment' AS kind, c.id AS target_id,
+            COALESCE(NULLIF(left(c.body_markdown, 120), ''), n.target_label) AS excerpt,
+            (c.id IS NULL OR c.deleted_at IS NOT NULL) AS content_deleted,
             n.reason, n.statement, n.reporter_name, n.reporter_email, n.created_at
        FROM dsa_notices n LEFT JOIN comments c ON c.id = n.comment_id
       WHERE n.target_kind = 'comment' AND n.email_verified_at IS NOT NULL AND n.resolved_at IS NULL
@@ -240,17 +254,57 @@ export async function listOpenDsaNotices(c: Client): Promise<OpenDsaNotice[]> {
 }
 
 /**
+ * The "is this notice's content gone" predicate shared by `closeOrphanedDsaNotice`
+ * and `orphanedDsaNoticeCandidate` — kept as ONE literal SQL fragment so the two
+ * can never drift (the UPDATE and the read-only follow-up MUST agree on what
+ * "eligible" means, or the 404/409 split at the route would be wrong).
+ *
+ * Post: `post_id IS NULL` — posts are hard-deleted (`routes/posts.ts`'s
+ * `handleDeletePost`: `DELETE FROM posts`, no soft-delete column; checked and
+ * confirmed none exists), so NULL is the only "gone" signal.
+ *
+ * Comment: `comment_id IS NULL OR` a tombstoned row still referenced by it —
+ * comments are NEVER hard-deleted (`routes/comments.ts`'s `handleDeleteComment`
+ * sets `deleted_at` + empties `body_markdown`; the FK never fires), so a
+ * notice whose comment is merely tombstoned is ALSO "nothing left to decide
+ * on" even though `comment_id` is still non-NULL.
+ */
+const ORPHANED_TARGET_SQL = `(
+  (target_kind = 'post' AND post_id IS NULL)
+  OR (target_kind = 'comment' AND (
+    comment_id IS NULL
+    OR EXISTS (SELECT 1 FROM comments WHERE id = dsa_notices.comment_id AND deleted_at IS NOT NULL)
+  ))
+)`;
+
+/**
  * Addendum (PM ruling, 2026-10-01): the ONLY way to close a notice whose
- * target has been deleted by its author. `decide.ts`'s ordinary resolution
- * path resolves by `post_id`/`comment_id`, which are NULL on an orphaned row
- * by construction — it can never reach one.
+ * content is gone (deleted post, or deleted/tombstoned comment — see
+ * `ORPHANED_TARGET_SQL`). `decide.ts`'s ordinary resolution path resolves by
+ * `post_id`/`comment_id` existing rows; for a post that is moot once deleted
+ * (the row no longer exists to resolve by), and for a tombstoned comment this
+ * route is used INSTEAD by convention (the admin list no longer offers the
+ * ordinary decision form for one — see dsa-notices.astro) even though
+ * `decide.ts` could technically still reach it; see that file's header for
+ * why its semantics are deliberately NOT changed here.
+ *
+ * Round 2 item 3: also requires `email_verified_at IS NOT NULL` — closing
+ * (like every other read/write path here) only ever acts on a CONFIRMED
+ * notice, consistent with `listOpenDsaNotices` hiding unconfirmed ones
+ * entirely. An unconfirmed notice is therefore indistinguishable from a
+ * nonexistent one at this route (404, not 409) — see
+ * `orphanedDsaNoticeCandidate`.
  *
  * Returns the reporter's email, the notice's kind, and its `target_label` (to
- * compose the outcome email) on success. "Eligible" means the row EXISTS, its
- * own target column (`target_kind`-selected) is NULL, and it is not already
- * resolved — any failure of those three is a 404 (no such notice) or a 409
- * (not an orphan / already resolved) at the route, which tells them apart
- * with its own read.
+ * compose the outcome email) on success. "Eligible" means the row EXISTS, is
+ * CONFIRMED, its content is gone (`ORPHANED_TARGET_SQL`), and it is not
+ * already resolved — any failure of those is a 404 (no such CONFIRMED notice)
+ * or a 409 (confirmed, but not an orphan / already resolved) at the route,
+ * which tells them apart with its own read.
+ *
+ * Round 2 item 4: also stamps `closed_by` with the acting admin's identity
+ * (the same value `decide.ts` stores as `actor_admin` — the caller passes
+ * `admin.email` straight through, read once at the route).
  */
 export interface OrphanedDsaNoticeCandidate {
   readonly exists: boolean;
@@ -260,18 +314,20 @@ export interface OrphanedDsaNoticeCandidate {
 export async function closeOrphanedDsaNotice(
   c: Client,
   noticeId: string,
+  closedBy: string,
 ): Promise<{ reporterEmail: string; kind: "post" | "comment"; targetLabel: string } | null> {
   // The UPDATE's own WHERE is the real guard (atomic: a row this UPDATE
   // touches is, by construction, exactly a row eligible to close) — the
   // caller re-reads on a zero-row result only to pick a status code.
   const { rows } = await c.query<{ reporter_email: string; target_kind: "post" | "comment"; target_label: string }>(
     `UPDATE dsa_notices
-        SET resolved_at = now()
+        SET resolved_at = now(), closed_by = $2
       WHERE id = $1
+        AND email_verified_at IS NOT NULL
         AND resolved_at IS NULL
-        AND ((target_kind = 'post' AND post_id IS NULL) OR (target_kind = 'comment' AND comment_id IS NULL))
+        AND ${ORPHANED_TARGET_SQL}
       RETURNING reporter_email, target_kind, target_label`,
-    [noticeId],
+    [noticeId, closedBy],
   );
   const row = rows[0];
   return row === undefined
@@ -279,18 +335,19 @@ export async function closeOrphanedDsaNotice(
     : { reporterEmail: row.reporter_email, kind: row.target_kind, targetLabel: row.target_label };
 }
 
-/** Does `noticeId` exist at all, and is it eligible to close (see `closeOrphanedDsaNotice`)?
- * Used ONLY to pick 404 vs 409 after that UPDATE affects zero rows — never to gate the
- * mutation itself (that would reintroduce a check-then-act gap the UPDATE's own WHERE avoids). */
+/** Does `noticeId` exist (as a CONFIRMED notice) at all, and is it eligible to
+ * close (see `closeOrphanedDsaNotice`)? Used ONLY to pick 404 vs 409 after that
+ * UPDATE affects zero rows — never to gate the mutation itself (that would
+ * reintroduce a check-then-act gap the UPDATE's own WHERE avoids). An
+ * unconfirmed notice reads as `exists: false` — see `closeOrphanedDsaNotice`'s
+ * header on why that is deliberate, not an oversight. */
 export async function orphanedDsaNoticeCandidate(
   c: Client,
   noticeId: string,
 ): Promise<OrphanedDsaNoticeCandidate> {
   const { rows } = await c.query<{ eligible: boolean }>(
-    `SELECT (resolved_at IS NULL
-             AND ((target_kind = 'post' AND post_id IS NULL) OR (target_kind = 'comment' AND comment_id IS NULL))
-            ) AS eligible
-       FROM dsa_notices WHERE id = $1`,
+    `SELECT (resolved_at IS NULL AND ${ORPHANED_TARGET_SQL}) AS eligible
+       FROM dsa_notices WHERE id = $1 AND email_verified_at IS NOT NULL`,
     [noticeId],
   );
   const row = rows[0];
