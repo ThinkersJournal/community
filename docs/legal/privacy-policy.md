@@ -24,6 +24,14 @@ This policy explains what we collect, why, who processes it, and your choices.
   strictly necessary for the Service; we do not use advertising or cross-site
   tracking cookies.
 
+**DSA notices (legal complaints):**
+- If you report illegal content via the `/dsa-notice` form, we collect your name,
+  email address, the category of the violation you are reporting, a statement
+  describing it, and a confirmation that you are acting in good faith. This is
+  required by DSA Article 16(2)(c)–(d) to process and respond to your report.
+  Your email is verified by a confirmation link before the report is reviewed.
+  Unconfirmed reports are deleted after 7 days.
+
 **We deliberately minimize:**
 - Uploaded images are converted to WebP and **EXIF metadata is stripped**, so
   location and camera data embedded in your photos are removed before storage.
@@ -67,6 +75,13 @@ public; and in a business transfer, subject to this policy.
 yet, automated or manual. It is required before the Community opens to users
 officially. The data a CyberTipline report shares must be listed here once the
 report's contents are designed.]]
+
+**DSA notice reporter information** — your name and email from a legal complaint
+you file — is shown to moderators reviewing the report, so they can respond to
+you. It is **never** disclosed to the author of the content you are reporting.
+Retention of confirmed notices is not yet implemented; they are retained
+indefinitely in our moderation log like other moderation decisions.
+[[Attorney to confirm retention period for confirmed DSA notices.]]
 
 ## 5. Retention
 

@@ -77,6 +77,14 @@ signals only *prioritize* review, they do not decide it.
   [[APPEAL_CHANNEL]]. A different reviewer, where practical, reviews the appeal.
 - **Audit.** Moderation actions are recorded in an append-only internal log for
   accountability and to support appeals.
+- **Reporting illegal content without an account.** We accept reports of legal
+  violations (such as CSAM, copyright infringement, or fraud) without requiring a
+  login through a public form at `/dsa-notice`. The reporter provides their name,
+  email, the reason category, and a statement. They confirm their email address via
+  a link we send them — until they do, the report is inert. Once confirmed, the
+  notice enters the review queue. **Notices are reviewed by a person; they never
+  hide content automatically.** After review, we email the reporter the outcome and
+  the moderator's reason for the decision.
 
 ## 3. Blocking another user
 

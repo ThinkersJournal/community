@@ -376,6 +376,8 @@ due-process notice, not marketing. In-app, the author additionally sees the bann
 
 ## 8. DSA notice-and-action intake (decision #6)
 
+**Status (2026-10-01):** BUILT — plan C (docs/superpowers/plans/2026-10-01-m4-dsa-notice-intake.md). Deviation: reporter_name + good_faith added for DSA Art. 16(2)(c)/(d); own admin list instead of the review queue (PM ruling).
+
 A public, unauthenticated `POST /dsa-notice` accepting a notice with the reporter's email.
 
 **Flow:** submit (Turnstile + rate limited) → row written with `email_verified_at IS NULL` and a
