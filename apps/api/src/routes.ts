@@ -40,6 +40,7 @@ import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follo
 import { handleForgotPassword } from "./routes/forgot-password";
 import { handleHealthBuild } from "./routes/health-build";
 import { handleHealthDb } from "./routes/health-db";
+import { handleHealthSchema } from "./routes/health-schema";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleUploadMedia } from "./routes/media";
@@ -105,6 +106,13 @@ export const ROUTES: readonly RouteDef[] = [
   // above, no shadow risk. Pure runtime binding readout (version_metadata);
   // see src/routes/health-build.ts for why it has no `sha` field.
   { method: "GET", pattern: "/health/build", handler: handleHealthBuild },
+
+  // The deploy-time migration gate's data source (#116, shape A) — distinct
+  // literal path from the two routes above, no shadow risk. Discloses only a
+  // boolean for a caller-supplied `?migration=` name, never a list or the
+  // latest name (PM ruling); reads `pgmigrations` through HYPERDRIVE_FRESH.
+  // See src/routes/health-schema.ts and scripts/check-migrations-applied.mjs.
+  { method: "GET", pattern: "/health/schema", handler: handleHealthSchema },
 
   // ⚠️ Signup and login do NOT run the mutating pipeline (src/auth/pipeline.ts)
   // — they are how a session comes to exist, so its "401 if no session" step
