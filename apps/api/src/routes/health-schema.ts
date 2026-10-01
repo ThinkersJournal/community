@@ -24,13 +24,34 @@
  * and only enumerates the request-path's DML tables; `pgmigrations` is not
  * among them because nothing in the request path touched it until now. See
  * that design doc's dated note.
+ *
+ * ⚠️ NO RATE LIMITER HERE, DELIBERATELY (fix round 1 ruling, review #13 first
+ * half). This route is reached ONLY over the api's Service Binding from
+ * `web`'s proxy (apps/web/src/pages/health/schema.ts) — never directly from
+ * the public internet — and whether `CF-Connecting-IP` survives that hop at
+ * all is UNVERIFIED (open item on CireSnave's board). An IP-keyed limiter
+ * behind a Service Binding could therefore collapse to one single global
+ * bucket shared by every caller, and the gate script's OWN repeated polling
+ * (every build, possibly retried) could exhaust that bucket and block
+ * deploys — the opposite of what a rate limiter is for here. The query this
+ * route runs is a single indexed-equality `SELECT` against a table that has
+ * historically held under 20 rows (`pgmigrations`), so the cost of leaving it
+ * unlimited is negligible. Do not add one without first resolving the
+ * CF-Connecting-IP-over-Service-Binding question.
  */
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
 
 import type { RouteParams } from "../routing";
 
-const MIGRATION_NAME_RE = /^\d{4}_[a-z0-9_]+$/;
+// ⚠️ MUST match `scripts/check-migrations-applied.mjs`'s own
+// `MIGRATION_NAME_RE` byte-for-byte (fix round 1, item 5's length cap —
+// review #13). The `{1,100}` cap bounds the value going into the `LIKE`-free
+// equality query below (already safe without it — it's a bind param, never
+// concatenated — but an unbounded user-controlled string is still its own
+// smell) and gives the gate script a 400 for an absurdly long name instead of
+// a query that always answers false.
+const MIGRATION_NAME_RE = /^\d{4}_[a-z0-9_]{1,100}$/;
 
 export async function handleHealthSchema(
   request: Request,

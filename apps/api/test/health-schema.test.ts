@@ -32,21 +32,21 @@ function unreachableHyperdrive(): Hyperdrive {
 }
 
 /**
- * The newest migration file present in `apps/api/migrations` as of this
- * writing. ⚠️ NOT read from disk: this suite runs in the POOL project, i.e.
- * real workerd, whose filesystem is VIRTUAL (rooted at `/bundle`) — the same
- * reason test/purge-binding.node.test.ts has to live in the Node project
- * instead. global-setup.ts applies every file in that directory to the test
- * database (in Node, before either project starts), so this name is
- * guaranteed applied here; it just has to be updated by hand if a newer
- * migration lands and this test is touched again.
+ * A migration file present in `apps/api/migrations` as of this writing,
+ * guaranteed applied in this test database. ⚠️ NOT read from disk: this suite
+ * runs in the POOL project, i.e. real workerd, whose filesystem is VIRTUAL
+ * (rooted at `/bundle`) — the same reason test/purge-binding.node.test.ts has
+ * to live in the Node project instead. global-setup.ts applies every file in
+ * that directory to the test database (in Node, before either project
+ * starts), so this name is guaranteed applied here as long as it stays a
+ * real, present filename — it need not be any particular one on disk.
  */
-const NEWEST_MIGRATION = "0019_account_deletion";
+const KNOWN_APPLIED_MIGRATION = "0019_account_deletion";
 
 describe("GET /health/schema", () => {
   it("200s {applied:true} for a migration that has been applied", async () => {
     const response = await fetchWorker(
-      new Request(`https://api.test/health/schema?migration=${NEWEST_MIGRATION}`),
+      new Request(`https://api.test/health/schema?migration=${KNOWN_APPLIED_MIGRATION}`),
     );
 
     expect(response.status).toBe(200);
@@ -85,6 +85,8 @@ describe("GET /health/schema", () => {
     ["an injection attempt", "0001_X;DROP"],
     ["uppercase, which node-pg-migrate names never are", "0001_Users"],
     ["no leading 4-digit sequence", "users_and_profiles"],
+    // fix round 1, item 5: the name part is capped at 100 chars; 101 trips it.
+    ["a name part one char over the 100-char cap", `0001_${"a".repeat(101)}`],
   ])("400 INVALID_INPUT for a malformed migration param (%s: %s)", async (_label, value) => {
     const response = await fetchWorker(
       new Request(`https://api.test/health/schema?migration=${encodeURIComponent(value)}`),
