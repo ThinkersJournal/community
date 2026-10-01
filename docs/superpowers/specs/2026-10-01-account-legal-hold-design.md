@@ -58,20 +58,56 @@ CREATE UNIQUE INDEX account_legal_holds_active_idx ON account_legal_holds (user_
 ```
 
 Unlike `media_legal_holds`, which is permanent per key, this table keeps released rows as history, because a DMCA or
-other hold on an account may legitimately end. A release is an UPDATE. A trigger refuses DELETE, and refuses any UPDATE
-other than setting the three release columns on an unreleased row. That keeps the table append-only in spirit and gives
-the same protection as `moderation_actions`.
+other hold on an account may legitimately end. A release is an UPDATE. Everything else is refused:
+
+```sql
+CREATE FUNCTION account_legal_holds_guard() RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'DELETE' OR TG_OP = 'TRUNCATE' THEN
+    RAISE EXCEPTION 'account_legal_holds is append-only (release by UPDATE of the release columns)';
+  END IF;
+  -- UPDATE: only a release of a currently-active hold, and only the three release columns change.
+  IF OLD.released_at IS NOT NULL THEN
+    RAISE EXCEPTION 'account_legal_holds: a released hold is final';
+  END IF;
+  IF NEW.id IS DISTINCT FROM OLD.id OR NEW.user_id IS DISTINCT FROM OLD.user_id
+     OR NEW.category IS DISTINCT FROM OLD.category OR NEW.imposed_by IS DISTINCT FROM OLD.imposed_by
+     OR NEW.moderation_action_id IS DISTINCT FROM OLD.moderation_action_id
+     OR NEW.reason IS DISTINCT FROM OLD.reason OR NEW.imposed_at IS DISTINCT FROM OLD.imposed_at THEN
+    RAISE EXCEPTION 'account_legal_holds: only released_at/released_by/release_reason may change';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER account_legal_holds_row_guard BEFORE UPDATE OR DELETE ON account_legal_holds
+  FOR EACH ROW EXECUTE FUNCTION account_legal_holds_guard();
+CREATE TRIGGER account_legal_holds_no_truncate BEFORE TRUNCATE ON account_legal_holds
+  FOR EACH STATEMENT EXECUTE FUNCTION account_legal_holds_guard();
+```
+
+(For TRUNCATE, `OLD` is unavailable, which is why that branch returns first.) The release-consistency and
+CSAM-never-released CHECKs apply on top.
 
 ## 3. Trigger points
 
 - **T1: content decision with a legal hold.** `POST /admin/decision` with `legalHold: true` already holds the content's
-  images. It now **also** holds the content author's account, with the same category and the decision's action id,
-  **inside the decision's transaction**. `DecisionInput` gains `accountHold?: { category }`, and `applyDecision`
-  (`applyDecisionInTx` once plan B lands) inserts the hold right after `recordModerationAction`, using
-  `ON CONFLICT (user_id, category) WHERE released_at IS NULL DO NOTHING`.
+  images. ⚠️ That image hold runs **after** the decision commits, as a best-effort side effect
+  (`applyMediaVisibilityChange`, `visibility-hook.ts`; `legalHold`/`legalHoldCategory` are parsed in `routes/admin.ts`
+  and never reach `DecisionInput`). The account hold is **new in-transaction behaviour**, not a copy of that pattern:
+  - thread the category from the route into `DecisionInput` as `accountHold?: { readonly category: LegalHoldCategory }`;
+  - `applyDecision` (`applyDecisionInTx` once plan B lands) inserts the author's hold (`row.author_id` is in scope)
+    immediately after `recordModerationAction`, with that action's id, using
+    `ON CONFLICT (user_id, category) WHERE released_at IS NULL DO NOTHING`.
+
+  A failure anywhere in the decision then leaves neither a decision nor a hold (AH-3). The image hold stays post-commit,
+  as it is.
 - **T2: CSAM intake (#114).** Every uploader in a case gets a `csam` account hold in the intake transaction, **whether or
-  not R1 bars them** (a hold blocks deletion, not access). This adds a line to #114's intake step 7 (the #114 plan is
-  updated in the same PR).
+  not R1 bars them** (a hold blocks deletion, not access). ⚠️ This is a **new step 7a over the FULL uploader set** that
+  step 3 resolves. It is **not** a line inside step 7: step 7 loops only over the uploaders §3.4 bars, so adding it
+  there would leave every unbarred uploader deletable. 7a runs for every uploader, before or after step 7, with the
+  case's `csam_hold` action id. The #114 spec (§3.3) and plan (Task 6) are updated in this PR to add 7a, with a test
+  that an **unbarred** uploader (`CSAM_BAR_UNREVIEWED_MATCH = false`, `cloudflare_match`) is held. While there, the #114
+  plan's two references to `#126 … migration 0020` become `0021` (#126 was renumbered).
 - **T3: manual.**
   - **Impose:** `POST /admin/accounts/:handle/holds` `{ category: "dmca" | "other", reason }`. `csam` is excluded here:
     CSAM holds come only from T1/T2, where there is evidence of the case.
@@ -93,6 +129,14 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 - `reap-unverified.ts`: the same.
 - Their header comments are rewritten to say why a hold, not a ban, is the gate.
 - A held account's deletion request stays recorded. Once the hold is released, the next nightly run proceeds.
+- ⚠️ **Two existing test blocks assert the OLD rule and must be REWRITTEN, not made to pass by putting the ban checks
+  back:**
+  - `apps/api/test/reap-unverified.test.ts`, `describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)")`;
+  - `apps/api/test/anonymise-accounts.test.ts`, `describe("anonymiseExpiredAccounts — a barred account is never scrubbed")`.
+
+  Their banned/suspended fixtures with **no** hold now **are** reaped or scrubbed (AH-2). New fixtures that **insert an
+  `account_legal_holds` row** survive (AH-1), including one that is held but neither banned nor suspended, which proves
+  the hold alone gates it.
 
 ## 4a. A banned account's email stays reserved (board item 93, option 2)
 
@@ -118,6 +162,11 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 - **Backfill (in the same migration):** every account whose `disabled_reason = 'terminate'` gets a `csam` hold
   (`imposed_by = 'system'`, `reason = 'backfill: terminated before account holds existed'`). Without it, the switch would
   make previously-protected terminated accounts deletable.
+- ⚠️ **The backfill's signal only exists once plan A's code is live.** On `main`, nothing writes
+  `disabled_reason = 'terminate'` yet (plan A's `account-actions.ts`, PR #132, is the only writer). Merge order then
+  doesn't matter: the backfill is idempotent (`ON CONFLICT … DO NOTHING`), and every terminate made **after** this lands
+  is held by T2/7a at the moment of termination. The backfill covers only terminations that happened before this
+  migration, by hand or by plan A's code.
 - **Plain bans** (`disabled_reason = 'ban'`) are **not** backfilled. That's the decision CireSnave made: a ban is not a
   legal hold. Accounts that were only suspended aren't either. As of 2026-10-01 production has no barred accounts
   (pre-launch), so in practice the backfill is a no-op. The SQL still exists because the code must not depend on that.
