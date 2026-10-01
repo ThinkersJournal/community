@@ -143,8 +143,12 @@ writes exactly one. Every legal hold and every `csam_cases` row references it, s
 
 **Sequence:**
 
-0. **Resolve, read-only, before the transaction:** the keys, their uploaders (§3.2), their embedding posts. Then
-   **bump the epoch of every uploader who will be barred** (plan A's "before" bump; see §3.4 for who is barred).
+0. **Resolve, read-only, before the transaction:** the keys **minus any already in `csam_case_files`** (the same
+   filter step 2 applies under the lock), then their uploaders (§3.2) and embedding posts. Then **bump the epoch of
+   every uploader who will be barred** (plan A's "before" bump; see §3.4 for who is barred). Filtering first means a
+   batch that mixes already-cased and new keys does not log out an uploader whose only key was already cased. A key
+   cased between this read and the lock costs at most one harmless extra logout, because step 3's authoritative set
+   decides who is barred, and the after-commit bump covers anyone new.
 1. Open the transaction. Take `pg_advisory_xact_lock(<fixed CSAM_INTAKE lock id>)`. Intake is low-volume, so
    serialising every intake is cheap and closes every intake-vs-intake race.
 2. **Idempotence:** `csam_case_files.r2_key` is **UNIQUE**. Inside the lock, drop every key already in
@@ -158,8 +162,10 @@ writes exactly one. Every legal hold and every `csam_cases` row references it, s
 6. For each embedding post: write a `moderation_snapshots` row (#126's table). This is **a new write path**: today's
    only writer is the author-delete CTE. Then call `applyDecisionInTx(c, { decision: "remove", reason: <fixed internal text>, … })`.
    **No author notice** (A3).
-7. For each uploader to be barred (§3.4): `applyAccountActionInTx(c, { kind: "terminate", … })`. `already_disabled`
-   is fine: a terminate on a banned account upgrades it, and on a terminated one it's a no-op outcome.
+7. For each uploader to be barred (§3.4): `applyAccountActionInTx(c, { kind: "terminate", … })`. A terminate always
+   applies: plan A's `already_disabled` early-out excludes `terminate` by construction, and on an already-barred
+   account it keeps the original `disabled_at` and sets `disabled_reason = 'terminate'`. The only other outcome is
+   `not_found`, for an uploader deleted mid-intake, which is skipped.
 8. `INSERT csam_case_files` (case id, key, sha256, `viewed_by_esp`). For **each uploader**, `INSERT ncmec_reports`
    (`pending`, or `awaiting_credentials` per §4.4) plus one `ncmec_report_files` row for **each of the case's files
    that uploader's own `media` row holds**. A report attaches only what that person uploaded (R3).
@@ -171,8 +177,8 @@ writes exactly one. Every legal hold and every `csam_cases` row references it, s
   move unconditionally only on that branch. Without it, it sees the key already held, `continue`s, and the image
   **stays in the public bucket** (AC-C1). The second `imposeLegalHold` this causes is idempotent
   (`ON CONFLICT (r2_key) DO NOTHING`).
-- for each key **no post embeds** (an orphan upload): enqueue the move to `MEDIA_RESTRICTED` directly, through the
-  same move function `visibility-hook.ts` uses for its legal-hold branch.
+- for each key **no post embeds** (an orphan upload): call `enqueueAndAttemptMove(env, ctx, r2Key, "to_restricted")`
+  (`apps/api/src/media/moves.ts`), the call `visibility-hook.ts` makes on its legal-hold branch.
 - bump the epoch of every barred uploader again (plan A's "after" bump).
 
 ### 3.4 R1 — the one pending switch
@@ -215,12 +221,15 @@ Each step persists before the next one starts, so a retry resumes where it stopp
 - ⚠️ **The deletion window:** if a `submitted` report isn't finished and `now()` has passed the later of
   (opened + 24 h) and (last modification + 1 h), or NCMEC answers `5001`, move its id to
   `abandoned_report_ids`, clear the per-file NCMEC ids, and go back to `pending`, which submits a fresh report.
-- Response bodies are read through a **64 KiB byte cap before parsing**. That cap is the real control (2026-09-08
-  decision §5). They're parsed with `fast-xml-parser`, configured `processEntities: false` for parity only. ⚠️
-  The decision measured that flag as **inert** for the probed vectors in 5.10.1, so it's kept for parity, not
-  protection. Request XML is **built** with an escaper, never parsed.
-- **Dependency (an explicit plan step):** add `fast-xml-parser` to `apps/api/package.json`, pinned to the version
-  `apps/web` uses. Turn the decision doc's §7 probes into a version-pinned characterisation test.
+- Response bodies are read through a **byte cap before parsing**. The cap is the real control (2026-09-08 decision
+  §5). The 64 KiB figure is **this design's choice**, not the decision's: a realistic NCMEC response is a few
+  hundred bytes. They're parsed with `fast-xml-parser`, configured `processEntities: false` for parity only. The
+  decision found that flag inert for its probed vectors. Request XML is **built** with an escaper, never parsed.
+- ⚠️ **Version drift:** the decision's probes ran against **5.10.1**, but `apps/web` now pins **5.11.1** (bumped in
+  `8411c70`, 2026-09-20), which **nobody has probed**. **Dependency (an explicit plan step):** add `fast-xml-parser`
+  to `apps/api/package.json`, pinned **exactly** to the version being shipped. Turn the decision doc's probes
+  (§3–§4: external entity, entity expansion, deep nesting, oversized input) into a version-pinned characterisation
+  test against that exact version. It must pass before merge (AC-C12). A failure is a stop, not a test to adjust.
 
 ### 4.4 Credentials and environment
 
@@ -308,10 +317,11 @@ Who can review: any Access admin. Access to the **images** keeps #61's two-perso
 | AC-C5 | The response byte cap fires before the parser, and a test of an oversized body fails without the cap. |
 | AC-C6 | `CSAM_BAR_UNREVIEWED_MATCH` equals CireSnave's R1 ruling, quoted in the PR. |
 | AC-C7 | No email is sent to the uploader or author by any CSAM path (A3). |
+| AC-C8 | An end-to-end run against **exttest** (`exttest.cybertip.org`) reaches `finished`, once credentials exist. **APP.live does not flip until this is shown.** |
 | AC-C9 | After a match intake, every held image has left the public bucket, **including an orphan upload with no embedding post**. Shown to fail when the post-commit `legalHold` argument is dropped (§3.3). |
 | AC-C10 | A second intake of an already-cased key files nothing new (no new case, report, or hold). Shown to fail without the UNIQUE/lock check. |
 | AC-C11 | In a multi-uploader case, each NCMEC report carries only the files that uploader's own media rows hold (R3). |
-| AC-C8 | An end-to-end run against **exttest** (`exttest.cybertip.org`) reaches `finished`, once credentials exist. **APP.live does not flip until this is shown.** |
+| AC-C12 | The `fast-xml-parser` characterisation test (§4.3) passes against the exact version pinned in `apps/api/package.json`. |
 
 ## 10. Dependencies and order
 
