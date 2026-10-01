@@ -168,6 +168,11 @@ const CASES: readonly ErrorCase[] = [
     build: () => new Request("https://api.test/verify-email"),
   },
   {
+    name: "400 dsa-notice confirm peek with no token",
+    route: "GET /dsa-notice/confirm",
+    build: () => new Request("https://api.test/dsa-notice/confirm"),
+  },
+  {
     name: "401 csrf route with no session",
     route: "GET /auth/csrf",
     build: () => new Request("https://api.test/auth/csrf"),

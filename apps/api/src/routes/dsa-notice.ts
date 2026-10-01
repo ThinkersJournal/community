@@ -26,7 +26,15 @@ import { enforceRateLimit } from "../auth/ratelimit";
 import { verifyTurnstile } from "../auth/turnstile";
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
-import { createDsaNotice } from "../moderation/dsa-notices";
+import { confirmDsaNotice, createDsaNotice, peekDsaToken } from "../moderation/dsa-notices";
+
+/** The single failure response for EVERY unhappy TOKEN path on either route
+ * below: missing, unknown, already-confirmed and expired all look identical —
+ * same "do not confirm what a guessed token means" reasoning as
+ * `verify-email.ts`'s `invalidToken`. */
+function invalidToken(): Response {
+  return errorResponse("INVALID_TOKEN", 400);
+}
 
 export async function handleDsaNotice(
   request: Request,
@@ -97,4 +105,75 @@ export async function handleDsaNotice(
   );
 
   return new Response(null, { status: 202 });
+}
+
+/**
+ * `GET /dsa-notice/confirm?token=` — a safe-to-retry PEEK: does it exist,
+ * unconfirmed, inside the `DSA_CONFIRM_WINDOW_DAYS` window? Never mutates, so
+ * a reporter's mail client prefetching the link (or a user clicking it twice)
+ * costs nothing and burns nothing. The actual confirmation is the POST below.
+ */
+export async function handlePeekDsaToken(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const token = new URL(request.url).searchParams.get("token");
+  if (token === null || token === "") {
+    return invalidToken();
+  }
+
+  const ok = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => peekDsaToken(c, token));
+  if (!ok) {
+    return invalidToken();
+  }
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * `POST /dsa-notice/confirm` — redeems the token: stamps `email_verified_at`
+ * exactly once. ⚠️ AC-1: this (and everything it calls) never touches
+ * `reports`, `hidden_at`, or `maybeAutoHide` — see
+ * `src/moderation/dsa-notices.ts`'s `confirmDsaNotice`.
+ */
+export async function handleConfirmDsaNotice(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  // ---- 1. Origin (CSRF) — before ANY parsing, same shape as the intake route
+  if (!checkOrigin(env, request)) {
+    return errorResponse("FORBIDDEN", 403);
+  }
+
+  // ---- 2. Parse ---------------------------------------------------------
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return errorResponse("INVALID_JSON", 400);
+  }
+  if (
+    typeof raw !== "object" ||
+    raw === null ||
+    typeof (raw as { token?: unknown }).token !== "string" ||
+    (raw as { token: string }).token === ""
+  ) {
+    return errorResponse("INVALID_INPUT", 400, { fields: ["token"] });
+  }
+  const { token } = raw as { token: string };
+
+  // ---- 3. Redeem (FRESH) --------------------------------------------------
+  const confirmed = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => confirmDsaNotice(c, token));
+  if (!confirmed) {
+    return invalidToken();
+  }
+
+  return new Response(JSON.stringify({}), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 }

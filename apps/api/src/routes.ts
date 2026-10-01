@@ -36,7 +36,7 @@ import { handleBlock, handleBlockStatus, handleListBlocks, handleUnblock } from 
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
 import { handleCsrf } from "./routes/csrf";
-import { handleDsaNotice } from "./routes/dsa-notice";
+import { handleConfirmDsaNotice, handleDsaNotice, handlePeekDsaToken } from "./routes/dsa-notice";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
 import { handleForgotPassword } from "./routes/forgot-password";
@@ -138,6 +138,12 @@ export const ROUTES: readonly RouteDef[] = [
   // inline `checkOrigin` + `DSA_LIMITER` + Turnstile. See
   // src/routes/dsa-notice.ts.
   { method: "POST", pattern: "/dsa-notice", handler: handleDsaNotice },
+
+  // Confirmation half of the same flow (Task 3) — GET peeks (safe to retry,
+  // never mutates), POST redeems. Same PIPELINE_EXEMPT shape as the intake
+  // route above; see src/routes/dsa-notice.ts.
+  { method: "GET", pattern: "/dsa-notice/confirm", handler: handlePeekDsaToken },
+  { method: "POST", pattern: "/dsa-notice/confirm", handler: handleConfirmDsaNotice },
 
   // Unlike signup/login these DO run the pipeline — they have a session — but
   // WITHOUT `requireVerifiedEmail`: an unverified user must still be able to
