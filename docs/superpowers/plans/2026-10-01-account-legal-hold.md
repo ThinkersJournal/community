@@ -14,6 +14,8 @@
 
 **Revision round 2 (2026-10-01), the re-audit:** B1 (per-row epoch bump, skip-and-continue, and a fail-closed `anonymised_at` gate in the pipeline), S1 (lock-wait poll by `pg_blocking_pids`, fixture isolation), S2 (the manual hold's log row labels the handle; the constraint and privacy copy now say what the moderation log keeps), N3 (zod 4.6.5).
 
+**Round 3 (2026-10-01), controller ruling on the GET path:** the reaper also bumps each row's epoch **before** its scrub (a failed pre-scrub bump skips the row), and `GET /verify-email`'s `UPDATE` skips an anonymised row. The residual is documented in spec §4 as accepted.
+
 ## Preconditions
 
 - ⚠️ **MERGE PRECONDITION (audit #4): #134 (migration 0020, `dsa_notices`) and #126 (0021, `moderation_snapshots`) are merged to `main` AND applied in production** (read `GET /health/schema` from #136) **before this PR merges.** Rebase this branch onto that `main` before Task 1. Why:
@@ -32,7 +34,7 @@
 - **Deletion eligibility = no active hold. Nothing else** (spec §4). `disabled_at`/`suspended_until` must not appear in either reaper's eligibility predicate afterwards. The only `disabled_at` read left in `anonymise-accounts.ts` is the `CASE` that decides the hash.
 - **`signup.ts`'s barred-row guard (the upsert's `WHERE`) is unchanged** (spec §1; AH-6). Signup's only change is the reserved-hash refusal after the upsert (spec §4a).
 - **No mail or authentication path can reach a deleted account's address** (PM ruling B). Every anonymised row's `email` is the sentinel, and a banned one also gets `reserved_email_sha256`. ⚠️ The address is **not** gone everywhere: `moderation_actions.subject_label` keeps the author's email recorded at each content decision (`decide.ts:128`), as the append-only legal record, and nothing in this plan changes that (spec §4a). Don't write any new copy of it: label new log rows with the handle.
-- **A deleted account can't authenticate** (spec §4, re-audit B1). The reaper bumps each row's epoch right after its own COMMIT, and the mutating pipeline refuses any session whose user has `anonymised_at` set.
+- **A deleted account can't act, and its pre-deletion sessions die** (spec §4, re-audit B1 and round 3). The reaper bumps each row's epoch before its scrub (skipping the row if that fails) and again after its COMMIT. The mutating pipeline refuses any session whose user has `anonymised_at` set. The GET-only residual is spec §4's accepted one.
 - CSAM holds are never released by app code (DB CHECK and route refusal).
 - A non-CSAM hold is released only by a **different** admin than the one who imposed it: compare with `sameAdminHand` (`@thinkersjournal/shared`, #98).
 - T1's account hold is written **inside** the decision transaction (spec §3 T1), never post-commit.
@@ -50,6 +52,7 @@
 5. **A second impose of the same category while one is active.** No duplicate and no error (`ON CONFLICT … WHERE released_at IS NULL DO NOTHING` through partial-index inference). The manual route writes no log row for it. Pinned in Task 2 and Task 5.
 6. **The reaper's batch goes stale before it writes.** A hold imposed, a ban lifted or a request cancelled after the SELECT is honoured, because each scrub locks the row and re-checks inside its `UPDATE`. Pinned in Task 3.
 7. **A row locked past the 5 s `lock_timeout` mid-batch** (re-audit B1). That row is skipped and logged, and the job doesn't throw. Every other row is scrubbed **and** its sessions revoked. A session that somehow survives anonymisation is refused by the pipeline (401). Pinned in Task 3, the gate with a mutation.
+8. **Revoke before the scrub** (round 3). Each row's epoch is bumped before its scrub and again after it. A row whose pre-scrub bump throws is **not** scrubbed. Pinned in Task 3 (RF8), with a mutation.
 
 ---
 
@@ -414,7 +417,7 @@ async function rollbackQuietly(c: Client): Promise<void> {
 
 ### Task 3: The reapers gate on the hold; a banned account's address is reserved by hash; signup refuses it
 
-**Files:** modify `apps/api/src/auth/anonymise-accounts.ts`, `apps/api/src/auth/reap-unverified.ts`, `apps/api/src/routes/signup.ts`, `apps/api/src/auth/pipeline.ts` (re-audit B1b); append to `apps/api/test/pipeline-barred.test.ts` (it has the session harness and the `ROUTES` table of every pipeline route); **rewrite** the two named blocks in `apps/api/test/anonymise-accounts.test.ts` (`describe("anonymiseExpiredAccounts — a barred account is never scrubbed")`) and `apps/api/test/reap-unverified.test.ts` (`describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)")`); append to `apps/api/test/barred-reentry.test.ts` (it has the signup harness: `resignup`, `stubFetch`, `ALLOWED_ORIGIN`, from :140) and `apps/api/test/forgot-password.test.ts` (it has `stubFetch(true)`, which returns the Postmark calls).
+**Files:** modify `apps/api/src/auth/anonymise-accounts.ts`, `apps/api/src/auth/reap-unverified.ts`, `apps/api/src/routes/signup.ts`, `apps/api/src/auth/pipeline.ts` (re-audit B1b), `apps/api/src/routes/verify-email.ts` (round 3); append to `apps/api/test/pipeline-barred.test.ts` (it has the session harness and the `ROUTES` table of every pipeline route); **rewrite** the two named blocks in `apps/api/test/anonymise-accounts.test.ts` (`describe("anonymiseExpiredAccounts — a barred account is never scrubbed")`) and `apps/api/test/reap-unverified.test.ts` (`describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)")`); append to `apps/api/test/barred-reentry.test.ts` (it has the signup harness: `resignup`, `stubFetch`, `ALLOWED_ORIGIN`, from :140) and `apps/api/test/forgot-password.test.ts` (it has `stubFetch(true)`, which returns the Postmark calls).
 
 ⚠️ **Rewrite those two blocks for the NEW rule. Do NOT make them pass by putting the ban checks back** (spec §4).
 
@@ -441,12 +444,68 @@ async function rollbackQuietly(c: Client): Promise<void> {
     - after `UPDATE users SET disabled_at = NULL, disabled_reason = NULL` plus `releaseReservedEmail(c, id)` → `resignup(email)` → 201.
   - **forgot-password, AH-7 structural (`forgot-password.test.ts`):** a banned account anonymised by the reaper; `forgotPassword(validBody(originalEmail))` → 202 with **0** Postmark calls and no `password_reset_tokens` row for that user. **Control:** the same request before the reaper runs → 1 Postmark call.
   - **anonymise, RF7 (re-audit B1a):** seed two eligible accounts, X and Y, and mint a session for Y (`createSession` with its current epoch). Lock X from a second client (`FOR UPDATE`) and **hold the lock for 7 s**, past the 5 s `lock_timeout`. Run the reaper (test timeout ≥ 20 s). It **resolves without throwing**; X is unscrubbed (`anonymised_at IS NULL`); Y is anonymised **and** its epoch has moved (`getEpoch()` ≠ the session's). Release X's lock, run the reaper again, and X is now anonymised. Control for the bump: Y's epoch before the run equals the session's.
+  - **anonymise, RF8 (round 3):** the pre-scrub bump runs first, and a row whose pre-scrub bump throws is not scrubbed. `anonymiseExpiredAccounts` takes `env`, so wrap the real `USER_SECURITY` binding. `seedEligible()` seeds a verified account with a unique far-past `deletion_requested_at` and returns its id; `anonymisedAt(id)` reads the column. Both are local helpers to write in that file.
+
+```ts
+/**
+ * An env whose USER_SECURITY wraps the real binding: it records, for each
+ * bumpEpoch, whether that user's row was already anonymised at that moment,
+ * and throws for `failFor`. Everything else passes through.
+ */
+function recordingEnv(failFor: string | null, log: Array<{ userId: string; anonymised: boolean }>): Env {
+  const real = env.USER_SECURITY;
+  const stub = {
+    getByName(userId: string) {
+      const stubInstance = real.getByName(userId);
+      return {
+        getEpoch: () => stubInstance.getEpoch(),
+        bumpEpoch: async () => {
+          const rows = await ctxRun(async (c) =>
+            (await c.query<{ anonymised: boolean }>(
+              "SELECT anonymised_at IS NOT NULL AS anonymised FROM users WHERE id = $1",
+              [userId],
+            )).rows,
+          );
+          log.push({ userId, anonymised: rows[0]?.anonymised ?? false });
+          if (userId === failFor) throw new Error("forced pre-scrub bump failure");
+          return stubInstance.bumpEpoch();
+        },
+      };
+    },
+  };
+  return { ...env, USER_SECURITY: stub as unknown as Env["USER_SECURITY"] };
+}
+
+it("RF8: each row is revoked BEFORE its scrub and again after it; a failed pre-scrub bump leaves the row unscrubbed", async () => {
+  const x = await seedEligible(); // unique far-past deletion_requested_at (see the flake note)
+  const y = await seedEligible();
+  const log: Array<{ userId: string; anonymised: boolean }> = [];
+
+  const ctx = createExecutionContext();
+  await expect(anonymiseExpiredAccounts(recordingEnv(x, log), ctx)).resolves.toBeTypeOf("number");
+  await waitOnExecutionContext(ctx);
+
+  // X: its first bump threw, so it was skipped — not scrubbed, retried next run.
+  expect(await anonymisedAt(x)).toBeNull();
+  expect(log.filter((e) => e.userId === x)).toEqual([{ userId: x, anonymised: false }]);
+  // Y: bumped once before the scrub (row not yet anonymised), once after it.
+  expect(await anonymisedAt(y)).not.toBeNull();
+  expect(log.filter((e) => e.userId === y)).toEqual([
+    { userId: y, anonymised: false },
+    { userId: y, anonymised: true },
+  ]);
+});
+```
+
+  ⚠️ X's DB-state assertion can flake only if a **parallel** file's reaper run reaches X in the same seconds (see the flake note above). The `log` assertions are the discriminating ones. If the DB assertion ever flakes, report it; don't weaken the `log` assertions.
+  - **verify-email (round 3, append to `email-verify.test.ts`, which drives `GET /verify-email`):** a session and a live verify token for an account, then `anonymised_at = now()` set in SQL with no epoch bump. `GET /verify-email?token=…` leaves `email_verified_at` unchanged (NULL). **Control:** the same flow without the anonymisation sets it.
   - **pipeline, RF7 (re-audit B1b, `pipeline-barred.test.ts`):** mint a session for a verified user, then set `anonymised_at = now()` **directly in SQL** (no reaper, so no epoch bump). Every route in `ROUTES` answers **401** with a cleared `tj_session` cookie, not `ACCOUNT_BARRED`. **Control:** the same session before the UPDATE passes the pipeline. **Mutation:** delete the step-5a block in `pipeline.ts` → the 401 assertions fail. Record that, then restore it.
   - **reap-unverified, AH-1/AH-2:** unverified, 8-day-old accounts that are banned or suspended **without** a hold are deleted; with a hold (banned or not) they survive.
   - **Mutation (AH-1):** remove the NOT-EXISTS clause from the anonymise `UPDATE` **and** the SELECT → the held-account test fails. Restore it.
   - **Mutation (AH-7):** change the `CASE` to `ELSE NULL` on both arms (store NULL always) → the signup 409 test and the hash assertion fail. Restore it.
   - **Mutation (RF6):** remove the `FOR UPDATE` lock statement → the "hold inserted while the reaper waits" test fails. (The blocked `UPDATE`'s `NOT EXISTS` uses its old snapshot.) Restore it. If it does not fail, say so in the report rather than weakening the test.
-  - **Mutation (RF7a):** move the epoch bump back to after the loop and rethrow from the per-row `catch` → the RF7 reaper test fails (it throws, and Y's epoch hasn't moved). Restore it.
+  - **Mutation (RF7a):** move the epoch bumps back to after the loop and rethrow from the per-row `catch` → the RF7 reaper test fails (it throws, and Y's epoch hasn't moved). Restore it.
+  - **Mutation (RF8):** delete the pre-scrub bump (the first `try { await env.USER_SECURITY…bumpEpoch() }` in the loop) → RF8 fails: X is scrubbed (its only bump is now the post-scrub one, which throws and is logged), and Y's log has one entry instead of two. Restore it.
 - [ ] **Step 2: Implement.**
   - **anonymise-accounts.ts.** Replace `anonymiseExpiredAccounts` with the following two functions. Change the import to `import { BEGIN_BOUNDED_TX, withClient } from "../db/client";`, and add `import type { Client } from "pg";` and `import { reservedEmailSha256 } from "./reserved-email";`. `scrubbedEmail`, `SCRUBBED_PASSWORD_HASH` and `scrubbedUsername` are unchanged.
 
@@ -470,11 +529,26 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
   let scrubbed = 0;
   await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     for (const { id, email } of candidates) {
-      // ⚠️ ONE ROW'S FAILURE NEVER STOPS THE BATCH (spec §4). A lock timeout
+      // ⚠️ REVOKE BEFORE THE SCRUB, AND AGAIN AFTER ITS COMMIT (spec §4).
+      // GET routes (readCurrentSession) check only the epoch, never the row,
+      // so the epoch is the only thing that stops a deleted account's session
+      // from reading. Bump #1 runs FIRST: if it fails, skip the row — nothing
+      // is scrubbed, so this fails closed, and the next nightly run retries
+      // it. If the scrub then fails or re-checks false, the user has merely
+      // been logged out (they asked for deletion 30+ days ago, or a hold has
+      // just landed). Bump #2 closes the window for a login that lands
+      // between bump #1 and the COMMIT.
+      try {
+        await env.USER_SECURITY.getByName(id).bumpEpoch();
+      } catch (err) {
+        console.error(`anonymise-accounts: skipped ${id}: pre-scrub epoch bump failed (retried next run)`, err);
+        continue;
+      }
+      // ⚠️ ONE ROW'S FAILURE NEVER STOPS THE BATCH. A lock timeout
       // (BEGIN_BOUNDED_TX's 5s) or any other error leaves THAT row unscrubbed,
       // which is safe, and the next nightly run retries it. Rethrowing would
-      // strand every row already committed in this run without its epoch
-      // bump: main's reaper had exactly that shape (bumps after the loop).
+      // strand every row already committed in this run: main's reaper had
+      // exactly that shape (it bumped only after the loop).
       let changed: boolean;
       try {
         changed = await scrubOne(c, id, email);
@@ -484,16 +558,12 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
       }
       if (!changed) continue;
       scrubbed += 1;
-      // Kill every live session RIGHT AFTER this row's COMMIT, not after the
-      // loop. The scrub makes password_hash unable to authenticate a FUTURE
-      // login, but does nothing about a session issued before it. Same
-      // mechanism as logout-all (src/routes/logout.ts). If the bump itself
-      // fails, the pipeline's anonymised_at gate (auth/pipeline.ts step 5a)
-      // still refuses the session: fail closed.
+      // Bump #2. If it fails, mutating routes still refuse the session
+      // (auth/pipeline.ts step 5a); the residual is spec §4's accepted one.
       try {
         await env.USER_SECURITY.getByName(id).bumpEpoch();
       } catch (err) {
-        console.error(`anonymise-accounts: epoch bump failed for ${id}; the pipeline gate still refuses it`, err);
+        console.error(`anonymise-accounts: post-scrub epoch bump failed for ${id}; step 5a still refuses writes`, err);
       }
     }
   });
@@ -575,6 +645,16 @@ async function scrubOne(c: Client, id: string, email: string): Promise<boolean> 
 ```
 
   Update the step list in `runMutatingPipeline`'s header comment to add 5a.
+  - **verify-email.ts (round 3).** It reads the session itself, so step 5a doesn't cover it. Its only write is the redeem `UPDATE`; make it skip an anonymised row:
+
+```ts
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    // Account-legal-hold spec §4: a deleted account's session must not write.
+    c.query("UPDATE users SET email_verified_at = now() WHERE id = $1 AND anonymised_at IS NULL", [
+      tokenUserId,
+    ]),
+  );
+```
   - **reap-unverified.ts:** in its inner SELECT, replace `AND disabled_at IS NULL AND suspended_until IS NULL` with the same NOT-EXISTS-hold clause, and rewrite the header comment to match the reworded AC-3. (It deletes in one statement, so it needs no lock: a deleted row has no hash and no profile left to scrub.)
   - **signup.ts:** add `import { isEmailReserved } from "../auth/reserved-email";`, and insert this right after the existing `if (row === null) { … return null; }` block, before the epoch bump:
 
@@ -595,7 +675,7 @@ async function scrubOne(c: Client, id: string, email: string): Promise<boolean> 
 ```
 
   Update the comment above `if (upserted === null)` to read "a VERIFIED or BARRED account owns this address, or a deleted banned account reserves it". The upsert and its `WHERE` don't change (AH-6).
-- [ ] **Step 3:** run `anonymise-accounts`, `reap-unverified`, `signup`, `barred-reentry` (**AH-6**: the barred-row guard's existing tests at :171 still pass), `forgot-password` and `pipeline-barred` → PASS. Run the five mutations and record each result. Commit `feat(auth): deletion gated on an account legal hold, not on ban/suspension; a banned account's address reserved by hash`.
+- [ ] **Step 3:** run `anonymise-accounts`, `reap-unverified`, `signup`, `barred-reentry` (**AH-6**: the barred-row guard's existing tests at :171 still pass), `forgot-password`, `pipeline-barred` and `email-verify` → PASS. Run the six mutations and record each result. Commit `feat(auth): deletion gated on an account legal hold, not on ban/suspension; a banned account's address reserved by hash`.
 
 ---
 
@@ -742,5 +822,5 @@ it("AH-3: a commit-time failure after the account-hold insert leaves neither the
 ## Whole-branch checks
 
 - [ ] `pnpm typecheck`; the full suites green except the known local `media-backfill` timeouts; e2e green in CI.
-- [ ] The PR body lists AH-1…AH-7, each with the test that shows it, plus the five Task 3 mutations' results.
+- [ ] The PR body lists AH-1…AH-7, each with the test that shows it, plus the six Task 3 mutations' results.
 - [ ] Deploy note: the migration (0022, applied after 0020 and 0021 in production, per the precondition) runs before the code.

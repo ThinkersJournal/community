@@ -4,7 +4,7 @@
 **Revised 2026-10-01** after the pre-flight audit: PM ruling B replaces §4a's "keep the real email" with a hashed
 reservation, and the audit's mechanical findings are folded into §3, §4, §5 and §6. **Revision round 2 (2026-10-01):**
 the re-audit's B1 (per-row revocation and a fail-closed pipeline gate, §4), S2 (what the moderation log keeps, §4a),
-S3, N1 and N3.
+S3, N1 and N3. **Round 3:** the reaper also revokes BEFORE each scrub, which covers the GET path (§4).
 **Author:** Community controller agent, 2026-10-01. Board item 91 (superseded by this).
 
 ## 0. Rulings
@@ -170,16 +170,31 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   target row, not the subquery.)
 - **Revoked per row, and one row's failure never stops the batch (re-audit B1).** Each scrub's `BEGIN_BOUNDED_TX` has
   a 5 s `lock_timeout` (`db/client.ts:51-53`), so a scrub can fail on a locked row. The reaper:
-  - bumps each row's security epoch right after **that row's** COMMIT, inside the loop;
-  - on any per-row failure (a lock timeout or any other error), logs the user id, skips the row and continues. A
-    failed row is still unscrubbed, so skipping it is safe, and the next nightly run retries it.
+  - bumps each row's security epoch **before** its scrub transaction. If that bump fails, it logs the user id and
+    skips the row: nothing is scrubbed, so this fails closed, and the next nightly run retries it. If the scrub then
+    fails or its re-check says no, the user has merely been logged out, which is harmless: they asked for deletion 30
+    or more days ago, or a hold has just landed;
+  - bumps it **again** right after **that row's** COMMIT, which closes the window for a login that lands between the
+    two bumps;
+  - on any per-row scrub failure (a lock timeout or any other error), logs the user id, skips the row and continues.
+    A failed row is still unscrubbed, so skipping it is safe, and the next nightly run retries it.
 
   ⚠️ `main`'s current reaper has the same latent shape: it bumps epochs only **after** the loop, so an error mid-batch
   leaves every already-scrubbed account with its sessions live. This task closes that.
 - **Defence in depth, fail closed (re-audit B1).** The mutating session pipeline (`runMutatingPipeline`,
   `auth/pipeline.ts`) already reads the session user's `users` row (`readAccountGate`, ~:83). It also reads
   `anonymised_at`, and treats `anonymised_at IS NOT NULL` as unauthenticated: the same 401 and cleared cookie a revoked
-  session gets, before the barred check. So a missed epoch bump can never act as a deleted account.
+  session gets, before the barred check. So a missed epoch bump can never **act** as a deleted account.
+- ⚠️ **Accepted residual: the GET path.** `readCurrentSession` (the GET-side session check, `pipeline.ts:157`, 16 call
+  sites) checks only the epoch and reads no row, so step 5a doesn't cover it. The pre-scrub bump does: any session
+  issued before the scrub dies at bump #1, and one issued between the bumps dies at bump #2. What remains is a session
+  created inside that window **and** a failed bump #2. It is GET-only, read-only, and sees an account already
+  scrubbed. Mutating routes fail closed through step 5a regardless. Accepted (controller ruling, 2026-10-01) rather
+  than threading `ctx` through 16 call sites for a DB read.
+- **`GET /verify-email`** reads the session itself (`readSession` plus the epoch). The only thing a deleted account's
+  session could do there is set `email_verified_at` on its own anonymised row, and only with a live 24 h verify token,
+  which can't be mailed to the sentinel. The plan still adds `AND anonymised_at IS NULL` to that route's `UPDATE`, so
+  it writes nothing to a deleted account.
 - ⚠️ **Two existing test blocks assert the OLD rule and must be REWRITTEN, not made to pass by putting the ban checks
   back:**
   - `apps/api/test/reap-unverified.test.ts`, `describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)")`;
