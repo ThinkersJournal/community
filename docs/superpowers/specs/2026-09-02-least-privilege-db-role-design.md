@@ -161,6 +161,16 @@ exists to defeat.
   `public`). The runtime never reads or writes it. To be strict:
   `REVOKE ALL ON pgmigrations FROM app_runtime;` after §3.3. Low value (it's
   bookkeeping, not sensitive), listed for completeness.
+  > **Dated note (2026-10-01, #116):** this is no longer true. The deploy-time
+  > migration gate's `GET /health/schema` route
+  > (`apps/api/src/routes/health-schema.ts`) now runs `SELECT 1 FROM
+  > pgmigrations WHERE name = $1` on every request, through
+  > `HYPERDRIVE_FRESH` — i.e. as whatever role the runtime connects as. If
+  > `app_runtime` ever cuts over, it **must** keep (or be granted) `SELECT` on
+  > `pgmigrations`, or this route — and therefore the deploy gate it
+  > backs — starts answering `503 {"applied": null}` for every request,
+  > silently blocking every future deploy. Do **not** apply the `REVOKE ALL`
+  > above without also re-granting `SELECT` on `pgmigrations` specifically.
 - **Column-level on `users`.** The runtime reads `email_verified_at`, the auth
   columns, etc. Column grants would over-fit the current query shapes and break
   on the next `SELECT *`; **not recommended** — table-level DML is the right

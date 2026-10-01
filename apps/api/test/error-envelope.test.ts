@@ -267,6 +267,16 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /public/reactions",
     build: () => new Request("https://api.test/public/reactions"),
   },
+  // GET /health/schema (#116, deploy-time migration gate) validates
+  // `migration` BEFORE touching the DB — a missing param is the simplest
+  // reachable 400. test/health-schema.test.ts owns the rest of its error
+  // paths (malformed values, the 503 applied:null branch). See
+  // src/routes/health-schema.ts.
+  {
+    name: "400 health/schema with no migration param",
+    route: "GET /health/schema",
+    build: () => new Request("https://api.test/health/schema"),
+  },
   // GET /public/search (M2.4a) validates q/type/offset BEFORE touching the DB —
   // same "no lookup gating it" shape as /public/authors' malformed-cursor case
   // above. A too-short q is the simplest reachable 400. See src/routes/search.ts.
