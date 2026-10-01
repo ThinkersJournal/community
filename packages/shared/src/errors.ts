@@ -34,6 +34,12 @@ export type ApiErrorCode =
   // --- authorization -------------------------------------------------------
   | "ADMIN_REQUIRED"         // 401 — no valid Cloudflare Access identity (M4 2a)
   | "FORBIDDEN"              // 403 — origin/CSRF/Turnstile rejection
+  // 403 — #50 Q2: the account is banned or currently suspended. Said ONLY to
+  // someone who already proved they hold the account (a correct password at
+  // login, or the account's own live session in the pipeline) — a wrong
+  // password still gets INVALID_CREDENTIALS, so a stranger learns nothing.
+  // The body carries `barred` (AccountBarredDetail).
+  | "ACCOUNT_BARRED"
   | "EMAIL_NOT_VERIFIED"     // 403 — the soft gate
   | "ALREADY_VERIFIED"       // 409 — resend-verification on a verified account (T10)
   | "QUOTA_EXCEEDED"         // 403 — per-user media quota (T8)
@@ -85,7 +91,19 @@ export interface ApiErrorBody {
   fields?: string[];
   /** For USERNAME_TAKEN: a few available handle suggestions. Advisory; never branch on it. */
   suggestions?: string[];
+  /** For ACCOUNT_BARRED: which bar applies, and (for a suspension) when it ends. */
+  barred?: AccountBarredDetail;
 }
+
+/**
+ * #50 Q2 — what a barred user is told. `until` is the suspension's end as an
+ * ISO-8601 string. A ban has no end. No reason text yet: a suspension's reason
+ * lives in `moderation_actions`, and whether a CSAM termination may state its
+ * reason to the account holder is an open legal question (#114).
+ */
+export type AccountBarredDetail =
+  | { readonly kind: "banned" }
+  | { readonly kind: "suspended"; readonly until: string };
 
 /** Narrow an unknown parsed body to the envelope. Structural, not exhaustive. */
 export function isApiErrorBody(value: unknown): value is ApiErrorBody {

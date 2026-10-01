@@ -15,7 +15,7 @@
  *
  * ⚠️ NEITHER DO SIGNUP/LOGIN. See `runMutatingPipeline`'s own note.
  */
-import { isBarred } from "./account-status";
+import { accountBarredResponse, isBarred } from "./account-status";
 import { checkCsrf, checkOrigin } from "./csrf";
 import { enforceRateLimit } from "./ratelimit";
 import { destroySession, readSession } from "./session";
@@ -120,20 +120,6 @@ function unauthorized(extraHeaders: Record<string, string> = {}): Response {
   return errorResponse("UNAUTHORIZED", 401, { headers: extraHeaders });
 }
 
-/**
- * The refusal for a BARRED user's live session (issue #50) — today the same
- * 401 as a revoked session, so a bar reads exactly like the epoch kill the spec
- * pairs it with (`:174`) and tells the caller nothing new.
- *
- * ⚠️ THE ONE PLACE TO CHANGE if CireSnave rules that a barred user should be
- * told WHY (a distinct 403 `ACCOUNT_BARRED` — a DSA Art. 17
- * statement-of-reasons question, tied to #57's durable notices). Deliberately
- * not pre-built: until that ruling, a distinct code would be an account-state
- * signal nobody decided to send.
- */
-function barred(extraHeaders: Record<string, string>): Response {
-  return unauthorized(extraHeaders);
-}
 
 /**
  * The GET-side counterpart to `runMutatingPipeline`: resolve an authenticated,
@@ -313,7 +299,11 @@ export async function runMutatingPipeline(
   const account = await readAccountGate(env, ctx, session.userId);
   if (account !== null && isBarred(account)) {
     const { cookie } = await destroySession(env, request);
-    return barred({ "Set-Cookie": cookie });
+    // #50 Q2 (CireSnave: "If returning that they are banned lets us tell them
+    // why, we should do that."): a distinct 403 ACCOUNT_BARRED, not the 401 a
+    // revocation gets. Only the session's own holder reaches this line. The
+    // cleared cookie is the same as a revocation's.
+    return accountBarredResponse(account, { "Set-Cookie": cookie });
   }
 
   // ---- 6. Verified email (content routes only) — same row as step 5 --------

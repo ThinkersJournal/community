@@ -12,7 +12,8 @@
  *   4. lookup (FRESH)      — `SELECT id, password_hash, suspended_until,
  *                            disabled_at`.
  *   5. verify              — generic 401 on ANY failure (see below).
- *   6. barring refusal     — `isBarred(row)` (issue #35), generic 401.
+ *   6. barring refusal     — `isBarred(row)` (issue #35), 403 ACCOUNT_BARRED
+ *                            (#50 Q2; a wrong password never reaches it).
  *                            PLACEMENT IS LOAD-BEARING: after the verify,
  *                            before the rehash. Refusing any earlier would
  *                            let a barred account skip the expensive
@@ -85,7 +86,7 @@
  */
 import { LoginInput } from "@thinkersjournal/shared";
 
-import { isBarred } from "../auth/account-status";
+import { accountBarredResponse, isBarred } from "../auth/account-status";
 import { checkOrigin } from "../auth/csrf";
 import { base64urlEncode } from "../auth/encoding";
 import { hashPassword, needsRehash, verifyPassword } from "../auth/password";
@@ -268,7 +269,9 @@ export async function handleLogin(
   // verify above exists to prevent. See the file header for the full
   // load-bearing-order rationale and the AST guard that pins this window.
   if (isBarred(row)) {
-    return unauthorized();
+    // #50 Q2: told WHY, not a generic 401. Still only AFTER the password
+    // verify, so only the account's holder ever hears it.
+    return accountBarredResponse(row);
   }
 
   // ---- 7. Rehash-on-upgrade — ONLY after a successful verify -----------------
