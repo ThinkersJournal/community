@@ -82,7 +82,7 @@ signals only *prioritize* review, they do not decide it.
   harassment) without requiring a login through a public form at `/dsa-notice`. The reporter provides their name,
   email, the reason category, and a statement. They confirm their email address via
   a link we send them — until they do, the report is inert. Once confirmed, the
-  notice enters the review queue. **Notices are reviewed by a person; they never
+  notice goes to a moderator's review list. **Notices are reviewed by a person; they never
   hide content automatically.** After review, we email the reporter the outcome and
   the moderator's reason for the decision.
 

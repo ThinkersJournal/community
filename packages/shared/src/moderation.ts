@@ -62,7 +62,10 @@ export const DsaNoticeInput = z
     reason: z.enum(REPORT_REASONS),
     statement: z.string().trim().min(1).max(5000),
     reporterName: z.string().trim().min(1).max(200),
-    reporterEmail: z.email().toLowerCase(),
+    // M6 (final-review fix): cap at 254, the longest address RFC 5321 permits
+    // — `z.email()` alone has no length bound. Validations before the
+    // `.toLowerCase()` transform, same order as NormalizedEmail in schemas.ts.
+    reporterEmail: z.email().max(254).toLowerCase(),
     goodFaith: z.literal(true),
     turnstileToken: z.string().min(1),
   })
