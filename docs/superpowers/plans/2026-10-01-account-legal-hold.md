@@ -194,7 +194,7 @@ export function scrubReservedEmailIfUnbanned(c: Client, userId: string): Promise
   - `csam` → 409 with a new code `HOLD_NOT_RELEASABLE` (added to the closed union with a comment);
   - `already_released` → 409 `HOLD_NOT_RELEASABLE`;
   - `not_found`, or a hold belonging to a different user than `:handle` → 404.
-- `GET /admin/accounts/:handle` gains `holds: AdminAccountHold[]` (newest first).
+- `GET /admin/accounts/:handle` gains `holds: readonly AdminAccountHold[]` (newest first).
 
 - [ ] **Step 1: Failing tests:**
   - the gate on both POSTs (cross-site 403, no JWT 401);
