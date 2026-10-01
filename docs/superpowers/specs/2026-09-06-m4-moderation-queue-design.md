@@ -187,20 +187,30 @@ Separate table, deliberately: `reports.reporter_id` is `NOT NULL REFERENCES user
 auto-hide distinct-reporter count depends on it (`auto-hide.ts:31-37`), so anonymous notices
 cannot live there without breaking that counting.
 
+Ruling 2026-10-01 (PM): SET NULL so the Art.16(5)/17 outcome survives author deletion. DSA
+Art. 16(5)/17 require an outcome to the reporter whatever happens to the content, so an author
+must not be able to make a CONFIRMED notice disappear by deleting the post or comment it names.
+`target_kind` records which column the notice is against (so it stays identifiable once that
+column goes to NULL), and `target_label` is a title/excerpt snapshot taken at intake so the
+notice can still be named after its target is gone.
+
 ```sql
 CREATE TABLE dsa_notices (
   id                uuid PRIMARY KEY DEFAULT uuidv7(),
   reporter_email    citext NOT NULL,
   email_verified_at timestamptz,          -- NULL = unverified; the notice is INERT until set
   verify_token_hash text NOT NULL,        -- SHA-256 of the emailed token; never store the token
-  post_id           uuid REFERENCES posts(id)    ON DELETE CASCADE,
-  comment_id        uuid REFERENCES comments(id) ON DELETE CASCADE,
+  target_kind       text NOT NULL CHECK (target_kind IN ('post','comment')),
+  target_label      text NOT NULL,        -- snapshot at intake; survives the target's deletion
+  post_id           uuid REFERENCES posts(id)    ON DELETE SET NULL,
+  comment_id        uuid REFERENCES comments(id) ON DELETE SET NULL,
   reason            text NOT NULL CHECK (reason IN
                       ('spam','harassment','hate','sexual','violence','ip_infringement','other')),
   statement         text NOT NULL,        -- the notice body / explanation (DSA requires reasons)
   created_at        timestamptz NOT NULL DEFAULT now(),
   resolved_at       timestamptz,
-  CONSTRAINT dsa_notices_one_target CHECK ((post_id IS NULL) <> (comment_id IS NULL))
+  CONSTRAINT dsa_notices_one_target CHECK
+    ((target_kind = 'post' AND comment_id IS NULL) OR (target_kind = 'comment' AND post_id IS NULL))
 );
 CREATE INDEX dsa_notices_open_idx ON dsa_notices (created_at)
   WHERE email_verified_at IS NOT NULL AND resolved_at IS NULL;

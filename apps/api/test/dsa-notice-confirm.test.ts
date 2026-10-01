@@ -43,8 +43,10 @@ async function seedNotice(opts: {
   const hash = await sha256Hex(token);
   const id = await ctxRun(async (c) => {
     const { rows } = await c.query<{ id: string }>(
-      `INSERT INTO dsa_notices (reporter_email, reporter_name, good_faith, email_verified_at, verify_token_hash, post_id, reason, statement, created_at)
-       VALUES ($1, 'Reporter', true, $2, $3, $4, 'spam', 'illegal', now() - ($5 || ' days')::interval)
+      // Addendum (2026-10-01): target_kind/target_label are NOT NULL as of
+      // migration 0020's SET NULL ruling.
+      `INSERT INTO dsa_notices (reporter_email, reporter_name, good_faith, email_verified_at, verify_token_hash, target_kind, target_label, post_id, reason, statement, created_at)
+       VALUES ($1, 'Reporter', true, $2, $3, 'post', 'a target label', $4, 'spam', 'illegal', now() - ($5 || ' days')::interval)
        RETURNING id`,
       [
         `confirm-${crypto.randomUUID()}@example.test`,
