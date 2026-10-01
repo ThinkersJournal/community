@@ -1,6 +1,15 @@
 /**
  * DSA notices (spec §3.3, §8). ⚠️ AC-1: NOTHING here touches `reports`,
  * `hidden_at` or `maybeAutoHide`. A notice is queue input for a human only.
+ *
+ * `listOpenDsaNotices` below DELIBERATELY READS HIDDEN ROWS, same reasoning as
+ * `queue.ts`'s header: a notice may name content auto-hide (or a prior
+ * decision) has since hidden, and an admin still needs to see it to resolve
+ * the notice. It carries no `hidden_at IS NULL` predicate on purpose. This
+ * module lives outside `src/routes/`, which is the only tree
+ * `test/hidden-at-read-guard.node.test.ts` scans — the property that makes
+ * that safe is NOT its directory, it is that `listOpenDsaNotices` is reachable
+ * only through `requireAdmin` (routes/admin.ts's `handleListDsaNotices`).
  */
 import type { Client } from "pg";
 
@@ -101,4 +110,61 @@ export async function reapUnconfirmedDsaNotices(
     console.log(`reap-unconfirmed-dsa-notices: deleted ${n} notice(s)`);
   }
   return n;
+}
+
+/** A row in `GET /admin/dsa-notices` (before the JSON round-trip). */
+export interface OpenDsaNotice {
+  readonly id: string;
+  readonly kind: "post" | "comment";
+  readonly targetId: string;
+  /** Post title, or the first 120 characters of a comment — mirrors queue.ts's excerpt. */
+  readonly excerpt: string;
+  readonly reason: string;
+  readonly statement: string;
+  readonly reporterName: string;
+  readonly reporterEmail: string;
+  readonly createdAt: Date;
+}
+
+/**
+ * Every CONFIRMED, unresolved notice, oldest first — `GET /admin/dsa-notices`'s
+ * data source. "Confirmed" is `email_verified_at IS NOT NULL`; "unresolved" is
+ * `resolved_at IS NULL` — the same two predicates `decide.ts`'s resolution
+ * UPDATE uses, so a row this lists is exactly a row that UPDATE can still
+ * reach. See this module's header for why it reads hidden rows on purpose.
+ */
+export async function listOpenDsaNotices(c: Client): Promise<OpenDsaNotice[]> {
+  const { rows } = await c.query<{
+    id: string;
+    kind: "post" | "comment";
+    target_id: string;
+    excerpt: string;
+    reason: string;
+    statement: string;
+    reporter_name: string;
+    reporter_email: string;
+    created_at: Date;
+  }>(
+    `SELECT n.id, 'post' AS kind, p.id AS target_id, p.title AS excerpt,
+            n.reason, n.statement, n.reporter_name, n.reporter_email, n.created_at
+       FROM dsa_notices n JOIN posts p ON p.id = n.post_id
+      WHERE n.post_id IS NOT NULL AND n.email_verified_at IS NOT NULL AND n.resolved_at IS NULL
+     UNION ALL
+     SELECT n.id, 'comment' AS kind, c.id AS target_id, left(c.body_markdown, 120) AS excerpt,
+            n.reason, n.statement, n.reporter_name, n.reporter_email, n.created_at
+       FROM dsa_notices n JOIN comments c ON c.id = n.comment_id
+      WHERE n.comment_id IS NOT NULL AND n.email_verified_at IS NOT NULL AND n.resolved_at IS NULL
+      ORDER BY created_at ASC`,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    targetId: r.target_id,
+    excerpt: r.excerpt,
+    reason: r.reason,
+    statement: r.statement,
+    reporterName: r.reporter_name,
+    reporterEmail: r.reporter_email,
+    createdAt: r.created_at,
+  }));
 }

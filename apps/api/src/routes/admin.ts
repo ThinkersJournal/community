@@ -9,6 +9,8 @@ import { checkOrigin } from "../auth/csrf";
 import { errorResponse } from "../http/errors";
 import { applyDecision, type DecisionKind } from "../moderation/decide";
 import { sendModerationNotice } from "../moderation/notify-author";
+import { sendDsaOutcome } from "../moderation/notify-reporter";
+import { listOpenDsaNotices } from "../moderation/dsa-notices";
 import { purgeTags } from "../cache/purge";
 import { purgeTagsFor } from "../moderation/purge-target";
 import { requireAdmin } from "../admin/require-admin";
@@ -195,6 +197,22 @@ export async function handleAdminDecision(
     }),
   );
 
+  // DSA (spec §8): every CONFIRMED, open notice this ruling resolved (same
+  // transaction — see decide.ts) gets its reporter a statement of reasons.
+  // Same after-the-commit, waitUntil discipline as the author notice above.
+  for (const r of result.dsaReporters) {
+    ctx.waitUntil(
+      sendDsaOutcome(env, r.email, {
+        decision: decision as DecisionKind,
+        reason: reason.trim(),
+        subject,
+        postTitle: result.postTitle,
+      }).then((sent) => {
+        if (!sent) console.error("dsa outcome not sent", { noticeId: r.noticeId, actionId: result.actionId });
+      }),
+    );
+  }
+
   return new Response(JSON.stringify({ actionId: result.actionId }), {
     status: 200,
     headers: { "content-type": "application/json" },
@@ -301,4 +319,33 @@ export async function handleBackfillHiddenMedia(request: Request, env: Env, ctx:
 
   const result = await backfillHiddenMedia(env, ctx);
   return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+/**
+ * `GET /admin/dsa-notices` — every CONFIRMED, unresolved notice (Part of
+ * #113, Task 4). GET, so it does not touch the mutating pipeline, same shape
+ * as `GET /admin/media-access-requests` above. `listOpenDsaNotices` reads
+ * HIDDEN rows on purpose — see its header in `moderation/dsa-notices.ts`.
+ */
+export async function handleListDsaNotices(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  const notices = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => listOpenDsaNotices(c));
+  return new Response(
+    JSON.stringify({
+      notices: notices.map((n) => ({
+        id: n.id,
+        kind: n.kind,
+        targetId: n.targetId,
+        excerpt: n.excerpt,
+        reason: n.reason,
+        statement: n.statement,
+        reporterName: n.reporterName,
+        reporterEmail: n.reporterEmail,
+        createdAt: n.createdAt.toISOString(),
+      })),
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
 }

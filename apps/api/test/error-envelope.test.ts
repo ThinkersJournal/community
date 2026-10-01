@@ -448,6 +448,13 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /admin/accounts/:handle",
     build: () => new Request("https://api.test/admin/accounts/nobody"),
   },
+  // GET /admin/dsa-notices (Part of #113, Task 4) — same shape as GET
+  // /admin/media-access-requests directly above.
+  {
+    name: "401 admin dsa-notices list with no Access header",
+    route: "GET /admin/dsa-notices",
+    build: () => new Request("https://api.test/admin/dsa-notices"),
+  },
   // GET /media/restricted/:sha256 (#61) — a GET, so LAYER 1 never reaches it.
   // A malformed sha256 is its simplest reachable failure (NOT_FOUND, before
   // any auth check runs — src/routes/media-restricted.ts never distinguishes

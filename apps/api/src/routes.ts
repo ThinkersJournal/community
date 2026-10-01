@@ -28,6 +28,7 @@ import {
   handleAdminWhoami,
   handleApproveMediaAccess,
   handleBackfillHiddenMedia,
+  handleListDsaNotices,
   handleListMediaAccessRequests,
   handleRequestMediaAccess,
 } from "./routes/admin";
@@ -398,6 +399,13 @@ export const ROUTES: readonly RouteDef[] = [
   // admin UI's data source. Distinct method from the POST literal above, no
   // shadow risk.
   { method: "GET", pattern: "/admin/media-access-requests", handler: handleListMediaAccessRequests },
+
+  // `GET /admin/dsa-notices` (Part of #113, Task 4) — every CONFIRMED,
+  // unresolved DSA notice. Same Access trust domain/GET shape as
+  // /admin/media-access-requests directly above; resolved by POST
+  // /admin/decision (src/moderation/decide.ts), in the same transaction as
+  // the ruling.
+  { method: "GET", pattern: "/admin/dsa-notices", handler: handleListDsaNotices },
 
   // #61 — the one-off backfill for media already public despite belonging to
   // already-hidden content. Same Access trust domain/shape as the routes
