@@ -62,9 +62,15 @@ describe("/admin/media-access — the JWT-absent guard is the FIRST statement", 
 });
 
 describe("⚠️ two-person legibility (PM requirement, 2026-09-24) — the rule is visible BEFORE the click", () => {
-  it("compares the viewer's own identity (from /admin/whoami) against requestedBy, case/whitespace-insensitively — mirrors approveMediaAccess's own lower(trim()) rule", () => {
+  it("compares the viewer's own identity (from /admin/whoami) against requestedBy via the SHARED sameAdminHand — the function the api's case table pins against approveMediaAccess's SQL (#98)", () => {
     expect(source).toMatch(/function isOwnRequest/);
-    expect(source).toMatch(/requestedBy\.trim\(\)\.toLowerCase\(\)\s*===\s*viewerEmail\.trim\(\)\.toLowerCase\(\)/);
+    expect(source).toMatch(/import\s*\{[^}]*\bsameAdminHand\b[^}]*\}\s*from\s*"@thinkersjournal\/shared"/);
+    expect(source).toMatch(/viewerEmail !== null && sameAdminHand\(requestedBy, viewerEmail\)/);
+  });
+
+  it("#98: no local copy of the normalization — a hand-written compare here is exactly the one-sided pin #98 removed", () => {
+    const isOwn = source.slice(source.indexOf("function isOwnRequest"), source.indexOf("function isOwnRequest") + 200);
+    expect(isOwn).not.toMatch(/toLowerCase|trim\(/);
   });
 
   it("a self-made request renders explanatory text INSTEAD of an Approve button — not a button that fails on click", () => {

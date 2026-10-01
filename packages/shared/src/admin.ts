@@ -60,3 +60,47 @@ export interface AdminMediaAccessRequest {
 export interface AdminMediaAccessRequestsResponse {
   requests: AdminMediaAccessRequest[];
 }
+
+/**
+ * The two-person rule's "same hand?" test for Access identities — the JS
+ * side of it (#98). Access emails are not case-normalized upstream, so
+ * "Alice@x" approving "alice@x" is ONE hand, not two.
+ *
+ * The rule lives in four places that must agree: this function (used by the
+ * admin UI's `isOwnRequest` and `GET /media/restricted`'s read-side
+ * re-check), and two SQL copies that cannot import it — `approveMediaAccess`'s
+ * `WHERE` and the 0016 `media_access_requests_distinct_hands` CHECK, both
+ * `lower(trim(...))`. `SAME_ADMIN_HAND_CASES` below is run through all of
+ * them (packages/shared/test/admin.test.ts for this function,
+ * apps/api/test/media-restricted-route.test.ts for the SQL), so changing any
+ * one copy's normalization fails a test.
+ *
+ * ⚠️ KNOWN, NOT REACHABLE: Postgres `trim()` strips SPACES only; JS `.trim()`
+ * strips all whitespace. For an identity padded with a tab/newline this
+ * function says "same hand" where the SQL says "two". That direction fails
+ * CLOSED here (the UI hides Approve; the read side refuses to serve), and
+ * both identities come from a verified Access JWT's `email` claim, never
+ * user input. The table therefore holds only cases on which both sides
+ * agree — do not add a non-space whitespace case without changing the SQL.
+ */
+export function sameAdminHand(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+export interface SameAdminHandCase {
+  readonly a: string;
+  readonly b: string;
+  /** true = one hand (a self-approval, refused); false = two distinct hands. */
+  readonly same: boolean;
+}
+
+export const SAME_ADMIN_HAND_CASES: readonly SameAdminHandCase[] = [
+  { a: "alice@example.test", b: "alice@example.test", same: true },
+  { a: "Alice@Example.Test", b: "alice@example.test", same: true },
+  { a: "  alice@example.test  ", b: "alice@example.test", same: true },
+  { a: " ALICE@example.test", b: "alice@EXAMPLE.test ", same: true },
+  { a: "alice@example.test", b: "bob@example.test", same: false },
+  { a: "alice@example.test", b: "alice@example.org", same: false },
+  { a: "alice+review@example.test", b: "alice@example.test", same: false },
+  { a: "al ice@example.test", b: "alice@example.test", same: false },
+];
