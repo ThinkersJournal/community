@@ -1,0 +1,198 @@
+# Account Legal Hold — Design
+
+**Status:** Approved in sections by the PM, 2026-10-01 (design note + rulings below), and written here for audit, then plan.
+**Author:** Community controller agent, 2026-10-01. Board item 91 (superseded by this).
+
+## 0. Rulings
+
+- **CireSnave** (relayed by the PM, verbatim): *"A legal hold should block deletion. A legal hold is not the same as a simple
+  suspension. Do we need to separate the two?"* The PM answered yes: build an account-level legal hold that mirrors
+  `media_legal_holds`.
+- **PM:**
+  - `disabled_at`/`suspended_until` become **pure access-control** fields.
+  - **Deletion eligibility checks only the account hold.**
+  - Applies to both reapers:
+    - `anonymise-accounts` (user-requested deletion);
+    - `reap-unverified` (the 7-day unverified reaper). For this one the PM ruled himself: *"applying the SAME principle he just
+      decided ... to a second reaper with the identical underlying concern"*. **Spec AC-3 is reworded to reference the hold.**
+  - Trigger points T1–T3 (§3) approved.
+  - #132 keeps no deletion change; this lands as its own PR.
+- **Board item 93 (F1), RULED by CireSnave, option 2** (relayed by the PM): *scrub everything else about a banned account on
+  deletion as normal, but leave the EMAIL reserved/unscrubbed while the ban stands — not deleted, not released for a new
+  signup.* No hash table and no signup-side comparison. Built here, in §4a.
+
+## 1. What changes for a user
+
+| Account state | Can log in? | Deletion request scrubs it after 30 days? | Unverified reaper deletes it after 7 days? |
+|---|---|---|---|
+| Ordinary | yes | yes | yes (if unverified) |
+| Suspended, or a lapsed suspension | per `isBarred` (unchanged) | **yes**, unless held | **yes**, unless held |
+| Banned (not held) | no (unchanged) | **yes**, but the **email stays reserved** (§4a) | **yes** (see §4a's note) |
+| **Any state + an active account legal hold** | per `isBarred` | **no**: the request is recorded and waits | **no** |
+
+`signup.ts`'s upsert guard (it refuses to overwrite a **barred** unverified row) is access control and **stays unchanged**
+(PM confirmed). Otherwise a stranger could take over a barred account by re-signing up (#50 Q3b).
+
+## 2. Data
+
+```sql
+CREATE TABLE account_legal_holds (
+  id                   uuid PRIMARY KEY DEFAULT uuidv7(),
+  user_id              uuid NOT NULL,          -- bare: evidence outlives its subject (same reasoning as 0013)
+  category             text NOT NULL CHECK (category IN ('csam', 'dmca', 'other')),
+  imposed_by           text NOT NULL,          -- Access identity, or 'system' for an automatic hold
+  moderation_action_id uuid,                   -- bare: the action that triggered it
+  reason               text NOT NULL,
+  imposed_at           timestamptz NOT NULL DEFAULT now(),
+  released_at          timestamptz,
+  released_by          text,
+  release_reason       text,
+  CONSTRAINT account_legal_holds_release_consistent CHECK (
+    (released_at IS NULL AND released_by IS NULL AND release_reason IS NULL)
+    OR (released_at IS NOT NULL AND released_by IS NOT NULL AND release_reason IS NOT NULL)),
+  -- ⚠️ CSAM holds are never released by the app (legal-hold.ts's rule, mirrored).
+  CONSTRAINT account_legal_holds_csam_never_released CHECK (category <> 'csam' OR released_at IS NULL)
+);
+-- At most one ACTIVE hold per (user, category); history is kept.
+CREATE UNIQUE INDEX account_legal_holds_active_idx ON account_legal_holds (user_id, category) WHERE released_at IS NULL;
+```
+
+Unlike `media_legal_holds`, which is permanent per key, this table keeps released rows as history, because a DMCA or
+other hold on an account may legitimately end. A release is an UPDATE. Everything else is refused:
+
+```sql
+CREATE FUNCTION account_legal_holds_guard() RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'DELETE' OR TG_OP = 'TRUNCATE' THEN
+    RAISE EXCEPTION 'account_legal_holds is append-only (release by UPDATE of the release columns)';
+  END IF;
+  -- UPDATE: only a release of a currently-active hold, and only the three release columns change.
+  IF OLD.released_at IS NOT NULL THEN
+    RAISE EXCEPTION 'account_legal_holds: a released hold is final';
+  END IF;
+  IF NEW.id IS DISTINCT FROM OLD.id OR NEW.user_id IS DISTINCT FROM OLD.user_id
+     OR NEW.category IS DISTINCT FROM OLD.category OR NEW.imposed_by IS DISTINCT FROM OLD.imposed_by
+     OR NEW.moderation_action_id IS DISTINCT FROM OLD.moderation_action_id
+     OR NEW.reason IS DISTINCT FROM OLD.reason OR NEW.imposed_at IS DISTINCT FROM OLD.imposed_at THEN
+    RAISE EXCEPTION 'account_legal_holds: only released_at/released_by/release_reason may change';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER account_legal_holds_row_guard BEFORE UPDATE OR DELETE ON account_legal_holds
+  FOR EACH ROW EXECUTE FUNCTION account_legal_holds_guard();
+CREATE TRIGGER account_legal_holds_no_truncate BEFORE TRUNCATE ON account_legal_holds
+  FOR EACH STATEMENT EXECUTE FUNCTION account_legal_holds_guard();
+```
+
+(For TRUNCATE, `OLD` is unavailable, which is why that branch **raises** first, before anything reads `OLD`.) The release-consistency and
+CSAM-never-released CHECKs apply on top.
+
+## 3. Trigger points
+
+- **T1: content decision with a legal hold.** `POST /admin/decision` with `legalHold: true` already holds the content's
+  images. ⚠️ That image hold runs **after** the decision commits, as a best-effort side effect
+  (`applyMediaVisibilityChange`, `visibility-hook.ts`; `legalHold`/`legalHoldCategory` are parsed in `routes/admin.ts`
+  and never reach `DecisionInput`). The account hold is **new in-transaction behaviour**, not a copy of that pattern:
+  - thread the category from the route into `DecisionInput` as `accountHold?: { readonly category: LegalHoldCategory }`;
+  - `applyDecision` (`applyDecisionInTx` once plan B lands) inserts the author's hold (`row.author_id` is in scope)
+    immediately after `recordModerationAction`, with that action's id, using
+    `ON CONFLICT (user_id, category) WHERE released_at IS NULL DO NOTHING`.
+
+  A failure anywhere in the decision then leaves neither a decision nor a hold (AH-3). The image hold stays post-commit,
+  as it is.
+- **T2: CSAM intake (#114).** Every uploader in a case gets a `csam` account hold in the intake transaction, **whether or
+  not R1 bars them** (a hold blocks deletion, not access). ⚠️ This is a **new step 7a over the FULL uploader set** that
+  step 3 resolves. It is **not** a line inside step 7: step 7 loops only over the uploaders §3.4 bars, so adding it
+  there would leave every unbarred uploader deletable. 7a runs for every uploader, before or after step 7, with the
+  case's `csam_hold` action id. The #114 spec (§3.3) and plan (Task 6) are updated in this PR to add 7a, with a test
+  that an **unbarred** uploader (`CSAM_BAR_UNREVIEWED_MATCH = false`, `cloudflare_match`) is held. While there, the #114
+  plan's two references to `#126 … migration 0020` become `0021` (#126 was renumbered).
+- **T3: manual.**
+  - **Impose:** `POST /admin/accounts/:handle/holds` `{ category: "dmca" | "other", reason }`. `csam` is excluded here:
+    CSAM holds come only from T1/T2, where there is evidence of the case.
+  - **Release:** `POST /admin/accounts/:handle/holds/:id/release` `{ reason }`. It is refused for `csam`, and **refused
+    when the releasing admin is the one who imposed it** (`sameAdminHand`, #98: the two-person pattern from #61).
+  - Both write a `moderation_actions` row. New kinds: `account_hold`, `account_hold_release`.
+- The **admin account page** shows active holds and their history, with impose and release forms.
+
+## 4. Deletion eligibility
+
+Both reapers replace their `disabled_at`/`suspended_until` predicates with:
+
+```sql
+AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id AND h.released_at IS NULL)
+```
+
+- `anonymise-accounts.ts`: the hold check is the **only** deletion-eligibility gate besides its existing
+  deletion-requested-30-days condition.
+- `reap-unverified.ts`: the same.
+- Their header comments are rewritten to say why a hold, not a ban, is the gate.
+- A held account's deletion request stays recorded. Once the hold is released, the next nightly run proceeds.
+- ⚠️ **Two existing test blocks assert the OLD rule and must be REWRITTEN, not made to pass by putting the ban checks
+  back:**
+  - `apps/api/test/reap-unverified.test.ts`, `describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)")`;
+  - `apps/api/test/anonymise-accounts.test.ts`, `describe("anonymiseExpiredAccounts — a barred account is never scrubbed")`.
+
+  Their banned/suspended fixtures with **no** hold now **are** reaped or scrubbed (AH-2). New fixtures that **insert an
+  `account_legal_holds` row** survive (AH-1), including one that is held but neither banned nor suspended, which proves
+  the hold alone gates it.
+
+## 4a. A banned account's email stays reserved (board item 93, option 2)
+
+- In `anonymise-accounts.ts`, when the account being scrubbed has `disabled_at IS NOT NULL` (in steady state that means a
+  ban, because a termination is always held by T2/7a or the backfill, so it never reaches the reaper),
+  **keep `users.email` as it is**. Everything else is scrubbed exactly as today: password hash, display name, bio, the
+  handle (released), and the other personal fields the function already clears. `anonymised_at` is set as usual.
+- Re-signup with that email is then refused by what already exists: `users.email` is `citext UNIQUE`, and the signup
+  upsert's `ON CONFLICT … DO UPDATE … WHERE` is a conjunction that fails on **both** `email_verified_at IS NULL` (a
+  verified account) **and** the barred-row clauses (`signup.ts`, unchanged). So it updates 0 rows and answers
+  `EMAIL_TAKEN`, the response any taken email gets. **Pin both with a test:** a deleted,
+  banned account's email cannot be used to sign up again, and gets the same response a taken email gets today.
+- **"While the ban stands":** if the ban is later lifted on an already-anonymised account (plan B's appeal grant, or
+  any future unban), the email must be scrubbed **then**. Plan B's ban-lift path gains one statement: if `anonymised_at`
+  is set, scrub `email` with the same sentinel `anonymise-accounts` uses. Until plan B lands there is no unban path in
+  the app. This PR builds and tests the helper `scrubReservedEmailIfUnbanned(c, userId)` (it checks `anonymised_at`
+  itself and is a no-op otherwise), **and plan B's plan (`2026-10-01-m4-2c-appeals.md`, Task 6, `resolveAppeal`'s
+  `user_ban` branch) is amended now to call it right after the ban is lifted**, so the obligation travels with the
+  plan its implementer reads.
+- The unverified reaper hard-DELETEs rows, so a banned unverified account with no hold is deleted outright, email
+  included. That reopens the evasion only for an account that **never verified its email**, which couldn't post. It's
+  accepted and stated, and it's consistent with the PM's AC-3 ruling (a hold, not a ban, protects).
+
+## 5. Migration and backfill
+
+- Migration: the table, the trigger, and the two new `moderation_actions` action kinds (rebuild the CHECK from the
+  **latest** list).
+- **Backfill (in the same migration):** every account whose `disabled_reason = 'terminate'` gets a `csam` hold
+  (`imposed_by = 'system'`, `reason = 'backfill: terminated before account holds existed'`). Without it, the switch would
+  make previously-protected terminated accounts deletable.
+- ⚠️ **The backfill's signal only exists once plan A's code is live.** On `main`, nothing writes
+  `disabled_reason = 'terminate'` yet (plan A's `account-actions.ts`, PR #132, is the only writer). Merge order then
+  doesn't matter: the backfill is idempotent (`ON CONFLICT … DO NOTHING`), and every terminate made **after** this lands
+  is held by T2/7a at the moment of termination. The backfill covers only terminations that happened before this
+  migration, by hand or by plan A's code.
+- **Plain bans** (`disabled_reason = 'ban'`) are **not** backfilled. That's the decision CireSnave made: a ban is not a
+  legal hold. Accounts that were only suspended aren't either. As of 2026-10-01 production has no barred accounts
+  (pre-launch), so in practice the backfill is a no-op. The SQL still exists because the code must not depend on that.
+
+## 6. Acceptance conditions
+
+| # | Condition |
+|---|---|
+| AH-1 | An account with an active hold is **not** anonymised and **not** reaped, whatever its ban or suspension state. Shown to fail without the hold check. |
+| AH-2 | An account with **no** hold is anonymised or reaped normally **even if banned or suspended**. This is the decoupling, and AC-3 is reworded to match. |
+| AH-3 | T1: a `legalHold` decision creates the author's account hold in the same transaction (a forced failure leaves neither). |
+| AH-4 | A CSAM hold cannot be released: the route refuses, and the DB CHECK refuses. A non-CSAM hold cannot be released by its imposer. |
+| AH-5 | The backfill holds every terminated account and no plain-banned one. |
+| AH-6 | `signup.ts`'s barred-row guard is unchanged; its existing test still passes. |
+| AH-7 | Deleting a banned account scrubs everything **except** the email; signing up again with that email is refused. Lifting the ban afterwards (`scrubReservedEmailIfUnbanned`) scrubs it. Shown to fail when the email-keeping branch is removed. |
+
+**Spec edit (AC-3):** in `2026-09-06-m4-moderation-queue-design.md` §12, AC-3 becomes *"A **legally held** unverified
+account survives `reapUnverifiedAccounts`. Otherwise the evidence a hold protects is silently deleted after 7 days.
+(Reworded 2026-10-01: a ban alone is access control, not a hold, per CireSnave.)"* §3.2's reaper bullet changes to
+match.
+
+## 7. Out of scope
+
+- A hold's effect on the user's ability to log in. There's none: holds and access are separate on purpose.
