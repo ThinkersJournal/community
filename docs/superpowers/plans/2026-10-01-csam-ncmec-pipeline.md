@@ -160,6 +160,9 @@ In `reachability.ts`, delete `MEDIA_KEY_REGEX_SQL` and import `MEDIA_KEY_SQL_PAT
 
 ```ts
 describe("the suspensionHours guard survives the split", () => {
+  // Proves the named error and no writes. It does NOT isolate the wrapper's own
+  // pre-BEGIN copy of the guard (the InTx copy would produce the same result);
+  // that copy is kept for unchanged behaviour, not because this test pins it.
   it("applyAccountAction: suspend without hours throws the named error and writes nothing", async () => {
     const u = await mkUser();
     await expect(apply({ ...base, userId: u, kind: "suspend", reason: "x" })).rejects.toThrow(/suspend requires suspensionHours/);
@@ -184,6 +187,9 @@ describe("applyAccountActionInTx — transaction-neutral (spec §3.3)", () => {
       await c.query("BEGIN");
       const out = await applyAccountActionInTx(c, { ...base, userId: u, kind: "terminate", reason: "x" });
       expect(out.kind).toBe("applied");
+      // An inner ROLLBACK on the applied path would also leave the DB clean, so
+      // prove the transaction is still OPEN (SAVEPOINT errors outside one).
+      await expect(c.query("SAVEPOINT still_open_applied")).resolves.toBeDefined();
       await c.query("ROLLBACK");
     });
     expect(await status(u)).toEqual({ suspended_until: null, disabled_at: null, disabled_reason: null });
@@ -233,7 +239,7 @@ export async function applyAccountAction(c: Client, input: AccountActionInput): 
 }
 ```
 
-- [ ] **Step 4:** run the whole `account-actions.test.ts` (Task 1's 9 tests from plan A must still pass, unchanged) plus `admin-accounts-route.test.ts` → PASS.
+- [ ] **Step 4:** run the whole `account-actions.test.ts` (plan A's 9 `applyAccountAction` tests must still pass, unchanged) plus `admin-accounts-route.test.ts` → PASS.
 - [ ] **Step 5:** commit `refactor(moderation): split applyAccountActionInTx for the CSAM intake transaction (Part of #114)`.
 
 ---
