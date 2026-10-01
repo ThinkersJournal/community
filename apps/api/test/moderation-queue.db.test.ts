@@ -140,3 +140,107 @@ describe("listOpenQueue", () => {
     expect(idsOf(await listOpenQueue(client))).toContain(post);
   });
 });
+
+describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderator already ruled on", () => {
+  // CireSnave: "It should be the oldest active report...not ruled on report."
+  // Only oldestReportAt changes; reportCount and severityRank stay cumulative
+  // (the reopen test above pins reportCount === 2), per the PM's scoping.
+
+  async function reportCreatedAt(reporter: string, column: "post_id" | "comment_id", target: string): Promise<Date> {
+    const { rows } = await client.query<{ created_at: Date }>(
+      `SELECT created_at FROM reports WHERE reporter_id = $1 AND ${column} = $2`, [reporter, target],
+    );
+    expect(rows).toHaveLength(1);
+    return rows[0]!.created_at;
+  }
+
+  async function mkComment(author: string, postId: string): Promise<string> {
+    const id = randomUUID();
+    await client.query(
+      `INSERT INTO comments (id, post_id, author_id, parent_id, path, depth, body_markdown)
+       VALUES ($1, $2, $3, NULL, $4, 0, 'a comment')`, [id, postId, author, id],
+    );
+    return id;
+  }
+
+  it("a REOPENED post's oldestReportAt is the first report AFTER the ruling", async () => {
+    const author = await mkUser();
+    const r1 = await mkUser();
+    const r2 = await mkUser();
+    const post = await mkPost(author, "Reopened-age");
+    await report(r1, post, "spam", 60);
+    await act(post, "content_keep_hidden");
+    await report(r2, post, "hate");
+
+    const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
+    expect(item.oldestReportAt.getTime()).toBe((await reportCreatedAt(r2, "post_id", post)).getTime());
+    expect(item.oldestReportAt.getTime()).not.toBe((await reportCreatedAt(r1, "post_id", post)).getTime());
+    expect(item.reportCount).toBe(2); // unchanged: still cumulative
+  });
+
+  it("a REOPENED comment's oldestReportAt is the first report AFTER the ruling", async () => {
+    const author = await mkUser();
+    const r1 = await mkUser();
+    const r2 = await mkUser();
+    const post = await mkPost(author, "Comment-host");
+    const comment = await mkComment(author, post);
+    await client.query(
+      `INSERT INTO reports (reporter_id, comment_id, reason, created_at) VALUES ($1, $2, 'spam', now() - interval '60 minutes')`,
+      [r1, comment],
+    );
+    await client.query(
+      `INSERT INTO moderation_actions (actor_admin, action, comment_id, reason) VALUES ('queue-test', 'content_keep_hidden', $1, 'test')`,
+      [comment],
+    );
+    await client.query(`INSERT INTO reports (reporter_id, comment_id, reason) VALUES ($1, $2, 'hate')`, [r2, comment]);
+
+    const item = (await listOpenQueue(client)).find((i) => i.targetId === comment)!;
+    expect(item.oldestReportAt.getTime()).toBe((await reportCreatedAt(r2, "comment_id", comment)).getTime());
+  });
+
+  // A report stamped at the SAME instant as the ruling keeps the item open
+  // (the open test is a strict `ma.created_at > newest_report_at`), so it must
+  // also count as active — otherwise an open item would have no age at all.
+  it("a report at the EXACT instant of the ruling is active (the tie that keeps the item open)", async () => {
+    const author = await mkUser();
+    const r1 = await mkUser();
+    const r2 = await mkUser();
+    const post = await mkPost(author, "Tie");
+    const tie = new Date(Date.now() - 30 * 60_000);
+    await report(r1, post, "spam", 60);
+    await client.query(
+      `INSERT INTO moderation_actions (actor_admin, action, post_id, reason, created_at)
+       VALUES ('queue-test', 'content_keep_hidden', $1, 'test', $2)`, [post, tie],
+    );
+    await client.query(`INSERT INTO reports (reporter_id, post_id, reason, created_at) VALUES ($1, $2, 'hate', $3)`, [r2, post, tie]);
+
+    const item = (await listOpenQueue(client)).find((i) => i.targetId === post);
+    expect(item).toBeDefined();
+    expect(item!.oldestReportAt?.getTime()).toBe(tie.getTime());
+  });
+
+  it("CONTROL: a never-ruled item's oldestReportAt is still its first report", async () => {
+    const author = await mkUser();
+    const r1 = await mkUser();
+    const r2 = await mkUser();
+    const post = await mkPost(author, "Never-ruled");
+    await report(r1, post, "spam", 60);
+    await report(r2, post, "hate");
+
+    const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
+    expect(item.oldestReportAt.getTime()).toBe((await reportCreatedAt(r1, "post_id", post)).getTime());
+  });
+
+  it("a NON-content action rules on nothing: the first report still counts as active", async () => {
+    const author = await mkUser();
+    const r1 = await mkUser();
+    const r2 = await mkUser();
+    const post = await mkPost(author, "Warned-age");
+    await report(r1, post, "spam", 60);
+    await act(post, "user_warn");
+    await report(r2, post, "hate");
+
+    const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
+    expect(item.oldestReportAt.getTime()).toBe((await reportCreatedAt(r1, "post_id", post)).getTime());
+  });
+});
