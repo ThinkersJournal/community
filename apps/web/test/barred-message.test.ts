@@ -37,6 +37,14 @@ describe("barredMessage", () => {
   });
 });
 
+describe("#113 — the reason", () => {
+  it("is appended when present", () => {
+    expect(barredMessage({ code: "ACCOUNT_BARRED", barred: { kind: "banned", reason: "spam" } })).toBe(
+      "This account has been banned. Reason given by the moderator: spam",
+    );
+  });
+});
+
 describe("login.astro uses it", () => {
   const source = readFileSync(join(import.meta.dirname, "../src/pages/login.astro"), "utf8");
 

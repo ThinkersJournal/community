@@ -1,0 +1,198 @@
+---
+/**
+ * `/admin/accounts/:handle` — the enforcement ladder's account page (#113
+ * plan A). Linked from `/admin/queue` (spec decision #3: content decision and
+ * account action are separate, deliberate steps — this page is NOT reachable
+ * from the queue's decision form). Same shape and same trust-boundary
+ * properties as `/admin/queue.astro` and `/admin/media-access.astro` — see
+ * those files' headers for the full reasoning.
+ *
+ * ⚠️⚠️ THE SAME PROPERTY AS THE QUEUE PAGE: no account content (a handle, a
+ * suspension date, a history row) reaches the HTML on any request that does
+ * not carry a verified Access JWT. The guard is the FIRST statement, before
+ * markPrivate, before the CSP, before any api call.
+ *
+ * ⚠️ `terminate` is deliberately never offered here — it is the CSAM path
+ * (#114), which calls the primitive itself and has no admin button.
+ */
+import BaseLayout from "../../../components/BaseLayout.astro";
+import { adminApiErrorCode, adminApiFetch } from "../../../lib/admin-api";
+import { markPrivate } from "../../../lib/cache";
+import { setPublicPageCsp } from "../../../lib/csp";
+
+import {
+  ACCESS_JWT_HEADER,
+  ADMIN_ACCOUNT_ACTIONS,
+  DEFAULT_SUSPENSION_HOURS,
+  REPORT_REASONS,
+  SUSPENSION_HOURS,
+  type AdminAccountActionKind,
+  type AdminAccountResponse,
+} from "@thinkersjournal/shared";
+
+// ⚠️⚠️ THE GUARD — see this file's header. Nothing above this line does
+// anything; nothing below it may run when this returns.
+const accessJwt = Astro.request.headers.get(ACCESS_JWT_HEADER);
+if (accessJwt === null || accessJwt === "") {
+  return new Response(null, { status: 401 });
+}
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+const handle = Astro.params.handle ?? "";
+let actionError: string | null = null;
+let actionOk = false;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const action = form.get("action");
+  const res = await adminApiFetch(`/admin/accounts/${encodeURIComponent(handle)}/actions`, {
+    method: "POST",
+    accessJwt,
+    origin: Astro.request.headers.get("Origin") ?? "",
+    body: {
+      action,
+      reason: form.get("reason"),
+      ...(form.get("violationCategory") ? { violationCategory: form.get("violationCategory") } : {}),
+      ...(action === "suspend" ? { suspensionHours: Number(form.get("suspensionHours")) } : {}),
+      ...(action === "ban" ? { confirmBan: form.get("confirmBan") === "on" } : {}),
+    },
+  });
+  if (res.status === 200) actionOk = true;
+  else actionError = adminApiErrorCode(res) ?? "ACTION_FAILED";
+}
+
+const accountResp = await adminApiFetch<AdminAccountResponse>(`/admin/accounts/${encodeURIComponent(handle)}`, { accessJwt });
+const account = accountResp.status === 200 ? accountResp.data : null;
+const loadError = accountResp.status !== 200 ? (adminApiErrorCode(accountResp) ?? "ACCOUNT_LOAD_FAILED") : null;
+
+function suspensionLabel(hours: number): string {
+  if (hours === 24) return "24h";
+  if (hours === 720) return "30 days";
+  return "7 days";
+}
+
+/**
+ * The account-state line (Review Focus 7). THREE disjoint states, not two:
+ * a `disabledAt` is either the permanent ban rung or the CSAM `terminate`
+ * path (#114 — never offered by this page's own form, but a moderator can
+ * still be looking at an account terminated elsewhere), and a `suspendedUntil`
+ * in the past is a LAPSED suspension, not a current one — the account is free,
+ * and saying "Suspended until <past date>" would read as still in force.
+ */
+function stateLine(account: AdminAccountResponse): string {
+  if (account.disabledAt) {
+    return account.disabledReason === "terminate"
+      ? `Terminated (CSAM path) since ${account.disabledAt}`
+      : `Banned since ${account.disabledAt}`;
+  }
+  if (account.suspendedUntil) {
+    return new Date(account.suspendedUntil).getTime() <= Date.now()
+      ? `Suspension ended ${account.suspendedUntil}`
+      : `Suspended until ${account.suspendedUntil}`;
+  }
+  return "In good standing";
+}
+---
+<BaseLayout title={`Account — ${handle}`}>
+  <div class="wrap admin-page">
+    <h1>Account — @{handle}</h1>
+    <p class="admin-nav"><a class="link" href="/admin/queue">← Moderation queue</a></p>
+    {actionError && <p class="err">Action failed: {actionError}</p>}
+    {actionOk && <p class="ok">Action recorded.</p>}
+    {loadError && <p class="err">Could not load the account: {loadError}</p>}
+    {
+      account && (
+        <>
+          <p class="state">{stateLine(account)}</p>
+          {!account.disabledAt && (
+            <p class="suggested">Suggested next step: {account.suggestedNext} (advisory)</p>
+          )}
+
+          <h2>History</h2>
+          {
+            account.history.length === 0 ? (
+              <p id="no-history">No prior actions.</p>
+            ) : (
+              <ul class="history">
+                {account.history.map((h) => (
+                  <li class="history-item">
+                    <p class="action">{h.action}</p>
+                    <p class="meta">
+                      {h.createdAt} · {h.reason} ·{" "}
+                      {h.countsTowardEscalation ? "counts toward escalation" : "older than 12 months"}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )
+          }
+
+          {
+            account.disabledAt ? (
+              <p class="banned">This account is banned.</p>
+            ) : (
+              <form method="POST" class="action-form">
+                <label>
+                  Statement of reasons (shown to the user)
+                  <textarea name="reason" required maxlength="2000" />
+                </label>
+                <label>
+                  Violation category (optional)
+                  <select name="violationCategory">
+                    <option value="">—</option>
+                    {REPORT_REASONS.map((cat) => (
+                      <option value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Suspension duration
+                  <select name="suspensionHours">
+                    {SUSPENSION_HOURS.map((hrs) => (
+                      <option value={hrs} selected={hrs === DEFAULT_SUSPENSION_HOURS}>
+                        {suspensionLabel(hrs)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label class="confirm-ban">
+                  <input type="checkbox" name="confirmBan" />
+                  I confirm a permanent ban
+                </label>
+                <div class="action-buttons">
+                  {ADMIN_ACCOUNT_ACTIONS.map((a: AdminAccountActionKind) => (
+                    <button type="submit" name="action" value={a} class="btn btn-ghost">
+                      {a}
+                    </button>
+                  ))}
+                </div>
+              </form>
+            )
+          }
+        </>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .admin-page{padding:clamp(40px,7vw,80px) 0}
+  .admin-nav{margin:4px 0 20px}
+  .err{color:var(--red, #e5484d)}
+  .ok{color:var(--green)}
+  .state{font-weight:600}
+  .suggested{color:var(--muted);font-size:14px;margin-bottom:24px}
+  .history{list-style:none;display:flex;flex-direction:column;gap:12px;margin:12px 0 32px}
+  .history-item{border:1px solid var(--line);border-radius:8px;padding:12px}
+  .history-item .action{font-weight:600}
+  .history-item .meta{color:var(--muted);font-size:13px;margin-top:4px}
+  .banned{color:var(--muted);font-style:italic}
+  .action-form{display:flex;flex-direction:column;gap:10px;max-width:480px;margin:20px 0 32px;
+    padding:16px;border:1px solid var(--line);border-radius:8px}
+  .action-form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .action-form label.confirm-ban{flex-direction:row;align-items:center;gap:8px}
+  .action-form input,.action-form textarea,.action-form select{background:var(--ink2);border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;color:var(--text);font:inherit}
+  .action-buttons{display:flex;gap:10px;flex-wrap:wrap}
+</style>

@@ -70,9 +70,9 @@ signals only *prioritize* review, they do not decide it.
 - **Actions ladder.** For confirmed violations, enforcement generally escalates:
   **warning → temporary suspension → permanent ban**, proportionate to severity
   and history. Severe violations (e.g. CSAM, credible threats) skip the ladder and
-  result in immediate termination. [[NOT YET TRUE — status 2026-10-01: no suspension
-  or termination mechanism exists yet (#113, #114). Content-level actions (hide,
-  remove, legal hold) do exist.]]
+  result in immediate termination. [[STATUS — warning, suspension and ban exist (#113 plan A). "Immediate
+  termination" for CSAM exists as a primitive but is not yet wired to detection
+  or NCMEC reporting (#114). Appeals: #113 plan B.]]
 - **Appeals.** If your content or account is actioned, you may appeal through
   [[APPEAL_CHANNEL]]. A different reviewer, where practical, reviews the appeal.
 - **Audit.** Moderation actions are recorded in an append-only internal log for

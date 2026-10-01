@@ -15,7 +15,7 @@
  *
  * ⚠️ NEITHER DO SIGNUP/LOGIN. See `runMutatingPipeline`'s own note.
  */
-import { accountBarredResponse, isBarred } from "./account-status";
+import { accountBarredResponse, isBarred, loadBarReason } from "./account-status";
 import { checkCsrf, checkOrigin } from "./csrf";
 import { enforceRateLimit } from "./ratelimit";
 import { destroySession, readSession } from "./session";
@@ -80,7 +80,7 @@ async function readAccountGate(
 ): Promise<AccountGateRow | null> {
   return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<AccountGateRow>(
-      "SELECT email_verified_at, suspended_until, disabled_at FROM users WHERE id = $1",
+      "SELECT email_verified_at, suspended_until, disabled_at, disabled_reason FROM users WHERE id = $1",
       [userId],
     );
     return rows[0] ?? null;
@@ -303,7 +303,8 @@ export async function runMutatingPipeline(
     // why, we should do that."): a distinct 403 ACCOUNT_BARRED, not the 401 a
     // revocation gets. Only the session's own holder reaches this line. The
     // cleared cookie is the same as a revocation's.
-    return accountBarredResponse(account, { "Set-Cookie": cookie });
+    const reason = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => loadBarReason(c, session.userId, account));
+    return accountBarredResponse(account, { "Set-Cookie": cookie }, reason);
   }
 
   // ---- 6. Verified email (content routes only) — same row as step 5 --------

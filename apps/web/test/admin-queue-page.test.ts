@@ -82,3 +82,12 @@ describe("/admin/queue — the JWT-absent guard is the FIRST statement, nothing 
     expect(source).toContain('form.get("decision")');
   });
 });
+
+describe("#113 — the queue LINKS to the account page and offers no account action (spec decision #3)", () => {
+  it("links each item's author", () => {
+    expect(source).toMatch(/href=\{`\/admin\/accounts\/\$\{encodeURIComponent\(item\.authorHandle\)\}`\}/);
+  });
+  it("has no account-action control on the decision form", () => {
+    expect(source).not.toMatch(/\b(suspend|ban|warn)\b/i);
+  });
+});

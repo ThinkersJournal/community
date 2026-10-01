@@ -40,6 +40,12 @@ export type ApiErrorCode =
   // password still gets INVALID_CREDENTIALS, so a stranger learns nothing.
   // The body carries `barred` (AccountBarredDetail).
   | "ACCOUNT_BARRED"
+  // 409 — #113: a warn/suspend/ban on an account that is already permanently
+  // disabled (banned, or terminated on the CSAM path). A second ban would be a
+  // log row that changes nothing; a suspension or warning of a disabled account
+  // would read as a step DOWN the ladder. "Disabled", not "banned": the code
+  // must not tell a moderator a terminated account was merely banned.
+  | "ACCOUNT_ALREADY_DISABLED"
   | "EMAIL_NOT_VERIFIED"     // 403 — the soft gate
   | "ALREADY_VERIFIED"       // 409 — resend-verification on a verified account (T10)
   | "QUOTA_EXCEEDED"         // 403 — per-user media quota (T8)
@@ -97,13 +103,14 @@ export interface ApiErrorBody {
 
 /**
  * #50 Q2 — what a barred user is told. `until` is the suspension's end as an
- * ISO-8601 string. A ban has no end. No reason text yet: a suspension's reason
- * lives in `moderation_actions`, and whether a CSAM termination may state its
+ * ISO-8601 string. A ban has no end. `reason` is the moderator's statement of
+ * reasons from the newest suspend or ban action against this account (#113)
+ * — NEVER sent for a `terminate` (the CSAM path): whether to state that one's
  * reason to the account holder is an open legal question (#114).
  */
 export type AccountBarredDetail =
-  | { readonly kind: "banned" }
-  | { readonly kind: "suspended"; readonly until: string };
+  | { readonly kind: "banned"; readonly reason?: string }
+  | { readonly kind: "suspended"; readonly until: string; readonly reason?: string };
 
 /** Narrow an unknown parsed body to the envelope. Structural, not exhaustive. */
 export function isApiErrorBody(value: unknown): value is ApiErrorBody {
