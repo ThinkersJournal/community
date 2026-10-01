@@ -50,7 +50,7 @@ behalf under contract:
 
 | Provider | Purpose |
 |---|---|
-| **Cloudflare** | Application runtime (Workers), image/object storage (R2), database connection pooling, session storage, bot detection (Turnstile), and CSAM scanning. |
+| **Cloudflare** | Application runtime (Workers), image/object storage (R2), database connection pooling, session storage, bot detection (Turnstile), and CSAM scanning [[confirm the CSAM Scanning Tool is enabled on the production zone; not verifiable from the repository — #114]]. |
 | **Neon** | The PostgreSQL database holding accounts and content. |
 | **Postmark** | Sending verification and notification emails. |
 | **[[MODERATION_SCORER]]** | Machine scoring of new posts/comments to prioritize moderation review. *(If Cloudflare Workers AI is used, content is scored in-platform and is not sent to a separate vendor — the recommended option.)* |
@@ -63,6 +63,10 @@ We share personal data only: with the sub-processors above; when **required by l
 or to respond to lawful requests; to **report CSAM** to NCMEC as legally mandated;
 to protect the rights, safety, and security of the Service, our users, or the
 public; and in a business transfer, subject to this policy.
+[[NOT YET TRUE — status 2026-10-01, issue #114: no NCMEC reporting path exists
+yet, automated or manual. It is required before the Community opens to users
+officially. The data a CyberTipline report shares must be listed here once the
+report's contents are designed.]]
 
 ## 5. Retention
 
