@@ -32,6 +32,9 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // relies on. See both routes' own headers.
   "POST /auth/forgot-password",
   "POST /auth/reset-password",
+  // spec §8 — unauthenticated by design (decision #6); inline checkOrigin +
+  // DSA_LIMITER + Turnstile.
+  "POST /dsa-notice",
   // Token-authed one-click unsubscribe (M2.3c, RFC 8058): cross-origin, no
   // session/CSRF by design — a mail provider's one-click POST carries no cookie,
   // so the HMAC token IS the auth (see src/routes/unsub.ts). Unlike signup/login
