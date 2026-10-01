@@ -30,6 +30,7 @@ export interface AdminQueueItem {
   reportCount: number;
   severityRank: number;
   oldestReportAt: string;
+  authorHandle: string | null;
 }
 
 export interface AdminQueueResponse {

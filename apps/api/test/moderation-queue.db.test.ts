@@ -243,4 +243,15 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
     expect(item.oldestReportAt.getTime()).toBe((await reportCreatedAt(r1, "post_id", post)).getTime());
   });
+
+  it("#113: each item carries its author's handle, for the account-page link", async () => {
+    const author = await mkUser();
+    const handle = `h${author.replace(/-/g, "").slice(0, 16)}`;
+    await client.query(`INSERT INTO profiles (user_id, username) VALUES ($1, $2)`, [author, handle]);
+    const r1 = await mkUser();
+    const post = await mkPost(author, "Handled");
+    await report(r1, post, "spam");
+    const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
+    expect(item.authorHandle).toBe(handle);
+  });
 });

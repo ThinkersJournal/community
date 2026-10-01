@@ -42,6 +42,8 @@ export interface QueueItem {
   readonly severityRank: number;
   /** Age of the oldest unactioned report — surfaced so an item cannot rot unseen. */
   readonly oldestReportAt: Date;
+  /** Null for an anonymised author (the handle is released). */
+  readonly authorHandle: string | null;
 }
 
 interface QueueRow {
@@ -52,6 +54,7 @@ interface QueueRow {
   report_count: number;
   severity_rank: number;
   oldest_report_at: Date;
+  author_handle: string | null;
 }
 
 // Founder decision, fixed: sexual > violence > hate > harassment >
@@ -100,16 +103,18 @@ comment_reports AS (
    WHERE r.comment_id IS NOT NULL GROUP BY r.comment_id
 )
 SELECT 'post' AS kind, pr.target_id, p.title AS excerpt, p.hidden_at,
-       pr.report_count, pr.severity_rank, pr.oldest_report_at
+       pr.report_count, pr.severity_rank, pr.oldest_report_at, apr.username AS author_handle
   FROM post_reports pr JOIN posts p ON p.id = pr.target_id
+  LEFT JOIN profiles apr ON apr.user_id = p.author_id
  WHERE NOT EXISTS (SELECT 1 FROM moderation_actions ma
                     WHERE ma.post_id = pr.target_id
                       AND ma.action LIKE 'content\\_%'
                       AND ma.created_at > pr.newest_report_at)
 UNION ALL
 SELECT 'comment' AS kind, cr.target_id, left(c.body_markdown, 120) AS excerpt, c.hidden_at,
-       cr.report_count, cr.severity_rank, cr.oldest_report_at
+       cr.report_count, cr.severity_rank, cr.oldest_report_at, acr.username AS author_handle
   FROM comment_reports cr JOIN comments c ON c.id = cr.target_id
+  LEFT JOIN profiles acr ON acr.user_id = c.author_id
  WHERE NOT EXISTS (SELECT 1 FROM moderation_actions ma
                     WHERE ma.comment_id = cr.target_id
                       AND ma.action LIKE 'content\\_%'
@@ -127,5 +132,6 @@ export async function listOpenQueue(c: Client, limit = QUEUE_PAGE_SIZE): Promise
     reportCount: r.report_count,
     severityRank: r.severity_rank,
     oldestReportAt: r.oldest_report_at,
+    authorHandle: r.author_handle,
   }));
 }
