@@ -2,7 +2,7 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { afterEach, describe, expect, it } from "vitest";
 
 import { withClient } from "../src/db/client";
-import { applyAccountAction } from "../src/moderation/account-actions";
+import { applyAccountAction, loadAccountHistory } from "../src/moderation/account-actions";
 
 /**
  * #113 plan A, Task 1 — the account-action primitive (spec §5). Pool project:
@@ -143,5 +143,23 @@ describe("applyAccountAction", () => {
       apply({ ...base, userId: u, kind: "ban", reason: "x", violationCategory: "not-a-category" as never }),
     ).rejects.toThrow(/violation_category/);
     expect(await status(u)).toEqual({ suspended_until: null, disabled_at: null, disabled_reason: null });
+  });
+});
+
+describe("loadAccountHistory", () => {
+  it("lists only user_* actions for that user, newest first, flagging those inside the 12-month window", async () => {
+    const u = await mkUser();
+    await ctxRun((c) => c.query(
+      `INSERT INTO moderation_actions (actor_admin, action, subject_user_id, reason, created_at)
+       VALUES ('m', 'user_warn', $1, 'old', now() - interval '13 months'),
+              ('m', 'user_warn', $1, 'recent', now() - interval '1 day'),
+              ('m', 'content_remove', $1, 'not an account action', now())`,
+      [u],
+    ));
+    const h = await ctxRun((c) => loadAccountHistory(c, u));
+    expect(h.map((x) => [x.reason, x.countsTowardEscalation])).toEqual([
+      ["recent", true],
+      ["old", false],
+    ]);
   });
 });

@@ -18,7 +18,8 @@ import type { Client } from "pg";
 import { BEGIN_BOUNDED_TX } from "../db/client";
 import { recordModerationAction, type ModerationActionKind, type ViolationCategory } from "./actions";
 
-import type { SuspensionHours } from "@thinkersjournal/shared";
+import type { AdminAccountHistoryEntry, SuspensionHours } from "@thinkersjournal/shared";
+import { ESCALATION_WINDOW_MONTHS } from "@thinkersjournal/shared";
 
 export type AccountActionKind = "warn" | "suspend" | "ban" | "terminate";
 
@@ -119,4 +120,39 @@ async function rollbackQuietly(c: Client): Promise<void> {
   } catch {
     // Deliberately swallowed — see decide.ts.
   }
+}
+
+/**
+ * Every account action against `userId`, newest first. Content actions are
+ * excluded: the ladder is about the ACCOUNT (spec §5, decision #3).
+ */
+export async function loadAccountHistory(c: Client, userId: string): Promise<AdminAccountHistoryEntry[]> {
+  const { rows } = await c.query<{
+    id: string;
+    action: AdminAccountHistoryEntry["action"];
+    reason: string;
+    violation_category: string | null;
+    actor_admin: string;
+    created_at: Date;
+    action_expires_at: Date | null;
+    counts: boolean;
+  }>(
+    `SELECT id, action, reason, violation_category, actor_admin, created_at, action_expires_at,
+            created_at > now() - make_interval(months => $2::int) AS counts
+       FROM moderation_actions
+      WHERE subject_user_id = $1
+        AND action IN ('user_warn','user_suspend','user_ban','user_terminate')
+      ORDER BY created_at DESC`,
+    [userId, ESCALATION_WINDOW_MONTHS],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    action: r.action,
+    reason: r.reason,
+    violationCategory: r.violation_category,
+    actorAdmin: r.actor_admin,
+    createdAt: r.created_at.toISOString(),
+    actionExpiresAt: r.action_expires_at?.toISOString() ?? null,
+    countsTowardEscalation: r.counts,
+  }));
 }
