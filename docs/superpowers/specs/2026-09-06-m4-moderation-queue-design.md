@@ -324,6 +324,8 @@ justification** — that is the guard working as designed, not an obstacle to ro
 
 ## 5. 2c — The enforcement ladder
 
+**Status (2026-10-01):** warn/suspend/ban BUILT (#113 plan A, docs/superpowers/plans/2026-10-01-m4-2c-enforcement-ladder.md); terminate primitive built, unwired (#114); appeals §6 = plan B; DSA §8 = plan C.
+
 `warn → temporary suspension → permanent ban`, proportionate to severity and history, with
 **severe violations skipping the ladder** (Guidelines). Each rung is a separate deliberate
 action (decision #3) writing a `moderation_actions` row:
