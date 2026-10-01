@@ -25,6 +25,7 @@ import { recordModerationAction } from "../moderation/actions";
 import { isKeyLegallyHeld } from "../media/legal-hold";
 import { mediaKeysReferencedBy } from "../media/reachability";
 import { r2KeyForSha256 } from "../media/key-pattern";
+import { sameAdminHand } from "@thinkersjournal/shared";
 
 import type { RouteParams } from "../routing";
 
@@ -108,17 +109,17 @@ export async function handleGetRestrictedMedia(
     // anywhere upstream, so "Alice@x" approving "alice@x" is the SAME hand,
     // not two. Every identity comparison on this path (here, the DB CHECK in
     // 0016, and `approveMediaAccess`'s write-time guard) must agree on this
-    // normalization or one of them becomes the exploitable gap.
-    const normalize = (s: string): string => s.trim().toLowerCase();
+    // normalization or one of them becomes the exploitable gap — hence ONE
+    // shared `sameAdminHand`, pinned against the SQL copies by a shared case
+    // table (#98; see packages/shared/src/admin.ts).
     const now = Date.now();
     const usable =
       grant !== null &&
       grant.approved_by !== null &&
-      normalize(grant.approved_by) !== normalize(grant.requested_by) && // TWO DISTINCT hands, always
+      !sameAdminHand(grant.approved_by, grant.requested_by) && // TWO DISTINCT hands, always
       grant.expires_at !== null &&
       grant.expires_at.getTime() > now &&
-      (normalize(admin.email) === normalize(grant.requested_by) ||
-        normalize(admin.email) === normalize(grant.approved_by)); // only the two parties
+      (sameAdminHand(admin.email, grant.requested_by) || sameAdminHand(admin.email, grant.approved_by)); // only the two parties
 
     if (!usable) return notFound();
 
