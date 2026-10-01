@@ -116,7 +116,7 @@ const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "
                 <input type="hidden" name="subject" value={item.kind} />
                 <input type="hidden" name="subjectId" value={item.targetId} />
                 <label>
-                  Statement of reasons (shown to the author)
+                  Statement of reasons (shown to the author and to anyone who filed a DSA notice about this content)
                   <textarea name="reason" required maxlength="2000" />
                 </label>
                 <label class="legal-hold-row">
