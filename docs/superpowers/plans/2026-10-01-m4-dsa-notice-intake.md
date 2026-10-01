@@ -40,7 +40,7 @@
 
 **Files:** create `apps/api/migrations/00NN_dsa_notices.sql`; modify `apps/api/test/migrations.db.test.ts`; test `apps/api/test/dsa-notices-schema.db.test.ts`.
 
-- [ ] **Step 1: Failing schema test** (Node project, direct `pg`, same harness as `test/moderation-snapshots-schema.db.test.ts`). Cases, each written out in full:
+- [ ] **Step 1: Failing schema test** (Node project, direct `pg`, same harness as `test/reports-schema.db.test.ts` (present on main; the snapshots schema test exists only on the unmerged #126 branch)). Cases, each written out in full:
   - a row with **both** `post_id` and `comment_id`, or **neither**, is rejected by `dsa_notices_one_target`;
   - `reason` outside `REPORT_REASONS` is rejected by `dsa_notices_reason_check`;
   - a blank `statement` or blank `reporter_name` is rejected by `dsa_notices_statement_check` / `dsa_notices_reporter_name_check`;
