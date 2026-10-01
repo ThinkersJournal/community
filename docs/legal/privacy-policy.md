@@ -80,8 +80,8 @@ report's contents are designed.]]
 you file — is shown to moderators reviewing the report, so they can respond to
 you. It is **never** disclosed to the author of the content you are reporting.
 Retention of confirmed notices is not yet implemented; they are retained
-indefinitely in the notice record itself, alongside a reference to the moderation
-decision that resolved it.
+indefinitely in the notice record itself, including after the reported content
+is deleted, alongside a reference to the moderation decision that resolved it.
 [[Attorney to confirm retention period for confirmed DSA notices.]]
 
 ## 5. Retention
