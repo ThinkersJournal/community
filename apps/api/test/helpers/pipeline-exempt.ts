@@ -72,4 +72,6 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   "POST /admin/media-access-requests",
   "POST /admin/media-access-requests/:id/approve",
   "POST /admin/backfill-hidden-media",
+  // #113 — same Access + inline checkOrigin defense as /admin/decision.
+  "POST /admin/accounts/:handle/actions",
 ]);
