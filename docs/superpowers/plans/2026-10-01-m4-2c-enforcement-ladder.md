@@ -758,7 +758,7 @@ git commit -m "feat(moderation): the warn/suspend/ban notice (Part of #113)"
 - [ ] **Step 1: Write the failing route test**
 
 Create `apps/api/test/admin-accounts-route.test.ts`. Copy the JWT harness from `apps/api/test/admin-decision-route.test.ts` **by symbol, not by line number** (its line numbers have already moved):
-- from the top of the file: its imports, the `TEAM`/`AUD`/`KID` constants, `b64url`, `b64urlJson`, the `let keyPair`/`adminEmail` declarations, `makeJwt`, `ctxRun` and `call`;
+- from the top of the file: its imports, the `TEAM`/`AUD`/`KID` constants, `b64url`, `b64urlJson`, **all five** module-scope `let` declarations (`keyPair`, `sentEmails`, `capturedPurges`, `createdUserIds`, `adminEmail`; lines 19–23 at ca8b192), `makeJwt`, `ctxRun` and `call`. The `beforeEach` below assigns all five, so a missing declaration is a `TS2304` (the plan re-audit reproduced this);
 - **and** its module-level `beforeEach`/`afterEach` pair, which sits after the helpers (around line 218 at ca8b192). The `beforeEach` generates `keyPair`, sets `adminEmail`, stubs `fetch` for the JWKS and Postmark endpoints, and calls `__resetJwksCacheForTests()`; the `afterEach` restores globals and deletes `createdUserIds`. Without that pair, every test in the new file fails on an unassigned `keyPair` or an unverifiable JWT.
 
 Keep the stub shapes exactly. Then add:
@@ -885,7 +885,7 @@ describe("GET /admin/accounts/:handle", () => {
 });
 ```
 
-(`createdUserIds` and its cleanup come with the copied `afterEach`.)
+(`createdUserIds` is DECLARED by the copied `let` block and cleaned up by the copied `afterEach`; `seedHandle` below pushes into it.)
 
 Verified at ca8b192: `UserSecurityDO.getEpoch()` exists (`apps/api/src/durable-objects/UserSecurityDO.ts:45`).
 
