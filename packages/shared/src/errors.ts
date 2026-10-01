@@ -103,13 +103,14 @@ export interface ApiErrorBody {
 
 /**
  * #50 Q2 — what a barred user is told. `until` is the suspension's end as an
- * ISO-8601 string. A ban has no end. No reason text yet: a suspension's reason
- * lives in `moderation_actions`, and whether a CSAM termination may state its
+ * ISO-8601 string. A ban has no end. `reason` is the moderator's statement of
+ * reasons from the newest suspend or ban action against this account (#113)
+ * — NEVER sent for a `terminate` (the CSAM path): whether to state that one's
  * reason to the account holder is an open legal question (#114).
  */
 export type AccountBarredDetail =
-  | { readonly kind: "banned" }
-  | { readonly kind: "suspended"; readonly until: string };
+  | { readonly kind: "banned"; readonly reason?: string }
+  | { readonly kind: "suspended"; readonly until: string; readonly reason?: string };
 
 /** Narrow an unknown parsed body to the envelope. Structural, not exhaustive. */
 export function isApiErrorBody(value: unknown): value is ApiErrorBody {

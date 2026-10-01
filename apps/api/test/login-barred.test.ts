@@ -199,3 +199,42 @@ describe("POST /auth/login — barred accounts", () => {
     expect(await barred.json()).toEqual(await wrong.json());
   });
 });
+
+describe("#113 — the 403 carries the moderator's statement of reasons", () => {
+  async function logAction(email: string, action: string, reason: string): Promise<void> {
+    await query(
+      `INSERT INTO moderation_actions (actor_admin, action, subject_user_id, reason)
+       SELECT 'mod@example.test', $2, id, $3 FROM users WHERE email = $1`,
+      [email, action, reason],
+    );
+  }
+
+  it("a ban carries the newest user_ban reason", async () => {
+    const email = uniqueEmail();
+    await insertUser(email, await hashPassword(VALID_PASSWORD));
+    await query(`UPDATE users SET disabled_at = now(), disabled_reason = 'ban' WHERE email = $1`, [email]);
+    await logAction(email, "user_ban", "spam, repeatedly");
+    const res = await login(email, VALID_PASSWORD);
+    expect(await res.json()).toEqual({ code: "ACCOUNT_BARRED", barred: { kind: "banned", reason: "spam, repeatedly" } });
+  });
+
+  it("⚠️ a TERMINATED account carries NO reason (#114: open legal question)", async () => {
+    const email = uniqueEmail();
+    await insertUser(email, await hashPassword(VALID_PASSWORD));
+    await query(`UPDATE users SET disabled_at = now(), disabled_reason = 'terminate' WHERE email = $1`, [email]);
+    // A prior user_ban row too: without it the loader would find nothing for a
+    // disabled account anyway, and this test could not catch the exclusion
+    // being removed.
+    await logAction(email, "user_ban", "must not be shown either");
+    await logAction(email, "user_terminate", "must not be shown");
+    const res = await login(email, VALID_PASSWORD);
+    expect(await res.json()).toEqual({ code: "ACCOUNT_BARRED", barred: { kind: "banned" } });
+  });
+
+  it("a hand-set bar with no log row still answers, without a reason", async () => {
+    const email = uniqueEmail();
+    await insertUser(email, await hashPassword(VALID_PASSWORD));
+    await query(`UPDATE users SET disabled_at = now() WHERE email = $1`, [email]);
+    expect(await (await login(email, VALID_PASSWORD)).json()).toEqual({ code: "ACCOUNT_BARRED", barred: { kind: "banned" } });
+  });
+});

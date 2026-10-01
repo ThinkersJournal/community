@@ -14,18 +14,37 @@
  * itself belongs to freedom, not to the bar.
  */
 import type { AccountBarredDetail } from "@thinkersjournal/shared";
+import type { Client } from "pg";
 
 import { errorResponse } from "../http/errors";
 
 export interface AccountStatusRow {
   readonly suspended_until: Date | null;
   readonly disabled_at: Date | null;
+  /** 'ban' | 'terminate' | null. Optional so existing isBarred callers need no change. */
+  readonly disabled_reason?: string | null;
 }
 
 export function isBarred(row: AccountStatusRow, now: Date = new Date()): boolean {
   if (row.disabled_at !== null) return true;
   if (row.suspended_until !== null && row.suspended_until.getTime() > now.getTime()) return true;
   return false;
+}
+
+/**
+ * The statement of reasons for the bar now in force (#113): the newest
+ * user_ban (if banned) or user_suspend (if suspended) row. ⚠️ NEVER for a
+ * terminated account (#114). Called ONLY on the already-barred path, so a
+ * normal login pays nothing.
+ */
+export async function loadBarReason(c: Client, userId: string, row: AccountStatusRow): Promise<string | null> {
+  if (row.disabled_reason === "terminate") return null;
+  const action = row.disabled_at !== null ? "user_ban" : "user_suspend";
+  const { rows } = await c.query<{ reason: string }>(
+    `SELECT reason FROM moderation_actions WHERE subject_user_id = $1 AND action = $2 ORDER BY created_at DESC LIMIT 1`,
+    [userId, action],
+  );
+  return rows[0]?.reason ?? null;
 }
 
 /**
@@ -37,10 +56,14 @@ export function isBarred(row: AccountStatusRow, now: Date = new Date()): boolean
  * would leave this with nothing true to say. A ban wins over a suspension: it
  * is permanent, so "suspended until X" would be a false promise.
  */
-export function accountBarredResponse(row: AccountStatusRow, headers: Record<string, string> = {}): Response {
+export function accountBarredResponse(
+  row: AccountStatusRow,
+  headers: Record<string, string> = {},
+  reason: string | null = null,
+): Response {
   const barred: AccountBarredDetail =
     row.disabled_at === null && row.suspended_until !== null
-      ? { kind: "suspended", until: row.suspended_until.toISOString() }
-      : { kind: "banned" };
+      ? { kind: "suspended", until: row.suspended_until.toISOString(), ...(reason !== null && { reason }) }
+      : { kind: "banned", ...(reason !== null && { reason }) };
   return errorResponse("ACCOUNT_BARRED", 403, { barred, headers });
 }

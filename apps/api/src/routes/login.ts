@@ -86,7 +86,7 @@
  */
 import { LoginInput } from "@thinkersjournal/shared";
 
-import { accountBarredResponse, isBarred } from "../auth/account-status";
+import { accountBarredResponse, isBarred, loadBarReason } from "../auth/account-status";
 import { checkOrigin } from "../auth/csrf";
 import { base64urlEncode } from "../auth/encoding";
 import { hashPassword, needsRehash, verifyPassword } from "../auth/password";
@@ -137,6 +137,7 @@ interface UserRow {
   password_hash: string;
   suspended_until: Date | null;
   disabled_at: Date | null;
+  disabled_reason: string | null;
 }
 
 function json(body: unknown, status: number, headers: HeadersInit = {}): Response {
@@ -242,7 +243,7 @@ export async function handleLogin(
   // `users.email` is citext, so this match is case-insensitive.
   const row = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query(
-      "SELECT id, password_hash, suspended_until, disabled_at FROM users WHERE email = $1",
+      "SELECT id, password_hash, suspended_until, disabled_at, disabled_reason FROM users WHERE email = $1",
       [email],
     );
     return (rows[0] ?? null) as UserRow | null;
@@ -271,7 +272,8 @@ export async function handleLogin(
   if (isBarred(row)) {
     // #50 Q2: told WHY, not a generic 401. Still only AFTER the password
     // verify, so only the account's holder ever hears it.
-    return accountBarredResponse(row);
+    const reason = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => loadBarReason(c, row.id, row));
+    return accountBarredResponse(row, {}, reason);
   }
 
   // ---- 7. Rehash-on-upgrade — ONLY after a successful verify -----------------
