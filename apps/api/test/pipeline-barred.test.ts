@@ -29,17 +29,19 @@ import type { RouteDef } from "../src/routing";
  * anyone to keep complete.
  *
  * Per route, four arms:
- *   • AC-1 DISABLED       -> 401 + cleared cookie + KV session destroyed.
+ *   • AC-1 DISABLED       -> 403 ACCOUNT_BARRED + cleared cookie + KV session
+ *                            destroyed (#50 Q2: CireSnave ruled a barred user is
+ *                            told so, not handed a 401 that reads as "logged out").
  *   • AC-2 SUSPENDED      -> the same.
- *   • AC-3 LAPSED         -> NOT 401: an expired suspension bars nothing
+ *   • AC-3 LAPSED         -> NOT refused: an expired suspension bars nothing
  *                            (mirrors login; diverges from the reaper on purpose,
  *                            see src/auth/account-status.ts vs reap-unverified.ts).
- *   • AC-4 CONTROL        -> NOT 401: an ordinary verified session on the SAME
+ *   • AC-4 CONTROL        -> NOT refused: an ordinary verified session on the SAME
  *                            route with the SAME request. Without it, AC-1/AC-2's
- *                            401 would be indistinguishable from "this probe
- *                            401s for some other reason".
+ *                            refusal would be indistinguishable from "this probe
+ *                            is refused for some other reason".
  *
- * AC-3/AC-4 assert only "not 401", not success: the probe body is generic and
+ * AC-3/AC-4 assert only "neither 401 nor ACCOUNT_BARRED", not success: the probe body is generic and
  * most handlers 400 it after the pipeline. What they prove is that the PIPELINE
  * let the request through — which is the only thing this suite is about.
  *
@@ -166,6 +168,12 @@ const PIPELINE_ROUTES = ROUTES.filter(
 );
 const CASES = PIPELINE_ROUTES.map((r) => [label(r), r] as const);
 
+/** Neither the session refusal (401) nor the bar (403 ACCOUNT_BARRED). Other 403s/400s are the handler's own business. */
+async function expectNotRefused(res: Response): Promise<void> {
+  expect(res.status).not.toBe(401);
+  expect(await res.text()).not.toContain("ACCOUNT_BARRED");
+}
+
 describe("#50 — every pipeline route refuses a barred session", () => {
   it("the population is non-empty and is the route-protection population", () => {
     // 24 at 758912a. Printed rather than pinned: the point is that the suite
@@ -178,7 +186,8 @@ describe("#50 — every pipeline route refuses a barred session", () => {
     const authed = await authenticate(await insertUser("disabled"));
     const res = await fetchWorker(authedRequest(route, authed));
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ code: "ACCOUNT_BARRED", barred: { kind: "banned" } });
     expect(res.headers.get("Set-Cookie") ?? "").toMatch(/Max-Age=0/);
     expect(await sessionLive(authed.token)).toBe(false);
   });
@@ -187,7 +196,8 @@ describe("#50 — every pipeline route refuses a barred session", () => {
     const authed = await authenticate(await insertUser("suspended"));
     const res = await fetchWorker(authedRequest(route, authed));
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { barred: { kind: string } }).barred.kind).toBe("suspended");
     expect(res.headers.get("Set-Cookie") ?? "").toMatch(/Max-Age=0/);
     expect(await sessionLive(authed.token)).toBe(false);
   });
@@ -196,21 +206,25 @@ describe("#50 — every pipeline route refuses a barred session", () => {
     const authed = await authenticate(await insertUser("lapsed"));
     const res = await fetchWorker(authedRequest(route, authed));
 
-    expect(res.status).not.toBe(401);
+    await expectNotRefused(res);
   });
 
   it.each(CASES)("AC-4 CONTROL %s — an ordinary verified session passes the pipeline", async (_name, route) => {
     const authed = await authenticate(await insertUser("ordinary"));
     const res = await fetchWorker(authedRequest(route, authed));
 
-    expect(res.status).not.toBe(401);
+    await expectNotRefused(res);
   });
 });
 
 describe("#50 — the refusal's shape", () => {
   const POST_POSTS = ROUTES.find((r) => r.method === "POST" && r.pattern === "/posts")!;
 
-  it("a barred refusal is BYTE-IDENTICAL to an epoch revocation (Q1 ruling: no new oracle)", async () => {
+  // #50 Q2 (CireSnave: "If returning that they are banned lets us tell them
+  // why, we should do that.") supersedes the Q1-era "byte-identical to a
+  // revocation" pin. Only the session's own holder can reach this branch, so
+  // it tells a stranger nothing; the cookie handling stays identical.
+  it("a barred refusal is a DISTINCT 403 ACCOUNT_BARRED, with the SAME cleared cookie as an epoch revocation", async () => {
     const barred = await authenticate(await insertUser("disabled"));
     const barredRes = await fetchWorker(authedRequest(POST_POSTS, barred));
 
@@ -219,18 +233,34 @@ describe("#50 — the refusal's shape", () => {
     await env.USER_SECURITY.getByName(revokedUser).bumpEpoch();
     const revokedRes = await fetchWorker(authedRequest(POST_POSTS, revoked));
 
-    expect(barredRes.status).toBe(revokedRes.status);
-    expect(await barredRes.text()).toBe(await revokedRes.text());
+    expect(revokedRes.status).toBe(401);
+    expect(barredRes.status).toBe(403);
+    expect(((await barredRes.json()) as { code: string }).code).toBe("ACCOUNT_BARRED");
     expect(barredRes.headers.get("Set-Cookie")).toBe(revokedRes.headers.get("Set-Cookie"));
   });
 
-  it("the bar runs BEFORE the verified-email gate — a barred UNVERIFIED user gets 401, not 403", async () => {
+  it("a suspension's `until` is the stored suspended_until, as ISO-8601", async () => {
+    const userId = await insertUser("suspended");
+    const authed = await authenticate(userId);
+    const res = await fetchWorker(authedRequest(POST_POSTS, authed));
+
+    const ctx = createExecutionContext();
+    const stored = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query<{ suspended_until: Date }>("SELECT suspended_until FROM users WHERE id = $1", [userId]);
+      return rows[0]!.suspended_until;
+    });
+    await waitOnExecutionContext(ctx);
+    expect(await res.json()).toEqual({ code: "ACCOUNT_BARRED", barred: { kind: "suspended", until: stored.toISOString() } });
+  });
+
+  it("the bar runs BEFORE the verified-email gate — a barred UNVERIFIED user gets ACCOUNT_BARRED, not EMAIL_NOT_VERIFIED", async () => {
     // Order matters: answering EMAIL_NOT_VERIFIED would leave the session live
     // and send the barred user into the verify-email flow.
     const authed = await authenticate(await insertUser("disabled", false));
     const res = await fetchWorker(authedRequest(POST_POSTS, authed));
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { code: string }).code).toBe("ACCOUNT_BARRED");
     expect(await sessionLive(authed.token)).toBe(false);
   });
 

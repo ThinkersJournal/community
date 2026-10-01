@@ -8,6 +8,7 @@
  */
 import BaseLayout from "../components/BaseLayout.astro";
 import { apiFetch, applyCookies } from "../lib/api";
+import { barredMessage } from "../lib/barred-message";
 import { markPrivate } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
 import { resolveNext } from "../lib/next-url";
@@ -71,10 +72,14 @@ if (Astro.request.method === "POST") {
   // The api answers 401 with a GENERIC failure for both "no such user" and
   // "wrong password" (it must not confirm which addresses are registered), so
   // this message stays generic too. Do not "improve" it.
+  //
+  // The one exception is a barred account (#50 Q2): the api says ACCOUNT_BARRED
+  // only AFTER the password checked out, so naming the bar here tells nothing
+  // to anyone but the account's own holder.
   error =
     response.status === 429
       ? "Too many attempts. Please wait and try again."
-      : "Invalid email or password.";
+      : (barredMessage(response.data) ?? "Invalid email or password.");
 }
 ---
 

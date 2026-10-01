@@ -115,7 +115,7 @@ afterEach(async () => {
 });
 
 describe("POST /auth/login — barred accounts", () => {
-  it("⚠️ AC-4: a DISABLED account cannot log in with the correct password", async () => {
+  it("⚠️ AC-4: a DISABLED account cannot log in with the correct password — and is told it is banned (#50 Q2)", async () => {
     const email = uniqueEmail();
     const passwordHash = await hashPassword(VALID_PASSWORD);
     await insertUser(email, passwordHash);
@@ -123,10 +123,12 @@ describe("POST /auth/login — barred accounts", () => {
     await updateAccountStatus(email, new Date(), null);
 
     const res = await login(email, VALID_PASSWORD);
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ code: "ACCOUNT_BARRED", barred: { kind: "banned" } });
+    expect(res.headers.get("Set-Cookie")).toBeNull();
   });
 
-  it("⚠️ AC-4: a currently-SUSPENDED account cannot log in", async () => {
+  it("⚠️ AC-4: a currently-SUSPENDED account cannot log in — and is told until when (#50 Q2)", async () => {
     const email = uniqueEmail();
     const passwordHash = await hashPassword(VALID_PASSWORD);
     await insertUser(email, passwordHash);
@@ -136,7 +138,21 @@ describe("POST /auth/login — barred accounts", () => {
     await updateAccountStatus(email, null, future);
 
     const res = await login(email, VALID_PASSWORD);
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      code: "ACCOUNT_BARRED",
+      barred: { kind: "suspended", until: future.toISOString() },
+    });
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it("a ban wins over a suspension when both are set", async () => {
+    const email = uniqueEmail();
+    await insertUser(email, await hashPassword(VALID_PASSWORD));
+    await updateAccountStatus(email, new Date(), new Date(Date.now() + 24 * 60 * 60 * 1000));
+
+    const res = await login(email, VALID_PASSWORD);
+    expect(await res.json()).toEqual({ code: "ACCOUNT_BARRED", barred: { kind: "banned" } });
   });
 
   it("an EXPIRED suspension does NOT bar login", async () => {
@@ -152,8 +168,8 @@ describe("POST /auth/login — barred accounts", () => {
     expect(res.status).toBe(200);
   });
 
-  // CONTROL: without this, "401" would be indistinguishable from "the password
-  // was wrong" or "this harness never logs anyone in".
+  // CONTROL: without this, "403" would be indistinguishable from "this
+  // harness never logs anyone in".
   it("CONTROL: an ordinary account with the same password logs in fine", async () => {
     const otherEmail = uniqueEmail();
     const passwordHash = await hashPassword(VALID_PASSWORD);
@@ -163,22 +179,22 @@ describe("POST /auth/login — barred accounts", () => {
     expect(res.status).toBe(200);
   });
 
-  // ⚠️ NO ACCOUNT-STATE ORACLE: a barred account must be indistinguishable
-  // from a wrong password. Login already refuses to enumerate users; barring
-  // must not undo that.
-  it("⚠️ a barred account returns the SAME body as a wrong password", async () => {
+  // ⚠️ STILL NO ACCOUNT-STATE ORACLE FOR A STRANGER. ACCOUNT_BARRED is only
+  // ever said to someone who just proved the password. With a WRONG password a
+  // barred account must stay indistinguishable from any other failed login —
+  // the bar check sits after the verify (test/login-bar-after-verify.node.test.ts).
+  it("⚠️ a barred account with a WRONG password gets the SAME generic 401 as any wrong password", async () => {
     const barredEmail = uniqueEmail();
     const otherEmail = uniqueEmail();
     const passwordHash = await hashPassword(VALID_PASSWORD);
     await insertUser(barredEmail, passwordHash);
     await insertUser(otherEmail, passwordHash);
-
-    // Bar the first account
     await updateAccountStatus(barredEmail, new Date(), null);
 
-    const barred = await login(barredEmail, VALID_PASSWORD);
+    const barred = await login(barredEmail, "definitely-not-the-password");
     const wrong = await login(otherEmail, "definitely-not-the-password");
 
+    expect(barred.status).toBe(401);
     expect(barred.status).toBe(wrong.status);
     expect(await barred.json()).toEqual(await wrong.json());
   });

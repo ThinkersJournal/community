@@ -7,7 +7,7 @@
  * so a route that hand-rolls `new Response("nope", { status: 400 })` fails
  * there rather than shipping a fifth dialect.
  */
-import type { ApiErrorCode } from "@thinkersjournal/shared";
+import type { AccountBarredDetail, ApiErrorCode } from "@thinkersjournal/shared";
 
 export interface ErrorResponseInit {
   /**
@@ -22,6 +22,8 @@ export interface ErrorResponseInit {
   fields?: string[];
   /** For USERNAME_TAKEN: a few available handle suggestions. Advisory; never branch on it. */
   suggestions?: string[];
+  /** For ACCOUNT_BARRED (#50 Q2). */
+  barred?: AccountBarredDetail;
 }
 
 export function errorResponse(
@@ -33,6 +35,7 @@ export function errorResponse(
   if (init.message !== undefined) body.message = init.message;
   if (init.fields !== undefined) body.fields = init.fields;
   if (init.suggestions !== undefined) body.suggestions = init.suggestions;
+  if (init.barred !== undefined) body.barred = init.barred;
 
   return new Response(JSON.stringify(body), {
     status,
