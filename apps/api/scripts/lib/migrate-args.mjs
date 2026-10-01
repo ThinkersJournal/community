@@ -1,21 +1,10 @@
 /**
  * PURE argument parsing for `apps/api/scripts/migrate.mjs` (#116 fix round 2
- * ruling — split out of that file so it can run with no entry-point guard).
- *
- * Fix round 1 added an optional `count` argument and, to make the parsing
- * testable without a database connection, guarded `migrate.mjs`'s real work
- * behind `import.meta.url === pathToFileURL(process.argv[1]).href`. The
- * controller found that comparison can FAIL OPEN (a symlinked path in the
- * environment, or a Windows drive-letter/case mismatch, makes it wrongly
- * `false`) — for this script that means a "apply the migration" run would
- * silently do nothing and report nothing, which is just as dangerous here as
- * it is for the deploy gate: a migration that was never applied looks, from
- * the outside, identical to one that succeeded.
- *
- * The fix: this file has NO side effects whatsoever (no `node-pg-migrate`
- * import, no database connection, no filesystem access) — importing it for
- * `parseArgs` can never run a migration, so `migrate.mjs` itself needs no
- * conditional and runs unconditionally, exactly as it did before round 1.
+ * ruling — split out so that file can run with no entry-point guard; see
+ * `scripts/lib/migration-gate.mjs`'s header for the full fail-open story
+ * this answers). This file has NO side effects whatsoever (no
+ * `node-pg-migrate` import, no database connection, no filesystem access),
+ * so importing it for `parseArgs` can never run a migration.
  */
 export function parseArgs(argv) {
   const target = argv[0] ?? "dev"; // "dev" | "test"

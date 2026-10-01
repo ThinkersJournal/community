@@ -20,19 +20,12 @@
 // one and passes that number here.
 //
 // ⚠️ UNCONDITIONAL TOP-LEVEL EXECUTION — NO ENTRY-POINT GUARD (#116 fix round
-// 2 ruling). Round 1 added one here (`import.meta.url ===
-// pathToFileURL(process.argv[1]).href`) purely so `parseArgs` could be
-// imported and tested without opening a real database connection. The
-// controller found that comparison can FAIL OPEN — a symlinked path in the
-// environment, or a Windows drive-letter/case mismatch, makes it wrongly
-// `false` — and for THIS script that means a "apply the migration" run
-// silently does nothing and reports nothing, which is exactly as dangerous as
-// the gate script failing open: a migration that was never applied then
-// looks, from the outside, identical to one that succeeded. The fix is
-// structural, not a better comparison: `parseArgs` now lives in
-// `scripts/lib/migrate-args.mjs`, a file with NO side effects at all, so a
-// test imports ONLY that library and this file needs no conditional to
-// protect — it runs exactly as it did before round 1 ever touched it.
+// 2 ruling: the same fail-open risk as scripts/check-migrations-applied.mjs —
+// see scripts/lib/migration-gate.mjs's header for the full story). Here it
+// would mean the PM's "apply the migration" run silently does nothing and
+// reports nothing. `parseArgs` lives in `scripts/lib/migrate-args.mjs` (no
+// side effects), so this file needs no conditional and runs exactly as it
+// did before round 1.
 import { fileURLToPath } from "node:url";
 import { runner } from "node-pg-migrate";
 

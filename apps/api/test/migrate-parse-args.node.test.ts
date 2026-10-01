@@ -38,25 +38,39 @@ function topLevelStatements(source: string): string[] {
 }
 
 /**
+ * A top-level statement cannot have an import-time side effect iff it is
+ * EITHER an `export (async )?function ...` (defining has no effect; calling
+ * would, but nothing here does that at the top level), or an `export
+ * const|let NAME = <initializer>;` whose initializer contains no call
+ * expression (an identifier directly followed by `(`) — `export const x =
+ * sideEffect();` DOES run at import time and must be rejected, which a bare
+ * "starts with export" check would miss. See the identical helper (and its
+ * full false-positive caveat) in
+ * apps/api/test/check-migrations-applied.node.test.ts.
+ */
+function isSafeTopLevelStatement(statement: string): boolean {
+  if (/^export\s+(?:async\s+)?function\b/.test(statement)) return true;
+
+  const constOrLet = /^export\s+(?:const|let)\s+[A-Za-z_$][\w$]*\s*=\s*([\s\S]*);$/.exec(statement);
+  if (constOrLet) {
+    const initializer = constOrLet[1];
+    return !/[A-Za-z_$][\w$]*\s*\(/.test(initializer);
+  }
+
+  return false;
+}
+
+/**
  * `apps/api/scripts/migrate.mjs`'s argument parsing (#116 fix round 1, item
  * 4) — the optional 3rd `count` argument that caps how many pending
  * migrations `up` applies, so the deploy runbook can apply migrations one at
  * a time and stop before one marked `-- deploy: after-code`.
  *
- * ⚠️ WHY THE LIBRARY SPLIT (fix round 2 ruling). Fix round 1 guarded
- * `migrate.mjs`'s real work (`runner(...)`, which opens a database
- * connection) behind `import.meta.url === pathToFileURL(process.argv[1])
- * .href`, purely so `parseArgs` could be imported and tested without
- * touching a database. The controller found that comparison can FAIL OPEN —
- * a symlinked path in the environment, or a Windows drive-letter/case
- * mismatch, makes it wrongly `false` — and for this script that means the
- * PM's "apply the migration" run would silently do nothing and report
- * nothing. The fix: `parseArgs` now lives in
- * `apps/api/scripts/lib/migrate-args.mjs`, which has NO side effects
- * whatsoever (no `node-pg-migrate` import, no database, no filesystem), so
- * importing it for testing can never run a migration — and `migrate.mjs`
- * itself needs no conditional and runs unconditionally, exactly as it did
- * before round 1.
+ * ⚠️ WHY THE LIBRARY SPLIT — see scripts/lib/migration-gate.mjs's header for
+ * the full fail-open story (fix round 2 ruling); the same risk applied here
+ * to `migrate.mjs`'s `runner(...)` call (which opens a database connection).
+ * `parseArgs` now lives in `apps/api/scripts/lib/migrate-args.mjs`, which has
+ * no side effects whatsoever.
  */
 
 describe("parseArgs", () => {
@@ -93,18 +107,12 @@ describe("parseArgs", () => {
 
 /**
  * ⚠️ WHY A STRUCTURAL CHECK, NOT A FRESH DYNAMIC RE-IMPORT (fix round 2, item
- * 4). An earlier draft proved "importing the library has no side effects"
- * behaviorally — stub `fetch`, cache-bust a dynamic `import()`, assert the
- * stub was never called. Under full-suite load that timed out at the node
- * project's 5000ms default (reproduced here too: 5020ms), for the same
- * reason as the gate's identical pattern — a fresh cache-busted specifier
- * forces Vite's transform pipeline to build a new module graph entry, which
- * contends under heavy parallel load. The property doesn't need a fresh
- * import: `scripts/lib/migrate-args.mjs`'s top level contains NOTHING but an
- * `export function` declaration (verified below), and a module with no
- * top-level executable statement cannot have an import-time side effect by
- * the ECMAScript module spec itself — a stronger guarantee, at a fraction of
- * the cost.
+ * 4). An earlier draft stubbed `fetch`, cache-busted a dynamic `import()`,
+ * and asserted it was never called — timed out under full-suite load at the
+ * node project's 5000ms default (reproduced: 5020ms), same reason as the
+ * gate's identical pattern (see that test file for the full explanation).
+ * Checking that every top-level statement is a side-effect-free export
+ * (below) proves the same thing statically, in microseconds.
  */
 describe("fix round 2, item 4: the library has no side effects, proven structurally and fast", () => {
   const libSource = stripComments(
@@ -116,9 +124,9 @@ describe("fix round 2, item 4: the library has no side effects, proven structura
     expect(statements.length).toBeGreaterThan(0);
   });
 
-  it("every top-level statement in scripts/lib/migrate-args.mjs is an export declaration", () => {
-    const nonExports = statements.filter((s) => !s.startsWith("export"));
-    expect(nonExports).toEqual([]);
+  it("every top-level statement in scripts/lib/migrate-args.mjs is a side-effect-free export", () => {
+    const unsafe = statements.filter((s) => !isSafeTopLevelStatement(s));
+    expect(unsafe).toEqual([]);
   });
 });
 

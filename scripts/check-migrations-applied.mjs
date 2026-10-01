@@ -32,19 +32,12 @@
  * grant removed, etc).
  *
  * ⚠️ `await main()` RUNS UNCONDITIONALLY — NO ENTRY-POINT GUARD (#116 fix
- * round 2 ruling). Round 1 guarded it with `import.meta.url ===
- * pathToFileURL(process.argv[1]).href` so importing this file for its pure
- * exports (for testing) would not also fetch production. The controller
- * found that comparison can FAIL OPEN — a symlinked path in the build
- * environment, or a Windows drive-letter/case mismatch, makes it wrongly
- * `false` — which would mean THIS SCRIPT SILENTLY EXITS 0 WITHOUT CHECKING
- * ANYTHING, the one failure a fail-closed gate must never have. The actual
- * fix: every pure piece this file used to export now lives in
- * `scripts/lib/migration-gate.mjs`, which has no side effects at all, so a
- * test imports ONLY that library and never reaches this file — meaning this
- * file needs no conditional to protect, and calls `main()` the same way it
- * would from any other script. `apps/api/test/check-migrations-applied
- * .node.test.ts` pins, at the source level, that no guard has crept back in.
+ * round 2 ruling: a guard here previously could fail open — see
+ * `scripts/lib/migration-gate.mjs`'s header for the full story). Every pure
+ * piece this file used to export now lives there, so this file needs no
+ * conditional to protect and just calls `main()` like any other script.
+ * `apps/api/test/check-migrations-applied.node.test.ts` pins, at the source
+ * level, that no guard has crept back in.
  *
  * Usage (from a Worker's Cloudflare Workers Builds build command):
  *   node scripts/check-migrations-applied.mjs && <the existing build command>

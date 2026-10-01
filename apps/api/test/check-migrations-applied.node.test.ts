@@ -55,25 +55,43 @@ function topLevelStatements(source: string): string[] {
 }
 
 /**
+ * A top-level statement cannot have an import-time side effect iff it is
+ * EITHER:
+ *   - `export (async )?function ...` — defining a function has no effect;
+ *     calling it would, but nothing here does that at the top level.
+ *   - `export const|let NAME = <initializer>;` — ONLY IF the initializer
+ *     contains no call expression (an identifier directly followed by `(`).
+ *     `export const x = sideEffect();` DOES run `sideEffect()` at import
+ *     time and must be rejected — a bare "starts with export" check would
+ *     wrongly pass it.
+ *
+ * Anything else (a bare statement, a different export form) is unsafe.
+ *
+ * ⚠️ NOT A GENERAL JS PARSER — text-based, not AST-based. A call nested
+ * inside its OWN function body within a const initializer (`export const f
+ * = () => sideEffect()`) is not actually a top-level call (it only runs when
+ * `f` is invoked), but this would flag it anyway. That's a false positive,
+ * not a false negative — it fails closed, the safe direction for a check
+ * with this name — and no file here currently has that shape.
+ */
+function isSafeTopLevelStatement(statement: string): boolean {
+  if (/^export\s+(?:async\s+)?function\b/.test(statement)) return true;
+
+  const constOrLet = /^export\s+(?:const|let)\s+[A-Za-z_$][\w$]*\s*=\s*([\s\S]*);$/.exec(statement);
+  if (constOrLet) {
+    const initializer = constOrLet[1];
+    return !/[A-Za-z_$][\w$]*\s*\(/.test(initializer);
+  }
+
+  return false;
+}
+
+/**
  * The deploy-time migration gate (#116, shape A). Covers the PURE library
  * (`scripts/lib/migration-gate.mjs`) and, separately, a source-level pin on
  * the CLI (`scripts/check-migrations-applied.mjs`) that it still has no
- * entry-point guard.
- *
- * ⚠️ WHY THE LIBRARY SPLIT (fix round 2 ruling). Fix round 1 guarded the
- * CLI's `await main()` with `import.meta.url === pathToFileURL(
- * process.argv[1]).href`, specifically so this test file could import the
- * CLI directly for its pure exports without also fetching production. The
- * controller found that guard can FAIL OPEN (a symlinked path, or a Windows
- * drive-letter/case mismatch, makes the comparison wrongly `false`) — for
- * this script that means a deploy passes UNCHECKED, the one failure it must
- * never have. The fix is structural: every pure function now lives in
- * `scripts/lib/migration-gate.mjs`, which has no top-level side effects at
- * all, so this file imports ONLY that library — never the CLI — and the CLI
- * itself needs no conditional to protect, because nothing imports it for
- * testing anymore. The CLI's unconditional `await main();` is pinned at the
- * source level below, so a guard like round 1's cannot be reintroduced
- * silently.
+ * entry-point guard — see that library's own header for why the guard was
+ * removed (fix round 2 ruling: round 1's version could fail open).
  *
  * ⚠️ WHY THIS IS A `*.node.test.ts`, NOT A POOL TEST. The script itself runs
  * under plain Node (it is invoked directly by Cloudflare Workers Builds, never
@@ -241,24 +259,14 @@ describe("fix round 1, item 5: every real migration file name matches the api's 
 
 /**
  * ⚠️ WHY A STRUCTURAL CHECK, NOT A FRESH DYNAMIC RE-IMPORT (fix round 2, item
- * 4). An earlier draft of this test proved "importing the library has no
- * side effects" behaviorally — stub `fetch`, cache-bust a dynamic `import()`
- * of the lib, assert the stub was never called. That test was CORRECT but
- * SLOW: under full-suite load it timed out at the node project's 5000ms
- * default (reproduced: 5020-5027ms, twice, across two files using the same
- * pattern), because a fresh cache-busted specifier forces Vite's transform
- * pipeline to build a brand-new module graph entry rather than a plain Node
- * `import`, and that pipeline contends under heavy parallel load — the cost
- * was in the tooling, not in anything this test's own logic does. Raising
- * the timeout would have hidden that rather than explained it.
- *
- * The property being proven doesn't need a fresh import at all:
- * `scripts/lib/migration-gate.mjs` is a module whose top level contains
- * NOTHING but `export const`/`export function` declarations (verified below,
- * structurally) — and by the ECMAScript module spec, a module with no
- * top-level executable statement literally CANNOT have an import-time side
- * effect. This is a stronger guarantee than "a fetch stub wasn't called
- * during one particular test run", and it costs microseconds, not seconds.
+ * 4). An earlier draft stubbed `fetch`, cache-busted a dynamic `import()` of
+ * the lib, and asserted the stub was never called. That timed out under
+ * full-suite load at the node project's 5000ms default (reproduced:
+ * 5020-5027ms, both lib files) — a fresh cache-busted specifier forces
+ * Vite's transform pipeline to build a new module graph entry, and that
+ * pipeline contends under heavy parallel load. The property doesn't need a
+ * fresh import: checking that every top-level statement is a side-effect-
+ * free export (below) proves the same thing statically, in microseconds.
  */
 describe("fix round 2, item 4: the library has no side effects, proven structurally and fast", () => {
   const libSource = neutralizeRegexLiterals(
@@ -275,9 +283,9 @@ describe("fix round 2, item 4: the library has no side effects, proven structura
     expect(statements.length).toBeGreaterThan(0);
   });
 
-  it("every top-level statement in scripts/lib/migration-gate.mjs is an export declaration", () => {
-    const nonExports = statements.filter((s) => !s.startsWith("export"));
-    expect(nonExports).toEqual([]);
+  it("every top-level statement in scripts/lib/migration-gate.mjs is a side-effect-free export", () => {
+    const unsafe = statements.filter((s) => !isSafeTopLevelStatement(s));
+    expect(unsafe).toEqual([]);
   });
 });
 
