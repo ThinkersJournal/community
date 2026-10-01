@@ -25,6 +25,14 @@
  *
  * Takes the caller's `pg.Client` and never opens its own connection, matching
  * `auto-hide.ts`, `is-blocked.ts` and `actions.ts`.
+ *
+ * ⚠️ `author_handle` IS NULL FOR AN ANONYMISED AUTHOR. `profiles.username` is
+ * released and reassignable the moment an account is scrubbed
+ * (src/auth/anonymise-accounts.ts) — joining `profiles` alone would show a
+ * moderator a handle that may since have been claimed by a completely
+ * different, unrelated user. `users.anonymised_at` is the only thing that
+ * says whether the name is still that author's, so both arms join `users`
+ * too and gate the handle on it.
  */
 import type { Client } from "pg";
 
@@ -42,6 +50,8 @@ export interface QueueItem {
   readonly severityRank: number;
   /** Age of the oldest unactioned report — surfaced so an item cannot rot unseen. */
   readonly oldestReportAt: Date;
+  /** Null for an anonymised author (the handle is released). */
+  readonly authorHandle: string | null;
 }
 
 interface QueueRow {
@@ -52,6 +62,7 @@ interface QueueRow {
   report_count: number;
   severity_rank: number;
   oldest_report_at: Date;
+  author_handle: string | null;
 }
 
 // Founder decision, fixed: sexual > violence > hate > harassment >
@@ -100,16 +111,22 @@ comment_reports AS (
    WHERE r.comment_id IS NOT NULL GROUP BY r.comment_id
 )
 SELECT 'post' AS kind, pr.target_id, p.title AS excerpt, p.hidden_at,
-       pr.report_count, pr.severity_rank, pr.oldest_report_at
+       pr.report_count, pr.severity_rank, pr.oldest_report_at,
+       CASE WHEN au.anonymised_at IS NULL THEN apr.username END AS author_handle
   FROM post_reports pr JOIN posts p ON p.id = pr.target_id
+  LEFT JOIN profiles apr ON apr.user_id = p.author_id
+  LEFT JOIN users au ON au.id = p.author_id
  WHERE NOT EXISTS (SELECT 1 FROM moderation_actions ma
                     WHERE ma.post_id = pr.target_id
                       AND ma.action LIKE 'content\\_%'
                       AND ma.created_at > pr.newest_report_at)
 UNION ALL
 SELECT 'comment' AS kind, cr.target_id, left(c.body_markdown, 120) AS excerpt, c.hidden_at,
-       cr.report_count, cr.severity_rank, cr.oldest_report_at
+       cr.report_count, cr.severity_rank, cr.oldest_report_at,
+       CASE WHEN au.anonymised_at IS NULL THEN acr.username END AS author_handle
   FROM comment_reports cr JOIN comments c ON c.id = cr.target_id
+  LEFT JOIN profiles acr ON acr.user_id = c.author_id
+  LEFT JOIN users au ON au.id = c.author_id
  WHERE NOT EXISTS (SELECT 1 FROM moderation_actions ma
                     WHERE ma.comment_id = cr.target_id
                       AND ma.action LIKE 'content\\_%'
@@ -127,5 +144,6 @@ export async function listOpenQueue(c: Client, limit = QUEUE_PAGE_SIZE): Promise
     reportCount: r.report_count,
     severityRank: r.severity_rank,
     oldestReportAt: r.oldest_report_at,
+    authorHandle: r.author_handle,
   }));
 }

@@ -433,6 +433,16 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /admin/media-access-requests",
     build: () => new Request("https://api.test/admin/media-access-requests"),
   },
+  // GET /admin/accounts/:handle (#113 plan A) — same Access-gate shape as
+  // GET /admin/queue above: a GET, so LAYER 1's automatic origin-less probe
+  // never reaches it, but requireAdmin gives it a real 401 path, so it
+  // belongs here rather than in ERROR_FREE. test/admin-accounts-route.test.ts
+  // owns the rest of the route's behaviour (handle lookup, history, rung).
+  {
+    name: "401 admin get account with no Access header",
+    route: "GET /admin/accounts/:handle",
+    build: () => new Request("https://api.test/admin/accounts/nobody"),
+  },
   // GET /media/restricted/:sha256 (#61) — a GET, so LAYER 1 never reaches it.
   // A malformed sha256 is its simplest reachable failure (NOT_FOUND, before
   // any auth check runs — src/routes/media-restricted.ts never distinguishes

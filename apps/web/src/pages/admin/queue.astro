@@ -107,6 +107,9 @@ const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "
               <p class="meta">
                 {item.kind} · {item.reportCount} report{item.reportCount === 1 ? "" : "s"} ·
                 {" "}{item.hiddenAt ? "hidden" : "not hidden"} · oldest report {item.oldestReportAt}
+                {item.authorHandle && (
+                  <> · <a class="link" href={`/admin/accounts/${encodeURIComponent(item.authorHandle)}`}>@{item.authorHandle} — account</a></>
+                )}
               </p>
               <form method="POST" class="decision-form">
                 <input type="hidden" name="subject" value={item.kind} />

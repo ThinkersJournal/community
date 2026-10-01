@@ -31,6 +31,7 @@ import {
   handleListMediaAccessRequests,
   handleRequestMediaAccess,
 } from "./routes/admin";
+import { handleAdminAccountAction, handleAdminGetAccount } from "./routes/admin-accounts";
 import { handleBlock, handleBlockStatus, handleListBlocks, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
@@ -388,6 +389,12 @@ export const ROUTES: readonly RouteDef[] = [
   // already-hidden content. Same Access trust domain/shape as the routes
   // above. Run once after this PR's deploy; safe to re-run (idempotent).
   { method: "POST", pattern: "/admin/backfill-hidden-media", handler: handleBackfillHiddenMedia },
+
+  // #113 plan A — the account half of the ladder. Same Access trust domain
+  // and inline-checkOrigin shape as /admin/decision. NOT linked from the
+  // decision form (spec decision #3); the queue links to the account page.
+  { method: "GET", pattern: "/admin/accounts/:handle", handler: handleAdminGetAccount },
+  { method: "POST", pattern: "/admin/accounts/:handle/actions", handler: handleAdminAccountAction },
 
   // TEST-ONLY. `handleTestRoute` returns null when `TEST_ROUTES` is unset (i.e.
   // in production), and we fall through to the SAME notFoundResponse() every

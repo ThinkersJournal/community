@@ -14,11 +14,16 @@ export function barredMessage(body: unknown): string | null {
   if (!isApiErrorBody(body) || body.code !== "ACCOUNT_BARRED") return null;
 
   const barred = body.barred;
-  if (barred?.kind === "banned") return "This account has been banned.";
-  if (barred?.kind === "suspended") {
-    const until = new Date(barred.until);
-    if (!Number.isNaN(until.getTime())) return `This account is suspended until ${until.toUTCString()}.`;
+  let base: string;
+  if (barred?.kind === "banned") {
+    base = "This account has been banned.";
+  } else if (barred?.kind === "suspended" && !Number.isNaN(new Date(barred.until).getTime())) {
+    base = `This account is suspended until ${new Date(barred.until).toUTCString()}.`;
+  } else {
+    // A bar we cannot describe is still a bar: say so, and invent nothing.
+    base = "This account is currently barred.";
   }
-  // A bar we cannot describe is still a bar: say so, and invent nothing.
-  return "This account is currently barred.";
+
+  const reason = typeof barred?.reason === "string" && barred.reason.trim() !== "" ? barred.reason.trim() : null;
+  return reason === null ? base : `${base} Reason given by the moderator: ${reason}`;
 }

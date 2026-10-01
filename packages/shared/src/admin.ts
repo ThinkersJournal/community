@@ -30,6 +30,7 @@ export interface AdminQueueItem {
   reportCount: number;
   severityRank: number;
   oldestReportAt: string;
+  authorHandle: string | null;
 }
 
 export interface AdminQueueResponse {
@@ -104,3 +105,73 @@ export const SAME_ADMIN_HAND_CASES: readonly SameAdminHandCase[] = [
   { a: "alice+review@example.test", b: "alice@example.test", same: false },
   { a: "al ice@example.test", b: "alice@example.test", same: false },
 ];
+
+/**
+ * #113 plan A — the account actions a moderator can take from the admin UI.
+ * ⚠️ `terminate` is deliberately NOT here: it is the CSAM path (#114), which
+ * calls the primitive itself and has no admin button.
+ */
+export const ADMIN_ACCOUNT_ACTIONS = ["warn", "suspend", "ban"] as const;
+export type AdminAccountActionKind = (typeof ADMIN_ACCOUNT_ACTIONS)[number];
+
+/** Spec §11.2, adopted by the PM 2026-10-01: 24h / 7d / 30d, default 7d. */
+export const SUSPENSION_HOURS = [24, 168, 720] as const;
+export type SuspensionHours = (typeof SUSPENSION_HOURS)[number];
+export const DEFAULT_SUSPENSION_HOURS: SuspensionHours = 168;
+
+/** Spec §5/§11.2, adopted: an action older than this no longer escalates the ladder (it stays in the log). */
+export const ESCALATION_WINDOW_MONTHS = 12;
+
+/** A moderation-log row as the ladder sees it. */
+export interface LadderEntry {
+  readonly action: "user_warn" | "user_suspend" | "user_ban" | "user_terminate";
+  /** False once the row is older than ESCALATION_WINDOW_MONTHS (it stays in the log). */
+  readonly countsTowardEscalation: boolean;
+}
+
+/** A row in `GET /admin/accounts/:handle`'s history, newest first. */
+export interface AdminAccountHistoryEntry extends LadderEntry {
+  readonly id: string;
+  readonly reason: string;
+  readonly violationCategory: string | null;
+  readonly actorAdmin: string;
+  readonly createdAt: string;
+  readonly actionExpiresAt: string | null;
+}
+
+/**
+ * Where history alone points on the ladder (spec §5). ADVISORY: the moderator
+ * decides, and a severe violation skips straight to ban. Shared so the admin
+ * page and the api can never disagree about it.
+ */
+export function suggestNextRung(history: readonly LadderEntry[]): AdminAccountActionKind {
+  const counted = history.filter((h) => h.countsTowardEscalation);
+  if (counted.some((h) => h.action === "user_suspend" || h.action === "user_ban" || h.action === "user_terminate")) {
+    return "ban";
+  }
+  if (counted.some((h) => h.action === "user_warn")) return "suspend";
+  return "warn";
+}
+
+/** `GET /admin/accounts/:handle`. */
+export interface AdminAccountResponse {
+  readonly userId: string;
+  readonly handle: string;
+  readonly suspendedUntil: string | null;
+  readonly disabledAt: string | null;
+  /** 'ban' | 'terminate' | null — mirrors `users.disabled_reason`. Null when not disabled. */
+  readonly disabledReason: string | null;
+  readonly history: readonly AdminAccountHistoryEntry[];
+  readonly suggestedNext: AdminAccountActionKind;
+}
+
+/** `POST /admin/accounts/:handle/actions`. */
+export interface AdminAccountActionRequest {
+  readonly action: AdminAccountActionKind;
+  readonly reason: string;
+  readonly violationCategory?: string;
+  /** Only for `suspend`; must be one of SUSPENSION_HOURS. Defaults to DEFAULT_SUSPENSION_HOURS. */
+  readonly suspensionHours?: number;
+  /** Only for `ban`; must be `true` or the route 400s INVALID_INPUT — a ban is permanent. */
+  readonly confirmBan?: boolean;
+}
