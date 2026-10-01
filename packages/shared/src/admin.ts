@@ -104,3 +104,19 @@ export const SAME_ADMIN_HAND_CASES: readonly SameAdminHandCase[] = [
   { a: "alice+review@example.test", b: "alice@example.test", same: false },
   { a: "al ice@example.test", b: "alice@example.test", same: false },
 ];
+
+/**
+ * #113 plan A — the account actions a moderator can take from the admin UI.
+ * ⚠️ `terminate` is deliberately NOT here: it is the CSAM path (#114), which
+ * calls the primitive itself and has no admin button.
+ */
+export const ADMIN_ACCOUNT_ACTIONS = ["warn", "suspend", "ban"] as const;
+export type AdminAccountActionKind = (typeof ADMIN_ACCOUNT_ACTIONS)[number];
+
+/** Spec §11.2, adopted by the PM 2026-10-01: 24h / 7d / 30d, default 7d. */
+export const SUSPENSION_HOURS = [24, 168, 720] as const;
+export type SuspensionHours = (typeof SUSPENSION_HOURS)[number];
+export const DEFAULT_SUSPENSION_HOURS: SuspensionHours = 168;
+
+/** Spec §5/§11.2, adopted: an action older than this no longer escalates the ladder (it stays in the log). */
+export const ESCALATION_WINDOW_MONTHS = 12;
