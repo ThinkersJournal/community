@@ -1,23 +1,36 @@
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  MIGRATION_NAME_RE,
   evaluate,
   findDisallowedMigrationFiles,
   pickGateMigration,
-} from "../../../scripts/check-migrations-applied.mjs";
+} from "../../../scripts/lib/migration-gate.mjs";
 
 /**
- * The deploy-time migration gate (#116, shape A) — `scripts/check-migrations-
- * applied.mjs` itself. Covers the pieces exported pure so they're testable
- * without the network or a real migrations directory: `pickGateMigration`
- * (which file it gates on), `findDisallowedMigrationFiles` (fix round 1, item
- * 7), and `evaluate` (pass/fail on a fetch outcome). Also covers fix round
- * 1's item 1 (the import-must-not-run-the-gate guard) and item 5's
- * filename-shape positive control against the real migrations directory.
+ * The deploy-time migration gate (#116, shape A). Covers the PURE library
+ * (`scripts/lib/migration-gate.mjs`) and, separately, a source-level pin on
+ * the CLI (`scripts/check-migrations-applied.mjs`) that it still has no
+ * entry-point guard.
+ *
+ * ⚠️ WHY THE LIBRARY SPLIT (fix round 2 ruling). Fix round 1 guarded the
+ * CLI's `await main()` with `import.meta.url === pathToFileURL(
+ * process.argv[1]).href`, specifically so this test file could import the
+ * CLI directly for its pure exports without also fetching production. The
+ * controller found that guard can FAIL OPEN (a symlinked path, or a Windows
+ * drive-letter/case mismatch, makes the comparison wrongly `false`) — for
+ * this script that means a deploy passes UNCHECKED, the one failure it must
+ * never have. The fix is structural: every pure function now lives in
+ * `scripts/lib/migration-gate.mjs`, which has no top-level side effects at
+ * all, so this file imports ONLY that library — never the CLI — and the CLI
+ * itself needs no conditional to protect, because nothing imports it for
+ * testing anymore. The CLI's unconditional `await main();` is pinned at the
+ * source level below, so a guard like round 1's cannot be reintroduced
+ * silently.
  *
  * ⚠️ WHY THIS IS A `*.node.test.ts`, NOT A POOL TEST. The script itself runs
  * under plain Node (it is invoked directly by Cloudflare Workers Builds, never
@@ -170,7 +183,7 @@ describe("evaluate", () => {
 });
 
 describe("fix round 1, item 5: every real migration file name matches the api's accepted pattern", () => {
-  it("apps/api/migrations/*.sql all match /^\\d{4}_[a-z0-9_]{1,100}\\.sql$/ (positive control: at least 19 files read)", () => {
+  it("apps/api/migrations/*.sql all match MIGRATION_NAME_RE + .sql (positive control: at least 19 files read)", () => {
     const dir = join(import.meta.dirname, "..", "migrations");
     const sqlFiles = readdirSync(dir).filter((f) => f.endsWith(".sql"));
 
@@ -178,18 +191,17 @@ describe("fix round 1, item 5: every real migration file name matches the api's 
     // empty/wrong directory silently passing vacuously.
     expect(sqlFiles.length).toBeGreaterThanOrEqual(19);
 
-    const pattern = /^\d{4}_[a-z0-9_]{1,100}\.sql$/;
-    const offenders = sqlFiles.filter((f) => !pattern.test(f));
+    const offenders = sqlFiles.filter((f) => !MIGRATION_NAME_RE.test(f.replace(/\.sql$/, "")));
     expect(offenders).toEqual([]);
   });
 });
 
-describe("fix round 1, item 1: import must not run the gate", () => {
-  it("importing the module calls no fetch and sets no process.exitCode", async () => {
+describe("fix round 2, item 3: importing the LIBRARY has no side effects", () => {
+  it("stubbing fetch and importing scripts/lib/migration-gate.mjs calls no fetch and sets no process.exitCode", async () => {
     const originalFetch = globalThis.fetch;
     const originalExitCode = process.exitCode;
     const fetchSpy = vi.fn(() => {
-      throw new Error("fetch must not be called by a bare import");
+      throw new Error("fetch must not be called merely by importing the library");
     });
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
     process.exitCode = undefined;
@@ -197,13 +209,12 @@ describe("fix round 1, item 1: import must not run the gate", () => {
     try {
       // Cache-busting query string: without it, Node/Vitest's module cache
       // would hand back the ALREADY-IMPORTED instance from the describe
-      // blocks above (whose top-level guard already ran once, proving
-      // nothing about whether a FRESH import would re-run it).
+      // blocks above, proving nothing about a FRESH import.
       const bust = `${Date.now()}-${Math.random()}`;
-      const scriptUrl = pathToFileURL(
-        join(import.meta.dirname, "..", "..", "..", "scripts", "check-migrations-applied.mjs"),
+      const libUrl = pathToFileURL(
+        join(import.meta.dirname, "..", "..", "..", "scripts", "lib", "migration-gate.mjs"),
       ).href;
-      await import(/* @vite-ignore */ `${scriptUrl}?bust=${bust}`);
+      await import(/* @vite-ignore */ `${libUrl}?bust=${bust}`);
 
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(process.exitCode).toBeUndefined();
@@ -211,5 +222,28 @@ describe("fix round 1, item 1: import must not run the gate", () => {
       globalThis.fetch = originalFetch;
       process.exitCode = originalExitCode;
     }
+  });
+});
+
+describe("fix round 2, item 3: the CLI has no entry-point guard (source-level pin)", () => {
+  // Source-level pin, same technique as apps/web/test/db-health-proxy.test.ts —
+  // reads the file as TEXT rather than importing it, since importing the CLI
+  // module runs `main()` for real (unconditionally, by design: see its header).
+  function stripComments(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  }
+
+  const CLI_PATH = join(import.meta.dirname, "..", "..", "..", "scripts", "check-migrations-applied.mjs");
+  const code = stripComments(readFileSync(CLI_PATH, "utf8"));
+
+  it("calls `await main();` as the LAST statement in the file, unconditionally", () => {
+    // If a guard like round 1's were reintroduced (`if (...) { await
+    // main(); }`), the file's last non-comment statement would be a closing
+    // `}`, not a bare `await main();` — this fails exactly that case.
+    expect(code.trimEnd().endsWith("await main();")).toBe(true);
+  });
+
+  it("round 1's guard condition (pathToFileURL(process.argv[1])) does not reappear", () => {
+    expect(code).not.toMatch(/pathToFileURL\s*\(\s*process\.argv\[1\]\s*\)/);
   });
 });

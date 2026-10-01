@@ -31,12 +31,20 @@
  * if the gate itself starts blocking every deploy (api/DB down, a `pgmigrations`
  * grant removed, etc).
  *
- * ⚠️ `await main()` IS GUARDED (fix round 1, item 1) — it runs ONLY when this
- * file is executed directly (`node scripts/check-migrations-applied.mjs`),
- * NOT when it is `import`ed (as the test below does, to reach the pure
- * exports). Without the guard, importing this module for its pure pieces
- * would ALSO fetch production on every test run, in every CI run, with no
- * network available and no reason to.
+ * ⚠️ `await main()` RUNS UNCONDITIONALLY — NO ENTRY-POINT GUARD (#116 fix
+ * round 2 ruling). Round 1 guarded it with `import.meta.url ===
+ * pathToFileURL(process.argv[1]).href` so importing this file for its pure
+ * exports (for testing) would not also fetch production. The controller
+ * found that comparison can FAIL OPEN — a symlinked path in the build
+ * environment, or a Windows drive-letter/case mismatch, makes it wrongly
+ * `false` — which would mean THIS SCRIPT SILENTLY EXITS 0 WITHOUT CHECKING
+ * ANYTHING, the one failure a fail-closed gate must never have. The actual
+ * fix: every pure piece this file used to export now lives in
+ * `scripts/lib/migration-gate.mjs`, which has no side effects at all, so a
+ * test imports ONLY that library and never reaches this file — meaning this
+ * file needs no conditional to protect, and calls `main()` the same way it
+ * would from any other script. `apps/api/test/check-migrations-applied
+ * .node.test.ts` pins, at the source level, that no guard has crept back in.
  *
  * Usage (from a Worker's Cloudflare Workers Builds build command):
  *   node scripts/check-migrations-applied.mjs && <the existing build command>
@@ -61,7 +69,15 @@
  *                             log shows any override.
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+
+import {
+  AFTER_CODE_HEAD_LINES,
+  MIGRATION_NAME_RE,
+  evaluate,
+  findDisallowedMigrationFiles,
+  pickGateMigration,
+} from "./lib/migration-gate.mjs";
 
 /** Absolute path to apps/api/migrations, independent of the process cwd. */
 const MIGRATIONS_DIR = fileURLToPath(new URL("../apps/api/migrations", import.meta.url));
@@ -70,127 +86,14 @@ const DEFAULT_BASE_URL = "https://community.thinkersjournal.com";
 const FETCH_TIMEOUT_MS = 20_000;
 
 /**
- * Must match `apps/api/src/routes/health-schema.ts`'s own `MIGRATION_NAME_RE`
- * byte-for-byte (fix round 1, item 5) — checked here, BEFORE the fetch, so a
- * malformed name on disk fails with a specific, actionable message instead of
- * an opaque 400 from the api.
- */
-const MIGRATION_NAME_RE = /^\d{4}_[a-z0-9_]{1,100}$/;
-
-/**
- * File extensions this gate does NOT understand (fix round 1, item 7). Any of
- * these present in `apps/api/migrations` means something non-`.sql` landed
- * there — node-pg-migrate itself supports JS migrations, but this repo's own
- * convention (and `pickGateMigration` below) only ever reasons about `.sql`
- * files, so a JS/TS migration would be silently invisible to the gate rather
- * than erroring loudly. Fail closed instead.
- */
-const DISALLOWED_EXTENSIONS = [".js", ".cjs", ".mjs", ".ts"];
-
-/**
- * A migration is "after-code" — its destructive change must run AFTER the
- * code that stops depending on the old shape, so it must never block that
- * code's own deploy (spec §2's contract case). Marked by this exact line
- * anywhere in its first 20 lines; see docs/runbooks/deploy.md's "Destructive
- * migrations" section for how/when to add it to a migration file.
- */
-const AFTER_CODE_MARKER = "-- deploy: after-code";
-const AFTER_CODE_HEAD_LINES = 20;
-
-/**
- * Read a migration file's first `AFTER_CODE_HEAD_LINES` lines. The real
- * filesystem implementation `pickGateMigration` is called with below;
- * injected as a parameter so tests can fake file contents without touching
- * disk.
+ * Read a migration file's first `AFTER_CODE_HEAD_LINES` lines. Real
+ * filesystem I/O — this is why it lives in the CLI file, not the pure
+ * library — injected into `pickGateMigration` as a parameter so tests can
+ * fake file contents without touching disk.
  */
 function readMigrationHead(name) {
   const text = readFileSync(`${MIGRATIONS_DIR}/${name}`, "utf8");
   return text.split(/\r?\n/).slice(0, AFTER_CODE_HEAD_LINES);
-}
-
-/**
- * Pure: which entries of a directory listing this gate refuses to run next
- * to (fix round 1, item 7) — see `DISALLOWED_EXTENSIONS` above. Returns the
- * offending names, sorted, or `[]` when none are present.
- */
-export function findDisallowedMigrationFiles(dirEntries) {
-  return dirEntries
-    .filter((name) => DISALLOWED_EXTENSIONS.some((ext) => name.endsWith(ext)))
-    .sort();
-}
-
-/**
- * Pure: picks the newest migration (by filename) that is NOT marked
- * after-code, skipping over any that are. Returns:
- *
- *   - `{ name, reason: null }` — `name` is the migration's name WITHOUT its
- *     `.sql` extension, matching what node-pg-migrate records in
- *     `pgmigrations` (see apps/api/scripts/migrate.mjs).
- *   - `{ name: null, reason: "no-sql-files" }` — the directory listing
- *     contains no `*.sql` entries at all (fix round 1, item 6 — a broken
- *     checkout, never silently treated the same as "nothing to gate on").
- *   - `{ name: null, reason: "all-after-code" }` — every `*.sql` file present
- *     is marked after-code; nothing for the gate to check, and NOT an error.
- *
- * `dirEntries` need not be pre-sorted or pre-filtered; this sorts and keeps
- * only `*.sql` itself, so a real `fs.readdirSync()` result can be passed
- * straight through.
- */
-export function pickGateMigration(dirEntries, readHead) {
-  const sqlFiles = dirEntries.filter((name) => name.endsWith(".sql")).sort();
-
-  if (sqlFiles.length === 0) {
-    return { name: null, reason: "no-sql-files" };
-  }
-
-  for (let i = sqlFiles.length - 1; i >= 0; i--) {
-    const file = sqlFiles[i];
-    const head = readHead(file);
-    const isAfterCode = head.some((line) => line.trim() === AFTER_CODE_MARKER);
-    if (!isAfterCode) {
-      return { name: file.slice(0, -".sql".length), reason: null };
-    }
-    // else: this is the newest file, but it runs AFTER its own code — gate on
-    // whichever migration comes before it instead.
-  }
-  return { name: null, reason: "all-after-code" };
-}
-
-/**
- * Pure (modulo the promise it's handed): turns a `fetch(...)` call — already
- * in flight, not yet awaited — into a pass/fail verdict, catching EVERY way
- * it can go wrong itself so no caller has to duplicate the try/catch. Pass
- * requires ALL THREE: the promise resolves, the response is HTTP 200, and its
- * body parses as JSON with `applied === true`. Anything else — a rejected
- * promise (network error, our own timeout abort, a redirect refused by
- * `redirect: "error"`), a non-200, or a body that is not valid JSON — is a
- * fail, with a `reason` string for the caller to print. `applied: false` and
- * `applied: null` (the api's own 503 shape, see health-schema.ts) are both
- * ordinary fails, distinguished only by `reason`.
- */
-export async function evaluate(responsePromise) {
-  let response;
-  try {
-    response = await responsePromise;
-  } catch (err) {
-    return { pass: false, reason: `request failed: ${err instanceof Error ? err.message : String(err)}` };
-  }
-
-  if (response.status !== 200) {
-    return { pass: false, reason: `HTTP ${response.status}` };
-  }
-
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    return { pass: false, reason: "response body was not valid JSON" };
-  }
-
-  if (body && body.applied === true) {
-    return { pass: true, reason: "applied:true" };
-  }
-  return { pass: false, reason: `applied:${JSON.stringify(body?.applied)}` };
 }
 
 export async function main() {
@@ -276,20 +179,8 @@ export async function main() {
   process.exitCode = 1;
 }
 
-// ⚠️ GUARDED, DELIBERATELY (fix round 1, item 1) — see this file's header.
-// Runs `main()` only when this file is the process's entry point (a direct
-// `node scripts/check-migrations-applied.mjs` invocation), never when it is
-// `import`ed for its pure exports (pickGateMigration, evaluate,
-// findDisallowedMigrationFiles). `process.argv[1]` is undefined in some
-// embedding contexts (never here, but defensively checked) — the `&&` short-
-// circuits rather than throwing if so.
-// ⚠️ GUARDED, DELIBERATELY (fix round 1, item 1) — see this file's header.
-// Runs `main()` only when this file is the process's entry point (a direct
-// `node scripts/check-migrations-applied.mjs` invocation), never when it is
-// `import`ed for its pure exports (pickGateMigration, evaluate,
-// findDisallowedMigrationFiles). `process.argv[1]` is undefined in some
-// embedding contexts (never here, but defensively checked) — the `&&` short-
-// circuits rather than throwing if so.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
-}
+// ⚠️ UNCONDITIONAL — NO ENTRY-POINT GUARD (#116 fix round 2 ruling). See this
+// file's header for why round 1's guard was removed rather than fixed in
+// place. Pinned at the source level by
+// apps/api/test/check-migrations-applied.node.test.ts.
+await main();
