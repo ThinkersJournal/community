@@ -17,10 +17,9 @@
       decided ... to a second reaper with the identical underlying concern"*. **Spec AC-3 is reworded to reference the hold.**
   - Trigger points T1–T3 (§3) approved.
   - #132 keeps no deletion change; this lands as its own PR.
-- **Not decided here: board item 93 (F1), with CireSnave.** Today a banned account can't be deleted, which incidentally keeps
-  its email. Once deletion follows holds only, a banned-but-unheld user can delete and re-register with the same email.
-  The fix (e.g. a hash of a banned account's email kept for signup to check) is a retention-policy call. It lands as its
-  own follow-up after his ruling. **This design neither builds it nor blocks on it.** The PR body must state the gap.
+- **Board item 93 (F1), RULED by CireSnave, option 2** (relayed by the PM): *scrub everything else about a banned account on
+  deletion as normal, but leave the EMAIL reserved/unscrubbed while the ban stands — not deleted, not released for a new
+  signup.* No hash table and no signup-side comparison. Built here, in §4a.
 
 ## 1. What changes for a user
 
@@ -28,7 +27,7 @@
 |---|---|---|---|
 | Ordinary | yes | yes | yes (if unverified) |
 | Suspended, or a lapsed suspension | per `isBarred` (unchanged) | **yes**, unless held | **yes**, unless held |
-| Banned (not held) | no (unchanged) | **yes** (see F1) | **yes** (see F1) |
+| Banned (not held) | no (unchanged) | **yes**, but the **email stays reserved** (§4a) | **yes** (see §4a's note) |
 | **Any state + an active account legal hold** | per `isBarred` | **no**: the request is recorded and waits | **no** |
 
 `signup.ts`'s upsert guard (it refuses to overwrite a **barred** unverified row) is access control and **stays unchanged**
@@ -95,6 +94,23 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 - Their header comments are rewritten to say why a hold, not a ban, is the gate.
 - A held account's deletion request stays recorded. Once the hold is released, the next nightly run proceeds.
 
+## 4a. A banned account's email stays reserved (board item 93, option 2)
+
+- In `anonymise-accounts.ts`, when the account being scrubbed has `disabled_at IS NOT NULL` (a ban or a termination),
+  **keep `users.email` as it is**. Everything else is scrubbed exactly as today: password hash, display name, bio, the
+  handle (released), and the other personal fields the function already clears. `anonymised_at` is set as usual.
+- Re-signup with that email is then refused by what already exists: `users.email` is `citext UNIQUE`, and the signup
+  upsert refuses to overwrite a barred row (`signup.ts`'s guard, unchanged). **Pin both with a test:** a deleted,
+  banned account's email cannot be used to sign up again, and gets the same response a taken email gets today.
+- **"While the ban stands":** if the ban is later lifted on an already-anonymised account (plan B's appeal grant, or
+  any future unban), the email must be scrubbed **then**. Plan B's ban-lift path gains one statement: if `anonymised_at`
+  is set, scrub `email` with the same sentinel `anonymise-accounts` uses. Until plan B lands there is no unban path in
+  the app, so this is recorded here for the plan-B implementer and pinned in this PR by a test of a helper
+  `scrubReservedEmailIfUnbanned(c, userId)`, which plan B calls.
+- The unverified reaper hard-DELETEs rows, so a banned unverified account with no hold is deleted outright, email
+  included. That reopens the evasion only for an account that **never verified its email**, which couldn't post. It's
+  accepted and stated, and it's consistent with the PM's AC-3 ruling (a hold, not a ban, protects).
+
 ## 5. Migration and backfill
 
 - Migration: the table, the trigger, and the two new `moderation_actions` action kinds (rebuild the CHECK from the
@@ -116,6 +132,7 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 | AH-4 | A CSAM hold cannot be released: the route refuses, and the DB CHECK refuses. A non-CSAM hold cannot be released by its imposer. |
 | AH-5 | The backfill holds every terminated account and no plain-banned one. |
 | AH-6 | `signup.ts`'s barred-row guard is unchanged; its existing test still passes. |
+| AH-7 | Deleting a banned account scrubs everything **except** the email; signing up again with that email is refused. Lifting the ban afterwards (`scrubReservedEmailIfUnbanned`) scrubs it. Shown to fail when the email-keeping branch is removed. |
 
 **Spec edit (AC-3):** in `2026-09-06-m4-moderation-queue-design.md` §12, AC-3 becomes *"A **legally held** unverified
 account survives `reapUnverifiedAccounts`. Otherwise the evidence a hold protects is silently deleted after 7 days.
@@ -124,5 +141,4 @@ match.
 
 ## 7. Out of scope
 
-- F1, the email retention after deleting a banned account (board item 93).
 - A hold's effect on the user's ability to log in. There's none: holds and access are separate on purpose.
