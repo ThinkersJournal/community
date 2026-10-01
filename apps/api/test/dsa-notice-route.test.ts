@@ -73,10 +73,11 @@ function validBody(target: { postId?: string; commentId?: string }) {
 
 /**
  * A fresh, per-call TEST-NET-3 address (203.0.113.0/24) — this route's
- * `DSA_LIMITER` is keyed on IP ALONE (no session, no email to bucket by, see
- * src/routes/dsa-notice.ts), so every case that does not deliberately share a
- * bucket (the 429 burst test below) needs its own IP, or it collides with
- * every OTHER case in this file inside the same 60s window.
+ * `DSA_LIMITER` is keyed `ip:email` (see src/routes/dsa-notice.ts), and
+ * `validBody` mints a fresh reporterEmail per call too, so every case that
+ * does not deliberately share a bucket (the key-shape tests below) needs its
+ * own IP, or it collides with every OTHER case in this file inside the same
+ * 60s window.
  */
 function uniqueIp(): string {
   return `203.0.113.${Math.floor(Math.random() * 254) + 1}`;
@@ -422,26 +423,114 @@ describe("POST /dsa-notice", () => {
    * `CF-Connecting-IP` (TEST-NET-3) keeps this burst isolated from every other
    * case in this file, which sends no such header and shares the "unknown"
    * bucket among themselves.
+   *
+   * ⚠️ I1: the key is `ip:email`, so the SAME email is reused across all 6
+   * requests here — a fresh email per call (what `validBody` mints by
+   * default) would put each request in its own bucket and this test would
+   * never 429. See the three key-shape tests below for the email half of the
+   * contract.
    */
   it(
-    "429s the 6th request from one IP in a minute",
+    "429s the 6th request from the same ip+email in a minute",
     async () => {
       stubFetch(false);
       const ip = "203.0.113.77";
+      const body = validBody({});
       await awaitLimiterBurstWindow();
 
       for (let i = 0; i < 5; i++) {
-        const response = await dsaNotice(validBody({ postId: crypto.randomUUID() }), {
-          Origin: ALLOWED_ORIGIN,
-          "CF-Connecting-IP": ip,
-        });
+        const response = await dsaNotice(
+          { ...body, postId: crypto.randomUUID() },
+          { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": ip },
+        );
         expect(response.status).toBe(403);
       }
-      const limited = await dsaNotice(validBody({ postId: crypto.randomUUID() }), {
-        Origin: ALLOWED_ORIGIN,
-        "CF-Connecting-IP": ip,
-      });
+      const limited = await dsaNotice(
+        { ...body, postId: crypto.randomUUID() },
+        { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": ip },
+      );
       expect(limited.status).toBe(429);
+    },
+    60_000,
+  );
+
+  /**
+   * I1 (final-review fix): the rate-limit key is `${ip}:${email}`, not the IP
+   * alone. Each of these three proves one axis of that key shape. Every one
+   * of them FAILS against the old IP-only key (`dsa:${clientIp}`) — see the
+   * final-fix-report for the FAIL→PASS mutation record.
+   */
+  it(
+    "the same IP with different emails is NOT limited together",
+    async () => {
+      stubFetch(false);
+      const ip = "203.0.113.78";
+      await awaitLimiterBurstWindow();
+
+      // 5 requests each for 2 DIFFERENT emails from the SAME ip: 10 total,
+      // all allowed through to the (stubbed-failing) Turnstile step, because
+      // each email has its own 5/60s bucket.
+      for (const email of [
+        `ip-shared-a-${crypto.randomUUID()}@example.com`,
+        `ip-shared-b-${crypto.randomUUID()}@example.com`,
+      ]) {
+        for (let i = 0; i < 5; i++) {
+          const response = await dsaNotice(
+            { ...validBody({ postId: crypto.randomUUID() }), reporterEmail: email },
+            { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": ip },
+          );
+          expect(response.status).toBe(403);
+        }
+      }
+    },
+    60_000,
+  );
+
+  it(
+    "the same email from the same IP IS limited after the threshold",
+    async () => {
+      stubFetch(false);
+      const ip = "203.0.113.79";
+      const email = `same-ip-email-${crypto.randomUUID()}@example.com`;
+      await awaitLimiterBurstWindow();
+
+      for (let i = 0; i < 5; i++) {
+        const response = await dsaNotice(
+          { ...validBody({ postId: crypto.randomUUID() }), reporterEmail: email },
+          { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": ip },
+        );
+        expect(response.status).toBe(403);
+      }
+      const limited = await dsaNotice(
+        { ...validBody({ postId: crypto.randomUUID() }), reporterEmail: email },
+        { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": ip },
+      );
+      expect(limited.status).toBe(429);
+    },
+    60_000,
+  );
+
+  it(
+    "with no CF-Connecting-IP header, two different emails do not share a bucket",
+    async () => {
+      stubFetch(false);
+      await awaitLimiterBurstWindow();
+
+      for (const email of [
+        `no-ip-a-${crypto.randomUUID()}@example.com`,
+        `no-ip-b-${crypto.randomUUID()}@example.com`,
+      ]) {
+        for (let i = 0; i < 5; i++) {
+          const response = await fetchWorker(
+            new Request("https://api.test/dsa-notice", {
+              method: "POST",
+              headers: { "content-type": "application/json", Origin: ALLOWED_ORIGIN },
+              body: JSON.stringify({ ...validBody({ postId: crypto.randomUUID() }), reporterEmail: email }),
+            }),
+          );
+          expect(response.status).toBe(403);
+        }
+      }
     },
     60_000,
   );

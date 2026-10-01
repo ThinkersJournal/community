@@ -69,9 +69,21 @@ export async function handleDsaNotice(
     parsed.data;
   const input = { postId, commentId, reason, statement, reporterName, reporterEmail };
 
-  // ---- 3. Rate limit — per-IP, unauthenticated (no session/email to bucket) -
+  // ---- 3. Rate limit — keyed `ip:email`, same reasoning as signup.ts/
+  // forgot-password.ts's (a) bucket: it runs AFTER parsing because the email
+  // is the key, and it bounds one IP spraying many reporter emails. Every real
+  // request arrives over the web→api Service Binding, where whether
+  // `CF-Connecting-IP` survives the hop is unverified — same `?? "unknown"`
+  // placeholder as signup, so an absent header still gives every (ip, email)
+  // pair its own bucket rather than collapsing all reporters into one.
+  // `reporterEmail` is the PARSED value (DsaNoticeInput already lowercases
+  // it) — do NOT rebuild the key from the raw request body, for the same
+  // case-folding reason signup.ts documents.
   const clientIp = request.headers.get("CF-Connecting-IP");
-  const limited = await enforceRateLimit(env.DSA_LIMITER, `dsa:${clientIp ?? "unknown"}`);
+  const limited = await enforceRateLimit(
+    env.DSA_LIMITER,
+    `${clientIp ?? "unknown"}:${reporterEmail}`,
+  );
   if (limited !== null) return limited;
 
   // ---- 4. Turnstile ----------------------------------------------------------
