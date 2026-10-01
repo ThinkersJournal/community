@@ -1,6 +1,8 @@
 # Account Legal Hold — Design
 
 **Status:** Approved in sections by the PM, 2026-10-01 (design note + rulings below), and written here for audit, then plan.
+**Revised 2026-10-01** after the pre-flight audit: PM ruling B replaces §4a's "keep the real email" with a hashed
+reservation, and the audit's mechanical findings are folded into §3, §4, §5 and §6.
 **Author:** Community controller agent, 2026-10-01. Board item 91 (superseded by this).
 
 ## 0. Rulings
@@ -19,7 +21,13 @@
   - #132 keeps no deletion change; this lands as its own PR.
 - **Board item 93 (F1), RULED by CireSnave, option 2** (relayed by the PM): *scrub everything else about a banned account on
   deletion as normal, but leave the EMAIL reserved/unscrubbed while the ban stands — not deleted, not released for a new
-  signup.* No hash table and no signup-side comparison. Built here, in §4a.
+  signup.* The **outcome** (the address can't be used for a new signup while the ban stands) is built here, in §4a. The
+  **mechanism** was replaced by the next ruling.
+- **PM ruling B (2026-10-01), replacing "keep the real email"**, after the audit found three mail paths that would reach a
+  deleted user. The PM's words, verbatim: *"Approve B … B structurally can't mail a deleted user because the real address
+  no longer exists anywhere to send to. It's also a real data-minimization win … Go with the SHA256-of-normalized-email
+  approach for barred-re-entry matching."* So the email is replaced at deletion like any other account's, a banned
+  account's address is reserved by a hash column on `users`, and signup compares against it (§4a).
 
 ## 1. What changes for a user
 
@@ -27,11 +35,12 @@
 |---|---|---|---|
 | Ordinary | yes | yes | yes (if unverified) |
 | Suspended, or a lapsed suspension | per `isBarred` (unchanged) | **yes**, unless held | **yes**, unless held |
-| Banned (not held) | no (unchanged) | **yes**, but the **email stays reserved** (§4a) | **yes** (see §4a's note) |
+| Banned (not held) | no (unchanged) | **yes**, email included; a **hash** of the email reserves the address while the ban stands (§4a) | **yes** (see §4a's note) |
 | **Any state + an active account legal hold** | per `isBarred` | **no**: the request is recorded and waits | **no** |
 
 `signup.ts`'s upsert guard (it refuses to overwrite a **barred** unverified row) is access control and **stays unchanged**
-(PM confirmed). Otherwise a stranger could take over a barred account by re-signing up (#50 Q3b).
+(PM confirmed). Otherwise a stranger could take over a barred account by re-signing up (#50 Q3b). Signup gains exactly
+one refusal, the reserved-hash check of §4a, which gives the same response.
 
 ## 2. Data
 
@@ -55,6 +64,22 @@ CREATE TABLE account_legal_holds (
 );
 -- At most one ACTIVE hold per (user, category); history is kept.
 CREATE UNIQUE INDEX account_legal_holds_active_idx ON account_legal_holds (user_id, category) WHERE released_at IS NULL;
+```
+
+And on `users` (§4a, PM ruling B):
+
+```sql
+ALTER TABLE users
+  ADD COLUMN reserved_email_sha256 text NULL,
+  -- lowercase hex, exactly what sha256Hex (src/auth/encoding.ts) emits
+  ADD CONSTRAINT users_reserved_email_sha256_hex
+    CHECK (reserved_email_sha256 ~ '^[0-9a-f]{64}$'),
+  -- only a deleted account reserves anything; a live row's own email does that job
+  ADD CONSTRAINT users_reserved_email_only_anonymised
+    CHECK (reserved_email_sha256 IS NULL OR anonymised_at IS NOT NULL);
+-- NOT unique (§4a says why).
+CREATE INDEX users_reserved_email_sha256_idx ON users (reserved_email_sha256)
+  WHERE reserved_email_sha256 IS NOT NULL;
 ```
 
 Unlike `media_legal_holds`, which is permanent per key, this table keeps released rows as history, because a DMCA or
@@ -95,9 +120,11 @@ CSAM-never-released CHECKs apply on top.
   (`applyMediaVisibilityChange`, `visibility-hook.ts`; `legalHold`/`legalHoldCategory` are parsed in `routes/admin.ts`
   and never reach `DecisionInput`). The account hold is **new in-transaction behaviour**, not a copy of that pattern:
   - thread the category from the route into `DecisionInput` as `accountHold?: { readonly category: LegalHoldCategory }`;
+  - the route casts it the way it already does for the image hold (`legalHoldCategory as LegalHoldCategory`,
+    `admin.ts:172`): at `admin.ts:118` the value is `unknown`, validated but not narrowed;
   - `applyDecision` (`applyDecisionInTx` once plan B lands) inserts the author's hold (`row.author_id` is in scope)
-    immediately after `recordModerationAction`, with that action's id, using
-    `ON CONFLICT (user_id, category) WHERE released_at IS NULL DO NOTHING`.
+    after `recordModerationAction` **and after #134's DSA-resolution block**, which #134 inserts at that same spot. It
+    uses the decision's action id and `ON CONFLICT (user_id, category) WHERE released_at IS NULL DO NOTHING`.
 
   A failure anywhere in the decision then leaves neither a decision nor a hold (AH-3). The image hold stays post-commit,
   as it is.
@@ -110,7 +137,9 @@ CSAM-never-released CHECKs apply on top.
   plan's two references to `#126 … migration 0020` become `0021` (#126 was renumbered).
 - **T3: manual.**
   - **Impose:** `POST /admin/accounts/:handle/holds` `{ category: "dmca" | "other", reason }`. `csam` is excluded here:
-    CSAM holds come only from T1/T2, where there is evidence of the case.
+    CSAM holds come only from T1/T2, where there is evidence of the case. One transaction locks the `users` row, checks
+    for an active hold of that category, and only then writes the log row and the hold. A duplicate writes nothing, and
+    two concurrent imposes serialise on the lock.
   - **Release:** `POST /admin/accounts/:handle/holds/:id/release` `{ reason }`. It is refused for `csam`, and **refused
     when the releasing admin is the one who imposed it** (`sameAdminHand`, #98: the two-person pattern from #61).
   - Both write a `moderation_actions` row. New kinds: `account_hold`, `account_hold_release`.
@@ -129,6 +158,14 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 - `reap-unverified.ts`: the same.
 - Their header comments are rewritten to say why a hold, not a ban, is the gate.
 - A held account's deletion request stays recorded. Once the hold is released, the next nightly run proceeds.
+- **Re-checked at the write, under a lock.** `anonymise-accounts` selects its batch first and scrubs each row later. In
+  that gap a hold can be imposed (T1–T3), a ban imposed or lifted (plan A, plan B), or the request cancelled. So each
+  scrub runs in its own transaction. It locks the `users` row (`FOR UPDATE`), then runs an `UPDATE` that re-checks the
+  hold (`NOT EXISTS`), the 30-day request and `anonymised_at IS NULL`, and decides the hash with
+  `CASE WHEN disabled_at IS NOT NULL`. The profile and reset-token scrubs run only if that `UPDATE` changed the row.
+  Every hold imposer locks the same row first, so a hold that commits while the reaper waits is visible to the reaper's
+  next statement. (A `NOT EXISTS` inside a blocked `UPDATE` alone isn't enough: READ COMMITTED's re-check re-reads the
+  target row, not the subquery.)
 - ⚠️ **Two existing test blocks assert the OLD rule and must be REWRITTEN, not made to pass by putting the ban checks
   back:**
   - `apps/api/test/reap-unverified.test.ts`, `describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)")`;
@@ -138,32 +175,63 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   `account_legal_holds` row** survive (AH-1), including one that is held but neither banned nor suspended, which proves
   the hold alone gates it.
 
-## 4a. A banned account's email stays reserved (board item 93, option 2)
+## 4a. A banned account's email stays reserved, by hash (board item 93; PM ruling B)
 
-- In `anonymise-accounts.ts`, when the account being scrubbed has `disabled_at IS NOT NULL` (in steady state that means a
-  ban, because a termination is always held by T2/7a or the backfill, so it never reaches the reaper),
-  **keep `users.email` as it is**. Everything else is scrubbed exactly as today: password hash, display name, bio, the
-  handle (released), and the other personal fields the function already clears. `anonymised_at` is set as usual.
-- Re-signup with that email is then refused by what already exists: `users.email` is `citext UNIQUE`, and the signup
-  upsert's `ON CONFLICT … DO UPDATE … WHERE` is a conjunction that fails on **both** `email_verified_at IS NULL` (a
-  verified account) **and** the barred-row clauses (`signup.ts`, unchanged). So it updates 0 rows and answers
-  `EMAIL_TAKEN`, the response any taken email gets. **Pin both with a test:** a deleted,
-  banned account's email cannot be used to sign up again, and gets the same response a taken email gets today.
-- **"While the ban stands":** if the ban is later lifted on an already-anonymised account (plan B's appeal grant, or
-  any future unban), the email must be scrubbed **then**. Plan B's ban-lift path gains one statement: if `anonymised_at`
-  is set, scrub `email` with the same sentinel `anonymise-accounts` uses. Until plan B lands there is no unban path in
-  the app. This PR builds and tests the helper `scrubReservedEmailIfUnbanned(c, userId)` (it checks `anonymised_at`
-  itself and is a no-op otherwise), **and plan B's plan (`2026-10-01-m4-2c-appeals.md`, Task 6, `resolveAppeal`'s
-  `user_ban` branch) is amended now to call it right after the ban is lifted**, so the obligation travels with the
-  plan its implementer reads.
-- The unverified reaper hard-DELETEs rows, so a banned unverified account with no hold is deleted outright, email
-  included. That reopens the evasion only for an account that **never verified its email**, which couldn't post. It's
-  accepted and stated, and it's consistent with the PM's AC-3 ruling (a hold, not a ban, protects).
+- **At deletion, every account loses its real email, banned or not.** `anonymise-accounts.ts` replaces `users.email`
+  with the undeliverable sentinel `deleted-<id>@invalid.thinkersjournal.local` and `password_hash` with the unusable
+  sentinel `!anonymised!`, exactly as today, along with the rest of its scrub. If the account is banned at that moment
+  (`disabled_at IS NOT NULL`; in steady state that means a ban, because a termination is always held by T2/7a or the
+  backfill and never reaches the reaper), the same `UPDATE` also stores `users.reserved_email_sha256`, the
+  lowercase-hex SHA-256 of the normalised email (§2). A suspended account reserves nothing.
+- **The normalisation is signup's own.** `packages/shared/src/schemas.ts:33` is
+  `const NormalizedEmail = z.email().toLowerCase();`, and signup, login and forgot-password all parse `email` with it.
+  zod 4's `toLowerCase()` is `_overwrite((input) => input.toLowerCase())`. The plan exports that transform as
+  `normalizeEmail` and has `NormalizedEmail` apply it with `.overwrite(normalizeEmail)`, so the hash and signup run the
+  same function and can't disagree. The hash is `sha256Hex` (`apps/api/src/auth/encoding.ts:40`).
+- **Signup refuses a reserved address with the response it already gives a barred one.** Today a barred row's address is
+  refused by the upsert's `WHERE` (`signup.ts` ~L264): it updates 0 rows, so the answer is `409 EMAIL_TAKEN`. That
+  clause is unchanged. A deleted account's row no longer holds the address, so the upsert succeeds. Signup then checks,
+  in the same transaction, whether the address's hash matches any `reserved_email_sha256`. If it does, signup rolls
+  back and answers the same `409 EMAIL_TAKEN`. The check runs **after** the upsert, not before. Until the reaper's
+  scrub commits, its row still holds the address, so the upsert conflicts with that row and the barred clause refuses
+  it. Once the upsert gets through without that conflict, the scrub has committed, and the next statement's snapshot
+  sees its hash. A check run before the upsert could miss a scrub that commits between the two.
+- **The mail paths need no guard.** The audit found three paths that would have mailed a deleted, banned user if the
+  real email had been kept:
+  - the notification email drain (`email-drain.ts:29-44`, which has no `anonymised_at` filter);
+  - forgot-password → reset-password (`forgot-password.ts:111` → `reset-password.ts:129-133`, which would also have
+    written a working password);
+  - the decision notice (`result.authorEmail`, `admin.ts:183` ← `decide.ts:89`).
+
+  Under ruling B the real address isn't stored anywhere, so each of them can only address the sentinel, whose domain is
+  never registered. Every anonymised account is already in that state today, so none of the three gains a guard. Pinned
+  structurally (AH-7): after a banned account is anonymised, its `email` is the sentinel, its `password_hash` is
+  unusable, and forgot-password for the original address sends nothing.
+- **"While the ban stands":** lifting the ban ends the reservation. `releaseReservedEmail(c, userId)`
+  (`apps/api/src/auth/reserved-email.ts`) sets `reserved_email_sha256 = NULL` once `disabled_at` is NULL, and does
+  nothing otherwise. There's nothing to scrub, because the address is already gone, so after the release it's simply
+  free for a new signup. The app has no unban path until plan B lands. This PR builds and tests the helper, and amends
+  plan B's plan (`2026-10-01-m4-2c-appeals.md`, Task 6, `resolveAppeal`'s `user_ban` branch) to call it right after the
+  ban is lifted, so the obligation travels with the plan its implementer reads.
+- **The index is not unique.** `users.email` is `citext UNIQUE` (0001), so only one live row holds an address at a
+  time, and the signup refusal makes a second reservation of the same hash unreachable today. The lookup is an
+  `EXISTS`, which needs no uniqueness. A UNIQUE index would protect nothing anything reads. And if a future path (an
+  email-change route, say) ever reserved a hash twice, the violation would abort the reaper's scrub, and because the
+  reaper rethrows, the rest of that night's batch with it.
+- **Privacy.** A SHA-256 of an email isn't anonymous: anyone holding the table can test a guessed address. It's kept
+  only for a banned account, only while the ban stands, and in place of the address itself. That's the data-minimising
+  choice the PM ruled. The privacy policy discloses it (plan Task 6).
+- **The unverified reaper** hard-DELETEs rows, so a banned unverified account with no hold is deleted outright, and no
+  hash is stored. That reopens the evasion only for an account that **never verified its email**, which couldn't post.
+  It's accepted and stated, and it's consistent with the PM's AC-3 ruling (a hold, not a ban, protects).
 
 ## 5. Migration and backfill
 
-- Migration: the table, the trigger, and the two new `moderation_actions` action kinds (rebuild the CHECK from the
-  **latest** list).
+- Migration: the table, the trigger, the two new `moderation_actions` action kinds (rebuild the CHECK from the
+  **latest** list), and `users.reserved_email_sha256` with its CHECKs and partial index (§2).
+- ⚠️ **Order:** this is 0022. #134 (0020, `dsa_notices`) and #126 (0021, `moderation_snapshots`) must merge, and be
+  applied in production, before this PR merges. node-pg-migrate checks order by position, and the production gate takes
+  the newest file as the expected schema.
 - **Backfill (in the same migration):** every account whose `disabled_reason = 'terminate'` gets a `csam` hold
   (`imposed_by = 'system'`, `reason = 'backfill: terminated before account holds existed'`). Without it, the switch would
   make previously-protected terminated accounts deletable.
@@ -185,8 +253,8 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 | AH-3 | T1: a `legalHold` decision creates the author's account hold in the same transaction (a forced failure leaves neither). |
 | AH-4 | A CSAM hold cannot be released: the route refuses, and the DB CHECK refuses. A non-CSAM hold cannot be released by its imposer. |
 | AH-5 | The backfill holds every terminated account and no plain-banned one. |
-| AH-6 | `signup.ts`'s barred-row guard is unchanged; its existing test still passes. |
-| AH-7 | Deleting a banned account scrubs everything **except** the email; signing up again with that email is refused. Lifting the ban afterwards (`scrubReservedEmailIfUnbanned`) scrubs it. Shown to fail when the email-keeping branch is removed. |
+| AH-6 | `signup.ts`'s barred-row guard (the upsert's `WHERE`) is unchanged, and its existing tests in `barred-reentry.test.ts` still pass. Signup's only addition is the reserved-hash refusal (§4a). |
+| AH-7 | Deleting a banned account scrubs it like any other (`email` is the sentinel, `password_hash` is unusable) and stores `reserved_email_sha256`. Signing up again with that address, in any letter case, gets the barred case's `409 EMAIL_TAKEN`. Forgot-password for it sends nothing. Deleting a non-banned account stores no hash. Once the ban is lifted, `releaseReservedEmail` clears the hash and the address can sign up. Shown to fail when the `CASE` always stores NULL. |
 
 **Spec edit (AC-3):** in `2026-09-06-m4-moderation-queue-design.md` §12, AC-3 becomes *"A **legally held** unverified
 account survives `reapUnverifiedAccounts`. Otherwise the evidence a hold protects is silently deleted after 7 days.
