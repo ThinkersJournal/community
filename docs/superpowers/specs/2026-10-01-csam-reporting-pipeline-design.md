@@ -1,7 +1,7 @@
 # CSAM Detection → NCMEC Reporting Pipeline — Design
 
 **Status:** Design for PM/founder review, then an implementation plan. Issue **#114**, part 2. This is the
-document `2026-09-06-m4-moderation-queue-design.md` §1 refers to as "the CSAM pipeline design, when written".
+design `2026-09-06-m4-moderation-queue-design.md` §1 points to as "`2026-09-06-csam-reporting-pipeline-design.md` when written".
 **Author:** Community controller agent, 2026-10-01.
 **Research:** `2026-10-01-ncmec-research-notes.md`, with every claim sourced and marked VERIFIED or UNVERIFIED.
 
@@ -95,111 +95,160 @@ It's an outbox drained by the existing `*/2 * * * *` cron, the same shape as the
   `source = 'cloudflare_match'`; every file gets `viewed_by_esp = false`.
 - **(b) Human-spotted.** Admin route `POST /admin/csam/cases`, body `{ subject: "post" | "comment", subjectId }`,
   reached from a "Report as CSAM" control on the review queue and the admin account page. Its keys are the media
-  that the content embeds. `source = 'moderator'`; `viewed_by_esp = true`, because a human saw it.
+  the content embeds, found with the shared helper (§3.2). `source = 'moderator'`; `viewed_by_esp = true`, because a human saw it.
 - **(v2, later, separate PR) Email Worker.** Cloudflare Email Routing for the address the CSAM tool notifies
   routes to a Worker that extracts the paths and calls (a)'s intake function. It's built only after one real
   notification email has been captured, since the format is unverified.
 
-### 3.2 Who is affected
+### 3.2 Who is affected, and the shared key helper
 
 For each matched key:
-- **uploaders**: every `media.owner_id` with that `r2_key`. Because media is content-addressed, several users can
-  hold the same object (R3).
-- **embedding content**: every post whose `markdown_source` references the key, plus comments if comments ever
-  carry media. Use the same regex as `reap-orphan-media.ts`, and make it **one shared helper**, not a third copy.
+- **uploaders**: every `media.owner_id` with that `r2_key`. Media is content-addressed, so several users can hold
+  the same object (R3).
+- **embedding content**: every post whose `markdown_source` references the key.
 
 Embedding content is hidden. Only **uploaders** are barred and reported (R3).
 
-### 3.3 The intake transaction
+**Prerequisite (folded into the plan's first task): one media-key helper.** Three copies of the `media/post/<sha256>.webp`
+pattern exist today at cc0e009:
+- `key-pattern.ts`'s `MEDIA_KEY_SQL_PATTERN`, exported but unused, although its comment claims `reap-orphan-media.ts`
+  uses it;
+- `reachability.ts`'s private `MEDIA_KEY_REGEX_SQL`;
+- `reap-orphan-media.ts`'s inline literal.
 
-One transaction, using the transaction-neutral primitives plans A/B introduce (`applyDecisionInTx`; and an
-`applyAccountActionInTx` split from plan A's `applyAccountAction`, the same split plan B makes for `decide.ts`):
+All three move onto the one export in `key-pattern.ts`, and the CSAM code uses only that export. It's used in both
+directions:
+- key → the posts whose `markdown_source` matches, for (a);
+- post → its embedded keys, for (b).
 
-1. `INSERT INTO csam_cases …` returning the case id.
-2. For each embedding post or comment, in this order: write a `moderation_snapshots` row (the #126 table) with its
-   current title and source, then `applyDecisionInTx(c, { decision: "remove", reason: <fixed internal text>,
-   actorAdmin, … })`. **No author notice is sent for a CSAM removal** (A3).
-3. For each key: `imposeLegalHold(c, { r2Key, category: "csam", imposedBy, moderationActionId })`.
-   `moderationActionId` is the `content_remove` row from step 2 for a post that embeds the key. A key with no
-   embedding content (an orphan upload) uses a dedicated `user_terminate` or case-level action row from step 4,
-   so step 3 runs after step 4 for those keys.
-4. For each uploader, if `CSAM_BAR_UNREVIEWED_MATCH` (R1) is true or the source is `moderator`:
-   `applyAccountActionInTx(c, { kind: "terminate", … })`.
-5. `INSERT INTO csam_case_files` (key, sha256, `viewed_by_esp`) and `INSERT INTO ncmec_reports` (one per
-   uploader, `status = 'pending'`, or `'awaiting_credentials'` when the secrets are absent, §4.4).
+Input parsing for (a): each line is either a bare 64-hex sha256 or any URL/path whose path ends in
+`media/post/<sha256>.webp`, extracted with the same pattern. The domain is not checked. Everything else is
+returned to the moderator as "unrecognised", line by line.
 
-Idempotence: a key already under an open case is not re-filed. Intake returns the existing case.
+### 3.3 The intake
 
-After commit, outside the transaction (mirroring `handleAdminDecision`):
-`afterContentDecision(...)` for each hidden target (cache purge plus the move to `MEDIA_RESTRICTED`), and
-`bumpEpoch` for each barred account. ⚠️ Plan A's before-and-after double bump applies here too.
+**New shared primitive (new work, not from plans A/B):** split plan A's `applyAccountAction` into a
+transaction-neutral `applyAccountActionInTx(c, input)` plus a wrapper, **exactly as** plan B splits
+`applyDecisionInTx` out of `applyDecision`:
+- the inner function keeps everything between BEGIN and COMMIT, including its `FOR UPDATE` row lock;
+- its early-outs (`not_found`, `already_disabled`) **return without a ROLLBACK**;
+- it has no BEGIN, no COMMIT and no try/catch;
+- the wrapper owns BEGIN/COMMIT, a swallowed ROLLBACK on the early-outs, and ROLLBACK-and-rethrow on error.
+
+`applyAccountAction`'s observable behaviour is unchanged.
+
+**New `moderation_actions` kind: `csam_hold`** (a migration extends the action CHECK, as 0017 did). Each case
+writes exactly one. Every legal hold and every `csam_cases` row references it, so every hold has a
+`moderationActionId` whether or not any post embeds the key and whether or not anyone is barred.
+
+**Sequence:**
+
+0. **Resolve, read-only, before the transaction:** the keys, their uploaders (§3.2), their embedding posts. Then
+   **bump the epoch of every uploader who will be barred** (plan A's "before" bump; see §3.4 for who is barred).
+1. Open the transaction. Take `pg_advisory_xact_lock(<fixed CSAM_INTAKE lock id>)`. Intake is low-volume, so
+   serialising every intake is cheap and closes every intake-vs-intake race.
+2. **Idempotence:** `csam_case_files.r2_key` is **UNIQUE**. Inside the lock, drop every key already in
+   `csam_case_files`. If none remain, `ROLLBACK` and return the existing case(s) for those keys. Nothing is
+   re-filed.
+3. Re-resolve uploaders and embedding posts for the remaining keys, inside the transaction. This is the
+   authoritative set.
+4. Write the `csam_hold` action row (`actor_admin` = the moderator; `subject_user_id` = the first uploader, or
+   null; `reason` = fixed internal text naming the case), then the `csam_cases` row referencing it.
+5. For each remaining key: `imposeLegalHold(c, { r2Key, category: "csam", imposedBy, moderationActionId: <the csam_hold id> })`.
+6. For each embedding post: write a `moderation_snapshots` row (#126's table). This is **a new write path**: today's
+   only writer is the author-delete CTE. Then call `applyDecisionInTx(c, { decision: "remove", reason: <fixed internal text>, … })`.
+   **No author notice** (A3).
+7. For each uploader to be barred (§3.4): `applyAccountActionInTx(c, { kind: "terminate", … })`. `already_disabled`
+   is fine: a terminate on a banned account upgrades it, and on a terminated one it's a no-op outcome.
+8. `INSERT csam_case_files` (case id, key, sha256, `viewed_by_esp`). For **each uploader**, `INSERT ncmec_reports`
+   (`pending`, or `awaiting_credentials` per §4.4) plus one `ncmec_report_files` row for **each of the case's files
+   that uploader's own `media` row holds**. A report attaches only what that person uploaded (R3).
+9. COMMIT.
+
+**After commit**, outside the transaction:
+- for each hidden post, `afterContentDecision(env, ctx, { subject, result, legalHold: { category: "csam", moderationActionId: <csam_hold id>, imposedBy } })`.
+  ⚠️ **The `legalHold` object MUST be passed.** `applyMediaVisibilityChange` (`visibility-hook.ts`) enqueues the
+  move unconditionally only on that branch. Without it, it sees the key already held, `continue`s, and the image
+  **stays in the public bucket** (AC-C1). The second `imposeLegalHold` this causes is idempotent
+  (`ON CONFLICT (r2_key) DO NOTHING`).
+- for each key **no post embeds** (an orphan upload): enqueue the move to `MEDIA_RESTRICTED` directly, through the
+  same move function `visibility-hook.ts` uses for its legal-hold branch.
+- bump the epoch of every barred uploader again (plan A's "after" bump).
 
 ### 3.4 R1 — the one pending switch
 
-`CSAM_BAR_UNREVIEWED_MATCH: boolean`, a named constant in `apps/api/src/csam/config.ts` (not an env var, so
-nobody can flip it without a reviewed change). **The implementation PR does not merge until CireSnave has ruled
-and the constant matches his ruling.** That's a merge condition (§9, AC-C6). Human-spotted cases always bar.
+`CSAM_BAR_UNREVIEWED_MATCH: boolean` is a named constant in `apps/api/src/csam/config.ts`, not an env var, so
+nobody can flip it without a reviewed change. Who is barred in step 7: every uploader when the source is
+`moderator`, or when the source is `cloudflare_match` **and** the constant is true. **The implementation PR does not
+merge until CireSnave has ruled and the constant matches his ruling** (AC-C6).
 
 ## 4. Filing (the drain)
 
 ### 4.1 State machine (`ncmec_reports.status`)
 
-`awaiting_credentials` → `pending` → `submitted` (`ncmec_report_id` set) → `finished` · or `failed`
-(retrying) → … · `abandoned_report_ids` accumulates every NCMEC report id lost to its deletion window.
+`awaiting_credentials` → `pending` → `submitted` (`ncmec_report_id` set) → `finished`.
+
+- Transient failures **do not change status**; they set `last_error`, `last_response_code`, `attempts` and
+  `next_attempt_at`.
+- `failed` is **terminal until a human acts**. It is set only by a `4100` validation failure, which no retry can
+  fix. An admin "retry" control moves a `failed` report back to `pending` after the code is fixed, and it's logged.
+- Every NCMEC report id lost to the deletion window is appended to `abandoned_report_ids`.
 
 ### 4.2 One drain step, per report
 
 Inside a single cron invocation:
 1. `pending`: build the report XML, store **the exact bytes** in `request_xml` (preserved, §5), `POST /submit`,
    and record `ncmec_report_id` → `submitted`.
-2. For each file: stream the object from `MEDIA_RESTRICTED` and `POST /upload` (multipart, with the report id),
-   recording `ncmec_file_id` per file. Then `POST /fileinfo` with `fileViewedByEsp`, `originalFileHash`
-   (sha256) and `publiclyAvailable` (true: it was served publicly before the hold).
+2. For each of **this report's** files (`ncmec_report_files`): stream the object from `MEDIA_RESTRICTED` and
+   `POST /upload` with the report id, recording `ncmec_file_id`. Then `POST /fileinfo` with `fileViewedByEsp`,
+   `originalFileHash` (sha256) and `publiclyAvailable` (true: it was served publicly before the hold).
 3. `POST /finish` → `finished`, with `finished_at`.
 
 Each step persists before the next one starts, so a retry resumes where it stopped.
 
 ### 4.3 Failure handling
 
-- Any non-zero `responseCode`, network error, or 5xx: set `last_error`, `attempts++`, and
-  `next_attempt_at = now() + backoff` (2, 4, 8 … min, capped at 30). Status stays at the last good state.
-- ⚠️ **The deletion window:** if a `submitted` report hasn't finished and `now()` has passed the later of
-  (opened + 24 h) and (last modification + 1 h), or NCMEC answers `5001` (report doesn't exist), move its id to
-  `abandoned_report_ids`, clear the per-file ids, and go back to `pending`, which submits a fresh report.
-  Never assume an open report is still there.
-- `2000`/`3100` (authentication or authorization): stop retrying this tick, and alarm (credentials problem).
-- `4100` (validation): `failed`, alarm with the error body. A code fix is needed; retrying won't help.
-- Response bodies are read through a **byte cap (64 KiB) before parsing**, then parsed with `fast-xml-parser`
-  using `processEntities: false`, per the 2026-09-08 decision. Request XML is **built** with an escaper, never
-  parsed.
+- A network error, 5xx, or `1000`: status unchanged, backoff (2, 4, 8 … min, capped at 30).
+- `2000`/`3100` (authentication/authorization): status unchanged, `last_response_code` recorded, no further
+  attempt this tick. This raises an **immediate** alarm (§6, condition 5).
+- `4100` (validation): `failed` (terminal), alarm with the error body.
+- ⚠️ **The deletion window:** if a `submitted` report isn't finished and `now()` has passed the later of
+  (opened + 24 h) and (last modification + 1 h), or NCMEC answers `5001`, move its id to
+  `abandoned_report_ids`, clear the per-file NCMEC ids, and go back to `pending`, which submits a fresh report.
+- Response bodies are read through a **64 KiB byte cap before parsing**. That cap is the real control (2026-09-08
+  decision §5). They're parsed with `fast-xml-parser`, configured `processEntities: false` for parity only. ⚠️
+  The decision measured that flag as **inert** for the probed vectors in 5.10.1, so it's kept for parity, not
+  protection. Request XML is **built** with an escaper, never parsed.
+- **Dependency (an explicit plan step):** add `fast-xml-parser` to `apps/api/package.json`, pinned to the version
+  `apps/web` uses. Turn the decision doc's §7 probes into a version-pinned characterisation test.
 
 ### 4.4 Credentials and environment
 
 Worker secrets `NCMEC_USERNAME`, `NCMEC_PASSWORD`; var `NCMEC_BASE_URL` (exttest vs prod; there's no default, so
 a missing value is "not configured"). If they're missing, intake writes `awaiting_credentials`, and the drain
-re-checks every tick and promotes those rows to `pending` once the secrets appear. That state **alarms** (§6).
+re-checks every tick and promotes those rows to `pending` once all three exist. That state **alarms** (§6).
 
 ### 4.5 Report contents
 
 Built from what we hold. Every field below is checked against the live XSD (`GET /xsd`) once credentials exist,
 and that check is a plan task.
-- `incidentType` (child pornography / CSAM) and `incidentDateTime` (the upload time of the earliest matched
-  media row).
+- `incidentType` (child pornography / CSAM) and `incidentDateTime` (the upload time of that uploader's earliest
+  matched media row).
 - The reporting person: the ESP contact from config (name and email), supplied by CireSnave.
-- The reported person, per uploader: `espIdentifier` (user id), `screenName` (handle), `profileUrl`, and email.
-  **No IP data**, because we don't store IPs, so `ipCaptureEvent` is omitted.
-- The web page: the URL of every embedding post.
-- Files: one per matched key.
+- The reported person (this report's uploader): `espIdentifier` (user id), `screenName` (handle), `profileUrl`,
+  and email. **No IP data**, because we don't store IPs.
+- The web page: the URL of every post that embeds one of this report's files.
+- Files: this report's `ncmec_report_files` only.
 
 ## 5. Preservation (§2258A(h))
 
 | What | Where | Kept |
 |---|---|---|
 | The images | R2 `MEDIA_RESTRICTED` under a `csam` legal hold (never released by the app) | indefinitely |
-| The report as sent | `ncmec_reports.request_xml`, append-only; UPDATE refused except for status columns | ≥ 1 year, no reaper |
-| The content (title, source) | `moderation_snapshots` (#126); the intake writes one snapshot per hidden post or comment | ≥ 1 year (trigger floor) |
+| The report as sent | `ncmec_reports.request_xml`; UPDATE of it refused by trigger | ≥ 1 year, no reaper |
+| The content (title, source) | `moderation_snapshots` (#126), written in intake step 6 | ≥ 1 year (trigger floor) |
 | The account | `users` row barred, never deleted (anonymise/reaper skip barred rows) | indefinitely |
-| Who did what | `moderation_actions` + `csam_cases` | append-only |
+| Who did what | `moderation_actions` (incl. `csam_hold`) + `csam_cases` | append-only |
 
 Access is limited (§2258B(c)): held media is fetchable only through #61's two-person grant. Permanent destruction
 on a law-enforcement request is **a manual runbook step** (§8), not app code.
@@ -208,18 +257,20 @@ on a law-enforcement request is **a manual runbook step** (§8), not app code.
 ## 6. Alarms — "never silent"
 
 The condition holds when **any** of these is true:
-- a report in `awaiting_credentials`;
-- a report in `failed`;
-- a report not `finished` within 6 h of its case's creation;
-- a non-empty `abandoned_report_ids` on a still-unfinished report.
+1. a report in `awaiting_credentials`;
+2. a report in `failed`;
+3. a report not `finished` within 6 h of its case's creation;
+4. a non-empty `abandoned_report_ids` on a still-unfinished report;
+5. a report whose `last_response_code` is `2000` or `3100`. This one is **immediate**: credentials NCMEC rejects
+   cannot heal themselves.
 
 When it holds:
 - **Admin banner:** every `/admin/*` page shows a red banner with the count and a link, from
   `GET /admin/csam/alarm`.
 - **Email:** the daily `0 14 * * *` tick emails the alarm address (config, CireSnave's) while the condition holds,
-  with no dedup suppression. Repeating daily is the point.
-- **Log:** an `ncmec ALARM` line every drain tick while it holds, so log-based alerting can key on it once it
-  exists.
+  with no dedup suppression. Conditions 2 and 5 **also** send an email on the tick that first raises them, so a
+  rejected credential is not left waiting up to a day.
+- **Log:** an `ncmec ALARM` line every drain tick while it holds.
 
 ## 7. Review (after the fact)
 
@@ -253,14 +304,17 @@ Who can review: any Access admin. Access to the **images** keeps #61's two-perso
 | AC-C1 | After a match intake, the content is not publicly reachable: the public routes 404, and the media is out of the public bucket. Tested through the real public endpoints. |
 | AC-C2 | No human action stands between intake and `submit`. The drain alone takes a report to `finished` against the NCMEC test double. |
 | AC-C3 | A report whose NCMEC deletion window has passed (or a `5001`) is resubmitted, with the old id kept in `abandoned_report_ids`. Shown to fail with the resubmit removed. |
-| AC-C4 | Every alarm condition in §6 produces the banner and the log line. Shown to fail when the condition is removed. |
+| AC-C4 | Each of §6's five alarm conditions produces the banner and the log line. Conditions 2 and 5 also send the immediate email. Each is shown to fail when its condition is removed. |
 | AC-C5 | The response byte cap fires before the parser, and a test of an oversized body fails without the cap. |
 | AC-C6 | `CSAM_BAR_UNREVIEWED_MATCH` equals CireSnave's R1 ruling, quoted in the PR. |
 | AC-C7 | No email is sent to the uploader or author by any CSAM path (A3). |
+| AC-C9 | After a match intake, every held image has left the public bucket, **including an orphan upload with no embedding post**. Shown to fail when the post-commit `legalHold` argument is dropped (§3.3). |
+| AC-C10 | A second intake of an already-cased key files nothing new (no new case, report, or hold). Shown to fail without the UNIQUE/lock check. |
+| AC-C11 | In a multi-uploader case, each NCMEC report carries only the files that uploader's own media rows hold (R3). |
 | AC-C8 | An end-to-end run against **exttest** (`exttest.cybertip.org`) reaches `finished`, once credentials exist. **APP.live does not flip until this is shown.** |
 
 ## 10. Dependencies and order
 
-Plan A (built) → plan B (`applyDecisionInTx`, the inverse paths) → #126 (snapshots) → **this**. Plan C (DSA) is
+Plan A (built) → plan B (`applyDecisionInTx`, `afterContentDecision`, the inverse paths) → #126 (snapshots) → **this**. This work's own prerequisites, the first tasks of its plan: the `applyAccountActionInTx` split, the shared media-key helper, the `csam_hold` action kind, and the `fast-xml-parser` dependency. Plan C (DSA) is
 independent. Building this needs from CireSnave: the R1 ruling, the ESP contact details for `reportingPerson`, an
 alarm email address, exttest credentials, and an answer on Cloudflare-scans-R2.
