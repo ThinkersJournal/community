@@ -16,10 +16,19 @@ You may not post, upload, or link to content that:
 
 1. **Is illegal**, or facilitates illegal activity.
 2. **Sexually exploits or endangers children** in any way. This is a zero-tolerance
-   category. Uploaded images are scanned for known CSAM, confirmed matches are
-   removed, the account is terminated, and we report to the National Center for
-   Missing & Exploited Children (NCMEC) as required by law. (See the
-   [Privacy Policy](privacy-policy.md) for how reporting data is handled.)
+   category. Child sexual abuse material (CSAM) is removed, and we report it to the
+   National Center for Missing & Exploited Children (NCMEC) as required by law.
+   (See the [Privacy Policy](privacy-policy.md) for how reporting data is handled.)
+   [[NOT YET TRUE AS WRITTEN — status 2026-10-01, issue #114. What exists today:
+   a human moderator removes matched media by placing a legal hold. What does
+   NOT exist yet: any automated match → remove pipeline; any way to terminate an
+   account (nothing sets `disabled_at`/`suspended_until`; see #113); and any NCMEC
+   CyberTipline reporting, automated or manual. Whether Cloudflare's CSAM Scanning
+   Tool is enabled on the production zone cannot be verified from this repository.
+   CireSnave's ruling (verbatim, relayed by the PM): "the automated CSAM/NCMEC
+   reporting needs to be built sooner rather than later and it must exist before
+   we open the community project up to users officially." Do not restore wording about
+   scanning, termination, or automatic reporting until #114 ships it.]]
 3. **Threatens, harasses, bullies, or incites violence** against a person or group.
 4. **Is hate speech** — attacks or dehumanizes people based on race, ethnicity,
    national origin, religion, disability, sex, gender identity, sexual orientation,
@@ -61,7 +70,9 @@ signals only *prioritize* review, they do not decide it.
 - **Actions ladder.** For confirmed violations, enforcement generally escalates:
   **warning → temporary suspension → permanent ban**, proportionate to severity
   and history. Severe violations (e.g. CSAM, credible threats) skip the ladder and
-  result in immediate termination.
+  result in immediate termination. [[NOT YET TRUE — status 2026-10-01: no suspension
+  or termination mechanism exists yet (#113, #114). Content-level actions (hide,
+  remove, legal hold) do exist.]]
 - **Appeals.** If your content or account is actioned, you may appeal through
   [[APPEAL_CHANNEL]]. A different reviewer, where practical, reviews the appeal.
 - **Audit.** Moderation actions are recorded in an append-only internal log for
