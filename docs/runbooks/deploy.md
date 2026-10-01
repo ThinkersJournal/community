@@ -26,10 +26,36 @@ migration in `apps/api/migrations/` has been applied. No credential of any
 kind was added for this (CireSnave ruled option 2 in the design's §4): the
 deployed Worker answers from the database access it already has.
 
+## Before editing: check each Worker's build root directory
+
+Workers Builds runs the build command from whatever **"Root directory"** that
+Worker's project is configured with in the Cloudflare dashboard — which is
+**not necessarily this repo's root**, and the correct path to
+`check-migrations-applied.mjs` depends on it:
+
+- Root directory = repo root → `node scripts/check-migrations-applied.mjs`
+- Root directory = `apps/web` or `apps/api` → `node ../../scripts/check-migrations-applied.mjs`
+
+**Before relying on this**, CireSnave should either run the exact command once
+in a shell at that root directory (so a typo or wrong relative path surfaces
+immediately, not on the next real deploy), or watch the first real build log
+after making the dashboard change below and confirm the gate's own
+`MIGRATION GATE: checking ...` line appears rather than a "file not found"
+build failure.
+
+The script itself does not care which root directory it was launched from:
+`scripts/check-migrations-applied.mjs` resolves `apps/api/migrations` from its
+**own file location** (`import.meta.url`), never from `process.cwd()` — same
+pattern as `apps/api/scripts/migrate.mjs`'s own migrations-directory
+resolution — so it finds the right directory regardless of where the build
+command's shell happens to be sitting.
+
 ## The one-time dashboard change (CireSnave)
 
 For **each** Worker — `thinkersjournal-web` and `thinkersjournal-api` — open
-its Cloudflare Workers Builds settings and change the build command to:
+its Cloudflare Workers Builds settings and change the build command to (using
+the correct relative path for that Worker's root directory, per the section
+above):
 
 ```
 node scripts/check-migrations-applied.mjs && <the CURRENT build command>
@@ -39,6 +65,14 @@ The current build commands live only in the Cloudflare dashboard — they are
 **not** in this repo (see `apps/api/src/routes/health-build.ts`'s own header
 for why the `api` Worker in particular has no build script here to hook
 into). **Keep whatever is there today after the `&&`; don't guess it.**
+
+⚠️ **`MIGRATION_GATE_BASE_URL` must never be set in the Workers Builds
+environment for either Worker.** It exists only so the gate script can be
+pointed at a non-production host for local testing; setting it in the real
+build environment would silently point the gate at the wrong host while
+still deploying from this one. The script prints the base URL it actually
+checked on every run (`MIGRATION GATE: checking <url> for migration
+<name>...`), so a build log always shows if this has happened.
 
 ⚠️ **Ordering matters, and it only goes one way.** Make this dashboard change
 **only after** this PR's code is live in production — production does not
@@ -57,9 +91,10 @@ and only then for both Workers.
 
 ## Shipping a PR with an additive migration
 
-1. **Merge.** The next build (either Worker, whichever one's dashboard
-   command has the gate wired in) **fails at the gate** — this is expected,
-   not a regression. The gate's own log line says which migration is missing:
+1. **Merge.** **Both Workers** carry the gate (per the dashboard change
+   above), so the next build for **each** of `thinkersjournal-web` and
+   `thinkersjournal-api` **fails at the gate** — this is expected, not a
+   regression. The gate's own log line says which migration is missing:
 
    ```
    MIGRATION GATE: production has not applied 0020_dsa_notices — apply it
@@ -74,16 +109,28 @@ and only then for both Workers.
    connection string from `process.env.DATABASE_URL` for the `dev` target
    (its default) — so the exact command shape is:
 
+   **bash:**
+
    ```
    DATABASE_URL="$TJ_PROD_DATABASE_URL" node apps/api/scripts/migrate.mjs dev up
    ```
 
-   Run from a trusted machine, with the credential supplied inline on the
-   command line (never written to a file, never exported into a shell
-   profile, never stored).
+   **PowerShell:**
 
-3. **Retry the build** in the Cloudflare dashboard. The gate now sees
-   `{"applied":true}` and the build proceeds — the deploy ships.
+   ```powershell
+   $env:DATABASE_URL=$env:TJ_PROD_DATABASE_URL; node apps/api/scripts/migrate.mjs dev up; Remove-Item Env:DATABASE_URL
+   ```
+
+   Run from a trusted machine. The credential is only ever set for that one
+   command — never written to a file, a CI secret, or a shell profile — and
+   the PowerShell form's trailing `Remove-Item Env:DATABASE_URL` clears it
+   from the session afterward (bash's inline `VAR=value cmd` form does not
+   leave it in the shell's environment to begin with).
+
+3. **Retry the build** in the Cloudflare dashboard, **for both Workers**
+   (whichever of them failed at step 1 — ordinarily both, since both carry
+   the gate). The gate now sees `{"applied":true}` and each build proceeds —
+   the deploy ships.
 
 4. **`prod-smoke.yml` runs after the push**, as it already does for every
    push to `main` (unchanged by this work — see that workflow).
@@ -98,6 +145,54 @@ design's §2 "destructive migrations run after the code that stops using the
 old shape" contract, made mechanical). Deploy the code that stops referencing
 the dropped shape first; apply the after-code migration only once that code
 is live and healthy.
+
+**When applying migrations and a pending one is marked after-code, apply them
+one at a time and stop before it** — `node-pg-migrate`'s `up` has no "stop
+before this named migration" option, only "apply at most N pending
+migrations", so `apps/api/scripts/migrate.mjs` now takes an optional 3rd
+`count` argument for exactly this (#116 fix round 1, item 4):
+
+```
+DATABASE_URL="$TJ_PROD_DATABASE_URL" node apps/api/scripts/migrate.mjs dev up 1
+```
+
+Run this once per pending additive migration (checking `pgmigrations` or the
+gate's own output between runs), and **do not** run a bare `up` (no count,
+applies everything pending) when an after-code migration is anywhere in the
+pending set — that would apply it too, before the code that still depends on
+the old shape has deployed.
+
+## Break-glass: the gate itself is blocking every deploy
+
+The gate fails closed by design (no bypass flag), which means anything that
+makes `GET /health/schema` unable to answer `200 {"applied":true}` blocks
+**every** deploy to **both** Workers, including the deploy that would fix the
+underlying problem. This can happen without any migration actually being
+missing — for example: the `api`/`web` Worker or the database is down, a
+future `app_runtime` cutover removes `SELECT` on `pgmigrations` (see the dated
+note in `docs/superpowers/specs/2026-09-02-least-privilege-db-role-design.md`
+§4), or `HYPERDRIVE_FRESH` itself is misconfigured.
+
+**To get unstuck, CireSnave temporarily removes the gate, not its
+guarantee:**
+
+1. In the Cloudflare dashboard, temporarily change the affected Worker's
+   build command back to just `<the CURRENT build command>` — i.e. remove
+   the `node ...check-migrations-applied.mjs &&` prefix added in "The
+   one-time dashboard change" above. (Or, for a single urgent deploy, run
+   `wrangler deploy` manually from a trusted machine instead of going through
+   Workers Builds at all.)
+2. Deploy the fix for whatever is actually broken (the api, Hyperdrive, the
+   DB, or the grant).
+3. Confirm `GET /health/schema?migration=<a known-applied name>` answers
+   `200 {"applied":true}` again from production.
+4. **Restore the gate** — put the `node ...check-migrations-applied.mjs &&`
+   prefix back on the build command — and confirm the next build passes it.
+
+The script itself still has, and must keep, **no bypass flag** — this
+break-glass path is a human, dashboard-level action taken deliberately and
+visibly, never something the script can be told to skip through an
+environment variable or argument.
 
 ## Rollback
 

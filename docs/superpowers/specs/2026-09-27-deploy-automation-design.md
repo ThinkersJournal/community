@@ -1,12 +1,12 @@
-# Deploy Automation — Design (spec only, not built)
+# Deploy Automation — Design (option 2 built as shape A)
 
-**Status (2026-10-01):** option 2 BUILT as shape A (no credential) — docs/runbooks/deploy.md; auto-rollback (§3 step 2) deferred to a future deploy-credential design.
-
-**Status:** Design for founder/PM review. **Detection is proven** (see
-`.github/workflows/prod-smoke.yml` / `scripts/smoke-prod.sh`, verified 2026-09-27
-to both fire and correctly fail) — that was the stated precondition for this
-design work, not for implementation. **Nothing in this document is built.** No
-credential of any kind has been added anywhere as part of it.
+**Status (2026-10-01):** option 2 is BUILT, as shape A (no credential) — see
+`docs/runbooks/deploy.md` for the operational runbook. Auto-rollback (§3 step
+2 below) is deferred to a future deploy-credential design; everything else
+option 2 describes is live. **Detection is proven** (see
+`.github/workflows/prod-smoke.yml` / `scripts/smoke-prod.sh`, verified
+2026-09-27 to both fire and correctly fail) — that was the stated
+precondition for this design work, which held before implementation began.
 
 **Author:** Community controller agent, 2026-09-27, dispatched by the portfolio
 PM after the 2026-09-27 production incident (see below).
