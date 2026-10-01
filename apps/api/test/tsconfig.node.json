@@ -8,9 +8,19 @@
   //
   // ⚠️ `*.node.test.ts` exists because workerd's filesystem is VIRTUAL (`/bundle`),
   // so a pool test cannot read this repo's own config files. See vitest.config.ts.
+  //
+  // `allowJs` (#116): check-migrations-applied.node.test.ts imports the pure
+  // pieces straight out of the repo-root `scripts/check-migrations-applied.mjs`
+  // (same precedent as apps/web/test/turnstile-build-guard.node.test.ts
+  // importing its sibling `.mjs` — that package's tsconfig gets `allowJs` for
+  // free from `astro/tsconfigs/strict`; this base does not, so it is set here
+  // explicitly). Without it, TS7016 ("could not find a declaration file")
+  // blocks the import outright, and this script is deliberately plain
+  // dependency-free ESM, never a `.ts` file, per its own header.
   "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"]
+    "types": ["node"],
+    "allowJs": true
   },
   "include": ["./**/*.db.test.ts", "./**/*.node.test.ts", "./global-setup.ts"]
 }
