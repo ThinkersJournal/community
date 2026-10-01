@@ -62,18 +62,42 @@ const SEVERITY_CASE = `CASE r.reason
         WHEN 'harassment' THEN 4 WHEN 'ip_infringement' THEN 3
         WHEN 'spam' THEN 2 ELSE 1 END`;
 
+// ⚠️ #119 — `oldest_report_at` is the oldest ACTIVE report: one at or after
+// the target's latest `content_*` decision. CireSnave: "It should be the
+// oldest active report...not ruled on report." `>=`, not `>`, so the rule is
+// exactly the complement of the OPEN test below (`ma.created_at >
+// newest_report_at`): every open item therefore has at least one active
+// report, and this is never NULL for a row the query returns. Only the AGE is
+// scoped this way — `report_count` and `severity_rank` stay cumulative on
+// purpose, so a reopened item shows its whole history (PM scoping, #119).
 const SELECT_OPEN_QUEUE = `
-WITH post_reports AS (
+WITH post_ruled AS (
+  SELECT ma.post_id AS target_id, max(ma.created_at) AS ruled_at
+    FROM moderation_actions ma
+   WHERE ma.post_id IS NOT NULL AND ma.action LIKE 'content\\_%'
+   GROUP BY ma.post_id
+),
+comment_ruled AS (
+  SELECT ma.comment_id AS target_id, max(ma.created_at) AS ruled_at
+    FROM moderation_actions ma
+   WHERE ma.comment_id IS NOT NULL AND ma.action LIKE 'content\\_%'
+   GROUP BY ma.comment_id
+),
+post_reports AS (
   SELECT r.post_id AS target_id, count(*)::int AS report_count,
-         min(r.created_at) AS oldest_report_at, max(r.created_at) AS newest_report_at,
+         min(r.created_at) FILTER (WHERE pru.ruled_at IS NULL OR r.created_at >= pru.ruled_at) AS oldest_report_at,
+         max(r.created_at) AS newest_report_at,
          max(${SEVERITY_CASE}) AS severity_rank
-    FROM reports r WHERE r.post_id IS NOT NULL GROUP BY r.post_id
+    FROM reports r LEFT JOIN post_ruled pru ON pru.target_id = r.post_id
+   WHERE r.post_id IS NOT NULL GROUP BY r.post_id
 ),
 comment_reports AS (
   SELECT r.comment_id AS target_id, count(*)::int AS report_count,
-         min(r.created_at) AS oldest_report_at, max(r.created_at) AS newest_report_at,
+         min(r.created_at) FILTER (WHERE cru.ruled_at IS NULL OR r.created_at >= cru.ruled_at) AS oldest_report_at,
+         max(r.created_at) AS newest_report_at,
          max(${SEVERITY_CASE}) AS severity_rank
-    FROM reports r WHERE r.comment_id IS NOT NULL GROUP BY r.comment_id
+    FROM reports r LEFT JOIN comment_ruled cru ON cru.target_id = r.comment_id
+   WHERE r.comment_id IS NOT NULL GROUP BY r.comment_id
 )
 SELECT 'post' AS kind, pr.target_id, p.title AS excerpt, p.hidden_at,
        pr.report_count, pr.severity_rank, pr.oldest_report_at
