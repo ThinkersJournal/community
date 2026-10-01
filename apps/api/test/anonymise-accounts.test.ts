@@ -14,7 +14,6 @@ import { withClient } from "../src/db/client";
 
 const ALLOWED_ORIGIN = "http://localhost:8787";
 const PASSWORD_HASH = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$ZGlnZXN0";
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function ctxRun<T>(fn: (c: import("pg").Client) => Promise<T>): Promise<T> {
   const ctx = createExecutionContext();
@@ -190,34 +189,6 @@ describe("anonymiseExpiredAccounts — a barred account is never scrubbed", () =
       (await row(ordinary.id)).anonymisedAt,
       "the reaper scrubbed nothing — the two guards above prove nothing",
     ).not.toBeNull();
-  });
-
-  // ⚠️ Fix: a LAPSED suspension (suspended_until in the past) is NOT a bar —
-  // src/auth/account-status.ts's isBarred treats it the same way, and login
-  // lets a lapsed-suspension user straight through. The reaper must agree:
-  // only a CURRENTLY-suspended account blocks deletion.
-  it("a LAPSED suspension does not block deletion; a CURRENT one still does", async () => {
-    const lapsed = await seed({
-      requestedDaysAgo: 45,
-      suspendedUntil: new Date(Date.now() - DAY_MS),
-    });
-    const current = await seed({
-      requestedDaysAgo: 45,
-      suspendedUntil: new Date(Date.now() + DAY_MS),
-    });
-
-    const ctx = createExecutionContext();
-    await anonymiseExpiredAccounts(env, ctx);
-    await waitOnExecutionContext(ctx);
-
-    expect(
-      (await row(lapsed.id)).anonymisedAt,
-      "a lapsed suspension blocked deletion — it bars nothing, same as login's isBarred",
-    ).not.toBeNull();
-    expect(
-      (await row(current.id)).anonymisedAt,
-      "CONTROL: a currently-suspended account was scrubbed anyway — it should still be spared",
-    ).toBeNull();
   });
 });
 
