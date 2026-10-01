@@ -4,7 +4,7 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
- * #58 Q2 — `moderation_snapshots` (0020). CireSnave: "minimum of 1 year or
+ * #58 Q2 — `moderation_snapshots` (0021). CireSnave: "minimum of 1 year or
  * until a lawyer states it should be removed."
  *
  * A guard never shown to fire is a claim, not a guard: every refusal below has
