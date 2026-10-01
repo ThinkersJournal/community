@@ -177,7 +177,10 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   - bumps it **again** right after **that row's** COMMIT, which closes the window for a login that lands between the
     two bumps;
   - on any per-row scrub failure (a lock timeout or any other error), logs the user id, skips the row and continues.
-    A failed row is still unscrubbed, so skipping it is safe, and the next nightly run retries it.
+    A failed row is still unscrubbed, so skipping it is safe, and the next nightly run retries it;
+  - counts the outcomes and logs `anonymised S, skipped (re-check) K, failed F of N` after the loop (`console.error`
+    when F > 0). When every candidate failed (N > 0 and F = N), it **throws** after the loop: that is a dead connection
+    or a down Durable Object, not a bad row, so the cron fails visibly. A partial failure doesn't throw.
 
   ⚠️ `main`'s current reaper has the same latent shape: it bumps epochs only **after** the loop, so an error mid-batch
   leaves every already-scrubbed account with its sessions live. This task closes that.
@@ -188,8 +191,10 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 - ⚠️ **Accepted residual: the GET path.** `readCurrentSession` (the GET-side session check, `pipeline.ts:157`, 16 call
   sites) checks only the epoch and reads no row, so step 5a doesn't cover it. The pre-scrub bump does: any session
   issued before the scrub dies at bump #1, and one issued between the bumps dies at bump #2. What remains is a session
-  created inside that window **and** a failed bump #2. It is GET-only, read-only, and sees an account already
-  scrubbed. Mutating routes fail closed through step 5a regardless. Accepted (controller ruling, 2026-10-01) rather
+  created inside that window **and** a failed bump #2. A lost COMMIT acknowledgement has the same effect: the scrub
+  committed, but `scrubOne` threw, so the row counts as failed and bump #2 is skipped. Step 5a still refuses that
+  session's writes, and the next run doesn't retry the row (it's already anonymised). Either way the residual is
+  GET-only, read-only, and sees an account already scrubbed. Mutating routes fail closed through step 5a regardless. Accepted (controller ruling, 2026-10-01) rather
   than threading `ctx` through 16 call sites for a DB read.
 - **`GET /verify-email`** reads the session itself (`readSession` plus the epoch). The only thing a deleted account's
   session could do there is set `email_verified_at` on its own anonymised row, and only with a live 24 h verify token,
@@ -246,8 +251,9 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 - **The index is not unique.** `users.email` is `citext UNIQUE` (0001), so only one live row holds an address at a
   time, and the signup refusal makes a second reservation of the same hash unreachable today. The lookup is an
   `EXISTS`, which needs no uniqueness. A UNIQUE index would protect nothing anything reads. And if a future path (an
-  email-change route, say) ever reserved a hash twice, the violation would abort the reaper's scrub, and because the
-  reaper rethrows, the rest of that night's batch with it.
+  email-change route, say) ever reserved a hash twice, every such row's scrub would fail on the violation, night after
+  night. The reaper would skip only that row (a per-row error is logged, the row is retried nightly, and the failure
+  count is visible, §4), but the account would never be deleted.
 - ⚠️ **What still holds the address (re-audit S2).** The moderation log keeps it. `moderation_actions.subject_label`
   records the author's email at the time of each content decision about their posts or comments (`decide.ts:128`,
   `subjectLabel: row.email`). Plan A's account actions label with the handle (`admin-accounts.ts:144`). That table is append-only and is kept as the legal record,
