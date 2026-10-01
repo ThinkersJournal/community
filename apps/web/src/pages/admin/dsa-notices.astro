@@ -46,6 +46,12 @@ if (accessJwt === null || accessJwt === "") {
   return new Response(null, { status: 401 });
 }
 
+/** Round 2 item 5 (minor): mirrors the api's own `UUID_RE` (routes/admin.ts) —
+ * this is the ONLY validation `noticeId` gets before it is interpolated into
+ * the api path below, so an unvalidated value would become part of the
+ * request URL this page builds. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 markPrivate(Astro);
 setPublicPageCsp(Astro);
 
@@ -59,13 +65,19 @@ if (Astro.request.method === "POST") {
     // Addendum (PM ruling, 2026-10-01): closes an ORPHANED notice — the one
     // path besides /admin/decision this page calls. See this file's header.
     const noticeId = form.get("noticeId");
-    const res = await adminApiFetch(`/admin/dsa-notices/${noticeId}/close`, {
-      method: "POST",
-      accessJwt,
-      origin: Astro.request.headers.get("Origin") ?? "",
-    });
-    if (res.status !== 204) {
-      decisionError = adminApiErrorCode(res) ?? "CLOSE_FAILED";
+    // Round 2 item 5: validate BEFORE building the path — an invalid value
+    // here would otherwise be interpolated straight into the api URL.
+    if (typeof noticeId !== "string" || !UUID_RE.test(noticeId)) {
+      decisionError = "INVALID_NOTICE_ID";
+    } else {
+      const res = await adminApiFetch(`/admin/dsa-notices/${noticeId}/close`, {
+        method: "POST",
+        accessJwt,
+        origin: Astro.request.headers.get("Origin") ?? "",
+      });
+      if (res.status !== 204) {
+        decisionError = adminApiErrorCode(res) ?? "CLOSE_FAILED";
+      }
     }
   } else {
     const subject = form.get("subject");

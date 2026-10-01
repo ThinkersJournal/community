@@ -81,7 +81,8 @@ you file — is shown to moderators reviewing the report, so they can respond to
 you. It is **never** disclosed to the author of the content you are reporting.
 Retention of confirmed notices is not yet implemented; they are retained
 indefinitely in the notice record itself, including after the reported content
-is deleted, alongside a reference to the moderation decision that resolved it.
+is deleted, alongside a reference to the moderation decision that resolved it,
+where a moderator decided it.
 [[Attorney to confirm retention period for confirmed DSA notices.]]
 
 ## 5. Retention
@@ -90,7 +91,9 @@ is deleted, alongside a reference to the moderation decision that resolved it.
   email is never verified.
 - **Individual content you delete** (a post or comment) is removed from the live
   Service, and any images that become unreferenced as a result are
-  garbage-collected from storage.
+  garbage-collected from storage. If someone filed a DSA notice naming that
+  content, its title (for a post) or the first 120 characters (for a comment)
+  is kept in that notice's own record, as described above.
 - **An account you delete is not erased.** After a 30-day grace period (during
   which you can cancel the deletion), we anonymise it: your email, password,
   and profile details are scrubbed and your handle is released. Your posts and

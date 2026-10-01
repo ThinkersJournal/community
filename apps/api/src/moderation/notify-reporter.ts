@@ -89,7 +89,7 @@ export async function sendDsaOrphanedOutcome(
   const contentLine =
     outcome.kind === "post"
       ? `This is about the post you reported, "${outcome.targetLabel}".`
-      : `This is about the comment you reported, on "${outcome.targetLabel}".`;
+      : `This is about the comment you reported, which began "${outcome.targetLabel}".`;
   const transparencyLine =
     "This notice has been closed because there is no longer any content to review, in keeping with the Digital Services Act.";
 
