@@ -15,7 +15,7 @@
 - Plan A (`2026-10-01-m4-2c-enforcement-ladder.md`) is **merged**. You need `applyAccountAction`, `accountBarredResponse` and the account routes.
 - Plan B (`2026-10-01-m4-2c-appeals.md`) is **merged**. You need `applyDecisionInTx`, `afterContentDecision` and its `legalHold` passthrough.
 - #126 is **merged** (`moderation_snapshots`, migration 0020).
-- Migration numbers below are written `00NN`, `00NN+1`: use the next free numbers at execution time.
+- The one migration below is written `00NN`: use the next free number at execution time.
 
 ## Global Constraints
 
@@ -159,6 +159,24 @@ In `reachability.ts`, delete `MEDIA_KEY_REGEX_SQL` and import `MEDIA_KEY_SQL_PAT
 - [ ] **Step 1: Failing test** (append to the pool test file):
 
 ```ts
+describe("the suspensionHours guard survives the split", () => {
+  it("applyAccountAction: suspend without hours throws the named error and writes nothing", async () => {
+    const u = await mkUser();
+    await expect(apply({ ...base, userId: u, kind: "suspend", reason: "x" })).rejects.toThrow(/suspend requires suspensionHours/);
+    expect(await actionsFor(u)).toEqual([]);
+  });
+  it("applyAccountActionInTx: the same named error, not a raw Postgres parameter error", async () => {
+    const u = await mkUser();
+    await ctxRun(async (c) => {
+      await c.query("BEGIN");
+      await expect(applyAccountActionInTx(c, { ...base, userId: u, kind: "suspend", reason: "x" })).rejects.toThrow(
+        /suspend requires suspensionHours/,
+      );
+      await c.query("ROLLBACK");
+    });
+  });
+});
+
 describe("applyAccountActionInTx — transaction-neutral (spec §3.3)", () => {
   it("leaves the caller's transaction open: a caller ROLLBACK undoes the bar and the log row", async () => {
     const u = await mkUser();
@@ -187,7 +205,7 @@ describe("applyAccountActionInTx — transaction-neutral (spec §3.3)", () => {
 
 - [ ] **Step 2:** run → FAIL (`applyAccountActionInTx` is not exported).
 - [ ] **Step 3: Implement.** Make the same three-change split plan B made for `applyDecisionInTx`:
-  1. Move everything after `await c.query(BEGIN_BOUNDED_TX);` and before `await c.query("COMMIT");` into `export async function applyAccountActionInTx(c, input)`, keeping the `FOR UPDATE` lock and the `suspend requires suspensionHours` guard.
+  1. Move everything after `await c.query(BEGIN_BOUNDED_TX);` and before `await c.query("COMMIT");` into `export async function applyAccountActionInTx(c, input)`, keeping the `FOR UPDATE` lock. ⚠️ **The `suspend requires suspensionHours` guard today sits BEFORE `BEGIN_BOUNDED_TX`**, outside that range. Keep it there in the wrapper, so `applyAccountAction` still throws before opening a transaction, which is unchanged behaviour. **Also** copy it as the first statement of `applyAccountActionInTx`, so a direct caller gets the same named error instead of a raw Postgres parameter error. (The plan-A suite never omits `suspensionHours`, so without the new test below this regression would be invisible.)
   2. Its two early-outs become `return { kind: "not_found" };` and `return { kind: "already_disabled" };` **with no ROLLBACK**.
   3. Delete the COMMIT; no try/catch.
 
@@ -195,6 +213,10 @@ describe("applyAccountActionInTx — transaction-neutral (spec §3.3)", () => {
 
 ```ts
 export async function applyAccountAction(c: Client, input: AccountActionInput): Promise<AccountActionOutcome> {
+  // Unchanged from plan A: refuse BEFORE opening a transaction.
+  if (input.kind === "suspend" && input.suspensionHours === undefined) {
+    throw new Error("applyAccountAction: suspend requires suspensionHours");
+  }
   await c.query(BEGIN_BOUNDED_TX);
   try {
     const out = await applyAccountActionInTx(c, input);
@@ -613,7 +635,7 @@ export function runIntake(env: Env, ctx: ExecutionContext, input: IntakeInput, h
 
 ### Task 8: Alarms
 
-**Files:** create `apps/api/src/csam/alarms.ts`; modify `apps/api/src/index.ts` (the `0 14` branch), `drain.ts` (immediate emails and the log line), `apps/api/src/routes/admin-csam.ts` (`GET /admin/csam/alarm`, created here if Task 9 hasn't run yet); test `apps/api/test/csam-alarms.test.ts`.
+**Files:** create `apps/api/src/csam/alarms.ts`; modify `apps/api/src/index.ts` (add an explicit `if (controller.cron === "0 14 * * *")` call to the alarm check. Today there is no such branch, only the `disposition` ternary before the unconditional email drain; keep that drain unchanged), `drain.ts` (immediate emails and the log line), `apps/api/src/routes/admin-csam.ts` (`GET /admin/csam/alarm`, created here if Task 9 hasn't run yet); test `apps/api/test/csam-alarms.test.ts`.
 
 **Produces:** `csamAlarmState(c, now): Promise<{ raised: boolean; counts: { awaitingCredentials: number; failed: number; overdue: number; abandonedUnfinished: number; credentialRejected: number } }>`; `sendCsamAlarmEmail(env, state): Promise<boolean>`; `CSAM_ALARM_EMAIL` and `CSAM_OVERDUE_HOURS = 6` in `config.ts`.
 
@@ -634,7 +656,7 @@ export function runIntake(env: Env, ctx: ExecutionContext, input: IntakeInput, h
 **Files:** create or extend `apps/api/src/routes/admin-csam.ts`, `apps/api/src/csam/review.ts`; modify `apps/api/src/routes.ts`, `pipeline-exempt.ts`, `packages/shared/src/admin.ts` (wire types); test `apps/api/test/admin-csam-route.test.ts` (the admin JWT harness, copied **by symbol** from `admin-decision-route.test.ts`: imports, `TEAM`/`AUD`/`KID`, `b64url`, `b64urlJson`, all five module-scope `let`s, `makeJwt`, `ctxRun`, `call`, and the module-level `beforeEach`/`afterEach`).
 
 **Routes:**
-- `POST /admin/csam/matches` `{ lines: string[] }` → each line goes through `sha256FromMatchInput`. Returns `200 { unrecognised: { line: number; text: string }[], result: IntakeResult }`. If every line is unrecognised: `400 INVALID_INPUT` with the list. **No silent drop.**
+- `POST /admin/csam/matches` `{ lines: string[] }` → each line goes through `sha256FromMatchInput`. (The spec §3.1(a) calls this field `paths`. It's `lines` here because an entry may also be a bare digest. One name, used everywhere in this plan.) Returns `200 { unrecognised: { line: number; text: string }[], result: IntakeResult }`. If every line is unrecognised: `400 INVALID_INPUT` with the list. **No silent drop.**
 - `POST /admin/csam/cases` `{ subject: "post", subjectId }` → `runIntake({ source: "moderator", … })`.
 - `GET /admin/csam` → cases newest first, each with files (sha256, `viewed_by_esp`, `revealed_at`), reports (status, `ncmec_report_id`, `last_error`, `abandoned_report_ids`) and review state.
 - `POST /admin/csam/files/:id/reveal` → set `revealed_at` (once), log a `media_access` action naming the case, and return `{ sha256 }`. The image itself still goes only through `GET /media/restricted/:sha256` and #61's two-person grant (spec §7). Reveal records intent and does not bypass that.
