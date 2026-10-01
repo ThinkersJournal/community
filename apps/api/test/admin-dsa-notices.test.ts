@@ -281,7 +281,11 @@ describe("POST /admin/decision resolves DSA notices", () => {
     expect(row.resolved_at).toBeNull();
   });
 
-  it("atomicity: if recordModerationAction fails (invalid violationCategory), no notice is resolved", async () => {
+  it("atomicity (failure BEFORE the resolve step): an invalid violationCategory breaks recordModerationAction's own INSERT, so the DSA UPDATE never runs and the notice is untouched", async () => {
+    // ⚠️ This proves ORDERING (the resolve step is unreached), not ROLLBACK —
+    // the UPDATE never executes here, so "resolved_at is null" is trivially
+    // true. The test below proves the stronger claim: a failure AFTER the
+    // UPDATE has already run rolls the resolution back too.
     const userId = await seedUser();
     const post = await seedPost(userId);
     const notice = await seedDsaNotice({ postId: post.id, confirmed: true });
@@ -295,7 +299,8 @@ describe("POST /admin/decision resolves DSA notices", () => {
           reason: "x",
           actorAdmin: adminEmail,
           // Not a member of the violation_category CHECK constraint — forces
-          // recordModerationAction's INSERT to fail inside the transaction.
+          // recordModerationAction's INSERT to fail inside the transaction,
+          // BEFORE the DSA UPDATE that follows it runs at all.
           violationCategory: "not-a-real-category" as never,
         }),
       ),
@@ -304,5 +309,93 @@ describe("POST /admin/decision resolves DSA notices", () => {
     const row = await dsaNoticeRow(notice.id);
     expect(row.resolved_at).toBeNull();
     expect(row.resolution_action_id).toBeNull();
+  });
+
+  it("atomicity (failure AFTER the resolve step): a commit-time failure rolls back a DSA resolution that already ran, along with the rest of the decision", async () => {
+    // ⚠️ Unlike the test above, this forces the failure to fire AT COMMIT,
+    // strictly after decide.ts's DSA UPDATE has already set resolved_at in
+    // the (not yet committed) transaction. A DEFERRED constraint trigger is
+    // the only deterministic way to do that from outside decide.ts: it runs
+    // when COMMIT is issued, which is exactly where applyDecision's `await
+    // c.query("COMMIT")` sits, after every other write in the transaction.
+    // If COMMIT raises, Postgres rolls the whole transaction back for us —
+    // this test is a genuine proof of atomicity, not of ordering.
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const notice = await seedDsaNotice({ postId: post.id, confirmed: true });
+    const hiddenAtBefore = await ctxRun(async (c) => {
+      const { rows } = await c.query<{ hidden_at: Date | null }>(
+        `SELECT hidden_at FROM posts WHERE id = $1`,
+        [post.id],
+      );
+      return rows[0]!.hidden_at;
+    });
+
+    // Unique per-test names: the test DB is SHARED across test files, so a
+    // fixed name would collide with a concurrently-running file, and the
+    // WHEN clause must scope to THIS test's notice only — a trigger that
+    // fired for every row would break every other test touching dsa_notices.
+    const suffix = crypto.randomUUID().replace(/-/g, "");
+    const fnName = `test_fail_on_resolve_${suffix}`;
+    const trgName = `test_fail_resolve_${suffix}`;
+
+    await ctxRun(async (c) => {
+      await c.query(
+        `CREATE FUNCTION ${fnName}() RETURNS trigger AS $$
+         BEGIN
+           RAISE EXCEPTION 'forced failure after resolve';
+         END;
+         $$ LANGUAGE plpgsql`,
+      );
+      await c.query(
+        `CREATE CONSTRAINT TRIGGER ${trgName}
+           AFTER UPDATE ON dsa_notices
+           DEFERRABLE INITIALLY DEFERRED
+           FOR EACH ROW
+           WHEN (NEW.id = '${notice.id}'::uuid AND NEW.resolved_at IS NOT NULL)
+           EXECUTE FUNCTION ${fnName}()`,
+      );
+    });
+
+    try {
+      await expect(
+        ctxRun((c) =>
+          applyDecision(c, {
+            subject: "post",
+            subjectId: post.id,
+            decision: "remove",
+            reason: "x",
+            actorAdmin: adminEmail,
+          }),
+        ),
+      ).rejects.toThrow(/forced failure after resolve/);
+
+      const row = await dsaNoticeRow(notice.id);
+      expect(row.resolved_at).toBeNull();
+      expect(row.resolution_action_id).toBeNull();
+
+      const hiddenAtAfter = await ctxRun(async (c) => {
+        const { rows } = await c.query<{ hidden_at: Date | null }>(
+          `SELECT hidden_at FROM posts WHERE id = $1`,
+          [post.id],
+        );
+        return rows[0]!.hidden_at;
+      });
+      expect(hiddenAtAfter).toEqual(hiddenAtBefore);
+
+      const actionRows = await ctxRun(async (c) => {
+        const { rows } = await c.query<{ count: string }>(
+          `SELECT COUNT(*) AS count FROM moderation_actions WHERE post_id = $1`,
+          [post.id],
+        );
+        return parseInt(rows[0]!.count, 10);
+      });
+      expect(actionRows).toBe(0);
+    } finally {
+      await ctxRun(async (c) => {
+        await c.query(`DROP TRIGGER IF EXISTS ${trgName} ON dsa_notices`);
+        await c.query(`DROP FUNCTION IF EXISTS ${fnName}()`);
+      });
+    }
   });
 });
