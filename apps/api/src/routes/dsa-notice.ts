@@ -25,6 +25,7 @@ import { postmarkSend } from "../auth/postmark";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { verifyTurnstile } from "../auth/turnstile";
 import { withClient } from "../db/client";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 import {
   confirmDsaNotice,
@@ -72,10 +73,13 @@ export async function handleDsaNotice(
   // ---- 3. Rate limit — TWO buckets, same reasoning as signup.ts's (a)/(b)
   // pair (see its own comment, which this mirrors): it runs AFTER parsing
   // because both keys need the email. Every real request arrives over the
-  // web→api Service Binding, where whether `CF-Connecting-IP` survives the
-  // hop is unverified — same `?? "unknown"` placeholder as signup, so an
-  // absent header still gives every (ip, email) pair its own bucket rather
-  // than collapsing all reporters into one.
+  // web→api Service Binding, which does NOT forward `CF-Connecting-IP` — the
+  // web Worker's middleware reads it and re-sends it as `CLIENT_IP_HEADER`
+  // (see `clientIp()`, apps/api/src/http/client-ip.ts); the same `?? "unknown"`
+  // placeholder still covers a direct `worker.fetch()` with neither header
+  // set (every test in this file), so an absent IP still gives every
+  // (ip, email) pair its own bucket rather than collapsing all reporters
+  // into one.
   //
   //   (a) `ip:email` — one IP cannot spray/confirmation-mail-bomb many
   //       reporter addresses.
@@ -91,10 +95,10 @@ export async function handleDsaNotice(
   // `reporterEmail` is the PARSED value (DsaNoticeInput already lowercases
   // it) — do NOT rebuild either key from the raw request body, for the same
   // case-folding reason signup.ts documents.
-  const clientIp = request.headers.get("CF-Connecting-IP");
+  const ip = clientIp(request);
   const ipLimited = await enforceRateLimit(
     env.DSA_LIMITER,
-    `${clientIp ?? "unknown"}:${reporterEmail}`,
+    `${ip ?? "unknown"}:${reporterEmail}`,
   );
   if (ipLimited !== null) return ipLimited;
   const emailLimited = await enforceRateLimit(env.DSA_LIMITER, `email:${reporterEmail}`);
@@ -103,7 +107,7 @@ export async function handleDsaNotice(
   // ---- 4. Turnstile ----------------------------------------------------------
   let turnstileOk: boolean;
   try {
-    turnstileOk = await verifyTurnstile(env, turnstileToken, clientIp ?? undefined);
+    turnstileOk = await verifyTurnstile(env, turnstileToken, ip ?? undefined);
   } catch (err) {
     console.error("turnstile verification errored", err);
     turnstileOk = false;

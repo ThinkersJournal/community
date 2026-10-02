@@ -56,6 +56,7 @@ import { verifyTurnstile } from "../auth/turnstile";
 import { suggestUsernames } from "../auth/username-suggest";
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
 import { isUniqueViolation } from "../db/errors";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 
 /**
@@ -147,10 +148,10 @@ export async function handleSignup(
   // consistent, so (b) is a real ceiling per Cloudflare location, not a global
   // one. It still collapses an unbounded per-IP multiplier down to a bounded
   // per-location one, which is the property being bought here.
-  const clientIp = request.headers.get("CF-Connecting-IP");
+  const ip = clientIp(request);
   const ipLimited = await enforceRateLimit(
     env.SIGNUP_LIMITER,
-    `${clientIp ?? "unknown"}:${email}`,
+    `${ip ?? "unknown"}:${email}`,
   );
   if (ipLimited !== null) {
     return ipLimited;
@@ -163,7 +164,7 @@ export async function handleSignup(
   // ---- 4. Turnstile --------------------------------------------------------
   let turnstileOk: boolean;
   try {
-    turnstileOk = await verifyTurnstile(env, turnstileToken, clientIp ?? undefined);
+    turnstileOk = await verifyTurnstile(env, turnstileToken, ip ?? undefined);
   } catch (err) {
     // verifyTurnstile REJECTS on a network/non-JSON failure; its contract says
     // to treat that exactly like a failed verification, never to proceed.

@@ -93,6 +93,7 @@ import { hashPassword, needsRehash, verifyPassword } from "../auth/password";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { createSession } from "../auth/session";
 import { withClient } from "../db/client";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 
 /**
@@ -226,10 +227,10 @@ export async function handleLogin(
   // consistent, so (b) is a real ceiling per Cloudflare location, not a global
   // one. It still collapses an unbounded per-IP multiplier down to a bounded
   // per-location one, which is the property being bought here.
-  const clientIp = request.headers.get("CF-Connecting-IP");
+  const ip = clientIp(request);
   const ipLimited = await enforceRateLimit(
     env.LOGIN_LIMITER,
-    `${clientIp ?? "unknown"}:${email}`,
+    `${ip ?? "unknown"}:${email}`,
   );
   if (ipLimited !== null) {
     return ipLimited;

@@ -1,7 +1,9 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { SEARCH_MAX_OFFSET, SEARCH_PAGE_SIZE, SEARCH_Q_MAX, SEARCH_Q_MIN } from "@thinkersjournal/shared";
+import {
+  CLIENT_IP_HEADER, SEARCH_MAX_OFFSET, SEARCH_PAGE_SIZE, SEARCH_Q_MAX, SEARCH_Q_MIN,
+} from "@thinkersjournal/shared";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
@@ -342,5 +344,50 @@ describe("GET /public/search", () => {
       }
     }
     expect(sawRateLimited).toBe(true);
+  });
+
+  /**
+   * The web->api forwarding fix (confirmed production bug): `apiFetch` can no
+   * longer rely on `CF-Connecting-IP` surviving the Service Binding, so it
+   * re-sends the browser's IP as `CLIENT_IP_HEADER` and `clientIp()`
+   * (src/http/client-ip.ts) reads THAT first. Mirrors the burst test just
+   * above but keyed on the new header, with its own dedicated TEST-NET-3
+   * addresses so neither test's budget burn can pollute the other.
+   */
+  it("SEARCH_LIMITER buckets on X-TJ-Client-IP — different values don't share a bucket, the same value does", async () => {
+    const ipA = "203.0.113.60";
+    const ipB = "203.0.113.70";
+
+    async function searchAs(ip: string): Promise<Response> {
+      const ctx = createExecutionContext();
+      const response = await worker.fetch(
+        new Request(`${U}/public/search?q=ratelimittest&type=posts`, {
+          headers: { [CLIENT_IP_HEADER]: ip },
+        }),
+        env,
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+      return response;
+    }
+
+    // Burst ipA until it is throttled.
+    let sawRateLimitedA = false;
+    for (let i = 0; i < 35 && !sawRateLimitedA; i++) {
+      const response = await searchAs(ipA);
+      if (response.status === 429) {
+        expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
+        sawRateLimitedA = true;
+      } else {
+        expect(response.status).toBe(200);
+      }
+    }
+    expect(sawRateLimitedA).toBe(true);
+
+    // A DIFFERENT X-TJ-Client-IP is NOT throttled by ipA's exhausted bucket.
+    expect((await searchAs(ipB)).status).toBe(200);
+
+    // The SAME X-TJ-Client-IP (ipA) still shares the bucket it just exhausted.
+    expect((await searchAs(ipA)).status).toBe(429);
   });
 });
