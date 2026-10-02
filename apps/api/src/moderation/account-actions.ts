@@ -85,13 +85,23 @@ export async function applyAccountAction(c: Client, input: AccountActionInput): 
     }
 
     let suspendedUntil: Date | null = null;
+    let ownEnd: Date | null = null;
     if (input.kind !== "warn") {
       const params: unknown[] = input.kind === "suspend" ? [input.userId, input.suspensionHours] : [input.userId];
-      const { rows: updated } = await c.query<{ suspended_until: Date | null }>(
-        `UPDATE users AS u SET ${SET_SQL[input.kind]} WHERE u.id = $1 RETURNING u.suspended_until`,
+      // ⚠️ TWO DIFFERENT ENDS (#113 plan B, pre-flight ruling B2).
+      // `u.suspended_until` is the EFFECTIVE bar: the GREATEST of every
+      // suspension in force (SET_SQL). `own_end` is THIS action's own end,
+      // now() + hours, whatever else is in force. The log records own_end, so
+      // an appeal grant can recompute the bar from the suspensions that remain
+      // (moderation/appeals.ts). The notice still names the effective end.
+      const { rows: updated } = await c.query<{ suspended_until: Date | null; own_end: Date | null }>(
+        `UPDATE users AS u SET ${SET_SQL[input.kind]} WHERE u.id = $1
+         RETURNING u.suspended_until,
+                   ${input.kind === "suspend" ? "now() + make_interval(hours => $2::int)" : "NULL::timestamptz"} AS own_end`,
         params,
       );
       suspendedUntil = input.kind === "suspend" ? (updated[0]?.suspended_until ?? null) : null;
+      ownEnd = input.kind === "suspend" ? (updated[0]?.own_end ?? null) : null;
     }
 
     const actionId = await recordModerationAction(c, {
@@ -101,7 +111,8 @@ export async function applyAccountAction(c: Client, input: AccountActionInput): 
       subjectUserId: input.userId,
       subjectLabel: input.subjectLabel,
       violationCategory: input.violationCategory,
-      actionExpiresAt: suspendedUntil ?? undefined,
+      // The action's OWN end, never the effective one (ruling B2).
+      actionExpiresAt: ownEnd ?? undefined,
       internalNote: input.internalNote,
     });
 
