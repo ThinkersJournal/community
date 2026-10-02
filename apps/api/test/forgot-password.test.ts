@@ -2,9 +2,11 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
+import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { createResetToken } from "../src/auth/password-reset";
 import { withClient } from "../src/db/client";
 import { createVerifiedActor, deleteCreatedUsers } from "./actor";
+import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
 import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 
 /**
@@ -264,7 +266,8 @@ describe("GET /__test/last-reset-token", () => {
   it("does not stash the raw token when TEST_ROUTES is unset", async () => {
     // `password_reset_tokens.user_id` is a real FK (unlike verification
     // tokens, which live in KV with no such constraint) — a made-up id would
-    // throw, so this needs a real user, not a random uuid.
+    // mint nothing (createResetToken's INSERT … SELECT finds no row), so this
+    // needs a real user, not a random uuid.
     const actor = await createVerifiedActor();
     const prodEnv = { ...env, TEST_ROUTES: undefined } as unknown as Env;
     const ctx = createExecutionContext();
@@ -273,5 +276,186 @@ describe("GET /__test/last-reset-token", () => {
     await waitOnExecutionContext(ctx);
 
     expect(await env.SESSIONS.get("__test:last-reset-token")).toBeNull();
+  });
+});
+
+async function sql<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
+  const ctx = createExecutionContext();
+  const rows = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => (await c.query(text, params)).rows as T[]);
+  await waitOnExecutionContext(ctx);
+  return rows;
+}
+
+/**
+ * AH-7, structural (account-legal-hold spec §4a, PM ruling B). A deleted,
+ * banned account's real address is no longer on its row, and forgot-password
+ * reads only `users.email`, so it needs no guard of its own: it finds nothing
+ * and mails nothing. The reaper reads the SHARED DB and other files run it in
+ * parallel, so the fixture gets a unique far-past `deletion_requested_at` and
+ * only its end state is asserted.
+ */
+describe("AH-7 — forgot-password for a deleted, banned account's original address", () => {
+  it("202 with NO Postmark call and no reset token once the reaper has anonymised it (CONTROL: 1 call before)", async () => {
+    const actor = await createVerifiedActor();
+    const email = (await lookupEmail(actor.userId))!;
+    await sql(
+      `UPDATE users
+          SET disabled_at = now(), disabled_reason = 'ban',
+              deletion_requested_at = timestamptz '2000-01-01' + (random() * interval '1000 days')
+        WHERE id = $1`,
+      [actor.userId],
+    );
+
+    // CONTROL, before the reaper: the same request reaches the account and mails it.
+    const before = stubFetch(true);
+    expect((await forgotPassword(validBody(email))).status).toBe(202);
+    expect(before).toHaveLength(1);
+    vi.unstubAllGlobals();
+
+    // Serialised against every other file's run (helpers/anonymise-reaper-lock.ts).
+    await withAnonymiseReaperLock(async () => {
+      const ctx = createExecutionContext();
+      await anonymiseExpiredAccounts(env, ctx);
+      await waitOnExecutionContext(ctx);
+    });
+    const [row] = await sql<{ anonymised_at: Date | null }>("SELECT anonymised_at FROM users WHERE id = $1", [
+      actor.userId,
+    ]);
+    expect(row!.anonymised_at, "precondition: the reaper did not anonymise the fixture").not.toBeNull();
+
+    const after = stubFetch(true);
+    const response = await forgotPassword(validBody(email));
+
+    expect(response.status).toBe(202);
+    expect(after).toHaveLength(0);
+    expect(
+      await sql("SELECT 1 FROM password_reset_tokens WHERE user_id = $1", [actor.userId]),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * Account-legal-hold (PM ruling B). forgot-password reads `id, email`, then
+ * mints a token; a scrub can commit in between. `createResetToken` therefore
+ * inserts only for a row that is not anonymised, and forgot-password mails
+ * only when a token was minted, answering the same 202 either way.
+ */
+describe("AH-7 — no reset token or mail for an anonymised account", () => {
+  async function anonymise(userId: string): Promise<string> {
+    const sentinel = `deleted-${userId}@invalid.thinkersjournal.local`;
+    await sql("UPDATE users SET anonymised_at = now(), email = $2, password_hash = '!anonymised!' WHERE id = $1", [
+      userId,
+      sentinel,
+    ]);
+    return sentinel;
+  }
+
+  it("createResetToken on an anonymised id returns null and inserts nothing", async () => {
+    const actor = await createVerifiedActor();
+    await anonymise(actor.userId);
+
+    const ctx = createExecutionContext();
+    const token = await createResetToken(env, ctx, actor.userId);
+    await waitOnExecutionContext(ctx);
+
+    expect(token).toBeNull();
+    expect(await sql("SELECT 1 FROM password_reset_tokens WHERE user_id = $1", [actor.userId])).toEqual([]);
+  });
+
+  it("a request that reaches an anonymised row sends no mail and answers exactly as the normal case", async () => {
+    // The sentinel address is the one thing a request can name that still
+    // finds the row after the scrub, so it stands in for the race window.
+    const normal = await createVerifiedActor();
+    const normalEmail = (await lookupEmail(normal.userId))!;
+    const deleted = await createVerifiedActor();
+    const sentinel = await anonymise(deleted.userId);
+
+    const normalCalls = stubFetch(true);
+    const normalRes = await forgotPassword(validBody(normalEmail));
+    expect(normalCalls, "CONTROL: the normal case mails").toHaveLength(1);
+    vi.unstubAllGlobals();
+
+    const calls = stubFetch(true);
+    const res = await forgotPassword(validBody(sentinel));
+
+    expect(res.status).toBe(normalRes.status);
+    expect(res.status).toBe(202);
+    expect(await res.text()).toBe(await normalRes.text());
+    expect(calls).toHaveLength(0);
+    expect(await sql("SELECT 1 FROM password_reset_tokens WHERE user_id = $1", [deleted.userId])).toEqual([]);
+  });
+});
+
+/**
+ * `createResetToken`'s INSERT … SELECT takes `FOR KEY SHARE` on the user row.
+ * In READ COMMITTED it therefore waits for an in-flight scrub's `FOR UPDATE`
+ * and re-evaluates `anonymised_at IS NULL` against the committed row, so a
+ * scrub that commits while the mint waits leaves no token. Without it, the
+ * SELECT reads its pre-scrub snapshot and inserts.
+ *
+ * The user is never due for deletion (no `deletion_requested_at`), so no
+ * reaper touches it; this test plays the scrub itself.
+ */
+describe("createResetToken waits for an in-flight scrub and re-checks the committed row", () => {
+  it("a scrub that commits while the mint is blocked on its row lock: null, and no token row", async () => {
+    const actor = await createVerifiedActor();
+    const mintCtx = createExecutionContext();
+    let mint: Promise<string | null> | undefined;
+    try {
+      const ctx = createExecutionContext();
+      await withClient(env.HYPERDRIVE_FRESH, ctx, async (holder) => {
+        await holder.query("BEGIN");
+        try {
+          await holder.query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE", [actor.userId]);
+          const { rows } = await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+          const holderPid = rows[0]!.pid;
+
+          mint = createResetToken(env, mintCtx, actor.userId);
+          mint.catch(() => undefined); // awaited below
+
+          // Poll (50 ms steps, 2 s max) until the mint is blocked by the holder,
+          // directly or behind one other waiter.
+          const blocked = await (async () => {
+            const deadline = Date.now() + 2000;
+            while (Date.now() < deadline) {
+              const r = await sql(
+                `SELECT 1 FROM pg_stat_activity w
+                  WHERE pg_blocking_pids(w.pid) @> ARRAY[$1::int]
+                     OR EXISTS (SELECT 1 FROM unnest(pg_blocking_pids(w.pid)) AS bp(pid)
+                                 WHERE pg_blocking_pids(bp.pid) @> ARRAY[$1::int])`,
+                [holderPid],
+              );
+              if (r.length > 0) return true;
+              await new Promise((res) => setTimeout(res, 50));
+            }
+            return false;
+          })();
+          if (!blocked) throw new Error(`timed out after 2s waiting for createResetToken to block on holder pid ${holderPid}`);
+
+          await holder.query(
+            `UPDATE users
+                SET anonymised_at = now(), password_hash = '!anonymised!',
+                    email = 'deleted-' || id || '@invalid.thinkersjournal.local'
+              WHERE id = $1`,
+            [actor.userId],
+          );
+          await holder.query("COMMIT");
+        } catch (err) {
+          try {
+            await holder.query("ROLLBACK");
+          } catch {
+            // keep the root error
+          }
+          throw err;
+        }
+      });
+      await waitOnExecutionContext(ctx);
+    } finally {
+      if (mint !== undefined) await Promise.allSettled([mint]);
+      await waitOnExecutionContext(mintCtx);
+    }
+
+    expect(await mint, "a token was minted for a row scrubbed while the mint waited").toBeNull();
+    expect(await sql("SELECT 1 FROM password_reset_tokens WHERE user_id = $1", [actor.userId])).toEqual([]);
   });
 });

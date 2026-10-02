@@ -66,6 +66,7 @@ export async function requireVerifiedEmail(
 /** What the pipeline needs from `users` for a session's user — one row, one read. */
 interface AccountGateRow extends AccountStatusRow {
   readonly email_verified_at: Date | null;
+  readonly anonymised_at: Date | null;
 }
 
 /**
@@ -80,7 +81,7 @@ async function readAccountGate(
 ): Promise<AccountGateRow | null> {
   return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<AccountGateRow>(
-      "SELECT email_verified_at, suspended_until, disabled_at, disabled_reason FROM users WHERE id = $1",
+      "SELECT email_verified_at, suspended_until, disabled_at, disabled_reason, anonymised_at FROM users WHERE id = $1",
       [userId],
     );
     return rows[0] ?? null;
@@ -214,6 +215,11 @@ export interface MutatingPipelineOptions {
  *   4. checkSecurityEpoch-> 401 + cleared cookie. Before ANY authorization
  *                           decision: a revoked session must not be able to
  *                           act, so nothing downstream may run for one.
+ *   5a. deleted account  -> 401 + cleared cookie (account-legal-hold spec §4).
+ *                           A session whose user has `anonymised_at` set is
+ *                           unauthenticated: the backstop for a missed epoch
+ *                           bump by the anonymise reaper. Same row read as
+ *                           step 5, and before it.
  *   5. barred account    -> 401 + cleared cookie (issue #50). EVERY route, no
  *                           opt-out. The first step that touches Postgres —
  *                           behind every cheaper rejection — and BEFORE step 6,
@@ -297,6 +303,19 @@ export async function runMutatingPipeline(
   // suspension bars nothing here (see src/auth/account-status.ts). A missing
   // row is not barred — step 6 still fails closed on it for content routes.
   const account = await readAccountGate(env, ctx, session.userId);
+
+  // ---- 5a. Deleted account — FAIL CLOSED (account-legal-hold spec §4) ------
+  // The anonymise reaper bumps the epoch before each row's scrub and again
+  // after its COMMIT, which step 4 then catches. This is the backstop for a
+  // missed bump: a session
+  // whose user has been anonymised is UNAUTHENTICATED — the same 401 and
+  // cleared cookie as step 4's revocation, deliberately not step 5's
+  // ACCOUNT_BARRED (a deleted account has no one to tell why).
+  if (account !== null && account.anonymised_at !== null) {
+    const { cookie } = await destroySession(env, request);
+    return unauthorized({ "Set-Cookie": cookie });
+  }
+
   if (account !== null && isBarred(account)) {
     const { cookie } = await destroySession(env, request);
     // #50 Q2 (CireSnave: "If returning that they are banned lets us tell them

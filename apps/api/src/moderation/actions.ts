@@ -21,7 +21,9 @@ export type ModerationActionKind =
   // #61 follow-up — an author hiding/unhiding their OWN post. See
   // src/moderation/author-hide.ts's header for why `actor_admin` holds the
   // author's own email here rather than an Access identity.
-  | "author_hide" | "author_unhide";
+  | "author_hide" | "author_unhide"
+  // Account legal holds (account-legal-hold spec §3 T3, migration 0022).
+  | "account_hold" | "account_hold_release";
 
 export type ViolationCategory =
   | "spam" | "harassment" | "hate" | "sexual" | "violence" | "ip_infringement" | "other";

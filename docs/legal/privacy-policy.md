@@ -106,6 +106,21 @@ where a moderator decided it.
   rather than your identity, so that conversations other people are part of
   are not broken. Reasonable backup and legal-compliance copies of the
   anonymised account may persist for a limited period.
+  A deletion request is delayed, not refused, while the account is subject to
+  a legal hold (for example, during a legal or safety investigation). If an
+  account was banned when its deletion took effect, we keep a one-way hash of
+  its email address while the ban stands, so the address can't be used to
+  create a new account. Our moderation log, which is append-only and kept as
+  the legal record of moderation actions, keeps the email address recorded
+  at the time of any moderation decision about that account's content, and
+  the email address recorded each time the account's owner hid or unhid one
+  of their own posts; it is not used to contact you.
+  [[Attorney: the three preceding sentences (hold-delayed deletion, the hashed
+  email reservation, and the moderation log's retained email) are a DRAFT and
+  have not had attorney review.]]
+  [[Attorney: the hash is an unsalted SHA-256 of the normalised address, so
+  anyone holding it can recover the address by hashing candidate addresses
+  and comparing. Confirm whether "one-way hash" needs that qualification.]]
 - **Security logs** are retained only as long as needed for abuse prevention.
 
 ## 6. Your choices and rights

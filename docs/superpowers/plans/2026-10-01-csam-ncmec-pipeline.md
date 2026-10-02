@@ -14,7 +14,7 @@
 
 - Plan A (`2026-10-01-m4-2c-enforcement-ladder.md`) is **merged**. You need `applyAccountAction`, `accountBarredResponse` and the account routes.
 - Plan B (`2026-10-01-m4-2c-appeals.md`) is **merged**. You need `applyDecisionInTx`, `afterContentDecision` and its `legalHold` passthrough.
-- #126 is **merged** (`moderation_snapshots`, migration 0020).
+- #126 is **merged** (`moderation_snapshots`, migration 0021).
 - The one migration below is written `00NN`: use the next free number at execution time.
 
 ## Global Constraints
@@ -346,7 +346,7 @@ CREATE TABLE ncmec_submissions (
   request_xml     text NOT NULL,
   sent_at         timestamptz NOT NULL DEFAULT now()
 );
--- Same guard as 0020's moderation_snapshots: no UPDATE, no TRUNCATE, no DELETE
+-- Same guard as 0021's moderation_snapshots: no UPDATE, no TRUNCATE, no DELETE
 -- inside the first year. Mirror its function/trigger pair exactly, renamed
 -- ncmec_submissions_guard / ncmec_submissions_no_update_or_early_delete /
 -- ncmec_submissions_no_truncate, using sent_at as the age column.
@@ -586,6 +586,7 @@ export function runIntake(env: Env, ctx: ExecutionContext, input: IntakeInput, h
   - ⚠️ **RF3 / AC-C11, a multi-uploader key plus a second key only one of them uploaded:** two reports. Uploader A's report carries both files; B's report carries only the shared one.
   - ⚠️ **RF1 / AC-C10:** run the same intake twice. The second returns `already_cased` naming the first case; the counts of `csam_cases`, `ncmec_reports`, holds and `moderation_actions` are unchanged; and **the uploader's epoch did not move** on the second call (`getEpoch` before and after). **Mutation:** remove step 2's filter → FAIL.
   - A **mixed batch** (one already-cased key and one new key with a different uploader): only the new key is cased, and only the new uploader's epoch moves.
+  - **Step 7a, account-legal-hold spec §3 T2:** an **unbarred** uploader (`cloudflare_match`, `CSAM_BAR_UNREVIEWED_MATCH = false`) still gets a `csam` account hold: an active, unreleased `account_legal_holds` row for that uploader, referencing the case's `hold_action_id`.
   - **(b) moderator, post:** `viewed_by_esp = true`, and the uploader is barred regardless of the flag.
   - **R1 both branches:** `whoIsBarred("cloudflare_match", false)` bars nobody; `whoIsBarred("cloudflare_match", true)` and `whoIsBarred("moderator", false)` bar all uploaders. An intake run with the constant **as set** matches the corresponding branch.
   - **AC-C7:** after any intake, the stubbed Postmark captured **zero** messages.
@@ -593,7 +594,7 @@ export function runIntake(env: Env, ctx: ExecutionContext, input: IntakeInput, h
   - **Unrecognised input:** the route test (Task 9) covers the line-by-line rejection. Here, an intake whose sha256s match no `media` row returns `nothing_to_do: no_media_rows`.
 - [ ] **Step 2:** run → FAIL.
 - [ ] **Step 3: Implement `config.ts`** as specified above. For `NCMEC_ESP_CONTACT`, use the values CireSnave supplies. Until then use `{ firstName: "[[ESP_CONTACT_FIRST]]", lastName: "[[ESP_CONTACT_LAST]]", email: "[[ESP_CONTACT_EMAIL]]" }`, and add a test asserting that `NCMEC_ESP_CONTACT` contains no `[[`. **That test is `it.skip`-free and fails until the real values land, by design: the PR cannot merge without them.** Name it `"the ESP contact is real (merge condition)"`.
-- [ ] **Step 4: Implement `intake.ts`.** It follows spec §3.3 steps 0–9 **literally, in that order**. The helpers it needs are all already defined: `sha256sInMarkdown`, `r2KeyForSha256`, `MEDIA_KEY_SQL_PATTERN`, `imposeLegalHold`, `applyDecisionInTx`, `applyAccountActionInTx`, `recordModerationAction`, `afterContentDecision`, `enqueueAndAttemptMove`, and `env.USER_SECURITY.getByName(id).bumpEpoch()`. Required SQL:
+- [ ] **Step 4: Implement `intake.ts`.** It follows spec §3.3 steps 0–9, **including step 7a**, literally, in that order. The helpers it needs are all already defined: `sha256sInMarkdown`, `r2KeyForSha256`, `MEDIA_KEY_SQL_PATTERN`, `imposeLegalHold`, `imposeAccountHoldInTx` (consumed from the account-legal-hold work, `apps/api/src/moderation/account-holds.ts`), `applyDecisionInTx`, `applyAccountActionInTx`, `recordModerationAction`, `afterContentDecision`, `enqueueAndAttemptMove`, and `env.USER_SECURITY.getByName(id).bumpEpoch()`. **Step 7a:** for every uploader in step 3's set, in id order (lock order), call `imposeAccountHoldInTx(c, { userId, category: "csam", imposedBy: actorAdmin, reason: <case text>, moderationActionId: holdActionId })`, whether or not that uploader is barred (§3.4) — a hold blocks deletion, not access. Required SQL:
   - uploaders of keys: `SELECT DISTINCT owner_id, r2_key, sha256, min(created_at) OVER (PARTITION BY owner_id) AS first_upload FROM media WHERE r2_key = ANY($1::text[])`
   - embedding posts: `SELECT id, author_id, title, markdown_source FROM posts WHERE markdown_source ~ ANY($1::text[])`, with `$1` = one escaped regex per sha256 (`'media/post/' || sha || '\.webp'`). Or, simpler and index-free like the reaper, a scan matching `regexp_matches(markdown_source, '${MEDIA_KEY_SQL_PATTERN}', 'g')` against the key set.
   - already cased: `SELECT case_id, r2_key FROM csam_case_files WHERE r2_key = ANY($1::text[])`.

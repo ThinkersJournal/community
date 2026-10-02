@@ -590,3 +590,41 @@ describe("GET /__test/last-verify-token", () => {
     },
   );
 });
+
+/**
+ * Account-legal-hold spec §4 (round 3). `GET /verify-email` reads the session
+ * itself, so the mutating pipeline's step 5a doesn't cover it. A deleted
+ * account's session must not write: the redeem `UPDATE` skips an anonymised
+ * row. `anonymised_at` is set directly in SQL with NO epoch bump, so the
+ * session is still live and only the `UPDATE`'s own guard can stop the write.
+ */
+describe("GET /verify-email — a deleted account's session writes nothing", () => {
+  async function setAnonymised(userId: string): Promise<void> {
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [userId]),
+    );
+    await waitOnExecutionContext(ctx);
+  }
+
+  it("leaves email_verified_at NULL for an anonymised account", async () => {
+    const userId = await insertUser();
+    const cookie = await sessionCookieFor(userId);
+    const token = await createVerificationToken(env, userId);
+    await setAnonymised(userId);
+
+    await verifyEmail(token, cookie);
+
+    expect(await readVerifiedAt(userId)).toBeNull();
+  });
+
+  it("CONTROL: the same flow without the anonymisation sets it", async () => {
+    const userId = await insertUser();
+    const cookie = await sessionCookieFor(userId);
+    const token = await createVerificationToken(env, userId);
+
+    await verifyEmail(token, cookie);
+
+    expect(await readVerifiedAt(userId)).not.toBeNull();
+  });
+});

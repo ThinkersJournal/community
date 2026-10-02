@@ -139,7 +139,8 @@ export async function handleVerifyEmail(
   await deleteVerificationToken(env, token);
 
   await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query("UPDATE users SET email_verified_at = now() WHERE id = $1", [
+    // Account-legal-hold spec §4: a deleted account's session must not write.
+    c.query("UPDATE users SET email_verified_at = now() WHERE id = $1 AND anonymised_at IS NULL", [
       tokenUserId,
     ]),
   );

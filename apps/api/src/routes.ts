@@ -33,7 +33,12 @@ import {
   handleListMediaAccessRequests,
   handleRequestMediaAccess,
 } from "./routes/admin";
-import { handleAdminAccountAction, handleAdminGetAccount } from "./routes/admin-accounts";
+import {
+  handleAdminAccountAction,
+  handleAdminGetAccount,
+  handleAdminImposeAccountHold,
+  handleAdminReleaseAccountHold,
+} from "./routes/admin-accounts";
 import { handleBlock, handleBlockStatus, handleListBlocks, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
@@ -425,6 +430,11 @@ export const ROUTES: readonly RouteDef[] = [
   // decision form (spec decision #3); the queue links to the account page.
   { method: "GET", pattern: "/admin/accounts/:handle", handler: handleAdminGetAccount },
   { method: "POST", pattern: "/admin/accounts/:handle/actions", handler: handleAdminAccountAction },
+
+  // account-legal-hold spec §3 T3 — manual impose/release. Same Access trust
+  // domain and inline-checkOrigin shape as the routes above.
+  { method: "POST", pattern: "/admin/accounts/:handle/holds", handler: handleAdminImposeAccountHold },
+  { method: "POST", pattern: "/admin/accounts/:handle/holds/:id/release", handler: handleAdminReleaseAccountHold },
 
   // TEST-ONLY. `handleTestRoute` returns null when `TEST_ROUTES` is unset (i.e.
   // in production), and we fall through to the SAME notFoundResponse() every

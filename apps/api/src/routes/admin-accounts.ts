@@ -11,6 +11,7 @@ import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
 import { applyAccountAction, loadAccountHistory } from "../moderation/account-actions";
+import { imposeManualAccountHold, listAccountHolds, releaseAccountHold } from "../moderation/account-holds";
 import { sendAccountActionNotice } from "../moderation/notify-account";
 
 import {
@@ -26,6 +27,10 @@ import {
 
 import type { ViolationCategory } from "../moderation/actions";
 import type { RouteParams } from "../routing";
+
+// Same shape as routes/admin.ts's own UUID_RE — a `:id` path param is
+// validated to 404 (never query) before it reaches any hold lookup.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface AccountRow {
   id: string;
@@ -61,6 +66,7 @@ export async function handleAdminGetAccount(
   if (account === null) return errorResponse("NOT_FOUND", 404);
 
   const history = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => loadAccountHistory(c, account.id));
+  const holds = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => listAccountHolds(c, account.id));
   const body: AdminAccountResponse = {
     userId: account.id,
     handle: account.username,
@@ -69,6 +75,7 @@ export async function handleAdminGetAccount(
     disabledReason: account.disabled_reason,
     history,
     suggestedNext: suggestNextRung(history),
+    holds,
   };
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
@@ -173,6 +180,124 @@ export async function handleAdminAccountAction(
   }
 
   return new Response(JSON.stringify({ actionId: outcome.actionId }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * T3's manual impose (account-legal-hold spec §3). `csam` is deliberately
+ * excluded here: CSAM holds come only from T1/T2, where there is evidence of
+ * the case. Same Access trust domain / inline-checkOrigin shape as
+ * handleAdminAccountAction above.
+ */
+export async function handleAdminImposeAccountHold(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("INVALID_JSON", 400);
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return errorResponse("INVALID_INPUT", 400);
+  const b = body as Record<string, unknown>;
+  const category = b["category"];
+  const reason = b["reason"];
+  if ((category !== "dmca" && category !== "other") || typeof reason !== "string" || reason.trim() === "") {
+    return errorResponse("INVALID_INPUT", 400);
+  }
+
+  const account = await findByHandle(env, ctx, params.handle ?? "");
+  if (account === null) return errorResponse("NOT_FOUND", 404);
+
+  const outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    imposeManualAccountHold(c, {
+      userId: account.id,
+      // ⚠️ The HANDLE, never the email (Task 2's test asserts this) — the
+      // log is append-only, so an email written here would outlive deletion.
+      subjectLabel: account.username,
+      category,
+      imposedBy: admin.email,
+      reason: reason.trim(),
+    }),
+  );
+  if (outcome.kind === "not_found") return errorResponse("NOT_FOUND", 404);
+  if (outcome.kind === "exists") {
+    return new Response(JSON.stringify({ created: false }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return new Response(JSON.stringify({ created: true, holdId: outcome.holdId }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * T3's manual release. Refused for `csam` and for an already-released hold
+ * (both `HOLD_NOT_RELEASABLE`), and refused when the releasing admin is the
+ * one who imposed it (`FORBIDDEN`, the two-person pattern — #98). A nonexistent
+ * id, or a hold belonging to a different user than `:handle`, is NOT_FOUND —
+ * `releaseAccountHold` enforces the handle-matches-hold check itself, under
+ * the row lock (audit #7).
+ */
+export async function handleAdminReleaseAccountHold(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  const holdId = params.id;
+  if (typeof holdId !== "string" || !UUID_RE.test(holdId)) return errorResponse("NOT_FOUND", 404);
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("INVALID_JSON", 400);
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return errorResponse("INVALID_INPUT", 400);
+  const reason = (body as Record<string, unknown>)["reason"];
+  if (typeof reason !== "string" || reason.trim() === "") return errorResponse("INVALID_INPUT", 400);
+
+  const account = await findByHandle(env, ctx, params.handle ?? "");
+  if (account === null) return errorResponse("NOT_FOUND", 404);
+
+  const outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    releaseAccountHold(c, {
+      holdId,
+      userId: account.id,
+      releasedBy: admin.email,
+      reason: reason.trim(),
+      subjectLabel: account.username,
+    }),
+  );
+  if (outcome.kind === "not_found") return errorResponse("NOT_FOUND", 404);
+  if (outcome.kind === "same_admin") {
+    // 403, not 404 like media-access's self-approval: the hold's existence
+    // is already visible on the admin account page (GET returns it in
+    // `holds`), so telling this admin "you imposed this" reveals nothing a
+    // 404 would have hidden — unlike a media-access request, which a 404
+    // keeps from confirming exists at all to its own requester.
+    return errorResponse("FORBIDDEN", 403, { message: "a different admin must release this hold" });
+  }
+  if (outcome.kind === "csam" || outcome.kind === "already_released") {
+    return errorResponse("HOLD_NOT_RELEASABLE", 409);
+  }
+  return new Response(JSON.stringify({ released: true }), {
     status: 200,
     headers: { "content-type": "application/json" },
   });

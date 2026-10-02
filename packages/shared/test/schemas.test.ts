@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SignupInput, LoginInput, SESSION_COOKIE_NAME } from '../src/index';
+import { SignupInput, LoginInput, SESSION_COOKIE_NAME, normalizeEmail } from '../src/index';
 
 describe('cookie constants', () => {
   it('has the exact session cookie name', () => {
@@ -88,5 +88,21 @@ describe('email normalization (rate-limiter key / citext agreement)', () => {
   it('LoginInput still rejects an invalid email and an empty password', () => {
     expect(LoginInput.safeParse({ email: 'not-an-email', password: 'x' }).success).toBe(false);
     expect(LoginInput.safeParse({ email: 'reader@example.com', password: '' }).success).toBe(false);
+  });
+});
+
+/**
+ * account-legal-hold spec §4a (Task 2): `normalizeEmail` is THE normaliser,
+ * and `SignupInput`'s parsed email must equal its output exactly, so the
+ * reserved-email hash (apps/api/src/auth/reserved-email.ts) can never
+ * disagree with what signup stores.
+ */
+describe('normalizeEmail (account-legal-hold spec §4a)', () => {
+  it('SignupInput.shape.email.parse matches normalizeEmail, both lowercased', () => {
+    const viaSchema = SignupInput.shape.email.parse('Ada@Example.COM');
+    const viaFn = normalizeEmail('Ada@Example.COM');
+    expect(viaSchema).toBe(viaFn);
+    expect(viaSchema).toBe('ada@example.com');
+    expect(viaFn).toBe('ada@example.com');
   });
 });

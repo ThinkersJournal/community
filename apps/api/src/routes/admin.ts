@@ -145,6 +145,7 @@ export async function handleAdminDecision(
       decision: decision as DecisionKind,
       reason: reason.trim(),
       actorAdmin: admin.email,
+      accountHold: legalHold === true ? { category: legalHoldCategory as LegalHoldCategory } : undefined,
     }),
   );
 

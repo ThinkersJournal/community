@@ -92,7 +92,16 @@ export type ApiErrorCode =
   // 403 — #58: PATCH /comments/:id on the caller's own HIDDEN comment. A
   // comment's hidden_at is only ever moderation's (no author self-hide for
   // comments). Same confirmed-owner reasoning as POST_UNDER_MODERATION.
-  | "COMMENT_UNDER_MODERATION";
+  | "COMMENT_UNDER_MODERATION"
+  // 409 — account-legal-hold spec §3 T3: POST
+  // /admin/accounts/:handle/holds/:id/release on a hold that cannot be
+  // released in the app — either its category is `csam` (never released by
+  // app code; the DB's own CHECK backs this up) or it is already released.
+  // A nonexistent id, or a hold of a different user than `:handle`, is
+  // NOT_FOUND, not this. The `same_admin` refusal is a separate, distinct
+  // FORBIDDEN (it is about WHO is asking, not whether the hold itself can
+  // ever be released).
+  | "HOLD_NOT_RELEASABLE";
 
 export interface ApiErrorBody {
   code: ApiErrorCode;

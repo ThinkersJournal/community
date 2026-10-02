@@ -163,6 +163,8 @@ export interface AdminAccountResponse {
   readonly disabledReason: string | null;
   readonly history: readonly AdminAccountHistoryEntry[];
   readonly suggestedNext: AdminAccountActionKind;
+  /** Newest first, active and released (account-legal-hold spec §3 T3). */
+  readonly holds: readonly AdminAccountHold[];
 }
 
 /** `POST /admin/accounts/:handle/actions`. */
@@ -199,4 +201,16 @@ export interface AdminDsaNotice {
 
 export interface AdminDsaNoticesResponse {
   notices: AdminDsaNotice[];
+}
+
+/** One row of an account's legal-hold history (account-legal-hold spec §2). ISO strings. */
+export interface AdminAccountHold {
+  readonly id: string;
+  readonly category: LegalHoldCategoryWire;
+  readonly reason: string;
+  readonly imposedBy: string;
+  readonly imposedAt: string;
+  readonly releasedAt: string | null;
+  readonly releasedBy: string | null;
+  readonly releaseReason: string | null;
 }

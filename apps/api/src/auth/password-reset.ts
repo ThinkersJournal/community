@@ -76,22 +76,35 @@ export const TEST_LAST_RESET_TOKEN_KEY = "__test:last-reset-token";
  * Mint a reset token for `userId`: a 32-byte random value, stored (as its
  * SHA-256 hash) in `password_reset_tokens` with a 1h expiry. Returns the RAW
  * token — the only copy — for embedding in the emailed reset link.
+ *
+ * ⚠️ Returns `null`, inserting nothing, when the account is anonymised
+ * (account-legal-hold spec §4a, PM ruling B: no mail or authentication path
+ * may reach a deleted account). forgot-password reads the row and then calls
+ * this, so the reaper's scrub can commit in between; the INSERT … SELECT
+ * re-checks `anonymised_at` in the same statement that writes. `FOR KEY SHARE`
+ * makes it wait for an in-flight scrub's `FOR UPDATE` and, in READ COMMITTED,
+ * re-evaluate the WHERE against the committed row, so it inserts nothing. A
+ * plain SELECT would read its pre-scrub snapshot and insert.
  */
 export async function createResetToken(
   env: Env,
   ctx: ExecutionContext,
   userId: string,
-): Promise<string> {
+): Promise<string | null> {
   const token = base64urlEncode(crypto.getRandomValues(new Uint8Array(32)));
   const tokenHash = await sha256Hex(token);
   const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
 
-  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query(
-      `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+  const inserted = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rowCount } = await c.query(
+      `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+       SELECT id, $2, $3 FROM users WHERE id = $1 AND anonymised_at IS NULL
+          FOR KEY SHARE`,
       [userId, tokenHash, expiresAt],
-    ),
-  );
+    );
+    return (rowCount ?? 0) === 1;
+  });
+  if (!inserted) return null;
 
   // TEST-ONLY — see TEST_LAST_RESET_TOKEN_KEY's own comment.
   if (env.TEST_ROUTES === "1") {
