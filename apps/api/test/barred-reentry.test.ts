@@ -7,6 +7,7 @@ import { verifyPassword } from "../src/auth/password";
 import { createResetToken } from "../src/auth/password-reset";
 import { releaseReservedEmail } from "../src/auth/reserved-email";
 import { withClient } from "../src/db/client";
+import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
 
 /**
  * ISSUE #50, the two SESSION-ISSUING side doors found by its route census.
@@ -234,9 +235,12 @@ async function seedDeleted(banned: boolean): Promise<Seeded> {
       WHERE id = $1`,
     [user.userId],
   );
-  const ctx = createExecutionContext();
-  await anonymiseExpiredAccounts(env, ctx);
-  await waitOnExecutionContext(ctx);
+  // Serialised against every other file's run (helpers/anonymise-reaper-lock.ts).
+  await withAnonymiseReaperLock(async () => {
+    const ctx = createExecutionContext();
+    await anonymiseExpiredAccounts(env, ctx);
+    await waitOnExecutionContext(ctx);
+  });
 
   const [row] = await query<{ email: string; anonymised_at: Date | null }>(
     "SELECT email, anonymised_at FROM users WHERE id = $1",

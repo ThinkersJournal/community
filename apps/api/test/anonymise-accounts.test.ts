@@ -5,6 +5,7 @@ import worker from "../src";
 import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
+import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
 
 /**
  * Board item 59 = Option C — the daily anonymisation reaper.
@@ -108,9 +109,7 @@ describe("anonymiseExpiredAccounts", () => {
     const recent = await seed({ requestedDaysAgo: 5 });
     const neverRequested = await seed({ requestedDaysAgo: null });
 
-    const ctx = createExecutionContext();
-    await anonymiseExpiredAccounts(env, ctx);
-    await waitOnExecutionContext(ctx);
+    await runReaper();
 
     const expiredRow = await row(expired.id);
     expect(expiredRow.anonymisedAt).not.toBeNull();
@@ -134,9 +133,7 @@ describe("anonymiseExpiredAccounts", () => {
   it("returns the number of accounts anonymised", async () => {
     const expired = await seed({ requestedDaysAgo: 45 });
 
-    const ctx = createExecutionContext();
-    const n = await anonymiseExpiredAccounts(env, ctx);
-    await waitOnExecutionContext(ctx);
+    const n = await runReaper();
 
     // >=1, not ===1 — the shared test DB may carry other suites' eligible
     // rows (same reasoning as test/reap-unverified.test.ts). This pins that
@@ -148,10 +145,8 @@ describe("anonymiseExpiredAccounts", () => {
   it("scrubbing kills every live session for that account (security_epoch bump)", async () => {
     const expired = await seed({ requestedDaysAgo: 45 });
 
-    const ctx = createExecutionContext();
     const epochBefore = await env.USER_SECURITY.getByName(expired.id).getEpoch();
-    await anonymiseExpiredAccounts(env, ctx);
-    await waitOnExecutionContext(ctx);
+    await runReaper();
     const epochAfter = await env.USER_SECURITY.getByName(expired.id).getEpoch();
 
     expect(epochAfter).toBeGreaterThan(epochBefore);
@@ -165,8 +160,10 @@ describe("anonymiseExpiredAccounts", () => {
  * S1). The reaper takes the oldest 500 eligible rows from the SHARED test DB,
  * and several files run it in parallel, so another file's run can scrub these
  * fixtures and this file's runs can scrub theirs. A far-past timestamp sorts a
- * fixture into the head of every run's batch, whatever else the DB holds. Which
- * run scrubbed a row is not deterministic; its end state is. So every
+ * fixture into the head of every run's batch, whatever else the DB holds. Every
+ * test-side run holds helpers/anonymise-reaper-lock.ts's lock, so runs no longer
+ * OVERLAP (RF7 flaked on exactly that), but a fixture seeded eligible can still
+ * be scrubbed by another file's run before this test's run starts. So every
  * assertion below reads a fixture row's FINAL STATE, never the reaper's return
  * value or a log line.
  */
@@ -215,8 +212,13 @@ async function seedAccount(
   return { id, username, email };
 }
 
-async function seedEligible(): Promise<string> {
-  return (await seedAccount()).id;
+/**
+ * An INELIGIBLE fixture's id. A test that asserts what ONE run did makes it
+ * eligible (`makeEligible`) only while holding helpers/anonymise-reaper-lock.ts's
+ * lock, so no other file's run can scrub it first.
+ */
+async function seedIneligible(): Promise<string> {
+  return (await seedAccount({ eligible: false })).id;
 }
 
 /** Autocommit, from its own client: a unique far-past deletion request. Changes no key column. */
@@ -257,11 +259,14 @@ async function expectedHash(email: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** One reaper run, serialised against every other file's (helpers/anonymise-reaper-lock.ts). */
 async function runReaper(e: Env = env): Promise<number> {
-  const ctx = createExecutionContext();
-  const n = await anonymiseExpiredAccounts(e, ctx);
-  await waitOnExecutionContext(ctx);
-  return n;
+  return withAnonymiseReaperLock(async () => {
+    const ctx = createExecutionContext();
+    const n = await anonymiseExpiredAccounts(e, ctx);
+    await waitOnExecutionContext(ctx);
+    return n;
+  });
 }
 
 /**
@@ -302,38 +307,42 @@ async function waitUntilBlockedBy(holderPid: number): Promise<boolean> {
  * client — which its own KEY SHARE never blocks — makes `change` and commits.
  */
 async function whileReaperWaits(id: string, change: (locker: import("pg").Client) => Promise<unknown>): Promise<void> {
-  const ctx = createExecutionContext();
-  let reaper: Promise<number> | undefined;
-  try {
-    await ctxRun(async (locker) => {
-      await locker.query("BEGIN");
-      try {
-        await locker.query("SELECT 1 FROM users WHERE id = $1 FOR KEY SHARE", [id]);
-        const { rows } = await locker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
-        const lockerPid = rows[0]!.pid;
-        await makeEligible(id);
-        reaper = anonymiseExpiredAccounts(env, ctx);
-        // Awaited below; this only stops an early rejection being reported as unhandled.
-        reaper.catch(() => undefined);
-        if (!(await waitUntilBlockedBy(lockerPid))) {
-          throw new Error(`timed out after 2s waiting for a reaper to block on locker pid ${lockerPid}`);
-        }
-        await change(locker);
-        await locker.query("COMMIT");
-      } catch (err) {
+  // Serialised against every other file's run, taken BEFORE the fixture becomes
+  // eligible and released only after this run settles.
+  await withAnonymiseReaperLock(async () => {
+    const ctx = createExecutionContext();
+    let reaper: Promise<number> | undefined;
+    try {
+      await ctxRun(async (locker) => {
+        await locker.query("BEGIN");
         try {
-          await locker.query("ROLLBACK");
-        } catch {
-          // keep the root error
+          await locker.query("SELECT 1 FROM users WHERE id = $1 FOR KEY SHARE", [id]);
+          const { rows } = await locker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+          const lockerPid = rows[0]!.pid;
+          await makeEligible(id);
+          reaper = anonymiseExpiredAccounts(env, ctx);
+          // Awaited below; this only stops an early rejection being reported as unhandled.
+          reaper.catch(() => undefined);
+          if (!(await waitUntilBlockedBy(lockerPid))) {
+            throw new Error(`timed out after 2s waiting for a reaper to block on locker pid ${lockerPid}`);
+          }
+          await change(locker);
+          await locker.query("COMMIT");
+        } catch (err) {
+          try {
+            await locker.query("ROLLBACK");
+          } catch {
+            // keep the root error
+          }
+          throw err;
         }
-        throw err;
-      }
-    });
-  } finally {
-    if (reaper !== undefined) await Promise.allSettled([reaper]);
-    await waitOnExecutionContext(ctx);
-  }
-  await reaper;
+      });
+    } finally {
+      if (reaper !== undefined) await Promise.allSettled([reaper]);
+      await waitOnExecutionContext(ctx);
+    }
+    await reaper;
+  });
 }
 
 /**
@@ -488,9 +497,10 @@ describe("anonymiseExpiredAccounts — one row's failure never stops the batch (
       // X is seeded INELIGIBLE and locked before it becomes eligible, by the
       // same KEY SHARE choreography as RF6, so no other file's reaper can scrub
       // it before the lock is held. KEY SHARE blocks the reaper's FOR UPDATE
-      // exactly as a FOR UPDATE would.
+      // exactly as a FOR UPDATE would. Y is also seeded INELIGIBLE and made
+      // eligible only under the reaper lock, so THIS run is the one that scrubs it.
       const x = await seedAccount({ eligible: false });
-      const y = await seedAccount();
+      const y = await seedAccount({ eligible: false });
       const ySessionEpoch = await env.USER_SECURITY.getByName(y.id).getEpoch();
       await createSession(env, {
         userId: y.id,
@@ -502,12 +512,16 @@ describe("anonymiseExpiredAccounts — one row's failure never stops the batch (
       // CONTROL for the bump: before the run, Y's epoch is the session's.
       expect(await env.USER_SECURITY.getByName(y.id).getEpoch()).toBe(ySessionEpoch);
 
-      await ctxRun(async (locker) => {
+      // ⚠️ SERIALISED against every other file's run (helpers/anonymise-reaper-lock.ts).
+      // A run that overlapped this one's 5 s wait on X scrubbed Y first, so this
+      // run re-checked Y as done, scrubbed nothing, and (correctly) threw.
+      await withAnonymiseReaperLock(() => ctxRun(async (locker) => {
         await locker.query("BEGIN");
         try {
           await locker.query("SELECT 1 FROM users WHERE id = $1 FOR KEY SHARE", [x.id]);
           const lockedAt = Date.now();
           await makeEligible(x.id);
+          await makeEligible(y.id);
 
           const ctx = createExecutionContext();
           const start = Date.now();
@@ -541,7 +555,7 @@ describe("anonymiseExpiredAccounts — one row's failure never stops the batch (
           }
           throw err;
         }
-      });
+      }));
 
       await runReaper();
       expect(await anonymisedAt(x.id), "the skipped row was not retried by the next run").not.toBeNull();
@@ -581,13 +595,17 @@ function recordingEnv(failFor: (userId: string) => boolean, log: Array<{ userId:
 
 describe("anonymiseExpiredAccounts — revoke before the scrub and after it (RF8, round 3)", () => {
   it("RF8: each row is revoked BEFORE its scrub and again after it; a failed pre-scrub bump leaves the row unscrubbed", async () => {
-    const x = await seedEligible(); // unique far-past deletion_requested_at (see the flake note)
-    const y = await seedEligible();
+    const x = await seedIneligible();
+    const y = await seedIneligible();
     const log: Array<{ userId: string; anonymised: boolean }> = [];
 
-    const ctx = createExecutionContext();
-    await expect(anonymiseExpiredAccounts(recordingEnv((id) => id === x, log), ctx)).resolves.toBeTypeOf("number");
-    await waitOnExecutionContext(ctx);
+    await withAnonymiseReaperLock(async () => {
+      await makeEligible(x);
+      await makeEligible(y);
+      const ctx = createExecutionContext();
+      await expect(anonymiseExpiredAccounts(recordingEnv((id) => id === x, log), ctx)).resolves.toBeTypeOf("number");
+      await waitOnExecutionContext(ctx);
+    });
 
     // X: its first bump threw, so it was skipped — not scrubbed, retried next run.
     expect(await anonymisedAt(x)).toBeNull();
@@ -601,15 +619,19 @@ describe("anonymiseExpiredAccounts — revoke before the scrub and after it (RF8
   });
 
   it("RF8: when every candidate fails, the run throws after the loop", async () => {
-    await seedEligible();
-    await seedEligible();
-    const ctx = createExecutionContext();
-    // Every bump throws, so every candidate in this run fails and none is
-    // scrubbed, whatever else the shared DB holds.
-    await expect(anonymiseExpiredAccounts(recordingEnv(() => true, []), ctx)).rejects.toThrow(
-      /no candidate was anonymised and \d+ of \d+ failed/,
-    );
-    await waitOnExecutionContext(ctx);
+    const a = await seedIneligible();
+    const b = await seedIneligible();
+    await withAnonymiseReaperLock(async () => {
+      await makeEligible(a);
+      await makeEligible(b);
+      const ctx = createExecutionContext();
+      // Every bump throws, so every candidate in this run fails and none is
+      // scrubbed, whatever else the shared DB holds.
+      await expect(anonymiseExpiredAccounts(recordingEnv(() => true, []), ctx)).rejects.toThrow(
+        /no candidate was anonymised and \d+ of \d+ failed/,
+      );
+      await waitOnExecutionContext(ctx);
+    });
     // The partial case (one failing of two does NOT throw) is the test above:
     // X failed, Y was scrubbed, and the run resolved.
   });
@@ -619,8 +641,8 @@ describe("anonymiseExpiredAccounts — revoke before the scrub and after it (RF8
     // (skipped). Every other candidate's bump throws (failed). Nothing is
     // scrubbed, so the failures are a dead connection or a down DO, and the
     // skipped row must not mask them.
-    const z = await seedEligible();
-    await seedEligible();
+    const z = await seedIneligible();
+    const other = await seedIneligible();
     const real = env.USER_SECURITY;
     const stub = {
       getByName(userId: string) {
@@ -637,9 +659,13 @@ describe("anonymiseExpiredAccounts — revoke before the scrub and after it (RF8
     };
     const e = { ...env, USER_SECURITY: stub as unknown as Env["USER_SECURITY"] };
 
-    const ctx = createExecutionContext();
-    await expect(anonymiseExpiredAccounts(e, ctx)).rejects.toThrow(/no candidate was anonymised and \d+ of \d+ failed/);
-    await waitOnExecutionContext(ctx);
+    await withAnonymiseReaperLock(async () => {
+      await makeEligible(z);
+      await makeEligible(other);
+      const ctx = createExecutionContext();
+      await expect(anonymiseExpiredAccounts(e, ctx)).rejects.toThrow(/no candidate was anonymised and \d+ of \d+ failed/);
+      await waitOnExecutionContext(ctx);
+    });
     expect(await anonymisedAt(z), "the held row was scrubbed").toBeNull();
   });
 });
@@ -648,13 +674,15 @@ describe("the scheduled dispatcher", () => {
   it('routes cron "40 4 * * *" to the anonymisation reaper, not the email drain', async () => {
     const expired = await seed({ requestedDaysAgo: 45 });
 
-    const ctx = createExecutionContext();
-    await worker.scheduled(
-      { cron: "40 4 * * *", scheduledTime: Date.now(), noRetry: () => {} },
-      env,
-      ctx,
-    );
-    await waitOnExecutionContext(ctx);
+    await withAnonymiseReaperLock(async () => {
+      const ctx = createExecutionContext();
+      await worker.scheduled(
+        { cron: "40 4 * * *", scheduledTime: Date.now(), noRetry: () => {} },
+        env,
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+    });
 
     expect((await row(expired.id)).anonymisedAt).not.toBeNull();
   });
@@ -664,16 +692,19 @@ describe("POST /__test/anonymise-accounts", () => {
   it("invokes the reaper and reports { anonymised }", async () => {
     const expired = await seed({ requestedDaysAgo: 45 });
 
-    const ctx = createExecutionContext();
-    const response = await worker.fetch(
-      new Request("https://api.test/__test/anonymise-accounts", {
-        method: "POST",
-        headers: { Origin: ALLOWED_ORIGIN },
-      }),
-      env,
-      ctx,
-    );
-    await waitOnExecutionContext(ctx);
+    const response = await withAnonymiseReaperLock(async () => {
+      const ctx = createExecutionContext();
+      const res = await worker.fetch(
+        new Request("https://api.test/__test/anonymise-accounts", {
+          method: "POST",
+          headers: { Origin: ALLOWED_ORIGIN },
+        }),
+        env,
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+      return res;
+    });
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { anonymised: number };

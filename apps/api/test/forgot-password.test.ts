@@ -6,6 +6,7 @@ import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { createResetToken } from "../src/auth/password-reset";
 import { withClient } from "../src/db/client";
 import { createVerifiedActor, deleteCreatedUsers } from "./actor";
+import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
 import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 
 /**
@@ -311,9 +312,12 @@ describe("AH-7 — forgot-password for a deleted, banned account's original addr
     expect(before).toHaveLength(1);
     vi.unstubAllGlobals();
 
-    const ctx = createExecutionContext();
-    await anonymiseExpiredAccounts(env, ctx);
-    await waitOnExecutionContext(ctx);
+    // Serialised against every other file's run (helpers/anonymise-reaper-lock.ts).
+    await withAnonymiseReaperLock(async () => {
+      const ctx = createExecutionContext();
+      await anonymiseExpiredAccounts(env, ctx);
+      await waitOnExecutionContext(ctx);
+    });
     const [row] = await sql<{ anonymised_at: Date | null }>("SELECT anonymised_at FROM users WHERE id = $1", [
       actor.userId,
     ]);
