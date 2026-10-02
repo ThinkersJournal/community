@@ -84,4 +84,9 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // Addendum to #113 (PM ruling, 2026-10-01) — same Access trust domain and
   // same reasoning as /admin/decision/media-access-requests above.
   "POST /admin/dsa-notices/:id/close",
+  // account-legal-hold spec §3 T3 (manual impose/release) — same Access trust
+  // domain and inline checkOrigin defense as /admin/accounts/:handle/actions
+  // directly above.
+  "POST /admin/accounts/:handle/holds",
+  "POST /admin/accounts/:handle/holds/:id/release",
 ]);

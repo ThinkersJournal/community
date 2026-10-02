@@ -163,6 +163,8 @@ export interface AdminAccountResponse {
   readonly disabledReason: string | null;
   readonly history: readonly AdminAccountHistoryEntry[];
   readonly suggestedNext: AdminAccountActionKind;
+  /** Newest first, active and released (account-legal-hold spec §3 T3). */
+  readonly holds: readonly AdminAccountHold[];
 }
 
 /** `POST /admin/accounts/:handle/actions`. */

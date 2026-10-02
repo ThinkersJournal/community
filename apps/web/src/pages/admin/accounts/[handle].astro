@@ -24,11 +24,16 @@ import {
   ACCESS_JWT_HEADER,
   ADMIN_ACCOUNT_ACTIONS,
   DEFAULT_SUSPENSION_HOURS,
+  LEGAL_HOLD_CATEGORIES,
   REPORT_REASONS,
   SUSPENSION_HOURS,
   type AdminAccountActionKind,
   type AdminAccountResponse,
 } from "@thinkersjournal/shared";
+
+// T3 impose never offers `csam` — CSAM holds come only from T1/T2, where
+// there is evidence of the case (account-legal-hold spec §3 T3).
+const MANUAL_HOLD_CATEGORIES = LEGAL_HOLD_CATEGORIES.filter((c) => c !== "csam");
 
 // ⚠️⚠️ THE GUARD — see this file's header. Nothing above this line does
 // anything; nothing below it may run when this returns.
@@ -46,21 +51,46 @@ let actionOk = false;
 
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
-  const action = form.get("action");
-  const res = await adminApiFetch(`/admin/accounts/${encodeURIComponent(handle)}/actions`, {
-    method: "POST",
-    accessJwt,
-    origin: Astro.request.headers.get("Origin") ?? "",
-    body: {
-      action,
-      reason: form.get("reason"),
-      ...(form.get("violationCategory") ? { violationCategory: form.get("violationCategory") } : {}),
-      ...(action === "suspend" ? { suspensionHours: Number(form.get("suspensionHours")) } : {}),
-      ...(action === "ban" ? { confirmBan: form.get("confirmBan") === "on" } : {}),
-    },
-  });
-  if (res.status === 200) actionOk = true;
-  else actionError = adminApiErrorCode(res) ?? "ACTION_FAILED";
+  const intent = form.get("intent");
+  const origin = Astro.request.headers.get("Origin") ?? "";
+
+  if (intent === "hold_impose") {
+    const res = await adminApiFetch(`/admin/accounts/${encodeURIComponent(handle)}/holds`, {
+      method: "POST",
+      accessJwt,
+      origin,
+      body: { category: form.get("category"), reason: form.get("reason") },
+    });
+    if (res.status === 200) actionOk = true;
+    else actionError = adminApiErrorCode(res) ?? "ACTION_FAILED";
+  } else if (intent === "hold_release") {
+    const holdId = form.get("holdId");
+    const res = await adminApiFetch(`/admin/accounts/${encodeURIComponent(handle)}/holds/${encodeURIComponent(String(holdId))}/release`, {
+      method: "POST",
+      accessJwt,
+      origin,
+      body: { reason: form.get("reason") },
+    });
+    if (res.status === 200) actionOk = true;
+    else actionError = adminApiErrorCode(res) ?? "ACTION_FAILED";
+  } else {
+    // "account_action" — unchanged body and path.
+    const action = form.get("action");
+    const res = await adminApiFetch(`/admin/accounts/${encodeURIComponent(handle)}/actions`, {
+      method: "POST",
+      accessJwt,
+      origin,
+      body: {
+        action,
+        reason: form.get("reason"),
+        ...(form.get("violationCategory") ? { violationCategory: form.get("violationCategory") } : {}),
+        ...(action === "suspend" ? { suspensionHours: Number(form.get("suspensionHours")) } : {}),
+        ...(action === "ban" ? { confirmBan: form.get("confirmBan") === "on" } : {}),
+      },
+    });
+    if (res.status === 200) actionOk = true;
+    else actionError = adminApiErrorCode(res) ?? "ACTION_FAILED";
+  }
 }
 
 const accountResp = await adminApiFetch<AdminAccountResponse>(`/admin/accounts/${encodeURIComponent(handle)}`, { accessJwt });
@@ -134,6 +164,7 @@ function stateLine(account: AdminAccountResponse): string {
               <p class="banned">This account is banned.</p>
             ) : (
               <form method="POST" class="action-form">
+                <input type="hidden" name="intent" value="account_action" />
                 <label>
                   Statement of reasons (shown to the user)
                   <textarea name="reason" required maxlength="2000" />
@@ -171,6 +202,62 @@ function stateLine(account: AdminAccountResponse): string {
               </form>
             )
           }
+
+          <section class="holds">
+            <h2>Legal holds</h2>
+            {
+              account.holds.length === 0 ? (
+                <p id="no-holds">No holds on record.</p>
+              ) : (
+                <ul class="holds-list">
+                  {account.holds.map((hold) => (
+                    <li class="hold-item">
+                      <p class="category">{hold.category}</p>
+                      <p class="meta">
+                        {hold.reason} · imposed by {hold.imposedBy} at {hold.imposedAt}
+                      </p>
+                      {
+                        hold.releasedAt ? (
+                          <p class="released">
+                            Released by {hold.releasedBy} at {hold.releasedAt}: {hold.releaseReason}
+                          </p>
+                        ) : hold.category === "csam" ? (
+                          <p class="csam-note">(cannot be released in the app)</p>
+                        ) : (
+                          <form method="POST" class="hold-release-form">
+                            <input type="hidden" name="intent" value="hold_release" />
+                            <input type="hidden" name="holdId" value={hold.id} />
+                            <label>
+                              Release reason
+                              <textarea name="reason" required maxlength="2000" />
+                            </label>
+                            <button type="submit" class="btn btn-ghost">Release hold</button>
+                          </form>
+                        )
+                      }
+                    </li>
+                  ))}
+                </ul>
+              )
+            }
+
+            <form method="POST" class="hold-impose-form">
+              <input type="hidden" name="intent" value="hold_impose" />
+              <label>
+                Category
+                <select name="category">
+                  {MANUAL_HOLD_CATEGORIES.map((cat) => (
+                    <option value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Reason
+                <textarea name="reason" required maxlength="2000" />
+              </label>
+              <button type="submit" class="btn btn-ghost">Impose hold</button>
+            </form>
+          </section>
         </>
       )
     }
@@ -195,4 +282,16 @@ function stateLine(account: AdminAccountResponse): string {
   .action-form input,.action-form textarea,.action-form select{background:var(--ink2);border:1px solid var(--line);
     border-radius:8px;padding:9px 11px;color:var(--text);font:inherit}
   .action-buttons{display:flex;gap:10px;flex-wrap:wrap}
+  .holds{margin:20px 0 32px}
+  .holds-list{list-style:none;display:flex;flex-direction:column;gap:12px;margin:12px 0 20px}
+  .hold-item{border:1px solid var(--line);border-radius:8px;padding:12px}
+  .hold-item .category{font-weight:600;text-transform:uppercase;font-size:12px}
+  .hold-item .meta{color:var(--muted);font-size:13px;margin-top:4px}
+  .hold-item .released{color:var(--muted);font-size:13px;margin-top:8px}
+  .hold-item .csam-note{color:var(--muted);font-style:italic;font-size:13px;margin-top:8px}
+  .hold-release-form,.hold-impose-form{display:flex;flex-direction:column;gap:10px;max-width:480px;margin-top:8px}
+  .hold-release-form label,.hold-impose-form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .hold-release-form input,.hold-release-form textarea,.hold-release-form select,
+  .hold-impose-form input,.hold-impose-form textarea,.hold-impose-form select{
+    background:var(--ink2);border:1px solid var(--line);border-radius:8px;padding:9px 11px;color:var(--text);font:inherit}
 </style>
