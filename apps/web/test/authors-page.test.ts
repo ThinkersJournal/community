@@ -1,10 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { readRouteManifest, serverBuilt } from "./helpers/route-manifest";
+
 const PAGE = join(import.meta.dirname, "../src/pages/authors.astro");
-const SERVER_ENTRY = join(import.meta.dirname, "../dist/server/entry.mjs");
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
@@ -47,11 +48,10 @@ describe("authors.astro", () => {
 });
 
 describe("built route manifest (when dist/ is present)", () => {
-  const built = existsSync(SERVER_ENTRY);
-  it.runIf(built)("contains the /authors route", () => {
-    expect(readFileSync(SERVER_ENTRY, "utf8")).toContain('"route":"/authors"');
+  it.runIf(serverBuilt)("contains the /authors route", () => {
+    expect(readRouteManifest()).toContain('"route":"/authors"');
   });
-  it.skipIf(built)("SKIPPED: no dist/ — reachability is E2E + deploy-gate verified", () => {
-    expect(built).toBe(false);
+  it.skipIf(serverBuilt)("SKIPPED: no dist/ — reachability is E2E + deploy-gate verified", () => {
+    expect(serverBuilt).toBe(false);
   });
 });

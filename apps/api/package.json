@@ -11,16 +11,16 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.22.0",
-    "@types/node": "26.6.2",
+    "@types/node": "26.6.4",
     "@types/pg": "^8.23.1",
     "jsonc-parser": "3.3.1",
-    "node-pg-migrate": "8.0.4",
+    "node-pg-migrate": "9.0.0",
     "vitest": "4.1.11",
-    "wrangler": "4.135.0"
+    "wrangler": "4.146.0"
   },
   "dependencies": {
     "@thinkersjournal/shared": "workspace:*",
     "argon2id": "^1.0.1",
-    "pg": "8.23.0"
+    "pg": "8.23.1"
   }
 }

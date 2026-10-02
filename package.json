@@ -13,15 +13,16 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
-    "@types/node": "26.6.2",
+    "@types/node": "26.6.4",
     "typescript": "6.0.3"
   },
   "pnpm": {
     "overrides": {
       "@cloudflare/vite-plugin": "1.44.0",
       "sharp": "^0.35.4",
-      "undici": "^7.29.0"
-    }
+      "undici": ">=7.29.1"
+    },
+    "_comment_undici_override": "Dependabot alert #35: undici >=7.28.0 <7.29.1 is vulnerable to DoS via WebSocket permessage-deflate decompression; fixed in 7.29.1. Pinned here because @cloudflare/vitest-pool-workers 0.22.0 still pulls wrangler@4.124.0 -> miniflare 5.20260815.0-alpha -> undici@7.29.0."
   },
   "packageManager": "pnpm@9.15.9+sha512.68046141893c66fad01c079231128e9afb89ef87e2691d69e4d40eee228988295fd4682181bae55b58418c3a253bde65a505ec7c5f9403ece5cc3cd37dcf2531"
 }
