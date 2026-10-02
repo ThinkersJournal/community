@@ -32,6 +32,13 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // relies on. See both routes' own headers.
   "POST /auth/forgot-password",
   "POST /auth/reset-password",
+  // spec §8 — unauthenticated by design (decision #6); inline checkOrigin +
+  // DSA_LIMITER + Turnstile.
+  "POST /dsa-notice",
+  // Confirmation half (Task 3) — same unauthenticated-by-design reasoning: a
+  // reporter who filed the notice above still has no session. Inline
+  // checkOrigin, same as the intake route.
+  "POST /dsa-notice/confirm",
   // Token-authed one-click unsubscribe (M2.3c, RFC 8058): cross-origin, no
   // session/CSRF by design — a mail provider's one-click POST carries no cookie,
   // so the HMAC token IS the auth (see src/routes/unsub.ts). Unlike signup/login
@@ -74,4 +81,7 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   "POST /admin/backfill-hidden-media",
   // #113 — same Access + inline checkOrigin defense as /admin/decision.
   "POST /admin/accounts/:handle/actions",
+  // Addendum to #113 (PM ruling, 2026-10-01) — same Access trust domain and
+  // same reasoning as /admin/decision/media-access-requests above.
+  "POST /admin/dsa-notices/:id/close",
 ]);

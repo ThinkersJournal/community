@@ -175,3 +175,28 @@ export interface AdminAccountActionRequest {
   /** Only for `ban`; must be `true` or the route 400s INVALID_INPUT — a ban is permanent. */
   readonly confirmBan?: boolean;
 }
+
+/**
+ * A row in `GET /admin/dsa-notices` (Part of #113, Task 4) — every CONFIRMED,
+ * unresolved DSA notice, mirroring apps/api/src/moderation/dsa-notices.ts's
+ * `OpenDsaNotice`, with `Date`s as ISO strings (the shape after a JSON
+ * round-trip).
+ */
+export interface AdminDsaNotice {
+  id: string;
+  kind: "post" | "comment";
+  /** `null` once the target has been deleted by its author (addendum, 2026-10-01). */
+  targetId: string | null;
+  excerpt: string;
+  /** Addendum (2026-10-01): true once `targetId` is `null` — see `/admin/dsa-notices/:id/close`. */
+  contentDeleted: boolean;
+  reason: string;
+  statement: string;
+  reporterName: string;
+  reporterEmail: string;
+  createdAt: string;
+}
+
+export interface AdminDsaNoticesResponse {
+  notices: AdminDsaNotice[];
+}

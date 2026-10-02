@@ -9,6 +9,8 @@ import { checkOrigin } from "../auth/csrf";
 import { errorResponse } from "../http/errors";
 import { applyDecision, type DecisionKind } from "../moderation/decide";
 import { sendModerationNotice } from "../moderation/notify-author";
+import { sendDsaOutcome, sendDsaOrphanedOutcome } from "../moderation/notify-reporter";
+import { closeOrphanedDsaNotice, listOpenDsaNotices, orphanedDsaNoticeCandidate } from "../moderation/dsa-notices";
 import { purgeTags } from "../cache/purge";
 import { purgeTagsFor } from "../moderation/purge-target";
 import { requireAdmin } from "../admin/require-admin";
@@ -195,6 +197,22 @@ export async function handleAdminDecision(
     }),
   );
 
+  // DSA (spec §8): every CONFIRMED, open notice this ruling resolved (same
+  // transaction — see decide.ts) gets its reporter a statement of reasons.
+  // Same after-the-commit, waitUntil discipline as the author notice above.
+  for (const r of result.dsaReporters) {
+    ctx.waitUntil(
+      sendDsaOutcome(env, r.email, {
+        decision: decision as DecisionKind,
+        reason: reason.trim(),
+        subject,
+        postTitle: result.postTitle,
+      }).then((sent) => {
+        if (!sent) console.error("dsa outcome not sent", { noticeId: r.noticeId, actionId: result.actionId });
+      }),
+    );
+  }
+
   return new Response(JSON.stringify({ actionId: result.actionId }), {
     status: 200,
     headers: { "content-type": "application/json" },
@@ -301,4 +319,81 @@ export async function handleBackfillHiddenMedia(request: Request, env: Env, ctx:
 
   const result = await backfillHiddenMedia(env, ctx);
   return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+/**
+ * `GET /admin/dsa-notices` — every CONFIRMED, unresolved notice (Part of
+ * #113, Task 4). GET, so it does not touch the mutating pipeline, same shape
+ * as `GET /admin/media-access-requests` above. `listOpenDsaNotices` reads
+ * HIDDEN rows on purpose — see its header in `moderation/dsa-notices.ts`.
+ */
+export async function handleListDsaNotices(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  const notices = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => listOpenDsaNotices(c));
+  return new Response(
+    JSON.stringify({
+      notices: notices.map((n) => ({
+        id: n.id,
+        kind: n.kind,
+        targetId: n.targetId,
+        excerpt: n.excerpt,
+        contentDeleted: n.contentDeleted,
+        reason: n.reason,
+        statement: n.statement,
+        reporterName: n.reporterName,
+        reporterEmail: n.reporterEmail,
+        createdAt: n.createdAt.toISOString(),
+      })),
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+/**
+ * `POST /admin/dsa-notices/:id/close` — addendum (PM ruling, 2026-10-01): the
+ * only way to resolve a notice whose target was deleted by its author before
+ * a decision. `decide.ts` resolves by `post_id`/`comment_id`, both NULL on an
+ * orphaned row by construction, so it can never reach one. Same Access trust
+ * domain, inline `checkOrigin`, and admin error-envelope conventions as
+ * `/admin/decision` and the media-access-requests routes above.
+ */
+export async function handleCloseOrphanedDsaNotice(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  const id = params.id;
+  if (typeof id !== "string" || !UUID_RE.test(id)) return errorResponse("NOT_FOUND", 404);
+
+  const closed = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => closeOrphanedDsaNotice(c, id, admin.email));
+  if (closed === null) {
+    // ⚠️ The UPDATE's own WHERE already decided eligibility atomically — this
+    // second read exists ONLY to pick 404 (no such CONFIRMED notice — that
+    // covers both "doesn't exist" and "exists but unconfirmed", round 2 item
+    // 3) vs 409 (confirmed, but its content is still live or it is already
+    // resolved), never to gate the mutation (which already ran, or didn't,
+    // above).
+    const candidate = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => orphanedDsaNoticeCandidate(c, id));
+    return candidate.exists ? errorResponse("DSA_NOTICE_NOT_ORPHANED", 409) : errorResponse("NOT_FOUND", 404);
+  }
+
+  // ⚠️ AFTER the commit, same waitUntil discipline as the author/reporter
+  // notices in handleAdminDecision above — a lost Postmark send must not turn
+  // an already-durable close into a 500.
+  ctx.waitUntil(
+    sendDsaOrphanedOutcome(env, closed.reporterEmail, { kind: closed.kind, targetLabel: closed.targetLabel }).then(
+      (sent) => {
+        if (!sent) console.error("dsa orphaned-notice outcome not sent", { noticeId: id });
+      },
+    ),
+  );
+
+  return new Response(null, { status: 204 });
 }

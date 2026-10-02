@@ -65,6 +65,11 @@ export type ApiErrorCode =
   | "COMMENT_NOT_FOUND"      // 404 — no such visible comment / parent (M2.2)
   | "COMMENT_DELETED"        // 409 — the target comment is tombstoned (M2.2)
   | "COMMENT_DEPTH_EXCEEDED" // 409 — reply would exceed the depth-8 cap (M2.2)
+  // 409 — POST /admin/dsa-notices/:id/close (#113 final-review addendum,
+  // 2026-10-01): the notice's target still exists (decide.ts is the path for
+  // that), or the notice is already resolved. A nonexistent notice id is
+  // NOT_FOUND, not this.
+  | "DSA_NOTICE_NOT_ORPHANED"
   // --- payloads ------------------------------------------------------------
   | "PAYLOAD_TOO_LARGE"      // 413 — over the streaming size cap (T8)
   | "UNSUPPORTED_MEDIA_TYPE" // 415 — failed the magic-byte allowlist (T7/T8)

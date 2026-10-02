@@ -50,3 +50,26 @@ export interface BlockedUser {
 export interface BlockedList {
   users: BlockedUser[];
 }
+
+/**
+ * DSA Art. 16 notice (spec §8). Unauthenticated: the reporter proves a working
+ * inbox by confirming. `goodFaith` must be literally true (Art. 16(2)(d)).
+ */
+export const DsaNoticeInput = z
+  .object({
+    postId: z.string().uuid().optional(),
+    commentId: z.string().uuid().optional(),
+    reason: z.enum(REPORT_REASONS),
+    statement: z.string().trim().min(1).max(5000),
+    reporterName: z.string().trim().min(1).max(200),
+    // M6 (final-review fix): cap at 254, the longest address RFC 5321 permits
+    // — `z.email()` alone has no length bound. Validations before the
+    // `.toLowerCase()` transform, same order as NormalizedEmail in schemas.ts.
+    reporterEmail: z.email().max(254).toLowerCase(),
+    goodFaith: z.literal(true),
+    turnstileToken: z.string().min(1),
+  })
+  .refine((t) => (t.postId === undefined) !== (t.commentId === undefined), {
+    message: "exactly one of postId/commentId",
+  });
+export type DsaNoticeInputT = z.infer<typeof DsaNoticeInput>;

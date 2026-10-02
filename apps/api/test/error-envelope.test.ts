@@ -168,6 +168,11 @@ const CASES: readonly ErrorCase[] = [
     build: () => new Request("https://api.test/verify-email"),
   },
   {
+    name: "400 dsa-notice confirm peek with no token",
+    route: "GET /dsa-notice/confirm",
+    build: () => new Request("https://api.test/dsa-notice/confirm"),
+  },
+  {
     name: "401 csrf route with no session",
     route: "GET /auth/csrf",
     build: () => new Request("https://api.test/auth/csrf"),
@@ -403,6 +408,13 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /__test/last-reset-token",
     build: () => new Request("https://api.test/__test/last-reset-token"),
   },
+  // Part of #113 — the identical shape as last-reset-token above, for DSA
+  // notice confirmation tokens.
+  {
+    name: "404 dsa-token test route with no stashed token",
+    route: "GET /__test/last-dsa-token",
+    build: () => new Request("https://api.test/__test/last-dsa-token"),
+  },
   // GET /admin/whoami (M4 2a) is a GET, so it is not in MUTATING and LAYER 1's
   // automatic origin-less probe never reaches it — but it DOES have a real
   // error path (requireAdmin's ADMIN_REQUIRED, src/admin/require-admin.ts), so
@@ -442,6 +454,13 @@ const CASES: readonly ErrorCase[] = [
     name: "401 admin get account with no Access header",
     route: "GET /admin/accounts/:handle",
     build: () => new Request("https://api.test/admin/accounts/nobody"),
+  },
+  // GET /admin/dsa-notices (Part of #113, Task 4) — same shape as GET
+  // /admin/media-access-requests directly above.
+  {
+    name: "401 admin dsa-notices list with no Access header",
+    route: "GET /admin/dsa-notices",
+    build: () => new Request("https://api.test/admin/dsa-notices"),
   },
   // GET /media/restricted/:sha256 (#61) — a GET, so LAYER 1 never reaches it.
   // A malformed sha256 is its simplest reachable failure (NOT_FOUND, before

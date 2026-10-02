@@ -28,6 +28,8 @@ import {
   handleAdminWhoami,
   handleApproveMediaAccess,
   handleBackfillHiddenMedia,
+  handleCloseOrphanedDsaNotice,
+  handleListDsaNotices,
   handleListMediaAccessRequests,
   handleRequestMediaAccess,
 } from "./routes/admin";
@@ -36,6 +38,7 @@ import { handleBlock, handleBlockStatus, handleListBlocks, handleUnblock } from 
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
 import { handleCsrf } from "./routes/csrf";
+import { handleConfirmDsaNotice, handleDsaNotice, handlePeekDsaToken } from "./routes/dsa-notice";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
 import { handleForgotPassword } from "./routes/forgot-password";
@@ -130,6 +133,19 @@ export const ROUTES: readonly RouteDef[] = [
   // the one deliberate ordering difference from signup/login.
   { method: "POST", pattern: "/auth/forgot-password", handler: handleForgotPassword },
   { method: "POST", pattern: "/auth/reset-password", handler: handleResetPassword },
+
+  // DSA Art. 16 notice-and-action intake (spec §8, decision #6, part of
+  // #113). Same PIPELINE_EXEMPT shape as forgot-password/reset-password
+  // above — no session exists for an anonymous reporter — running its own
+  // inline `checkOrigin` + `DSA_LIMITER` + Turnstile. See
+  // src/routes/dsa-notice.ts.
+  { method: "POST", pattern: "/dsa-notice", handler: handleDsaNotice },
+
+  // Confirmation half of the same flow (Task 3) — GET peeks (safe to retry,
+  // never mutates), POST redeems. Same PIPELINE_EXEMPT shape as the intake
+  // route above; see src/routes/dsa-notice.ts.
+  { method: "GET", pattern: "/dsa-notice/confirm", handler: handlePeekDsaToken },
+  { method: "POST", pattern: "/dsa-notice/confirm", handler: handleConfirmDsaNotice },
 
   // Unlike signup/login these DO run the pipeline — they have a session — but
   // WITHOUT `requireVerifiedEmail`: an unverified user must still be able to
@@ -385,6 +401,20 @@ export const ROUTES: readonly RouteDef[] = [
   // shadow risk.
   { method: "GET", pattern: "/admin/media-access-requests", handler: handleListMediaAccessRequests },
 
+  // `GET /admin/dsa-notices` (Part of #113, Task 4) — every CONFIRMED,
+  // unresolved DSA notice. Same Access trust domain/GET shape as
+  // /admin/media-access-requests directly above; resolved by POST
+  // /admin/decision (src/moderation/decide.ts), in the same transaction as
+  // the ruling.
+  { method: "GET", pattern: "/admin/dsa-notices", handler: handleListDsaNotices },
+
+  // `POST /admin/dsa-notices/:id/close` — addendum (PM ruling, 2026-10-01):
+  // closes ONE notice whose target was deleted by its author before a
+  // decision (schema option B — SET NULL + target_kind + target_label,
+  // migration 0020). Same Access trust domain/inline-checkOrigin shape as
+  // /admin/decision and the media-access-requests routes above.
+  { method: "POST", pattern: "/admin/dsa-notices/:id/close", handler: handleCloseOrphanedDsaNotice },
+
   // #61 — the one-off backfill for media already public despite belonging to
   // already-hidden content. Same Access trust domain/shape as the routes
   // above. Run once after this PR's deploy; safe to re-run (idempotent).
@@ -441,6 +471,15 @@ export const ROUTES: readonly RouteDef[] = [
   {
     method: "POST",
     pattern: "/__test/anonymise-accounts",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
+
+  // TEST-ONLY (Part of #113). Same null-means-404 contract and same handler
+  // as /__test/last-reset-token above.
+  {
+    method: "GET",
+    pattern: "/__test/last-dsa-token",
     handler: async (request, env, ctx) =>
       (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },

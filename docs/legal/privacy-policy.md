@@ -24,6 +24,14 @@ This policy explains what we collect, why, who processes it, and your choices.
   strictly necessary for the Service; we do not use advertising or cross-site
   tracking cookies.
 
+**DSA notices (legal complaints):**
+- If you report illegal content via the `/dsa-notice` form, we collect your name,
+  email address, the category of the violation you are reporting, a statement
+  describing it, and a confirmation that you are acting in good faith. This is
+  required by DSA Article 16(2)(c)–(d) to process and respond to your report.
+  Your email is verified by a confirmation link before the report is reviewed.
+  Unconfirmed reports are deleted after 7 days.
+
 **We deliberately minimize:**
 - Uploaded images are converted to WebP and **EXIF metadata is stripped**, so
   location and camera data embedded in your photos are removed before storage.
@@ -68,13 +76,24 @@ yet, automated or manual. It is required before the Community opens to users
 officially. The data a CyberTipline report shares must be listed here once the
 report's contents are designed.]]
 
+**DSA notice reporter information** — your name and email from a legal complaint
+you file — is shown to moderators reviewing the report, so they can respond to
+you. It is **never** disclosed to the author of the content you are reporting.
+Retention of confirmed notices is not yet implemented; they are retained
+indefinitely in the notice record itself, including after the reported content
+is deleted, alongside a reference to the moderation decision that resolved it,
+where a moderator decided it.
+[[Attorney to confirm retention period for confirmed DSA notices.]]
+
 ## 5. Retention
 
 - **Unverified accounts** are automatically deleted after [[REAPER_WINDOW]] if the
   email is never verified.
 - **Individual content you delete** (a post or comment) is removed from the live
   Service, and any images that become unreferenced as a result are
-  garbage-collected from storage.
+  garbage-collected from storage. If someone filed a DSA notice naming that
+  content, its title (for a post) or the first 120 characters (for a comment)
+  is kept in that notice's own record, as described above.
 - **An account you delete is not erased.** After a 30-day grace period (during
   which you can cancel the deletion), we anonymise it: your email, password,
   and profile details are scrubbed and your handle is released. Your posts and

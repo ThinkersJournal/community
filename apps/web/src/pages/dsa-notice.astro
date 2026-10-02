@@ -1,0 +1,185 @@
+---
+/**
+ * `POST /dsa-notice` through the Service Binding (Part of #113) — DSA Art. 16
+ * notice-and-action intake. Unauthenticated, same server-side
+ * form-post-to-self shape as forgot-password.astro: no client `fetch`, so the
+ * api stays unreachable from the browser directly.
+ *
+ * `?post=<id>` or `?comment=<id>` names the target. Carried across the POST
+ * re-render as a hidden field — same `?post=`/hidden-field shape
+ * reset-password.astro uses for its token, not relied on to survive in the
+ * query string of a form submission.
+ *
+ * ⚠️ `{ turnstile: true }`, same reason as signup.astro/forgot-password.astro:
+ * this is another anonymous form that can trigger mail to an
+ * attacker-chosen address (`reporterEmail`), so it gets the same bot-defense
+ * widget and CSP widening for its host.
+ */
+import BaseLayout from "../components/BaseLayout.astro";
+import { apiFetch, applyCookies } from "../lib/api";
+import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+
+import { REPORT_REASONS } from "@thinkersjournal/shared";
+
+// Per-viewer, like forgot-password/signup: this page's own render carries no
+// session state, but it is a same-shape anonymous form that must never be
+// cached — see src/lib/cache.ts.
+markPrivate(Astro);
+
+setPublicPageCsp(Astro, { turnstile: true });
+
+const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY as string | undefined;
+
+const postIdFromLink = Astro.url.searchParams.get("post") ?? "";
+const commentIdFromLink = Astro.url.searchParams.get("comment") ?? "";
+
+/** `null` = first visit. `"sent"` is the ONLY other success state. */
+let result: "sent" | null = null;
+let error: string | null = null;
+let postId = postIdFromLink;
+let commentId = commentIdFromLink;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  postId = String(form.get("postId") ?? "");
+  commentId = String(form.get("commentId") ?? "");
+
+  const response = await apiFetch("/dsa-notice", {
+    method: "POST",
+    body: {
+      ...(postId !== "" ? { postId } : {}),
+      ...(commentId !== "" ? { commentId } : {}),
+      reason: form.get("reason"),
+      statement: form.get("statement"),
+      reporterName: form.get("reporterName"),
+      reporterEmail: form.get("reporterEmail"),
+      goodFaith: form.get("goodFaith") === "on",
+      turnstileToken: form.get("turnstileToken"),
+    },
+    // ⚠️ The BROWSER's Origin, forwarded verbatim — same reasoning as
+    // forgot-password/login/signup: this route has no session, so
+    // `checkOrigin` is its entire CSRF defense.
+    origin: Astro.request.headers.get("Origin") ?? "",
+  });
+  applyCookies(Astro.response.headers, response.setCookies);
+
+  if (response.status === 202) {
+    result = "sent";
+  } else if (response.status === 404) {
+    // ⚠️ Every unpublic-target case (hidden/draft/deleted/nonexistent) is the
+    // SAME 404 at the api — see routes/dsa-notice.ts's header. This page must
+    // not try to distinguish them either.
+    error = "That content isn't available to report.";
+  } else if (response.status === 429) {
+    error = "Too many attempts. Please wait and try again.";
+  } else if (response.status === 403) {
+    error = "Rejected (failed bot check).";
+  } else {
+    // 400 (malformed input) is the only other realistic case.
+    error = "Something went wrong. Check the form and try again.";
+  }
+}
+---
+
+<BaseLayout title="Report illegal content" description="File a DSA notice against a post or comment on Thinker's Journal.">
+  <div class="wrap form-page">
+    <h1>Report illegal content</h1>
+
+    {
+      result === "sent" ? (
+        <p id="sent">
+          Check your email to confirm your report. Nothing happens until you do.
+        </p>
+      ) : (
+        <>
+          <p class="intro">
+            No account needed. We'll email you a link to confirm this report before
+            anyone reviews it.
+          </p>
+          {error !== null && <p id="error" role="alert">{error}</p>}
+          <form method="POST" class="form">
+            <input type="hidden" name="postId" value={postId} />
+            <input type="hidden" name="commentId" value={commentId} />
+            <label>
+              Your name
+              <input type="text" name="reporterName" required maxlength="200" />
+            </label>
+            <label>
+              Your email
+              <input type="email" name="reporterEmail" required />
+            </label>
+            <label>
+              Reason
+              <select name="reason" required>
+                {REPORT_REASONS.map((r) => (
+                  <option value={r}>{r.replace("_", " ")}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Statement
+              <textarea name="statement" required maxlength="5000" rows="6" />
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" name="goodFaith" required />
+              I believe in good faith that this information is accurate and complete
+            </label>
+            {/* Same Turnstile widget as signup.astro/forgot-password.astro — see
+                its own comment for the production-vs-dev/e2e split. */}
+            {
+              turnstileSiteKey ? (
+                <>
+                  <div
+                    class="cf-turnstile"
+                    data-sitekey={turnstileSiteKey}
+                    data-response-field-name="turnstileToken"
+                    data-error-callback="turnstileOnError"
+                    data-timeout-callback="turnstileOnTimeout"
+                  ></div>
+                  {/* Same failure-UX control as signup.astro — see
+                      src/scripts/turnstile-error.ts's header. */}
+                  <p class="turnstile-error" data-turnstile-error hidden>
+                    Verification failed.{" "}
+                    <button type="button" data-turnstile-retry class="link">Tap to retry</button>
+                  </p>
+                </>
+              ) : (
+                <input type="text" name="turnstileToken" value="dummy-token" />
+              )
+            }
+            <button type="submit" class="btn btn-primary">Submit report</button>
+          </form>
+          {
+            turnstileSiteKey && (
+              <>
+                {/* NO Subresource Integrity, deliberately — same reasoning as
+                    signup.astro's identical script tag. The integrity control
+                    is the CSP instead: script-src is allowlisted to
+                    challenges.cloudflare.com only (setPublicPageCsp's
+                    `{ turnstile: true }` policy). */}
+                <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+                <script>
+                  import { initTurnstileErrorHandling } from "../scripts/turnstile-error";
+                  initTurnstileErrorHandling();
+                </script>
+              </>
+            )
+          }
+        </>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .turnstile-error{color:var(--red, #e5484d);font-size:14px;margin-top:-4px}
+  .intro{color:var(--muted);margin:0 0 20px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .form input,.form select,.form textarea{background:var(--ink2);border:1px solid var(--line);
+    border-radius:8px;padding:11px 13px;color:var(--text);font:inherit}
+  .form input:focus-visible,.form select:focus-visible,.form textarea:focus-visible{border-color:var(--green)}
+  .checkbox-row{flex-direction:row;align-items:center;gap:8px}
+  .checkbox-row input{flex:0 0 auto}
+</style>

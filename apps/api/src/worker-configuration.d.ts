@@ -29,6 +29,11 @@ interface __BaseEnv_Env {
 	// a full `wrangler types` regeneration in this checkout pulls in an
 	// unrelated diff.
 	SEARCH_LIMITER: RateLimit;
+	// #DSA_LIMITER (spec §8, DSA notice intake, #113) — added by hand, same
+	// established pattern as SEARCH_LIMITER just above, for the same reason:
+	// a full `wrangler types` regeneration in this checkout pulls in an
+	// unrelated diff.
+	DSA_LIMITER: RateLimit;
 	IMAGES: ImagesBinding;
 	TURNSTILE_SECRET_KEY: string;
 	POSTMARK_SERVER_TOKEN: string;

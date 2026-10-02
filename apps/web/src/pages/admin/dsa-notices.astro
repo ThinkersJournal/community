@@ -1,0 +1,192 @@
+---
+/**
+ * `/admin/dsa-notices` — the DSA Art. 16 notice queue + the decision action,
+ * in one page (Part of #113). Modelled byte-for-byte on `admin/queue.astro`'s
+ * guard-first/markPrivate/CSP/decision shape — see that file's header for the
+ * full reasoning this page reuses without repeating.
+ *
+ * ⚠️⚠️ THE PROPERTY THIS FILE MUST NEVER LOSE: no notice content (a reporter's
+ * name/email, a statement, an excerpt of hidden/reported content) reaches the
+ * HTML on any request that does not carry a verified Access JWT. The guard
+ * below is therefore the FIRST statement in this file's frontmatter, before
+ * markPrivate, before the CSP, before ANY api call — see admin/queue.astro's
+ * header for why that ordering is load-bearing, not stylistic.
+ *
+ * ⚠️ THE ONLY DECISION PATH FOR A LIVE TARGET IS `/admin/decision` (PM
+ * ruling, Part of #113) — a DSA notice is queue INPUT for a human only
+ * (AC-1); resolving it goes through the SAME moderation decision the
+ * ordinary queue uses, not a separate "DSA decision" endpoint. The ONE other
+ * mutating route this page calls is `/admin/dsa-notices/:id/close`
+ * (addendum, PM ruling 2026-10-01), and ONLY for a notice whose
+ * `contentDeleted` is true — `/admin/decision` can never resolve one (it
+ * resolves by post/comment id, which are NULL on an orphaned row).
+ *
+ * ⚠️ NO GENERIC PROXY, same reasoning as admin/queue.astro: this page's own
+ * frontmatter is the only caller of the api's `/admin/*` routes for this
+ * page.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { adminApiErrorCode, adminApiFetch } from "../../lib/admin-api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+import {
+  ACCESS_JWT_HEADER,
+  ADMIN_DECISIONS,
+  LEGAL_HOLD_CATEGORIES,
+  type AdminDecisionKind,
+  type AdminDsaNoticesResponse,
+  type LegalHoldCategoryWire,
+} from "@thinkersjournal/shared";
+
+// ⚠️⚠️ THE GUARD — see this file's header. Nothing above this line does
+// anything; nothing below it may run when this returns.
+const accessJwt = Astro.request.headers.get(ACCESS_JWT_HEADER);
+if (accessJwt === null || accessJwt === "") {
+  return new Response(null, { status: 401 });
+}
+
+/** Round 2 item 5 (minor): mirrors the api's own `UUID_RE` (routes/admin.ts) —
+ * this is the ONLY validation `noticeId` gets before it is interpolated into
+ * the api path below, so an unvalidated value would become part of the
+ * request URL this page builds. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+let decisionError: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const action = form.get("action");
+
+  if (action === "close") {
+    // Addendum (PM ruling, 2026-10-01): closes an ORPHANED notice — the one
+    // path besides /admin/decision this page calls. See this file's header.
+    const noticeId = form.get("noticeId");
+    // Round 2 item 5: validate BEFORE building the path — an invalid value
+    // here would otherwise be interpolated straight into the api URL.
+    if (typeof noticeId !== "string" || !UUID_RE.test(noticeId)) {
+      decisionError = "INVALID_NOTICE_ID";
+    } else {
+      const res = await adminApiFetch(`/admin/dsa-notices/${noticeId}/close`, {
+        method: "POST",
+        accessJwt,
+        origin: Astro.request.headers.get("Origin") ?? "",
+      });
+      if (res.status !== 204) {
+        decisionError = adminApiErrorCode(res) ?? "CLOSE_FAILED";
+      }
+    }
+  } else {
+    const subject = form.get("subject");
+    const subjectId = form.get("subjectId");
+    const decision = form.get("decision");
+    const reason = form.get("reason");
+    const legalHold = form.get("legalHold") === "on";
+    const legalHoldCategory = form.get("legalHoldCategory");
+
+    const res = await adminApiFetch("/admin/decision", {
+      method: "POST",
+      accessJwt,
+      origin: Astro.request.headers.get("Origin") ?? "",
+      body: {
+        subject,
+        subjectId,
+        decision,
+        reason,
+        ...(legalHold ? { legalHold: true, legalHoldCategory } : {}),
+      },
+    });
+    if (res.status !== 200) {
+      decisionError = adminApiErrorCode(res) ?? "DECISION_FAILED";
+    }
+  }
+}
+
+const noticesResp = await adminApiFetch<AdminDsaNoticesResponse>("/admin/dsa-notices", { accessJwt });
+const notices = noticesResp.status === 200 && noticesResp.data ? noticesResp.data.notices : [];
+const noticesError =
+  noticesResp.status !== 200 ? (adminApiErrorCode(noticesResp) ?? "NOTICES_LOAD_FAILED") : null;
+---
+<BaseLayout title="DSA notices">
+  <div class="wrap admin-page">
+    <h1>DSA notices</h1>
+    <p class="admin-nav"><a class="link" href="/admin/queue">Moderation queue →</a></p>
+    <p class="hint">Deciding a post does not resolve notices filed against its comments; each target is decided separately.</p>
+    {decisionError && <p class="err">Decision failed: {decisionError}</p>}
+    {noticesError && <p class="err">Could not load the notices: {noticesError}</p>}
+    {
+      notices.length === 0 ? (
+        <p id="no-items">Nothing open.</p>
+      ) : (
+        <ul class="queue">
+          {notices.map((n) => (
+            <li class="queue-item">
+              <p class="excerpt">{n.excerpt}</p>
+              <p class="meta">
+                {n.kind} · {n.reason} · reported by {n.reporterName} ({n.reporterEmail}) ·
+                {" "}{n.createdAt}
+              </p>
+              {n.contentDeleted && (
+                <p class="orphan-flag">Content deleted by its author — there is nothing left to decide on.</p>
+              )}
+              <p class="statement">{n.statement}</p>
+              {n.contentDeleted ? (
+                <form method="POST" class="close-form">
+                  <input type="hidden" name="action" value="close" />
+                  <input type="hidden" name="noticeId" value={n.id} />
+                  <button type="submit" class="btn btn-ghost">Close (content already deleted)</button>
+                </form>
+              ) : (
+                <form method="POST" class="decision-form">
+                  <input type="hidden" name="subject" value={n.kind} />
+                  <input type="hidden" name="subjectId" value={n.targetId} />
+                  <label>
+                    Statement of reasons (shown to the author and to anyone who filed a DSA notice about this content)
+                    <textarea name="reason" required maxlength="2000" />
+                  </label>
+                  <label class="legal-hold-row">
+                    <input type="checkbox" name="legalHold" />
+                    Legal hold
+                    <select name="legalHoldCategory">
+                      {LEGAL_HOLD_CATEGORIES.map((cat: LegalHoldCategoryWire) => (
+                        <option value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <div class="decision-buttons">
+                    {ADMIN_DECISIONS.map((d: AdminDecisionKind) => (
+                      <button type="submit" name="decision" value={d} class="btn btn-ghost">
+                        {d.replace("_", " ")}
+                      </button>
+                    ))}
+                  </div>
+                </form>
+              )}
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .admin-page{padding:clamp(40px,7vw,80px) 0}
+  .admin-nav{margin:4px 0 20px}
+  .hint{color:var(--muted);font-size:14px;margin:0 0 20px}
+  .err{color:var(--red, #e5484d)}
+  .queue{list-style:none;display:flex;flex-direction:column;gap:24px;margin-top:24px}
+  .queue-item{border:1px solid var(--line);border-radius:8px;padding:16px}
+  .queue-item .excerpt{font-weight:600}
+  .queue-item .meta{color:var(--muted);font-size:13px;margin:6px 0 12px}
+  .queue-item .statement{color:var(--text);margin:0 0 12px;white-space:pre-wrap}
+  .orphan-flag{color:var(--red, #e5484d);font-size:13px;margin:0 0 12px}
+  .close-form{display:flex}
+  .decision-form{display:flex;flex-direction:column;gap:10px}
+  .decision-form textarea{width:100%;background:var(--ink2);border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;color:var(--text);font:inherit;margin-top:4px}
+  .legal-hold-row{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}
+  .decision-buttons{display:flex;gap:10px;flex-wrap:wrap}
+</style>

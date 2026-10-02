@@ -225,6 +225,14 @@
       "name": "SEARCH_LIMITER",
       "namespace_id": "1011",
       "simple": { "limit": 30, "period": 60 }
+    },
+    // DSA notice intake (spec §8) — unauthenticated, so per-IP. 5/min: a
+    // notice also costs the sender a confirmable inbox, so this only has to
+    // stop scripted floods.
+    {
+      "name": "DSA_LIMITER",
+      "namespace_id": "1012",
+      "simple": { "limit": 5, "period": 60 }
     }
   ],
   // Email outbox drains (M2.3c) — api's FIRST cron. */2 = instant pass; the daily

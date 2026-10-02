@@ -48,6 +48,8 @@ export interface DecisionResult {
   readonly postTitle: string;
   /** Canonical ids for the cache purge (purgeTagsFor). */
   readonly purge: PurgeTarget;
+  /** Every CONFIRMED, open DSA notice this ruling resolved — Task 4 emails each reporter. */
+  readonly dsaReporters: readonly { email: string; noticeId: string }[];
 }
 
 const ACTION_FOR: Readonly<Record<DecisionKind, ModerationActionKind>> = {
@@ -130,6 +132,18 @@ export async function applyDecision(
       internalNote: input.internalNote,
     });
 
+    // DSA (spec §8): a ruling on this content answers every CONFIRMED, open
+    // notice about it — in the same transaction as the ruling, so the notices
+    // can never claim a resolution the log does not contain. Unconfirmed
+    // notices are inert and stay so (they are reaped, never resolved).
+    const { rows: dsaRows } = await c.query<{ id: string; reporter_email: string }>(
+      `UPDATE dsa_notices SET resolved_at = now(), resolution_action_id = $2
+        WHERE ${input.subject === "post" ? "post_id" : "comment_id"} = $1
+          AND email_verified_at IS NOT NULL AND resolved_at IS NULL
+        RETURNING id, reporter_email`,
+      [row.id, actionId],
+    );
+
     const purge: PurgeTarget =
       input.subject === "post"
         ? { kind: "post", postId: row.id, authorId: row.author_id, tagSlugs: await loadPostTagSlugs(c, row.id) }
@@ -144,6 +158,7 @@ export async function applyDecision(
       hidden: row.hidden,
       postTitle: row.title,
       purge,
+      dsaReporters: dsaRows.map((r) => ({ email: r.reporter_email, noticeId: r.id })),
     };
   } catch (err) {
     // ⚠️ THE ROLLBACK GETS ITS OWN try/catch SO IT CANNOT REPLACE THE ROOT

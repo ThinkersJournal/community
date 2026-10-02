@@ -1,0 +1,96 @@
+---
+/**
+ * `GET /dsa-notice/confirm?token=…` (peek) + `POST /dsa-notice/confirm`
+ * (redeem) through the Service Binding (Part of #113).
+ *
+ * Same server-side form-post-to-self shape as reset-password.astro — the
+ * token travels in `?token=` (the emailed link) and is carried forward as a
+ * hidden field on the form across the POST re-render.
+ *
+ * ⚠️ UNLIKE reset-password.astro, the GET visit here is NOT a bare render —
+ * it PEEKS (`GET /dsa-notice/confirm`, a safe-to-retry read: see
+ * apps/api/src/routes/dsa-notice.ts's `handlePeekDsaToken`) so an
+ * invalid/expired/already-confirmed token shows its outcome before the
+ * reporter clicks anything, rather than only on submit. ⚠️ The GET call is
+ * NEVER a `method: "POST"` call — the only `method: "POST"` api call on this
+ * page is inside the `if (Astro.request.method === "POST")` branch, which is
+ * the actual redemption. A reporter's mail client prefetching the link, or
+ * opening it twice, must never burn the token.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { apiErrorCode, apiFetch } from "../../lib/api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+// Per-viewer, like reset-password.astro — this page's own URL carries a
+// per-request secret (the token) and its outcome is per-reporter.
+markPrivate(Astro);
+
+setPublicPageCsp(Astro);
+
+const tokenFromLink = Astro.url.searchParams.get("token") ?? "";
+
+/** Set on a GET visit only — whether the token is confirmable at all. */
+let peekValid = false;
+let confirmed = false;
+let error: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const token = String(form.get("token") ?? "");
+
+  const response = await apiFetch("/dsa-notice/confirm", {
+    method: "POST",
+    body: { token },
+    // ⚠️ The BROWSER's Origin, forwarded verbatim — same reasoning as
+    // reset-password.astro: no session exists here, so `checkOrigin` is this
+    // route's entire CSRF defense.
+    origin: Astro.request.headers.get("Origin") ?? "",
+  });
+
+  if (response.status === 200) {
+    confirmed = true;
+  } else {
+    error =
+      apiErrorCode(response) === "INVALID_TOKEN"
+        ? "This confirmation link is invalid or has expired."
+        : "Something went wrong. Please try again.";
+  }
+} else if (tokenFromLink !== "") {
+  // GET — PEEK ONLY. No consuming call on this path, ever.
+  const peek = await apiFetch<{ ok: boolean }>(
+    `/dsa-notice/confirm?token=${encodeURIComponent(tokenFromLink)}`,
+  );
+  peekValid = peek.status === 200;
+}
+---
+
+<BaseLayout title="Confirm your report" description="Confirm your DSA report on Thinker's Journal.">
+  <div class="wrap form-page">
+    <h1>Confirm your report</h1>
+
+    {
+      confirmed ? (
+        <p id="confirmed">Thanks — your report is confirmed and will be reviewed.</p>
+      ) : (
+        <>
+          {error !== null && <p id="error" role="alert">{error}</p>}
+          {
+            Astro.request.method !== "POST" && !peekValid ? (
+              <p id="invalid">This confirmation link is invalid or has expired.</p>
+            ) : (
+              <form method="POST" class="form">
+                <input type="hidden" name="token" value={tokenFromLink} />
+                <button type="submit" class="btn btn-primary">Confirm my report</button>
+              </form>
+            )
+          }
+        </>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+</style>

@@ -5,6 +5,7 @@ import { notFoundResponse } from "./http/errors";
 import { reapOrphanMedia } from "./media/reap-orphan-media";
 import { processPendingMoves } from "./media/moves";
 import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media";
+import { reapUnconfirmedDsaNotices } from "./moderation/dsa-notices";
 import { runEmailDrain } from "./notifications/email-drain";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
@@ -60,7 +61,10 @@ export default {
     ctx.waitUntil(recordDbProbe(env, ctx));
 
     if (controller.cron === "30 3 * * *") {
+      /* DSA notice intake Task 3 — the unconfirmed-notice reaper rides the
+         same daily tick as the account reaper (see src/moderation/dsa-notices.ts). */
       ctx.waitUntil(reapUnverifiedAccounts(env, ctx));
+      ctx.waitUntil(reapUnconfirmedDsaNotices(env, ctx));
       return;
     }
     if (controller.cron === "15 4 * * *") {

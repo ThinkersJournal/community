@@ -170,6 +170,7 @@ const EXPECTED_DISPATCHER_BODY =
   'import { reapOrphanMedia } from "./media/reap-orphan-media"; ' +
   'import { processPendingMoves } from "./media/moves"; ' +
   'import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media"; ' +
+  'import { reapUnconfirmedDsaNotices } from "./moderation/dsa-notices"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
@@ -191,6 +192,7 @@ const EXPECTED_DISPATCHER_BODY =
   "ctx.waitUntil(recordDbProbe(env, ctx)); " +
   'if (controller.cron === "30 3 * * *") { ' +
   "ctx.waitUntil(reapUnverifiedAccounts(env, ctx)); " +
+  "ctx.waitUntil(reapUnconfirmedDsaNotices(env, ctx)); " +
   "return; " +
   "} " +
   'if (controller.cron === "15 4 * * *") { ' +
