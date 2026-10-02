@@ -151,11 +151,19 @@ describe("⚠️ the adapter's DEFAULT-DENY stamp — the basis of 'no authed HT
   const adapterRoot = dirname(require_.resolve("@astrojs/cloudflare/package.json"));
   const handlerSource = readFileSync(join(adapterRoot, "dist/utils/handler.js"), "utf8");
   const normalized = handlerSource.replace(/\s+/g, " ");
+  // @astrojs/cloudflare 14.3.3 moved the actual stamping out of handler.js and
+  // into response.js's applyCloudflareResponseHeaders, which handler.js still
+  // calls, passing `cacheProviderEnabled` through (asserted below). Read both.
+  const responseSource = readFileSync(join(adapterRoot, "dist/utils/response.js"), "utf8");
+  const normalizedResponse = responseSource.replace(/\s+/g, " ");
 
   it("still stamps `no-store` on any response that did not opt in", () => {
-    expect(normalized).toContain(
-      'if (cacheProviderEnabled && !response.headers.has("Cloudflare-CDN-Cache-Control")) ' +
-        '{ response.headers.set("Cloudflare-CDN-Cache-Control", "no-store"); }',
+    expect(normalizedResponse).toContain(
+      'const needsNoStoreDefault = cacheProviderEnabled && ' +
+        '!response.headers.has("Cloudflare-CDN-Cache-Control");',
+    );
+    expect(normalizedResponse).toContain(
+      'if (needsNoStoreDefault) { target.headers.set("Cloudflare-CDN-Cache-Control", "no-store"); }',
     );
   });
 
