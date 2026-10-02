@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { BACKFILL_TERMINATED_HOLDS_SQL } from "../src/moderation/account-holds";
+import { BACKFILL_TERMINATED_HOLDS_SQL } from "../src/moderation/account-holds-backfill";
 
 /**
  * account_legal_holds (migration 0022, account-legal-hold spec §2/§3).

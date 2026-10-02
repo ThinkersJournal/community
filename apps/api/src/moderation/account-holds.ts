@@ -15,25 +15,18 @@ import type { LegalHoldCategory } from "../media/legal-hold";
 import { recordModerationAction } from "./actions";
 
 /**
- * The backfill statement (spec §5, AH-5): every account whose
- * `disabled_reason = 'terminate'` gets a `csam` hold, so a termination made
- * before holds existed stays undeletable. Idempotent via
- * `ON CONFLICT ... WHERE released_at IS NULL DO NOTHING`. Plain bans
- * (`disabled_reason = 'ban'`) are deliberately NOT backfilled — a ban is not
- * a legal hold (CireSnave's ruling, spec §5).
- *
- * ⚠️ Kept BYTE-IDENTICAL to the backfill statement in migration
- * 0022_account_legal_holds.sql. The schema test
- * (`test/account-legal-holds-schema.db.test.ts`) runs THIS constant directly
- * to prove the backfill's behaviour, and separately asserts the migration
- * file contains this exact string (stripped of `\r`, since the worktree is
- * CRLF under `core.autocrlf=true` while this source file is LF), so the two
- * copies can't drift apart.
+ * Re-exported from the import-free leaf module (fix round 1): this file
+ * imports `../db/client`, which uses Worker ambient types (`Hyperdrive`,
+ * `ExecutionContext`) unavailable to the Node test project
+ * (`test/tsconfig.node.json`) that `test/account-legal-holds-schema.db.test.ts`
+ * runs under. Importing the constant from HERE (rather than this file
+ * defining it) previously pulled this whole module — and `../db/client` with
+ * it — into that project's program, failing `pnpm typecheck` with TS2304.
+ * The db test now imports the constant straight from
+ * `./account-holds-backfill` instead; this re-export keeps every other
+ * caller's `from "./account-holds"` import unchanged.
  */
-export const BACKFILL_TERMINATED_HOLDS_SQL = `INSERT INTO account_legal_holds (user_id, category, imposed_by, reason)
-SELECT id, 'csam', 'system', 'backfill: terminated before account holds existed'
-  FROM users WHERE disabled_reason = 'terminate'
-ON CONFLICT (user_id, category) WHERE released_at IS NULL DO NOTHING;`;
+export { BACKFILL_TERMINATED_HOLDS_SQL } from "./account-holds-backfill";
 
 /** An alias, not a re-spelling: account and media holds share one category set. */
 export type AccountHoldCategory = LegalHoldCategory;

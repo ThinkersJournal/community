@@ -44,8 +44,14 @@ async function mkUser(): Promise<string> {
 
 async function holdsFor(userId: string) {
   return ctxRun(async (c) => {
-    const { rows } = await c.query<{ id: string; category: string; released_at: Date | null }>(
-      `SELECT id, category, released_at FROM account_legal_holds WHERE user_id = $1`,
+    const { rows } = await c.query<{
+      id: string;
+      category: string;
+      released_at: Date | null;
+      released_by: string | null;
+      release_reason: string | null;
+    }>(
+      `SELECT id, category, released_at, released_by, release_reason FROM account_legal_holds WHERE user_id = $1`,
       [userId],
     );
     return rows;
@@ -120,11 +126,81 @@ describe("imposeManualAccountHold", () => {
   });
 
   it("concurrent: two calls on two clients → exactly one created, one exists, one hold, one log row (audit #8)", async () => {
+    // Fix round 1, minor #1: deterministic concurrency, not a race hoped to
+    // land right. A third client holds `FOR UPDATE` on the user row first;
+    // both imposes are started against it, then this test POLLS
+    // `pg_blocking_pids` (every 50ms, 2s budget) until BOTH imposes are
+    // actually waiting on the holder's backend pid — proving the two really
+    // did serialize on the row lock, not just "finished in some order" —
+    // before releasing the holder and awaiting both.
+    //
+    // ⚠️ Verified against real Postgres (18) before writing this: a PLAIN
+    // `pg_blocking_pids(pid) @> ARRAY[holderPid]` never reaches 2, because
+    // Postgres's row-lock wait queue makes the SECOND waiter block on the
+    // FIRST waiter (not on the original holder) — `pg_blocking_pids` reports
+    // only the immediate blocker, not the transitive chain. The check below
+    // counts a waiter as "blocked by the holder" if the holder is its direct
+    // blocker OR its blocker's direct blocker (sufficient for exactly two
+    // waiters on one row), which is what actually happens and was confirmed
+    // against a real instance outside this suite.
     const u = await mkUser();
-    const [a, b] = await Promise.all([
+
+    let resolvePid!: (pid: number) => void;
+    const pidReady = new Promise<number>((res) => {
+      resolvePid = res;
+    });
+    let resolveRelease!: () => void;
+    const releaseGate = new Promise<void>((res) => {
+      resolveRelease = res;
+    });
+
+    const holderDone = ctxRun(async (c) => {
+      await c.query("BEGIN");
+      await c.query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE", [u]);
+      const { rows } = await c.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+      resolvePid(rows[0]!.pid);
+      await releaseGate;
+      await c.query("COMMIT");
+    });
+
+    const holderPid = await pidReady;
+
+    const imposesDone = Promise.all([
       ctxRun((c) => imposeManualAccountHold(c, { userId: u, subjectLabel: "h", category: "other", imposedBy: "mod1@example.com", reason: "r1" })),
       ctxRun((c) => imposeManualAccountHold(c, { userId: u, subjectLabel: "h", category: "other", imposedBy: "mod2@example.com", reason: "r2" })),
     ]);
+
+    const bothWaiting = await ctxRun(async (c) => {
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        const { rows } = await c.query<{ n: string }>(
+          `SELECT count(*) AS n
+             FROM pg_stat_activity w
+            WHERE w.wait_event_type = 'Lock'
+              AND (
+                $1 = ANY(pg_blocking_pids(w.pid))
+                OR EXISTS (
+                  SELECT 1 FROM unnest(pg_blocking_pids(w.pid)) AS bp(pid)
+                  WHERE $1 = ANY(pg_blocking_pids(bp.pid))
+                )
+              )`,
+          [holderPid],
+        );
+        if (Number(rows[0]!.n) >= 2) return true;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return false;
+    });
+    if (!bothWaiting) {
+      resolveRelease();
+      await holderDone;
+      await imposesDone;
+      throw new Error(`timed out after 2s waiting for both imposes to block on holder pid ${holderPid}`);
+    }
+
+    resolveRelease();
+    await holderDone;
+    const [a, b] = await imposesDone;
     const kinds = [a.kind, b.kind].sort();
     expect(kinds).toEqual(["created", "exists"]);
 
@@ -182,6 +258,11 @@ describe("releaseAccountHold", () => {
     expect(out.kind).toBe("released");
     const actions = await actionsFor(u);
     expect(actions.map((a) => a.action)).toContain("account_hold_release");
+
+    const row = (await holdsFor(u)).find((r) => r.id === holdId)!;
+    expect(row.released_at).not.toBeNull();
+    expect(row.released_by).toBe("mod2@example.com");
+    expect(row.release_reason).toBe("resolved");
   });
 
   it("RF4: release by the imposer in different case → same_admin, with no change and no log row", async () => {
@@ -198,13 +279,20 @@ describe("releaseAccountHold", () => {
     expect(actions.map((a) => a.action)).not.toContain("account_hold_release");
   });
 
-  it("a csam hold → csam", async () => {
+  it("a csam hold → csam, with no account_hold_release log row and the hold unchanged", async () => {
     const u = await mkUser();
     const holdId = await imposeOne(u, "csam", "mod1@example.com");
     const out = await ctxRun((c) =>
       releaseAccountHold(c, { holdId, userId: u, releasedBy: "mod2@example.com", reason: "r", subjectLabel: "h" }),
     );
     expect(out.kind).toBe("csam");
+
+    const actions = await actionsFor(u);
+    expect(actions.map((a) => a.action)).not.toContain("account_hold_release");
+    const row = (await holdsFor(u)).find((r) => r.id === holdId)!;
+    expect(row.released_at).toBeNull();
+    expect(row.released_by).toBeNull();
+    expect(row.release_reason).toBeNull();
   });
 
   it("an unknown id → not_found", async () => {
@@ -227,7 +315,7 @@ describe("releaseAccountHold", () => {
     expect(rows[0]!.released_at).toBeNull();
   });
 
-  it("a second release → already_released", async () => {
+  it("a second release → already_released, with no second account_hold_release log row and the hold unchanged", async () => {
     const u = await mkUser();
     const holdId = await imposeOne(u, "dmca", "mod1@example.com");
     const first = await ctxRun((c) =>
@@ -238,6 +326,12 @@ describe("releaseAccountHold", () => {
       releaseAccountHold(c, { holdId, userId: u, releasedBy: "mod3@example.com", reason: "r2", subjectLabel: "h" }),
     );
     expect(second.kind).toBe("already_released");
+
+    const actions = await actionsFor(u);
+    expect(actions.map((a) => a.action).filter((a) => a === "account_hold_release")).toHaveLength(1);
+    const row = (await holdsFor(u)).find((r) => r.id === holdId)!;
+    expect(row.released_by).toBe("mod2@example.com");
+    expect(row.release_reason).toBe("r");
   });
 });
 

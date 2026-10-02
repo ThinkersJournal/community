@@ -3,45 +3,48 @@ import { z } from 'zod';
 import { USERNAME_PATTERN } from './social';
 
 /**
- * An email address, NORMALIZED TO LOWERCASE.
+ * THE email normaliser — lowercases its input. `NormalizedEmail` below
+ * applies it to produce an email address NORMALIZED TO LOWERCASE, and the
+ * reserved-email hash (apps/api/src/auth/reserved-email.ts, account-legal-hold
+ * spec §4a) hashes its output too. One function, so the two can never
+ * disagree about which addresses are "the same". Identical to the zod 4.6.5
+ * `toLowerCase()` it replaces in `NormalizedEmail`, which is
+ * `_overwrite((input) => input.toLowerCase())`.
  *
- * ⚠️ THE `.toLowerCase()` IS A SECURITY CONTROL, not cosmetics. `users.email`
- * is `citext`, so `WHERE email = $1` matches case-INsensitively — but the
- * auth routes build their rate-limiter keys out of the PARSED email
+ * ⚠️ THIS CALL IS A SECURITY CONTROL, not cosmetics. `users.email` is
+ * `citext`, so `WHERE email = $1` matches case-INsensitively — but the auth
+ * routes build their rate-limiter keys out of the PARSED email
  * (`${ip}:${email}` AND `email:${email}` — see src/routes/login.ts and
- * src/routes/signup.ts in apps/api). Without normalization those disagree with
- * the lookup: `victim@example.com` and `Victim@example.com` resolve to the SAME
- * user row but DIFFERENT limiter buckets, so an attacker case-rotates the
- * address (~2^16 variants for a typical address) and harvests 10 attempts PER
- * VARIANT — turning LOGIN_LIMITER's 10/60s ceiling into ~650k/60s against one
- * account and nullifying the only brute-force defense on the route. Note this
- * bypass defeats BOTH buckets at once: they are both keyed on this value, so
- * the email-only ceiling is no more immune to case-rotation than the per-IP one.
+ * src/routes/signup.ts in apps/api). Without `normalizeEmail` those disagree
+ * with the lookup: `victim@example.com` and `Victim@example.com` resolve to
+ * the SAME user row but DIFFERENT limiter buckets, so an attacker
+ * case-rotates the address (~2^16 variants for a typical address) and
+ * harvests 10 attempts PER VARIANT — turning LOGIN_LIMITER's 10/60s ceiling
+ * into ~650k/60s against one account and nullifying the only brute-force
+ * defense on the route. Note this bypass defeats BOTH buckets at once: they
+ * are both keyed on this value, so the email-only ceiling is no more immune
+ * to case-rotation than the per-IP one.
  *
- * Normalizing HERE (at the schema) rather than at each call site is what makes
- * the key and the citext lookup agree BY CONSTRUCTION for every current and
- * future consumer — a route that forgets to lowercase cannot reintroduce the
- * bypass, because the parsed value is already canonical. It also canonicalizes
- * what signup STORES, which is consistent with the citext column choice.
+ * Applying it HERE (at the schema, via `NormalizedEmail`) rather than at each
+ * call site is what makes the key and the citext lookup agree BY
+ * CONSTRUCTION for every current and future consumer — a route that forgets
+ * to call it cannot reintroduce the bypass, because the parsed value is
+ * already canonical. It also canonicalizes what signup STORES, which is
+ * consistent with the citext column choice.
+ */
+export function normalizeEmail(email: string): string {
+  return email.toLowerCase();
+}
+
+/**
+ * An email address, NORMALIZED TO LOWERCASE via `normalizeEmail` (see its doc
+ * comment above for why that call is a security control, not cosmetics).
  *
  * Order is deliberate: `z.email()` validates first (its check is
  * case-insensitive, so nothing valid is rejected), then the value is
  * lowercased via `.overwrite(normalizeEmail)`. Verified against the installed
  * zod 4.6.5.
  */
-
-/**
- * THE email normaliser. `NormalizedEmail` applies it (so signup, login and
- * forgot-password all store and look up its output), and the reserved-email
- * hash (apps/api/src/auth/reserved-email.ts, account-legal-hold spec §4a)
- * hashes its output. One function, so the two can never disagree about which
- * addresses are "the same". Identical to the zod 4.6.5 `toLowerCase()` it
- * replaces, which is `_overwrite((input) => input.toLowerCase())`.
- */
-export function normalizeEmail(email: string): string {
-  return email.toLowerCase();
-}
-
 const NormalizedEmail = z.email().overwrite(normalizeEmail);
 
 export const SignupInput = z.object({

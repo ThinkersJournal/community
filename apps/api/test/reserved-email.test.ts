@@ -44,28 +44,34 @@ describe("reservedEmailSha256", () => {
     expect(a).toBe(b);
     expect(a).toMatch(/^[0-9a-f]{64}$/);
 
-    // Known sha256("ada@example.com") hex digest, computed independently.
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("ada@example.com"));
-    const expected = Array.from(new Uint8Array(digest)).map((n) => n.toString(16).padStart(2, "0")).join("");
-    expect(a).toBe(expected);
+    // Literal expected digest for "ada@example.com", computed independently
+    // (fix round 1, minor #2) with TWO external tools, outside this test:
+    //   printf '%s' "ada@example.com" | sha256sum
+    //   printf '%s' "ada@example.com" | openssl dgst -sha256
+    // Both: b5fc85e55755f9e0d030a10ab4429b6b2944855f9a0d60077fe832becbc41d72
+    expect(a).toBe("b5fc85e55755f9e0d030a10ab4429b6b2944855f9a0d60077fe832becbc41d72");
   });
 });
 
 describe("isEmailReserved", () => {
   it("is true for an anonymised row holding that hash, and false for a different address (control)", async () => {
-    const hash = await reservedEmailSha256("reserved-target@holds.test");
+    // Random local part per run (fix round 1, minor #5): avoids any collision
+    // with another lane's concurrent run against the shared test DB.
+    const target = `reserved-target-${crypto.randomUUID()}@holds.test`;
+    const other = `nobody-reserved-this-${crypto.randomUUID()}@holds.test`;
+    const hash = await reservedEmailSha256(target);
     await mkAnonymisedUser({ reservedHash: hash });
 
-    expect(await ctxRun((c) => isEmailReserved(c, "reserved-target@holds.test"))).toBe(true);
-    expect(await ctxRun((c) => isEmailReserved(c, "Reserved-Target@Holds.TEST"))).toBe(true);
+    expect(await ctxRun((c) => isEmailReserved(c, target))).toBe(true);
+    expect(await ctxRun((c) => isEmailReserved(c, target.toUpperCase()))).toBe(true);
     // Control: a different address, never reserved, is false.
-    expect(await ctxRun((c) => isEmailReserved(c, "nobody-reserved-this@holds.test"))).toBe(false);
+    expect(await ctxRun((c) => isEmailReserved(c, other))).toBe(false);
   });
 });
 
 describe("releaseReservedEmail", () => {
   it("an anonymised, no longer banned row → hash NULL, true", async () => {
-    const hash = await reservedEmailSha256("release-me@holds.test");
+    const hash = await reservedEmailSha256(`release-me-${crypto.randomUUID()}@holds.test`);
     const u = await mkAnonymisedUser({ disabledAt: false, reservedHash: hash });
 
     const result = await ctxRun((c) => releaseReservedEmail(c, u));
@@ -78,7 +84,7 @@ describe("releaseReservedEmail", () => {
   });
 
   it("an anonymised row still banned → unchanged, false", async () => {
-    const hash = await reservedEmailSha256("still-banned@holds.test");
+    const hash = await reservedEmailSha256(`still-banned-${crypto.randomUUID()}@holds.test`);
     const u = await mkAnonymisedUser({ disabledAt: true, reservedHash: hash });
 
     const result = await ctxRun((c) => releaseReservedEmail(c, u));
