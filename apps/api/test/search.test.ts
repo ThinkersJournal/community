@@ -8,6 +8,8 @@ import {
 import worker from "../src";
 import { withClient } from "../src/db/client";
 
+import { withWindowRolloverRetry } from "./helpers/window-rollover-retry";
+
 const created: string[] = [];
 afterAll(async () => {
   const ctx = createExecutionContext();
@@ -316,7 +318,7 @@ describe("GET /public/search", () => {
   });
 
   /**
-   * ⚠️ WINDOW-ROLLOVER GUARD (fix round 1, item 4). Miniflare's `RateLimit`
+   * ⚠️ WINDOW-ROLLOVER GUARD (fix rounds 1 and 2). Miniflare's `RateLimit`
    * binding is a FIXED wall-clock window — `epoch = floor(now / 60000)`, not
    * a sliding window counted from a burst's own first request. A burst that
    * straddles a minute boundary can reset mid-burst and never trip 429 at
@@ -326,21 +328,12 @@ describe("GET /public/search", () => {
    *   - a UNIQUE key per invocation (`crypto.randomUUID()`), so a retried
    *     attempt never inherits a partial count left over from the one it's
    *     retrying;
-   *   - read the epoch before and after the whole case and retry ONCE if it
-   *     rolled over mid-burst.
+   *   - `withWindowRolloverRetry` (./helpers/window-rollover-retry.ts) reads
+   *     the epoch before and after the whole case and retries ONCE if it
+   *     rolled over mid-burst — including when the roll-over made the burst's
+   *     OWN assertion throw (round 1's version only retried on success; see
+   *     that file's header for the CI failure that found the gap).
    */
-  function minuteEpoch(): number {
-    return Math.floor(Date.now() / 60000);
-  }
-
-  async function withWindowRolloverRetry(attempt: () => Promise<void>): Promise<void> {
-    const before = minuteEpoch();
-    await attempt();
-    if (minuteEpoch() !== before) {
-      await attempt();
-    }
-  }
-
   async function searchWithIp(ip: string): Promise<Response> {
     const ctx = createExecutionContext();
     const response = await worker.fetch(
