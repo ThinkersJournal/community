@@ -91,7 +91,12 @@ where a moderator decided it.
   email is never verified.
 - **Individual content you delete** (a post or comment) is removed from the live
   Service, and any images that become unreferenced as a result are
-  garbage-collected from storage. If someone filed a DSA notice naming that
+  garbage-collected from storage. **Exception:** if our moderators had hidden or
+  removed that content when you deleted it, we keep a private copy of it (and
+  the images it contains) for legal purposes, such as appeals and legal
+  obligations, for at least one year, and until we are advised it may be
+  deleted. It is not shown to anyone on the Service.
+  If someone filed a DSA notice naming that
   content, its title (for a post) or the first 120 characters (for a comment)
   is kept in that notice's own record, as described above.
 - **An account you delete is not erased.** After a 30-day grace period (during

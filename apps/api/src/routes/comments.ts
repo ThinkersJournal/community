@@ -270,13 +270,32 @@ export async function handleDeleteComment(
     // TOMBSTONE, never DELETE: children keep their parent row; the body is
     // genuinely emptied (privacy). Ownership predicate = comment author OR
     // post author (spec decision 7), atomic in the WHERE.
+    //
+    // ⚠️ #58 Q1: a HIDDEN comment's body is copied into moderation_snapshots
+    // by the SAME statement that blanks it, so the copy and the tombstone
+    // commit together or not at all. `hidden_at` on a comment is only ever
+    // moderation's (no author self-hide for comments), and #58's edit freeze is
+    // why the body copied now is the version that was hidden. `author_id` is
+    // the COMMENTER even when the post's author is the one deleting. `t` locks
+    // the row and reads the body BEFORE the UPDATE blanks it — every CTE sees
+    // the same pre-statement snapshot.
     const { rows } = await c.query<{ postId: string }>(
-      `UPDATE comments c
+      `WITH t AS (
+         SELECT c.id, c.author_id, c.body_markdown, c.hidden_at
+           FROM comments c JOIN posts p ON p.id = c.post_id
+          WHERE c.id = $1
+            AND c.deleted_at IS NULL
+            AND (c.author_id = $2 OR p.author_id = $2)
+            FOR UPDATE OF c
+       ),
+       snapshot AS (
+         INSERT INTO moderation_snapshots (comment_id, author_id, body_markdown)
+         SELECT t.id, t.author_id, t.body_markdown FROM t WHERE t.hidden_at IS NOT NULL
+       )
+       UPDATE comments c
           SET deleted_at = now(), body_markdown = ''
-         FROM posts p
-        WHERE c.id = $1 AND p.id = c.post_id
-          AND c.deleted_at IS NULL
-          AND (c.author_id = $2 OR p.author_id = $2)
+         FROM t
+        WHERE c.id = t.id
        RETURNING c.post_id AS "postId"`,
       [id, userId],
     );
