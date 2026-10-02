@@ -272,3 +272,47 @@ describe("#50 — the refusal's shape", () => {
     expect(((await res.json()) as { code: string }).code).toBe("EMAIL_NOT_VERIFIED");
   });
 });
+
+/**
+ * RF9 (account-legal-hold spec §4, re-audit B1b) — step 5a. The anonymise
+ * reaper bumps each row's epoch before and after its scrub, which step 4 then
+ * catches. Step 5a is the backstop for a MISSED bump: a session whose user has
+ * `anonymised_at` set is unauthenticated, the same 401 and cleared cookie as a
+ * revocation — deliberately not ACCOUNT_BARRED.
+ *
+ * `anonymised_at` is set directly in SQL (no reaper, hence no epoch bump), so
+ * only step 5a can refuse the session. The CONTROL is the same session on the
+ * same route BEFORE the UPDATE, so "refused" can't be "refused for some other
+ * reason".
+ */
+async function setAnonymised(userId: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    c.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [userId]),
+  );
+  await waitOnExecutionContext(ctx);
+}
+
+describe("RF9 — every pipeline route refuses a session whose user has been anonymised (step 5a)", () => {
+  it.each(CASES)("%s — 401 with a cleared cookie, not ACCOUNT_BARRED (CONTROL: passes before the UPDATE)", async (_name, route) => {
+    const userId = await insertUser("ordinary");
+
+    // CONTROL: a session for this user passes the pipeline on this route before
+    // the account is anonymised. A fresh session, minted the same way, is used
+    // below, because the control request may itself end its session (logout)
+    // or bump the epoch (logout-all).
+    await expectNotRefused(await fetchWorker(authedRequest(route, await authenticate(userId))));
+
+    const authed = await authenticate(userId);
+    const epoch = await env.USER_SECURITY.getByName(userId).getEpoch();
+    await setAnonymised(userId);
+    const res = await fetchWorker(authedRequest(route, authed));
+
+    expect(res.status).toBe(401);
+    expect(await res.text()).not.toContain("ACCOUNT_BARRED");
+    expect(res.headers.get("Set-Cookie") ?? "").toMatch(/Max-Age=0/);
+    expect(await sessionLive(authed.token)).toBe(false);
+    // No epoch bump happened: step 4 did not refuse it, step 5a did.
+    expect(await env.USER_SECURITY.getByName(userId).getEpoch()).toBe(epoch);
+  });
+});

@@ -13,6 +13,16 @@
  * Run daily by src/index.ts's `scheduled` on cron `"30 3 * * *"` — its own
  * branch, BEFORE the email-drain dispatch (every other cron pattern there is
  * the drain; this one is not).
+ *
+ * ⚠️ AN ACTIVE ACCOUNT LEGAL HOLD IS THE ONLY THING THAT SPARES A STALE
+ * UNVERIFIED ACCOUNT (account-legal-hold spec §0/§4; AC-3 as reworded there:
+ * "A legally held unverified account survives `reapUnverifiedAccounts`").
+ * CireSnave ruled that a legal hold, not a suspension, blocks deletion, and the
+ * PM applied the same principle to this reaper. `disabled_at`/`suspended_until`
+ * are access control only, so a banned or suspended unverified account with no
+ * hold is deleted like any other (spec §4a accepts that for an account that
+ * never verified, and so could never post). It deletes in ONE statement, so it
+ * needs no row lock: a deleted row has no hash and no profile left to scrub.
  */
 import { withClient } from "../db/client";
 
@@ -42,18 +52,19 @@ export async function reapUnverifiedAccounts(
   ctx: ExecutionContext,
 ): Promise<number> {
   const n = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    // ⚠️ A BARRED ACCOUNT IS NEVER REAPED, even unverified and stale. A ban
-    // whose subject was never verified would otherwise be deleted after 7
-    // days -- taking the user AND THE EVIDENCE with it. See issue #35 and
-    // AC-3; test/reap-unverified.test.ts pins it against this function.
+    // ⚠️ A HELD ACCOUNT IS NEVER REAPED, even unverified and stale: deleting
+    // it would take the user AND THE EVIDENCE the hold preserves. A ban or
+    // suspension alone does not spare it (see the file header). AC-3 (as
+    // reworded by the account-legal-hold spec); test/reap-unverified.test.ts
+    // pins it against this function.
     const { rowCount } = await c.query(
       `DELETE FROM users
         WHERE id IN (
           SELECT id FROM users
            WHERE email_verified_at IS NULL
              AND created_at < now() - interval '7 days'
-             AND disabled_at IS NULL
-             AND suspended_until IS NULL
+             AND NOT EXISTS (SELECT 1 FROM account_legal_holds h
+                              WHERE h.user_id = users.id AND h.released_at IS NULL)
            ORDER BY created_at
            LIMIT $1
         )`,

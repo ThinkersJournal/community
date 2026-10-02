@@ -2,6 +2,7 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
+import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { createResetToken } from "../src/auth/password-reset";
 import { withClient } from "../src/db/client";
 import { createVerifiedActor, deleteCreatedUsers } from "./actor";
@@ -273,5 +274,57 @@ describe("GET /__test/last-reset-token", () => {
     await waitOnExecutionContext(ctx);
 
     expect(await env.SESSIONS.get("__test:last-reset-token")).toBeNull();
+  });
+});
+
+async function sql<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
+  const ctx = createExecutionContext();
+  const rows = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => (await c.query(text, params)).rows as T[]);
+  await waitOnExecutionContext(ctx);
+  return rows;
+}
+
+/**
+ * AH-7, structural (account-legal-hold spec §4a, PM ruling B). A deleted,
+ * banned account's real address is no longer on its row, and forgot-password
+ * reads only `users.email`, so it needs no guard of its own: it finds nothing
+ * and mails nothing. The reaper reads the SHARED DB and other files run it in
+ * parallel, so the fixture gets a unique far-past `deletion_requested_at` and
+ * only its end state is asserted.
+ */
+describe("AH-7 — forgot-password for a deleted, banned account's original address", () => {
+  it("202 with NO Postmark call and no reset token once the reaper has anonymised it (CONTROL: 1 call before)", async () => {
+    const actor = await createVerifiedActor();
+    const email = (await lookupEmail(actor.userId))!;
+    await sql(
+      `UPDATE users
+          SET disabled_at = now(), disabled_reason = 'ban',
+              deletion_requested_at = timestamptz '2000-01-01' + (random() * interval '1000 days')
+        WHERE id = $1`,
+      [actor.userId],
+    );
+
+    // CONTROL, before the reaper: the same request reaches the account and mails it.
+    const before = stubFetch(true);
+    expect((await forgotPassword(validBody(email))).status).toBe(202);
+    expect(before).toHaveLength(1);
+    vi.unstubAllGlobals();
+
+    const ctx = createExecutionContext();
+    await anonymiseExpiredAccounts(env, ctx);
+    await waitOnExecutionContext(ctx);
+    const [row] = await sql<{ anonymised_at: Date | null }>("SELECT anonymised_at FROM users WHERE id = $1", [
+      actor.userId,
+    ]);
+    expect(row!.anonymised_at, "precondition: the reaper did not anonymise the fixture").not.toBeNull();
+
+    const after = stubFetch(true);
+    const response = await forgotPassword(validBody(email));
+
+    expect(response.status).toBe(202);
+    expect(after).toHaveLength(0);
+    expect(
+      await sql("SELECT 1 FROM password_reset_tokens WHERE user_id = $1", [actor.userId]),
+    ).toEqual([]);
   });
 });

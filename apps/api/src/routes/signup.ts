@@ -50,6 +50,7 @@ import {
 import { base64urlEncode } from "../auth/encoding";
 import { hashPassword } from "../auth/password";
 import { enforceRateLimit } from "../auth/ratelimit";
+import { isEmailReserved } from "../auth/reserved-email";
 import { isReservedUsername } from "../auth/reserved-usernames";
 import { createSession } from "../auth/session";
 import { verifyTurnstile } from "../auth/turnstile";
@@ -282,6 +283,20 @@ export async function handleSignup(
           return null;
         }
 
+        // ⚠️ A DELETED, BANNED ACCOUNT RESERVES ITS ADDRESS BY HASH (account-legal-hold
+        // spec §4a, PM ruling B). Its `users.email` is the undeliverable sentinel,
+        // so the upsert above found no conflict; this refuses it the same way the
+        // barred-row WHERE does: ROLLBACK, null, the same 409 EMAIL_TAKEN.
+        // ⚠️ AFTER the upsert, not before: until the reaper's scrub commits, its
+        // row still holds this email and the upsert conflicts with it (barred:
+        // 0 rows). Once the upsert succeeds without that conflict, the scrub has
+        // committed, and this later statement's snapshot sees its hash. A check
+        // run BEFORE the upsert could miss a scrub that commits between the two.
+        if (await isEmailReserved(c, email)) {
+          await c.query("ROLLBACK");
+          return null;
+        }
+
         // ---- Epoch bump — RE-SIGNUP ONLY, and BEFORE THE COMMIT ---------------
         // ⚠️ LOAD-BEARING SECURITY STEP, and half of the account-takeover fix
         // documented at the top of src/routes/verify-email.ts. Taking over an
@@ -367,7 +382,7 @@ export async function handleSignup(
     throw err;
   }
 
-  // Zero rows came back: a VERIFIED or BARRED account owns this address (see the guard).
+  // A VERIFIED or BARRED account owns this address, or a deleted banned account reserves it.
   if (upserted === null) {
     return errorResponse("EMAIL_TAKEN", 409);
   }

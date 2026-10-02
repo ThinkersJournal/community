@@ -20,11 +20,12 @@ import { withClient } from "../src/db/client";
  * binding, same shape as test/email-drain.test.ts.
  *
  * ⚠️ ONE RESIDUE CLASS THE REAPER ITSELF CANNOT CLEAN UP: the AC-3 describe
- * block below seeds fixtures that are barred by construction, so if its
- * `afterEach` ever fails to run (timeout, hard kill) those rows persist in
- * the shared test database and — unlike every other fixture in this file —
- * the reaper will never delete them either. A stale `reap...@example.com`
- * row with `disabled_at`/`suspended_until` set came from here.
+ * block below seeds fixtures that are HELD by construction (an
+ * `account_legal_holds` row), so if its `afterEach` ever fails to run
+ * (timeout, hard kill) those rows persist in the shared test database and —
+ * unlike every other fixture in this file — the reaper will never delete
+ * them either. A stale `reap...@example.com` row with an active hold came
+ * from here.
  */
 
 const ALLOWED_ORIGIN = "http://localhost:8787";
@@ -126,55 +127,78 @@ describe("reapUnverifiedAccounts", () => {
 });
 
 /**
- * ⚠️ AC-3 (issue #35, design §12). A barred account that never verified its
- * email is unverified AND stale, so the reaper's ordinary predicate matches it
- * exactly. Deleting it takes the user AND THE EVIDENCE -- the record an appeal,
- * a DSA statement of reasons, or a preservation obligation is about.
+ * ⚠️ AC-3, REWORDED FOR THE ACCOUNT LEGAL HOLD (account-legal-hold spec §0/§4):
+ * "A legally held unverified account survives `reapUnverifiedAccounts`." A
+ * held, unverified, stale account matches the reaper's ordinary predicate
+ * exactly, and deleting it takes the user AND THE EVIDENCE a hold protects.
+ * A ban or suspension alone is access control, not a hold (CireSnave; the PM
+ * applied the same principle to this reaper), so a banned or suspended
+ * account with NO hold IS reaped (AH-2).
  *
- * All three fixtures are reaped in ONE invocation, so the control is not a
- * separate run that could differ: if the reaper had simply stopped working,
- * the third assertion fails and the two guards prove nothing.
+ * Every fixture of a case is reaped in ONE invocation, so the control is not a
+ * separate run that could differ.
+ *
+ * Holds are inserted directly; `account_legal_holds` rows can't be deleted
+ * (its trigger refuses), and `user_id` is bare, so a deleted user leaves its
+ * hold rows behind by design. Fresh random ids keep them from colliding.
  */
-describe("reapUnverifiedAccounts — a barred account is never reaped (AC-3)", () => {
-  it("spares disabled and suspended accounts while still reaping an ordinary one", async () => {
-    const disabled = await seed({ verified: false, ageDays: 30, disabledAt: new Date() });
+async function imposeHold(userId: string, category: "csam" | "dmca" | "other"): Promise<void> {
+  await ctxRun((c) =>
+    c.query(
+      `INSERT INTO account_legal_holds (user_id, category, imposed_by, reason)
+       VALUES ($1, $2, 'system', 'reap-unverified.test')`,
+      [userId, category],
+    ),
+  );
+}
+
+describe("reapUnverifiedAccounts — a held account is never reaped; a ban alone does not protect (AC-3 reworded)", () => {
+  it("AH-2: unverified, 8-day-old banned, suspended and lapsed-suspended accounts with no hold ARE deleted", async () => {
+    const banned = await seed({ verified: false, ageDays: 8, disabledAt: new Date() });
     const suspended = await seed({
       verified: false,
-      ageDays: 30,
+      ageDays: 8,
       suspendedUntil: new Date(Date.now() + 864e5),
     });
     const lapsed = await seed({
       verified: false,
-      ageDays: 30,
-      suspendedUntil: new Date(Date.now() - 864e5), // suspension ALREADY EXPIRED
+      ageDays: 8,
+      suspendedUntil: new Date(Date.now() - 864e5),
     });
-    const ordinary = await seed({ verified: false, ageDays: 30 });
 
     const ctx = createExecutionContext();
     await reapUnverifiedAccounts(env, ctx);
     await waitOnExecutionContext(ctx);
 
-    expect(
-      await present(disabled.id),
-      "a disabled account was deleted by the reaper — the ban and its evidence are gone",
-    ).toBe(true);
-    expect(
-      await present(suspended.id),
-      "a suspended account was deleted by the reaper — the ban and its evidence are gone",
-    ).toBe(true);
-    // ⚠️ A LAPSED suspension still protects the row. This is the fixture that
-    // discriminates: a guard wrongly unified with Task 2's `isBarred`
-    // (`suspended_until < now()`) would reap this one and spare the others.
-    expect(
-      await present(lapsed.id),
-      "an expired suspension stopped protecting the row — the guard was unified with isBarred, which is Task 2's question, not the reaper's",
-    ).toBe(true);
+    expect(await present(banned.id), "a banned, unheld account survived — a ban alone still gates deletion").toBe(false);
+    expect(await present(suspended.id), "a suspended, unheld account survived").toBe(false);
+    expect(await present(lapsed.id), "a lapsed-suspended, unheld account survived").toBe(false);
+  });
+
+  it("AH-1: unverified, 8-day-old held accounts survive, banned or not, while an unheld one in the same run is deleted", async () => {
+    // Held but neither banned nor suspended: proves the hold ALONE protects it.
+    const heldPlain = await seed({ verified: false, ageDays: 8 });
+    const heldBanned = await seed({ verified: false, ageDays: 8, disabledAt: new Date() });
+    const heldSuspended = await seed({
+      verified: false,
+      ageDays: 8,
+      suspendedUntil: new Date(Date.now() + 864e5),
+    });
+    const control = await seed({ verified: false, ageDays: 8 });
+    await imposeHold(heldPlain.id, "dmca");
+    await imposeHold(heldBanned.id, "csam");
+    await imposeHold(heldSuspended.id, "other");
+
+    const ctx = createExecutionContext();
+    await reapUnverifiedAccounts(env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(await present(heldPlain.id), "a held account was deleted — the hold and its evidence are gone").toBe(true);
+    expect(await present(heldBanned.id), "a held, banned account was deleted").toBe(true);
+    expect(await present(heldSuspended.id), "a held, suspended account was deleted").toBe(true);
     // CONTROL, in the same reap: without it, "survived" is indistinguishable
     // from "the reaper deleted nothing at all".
-    expect(
-      await present(ordinary.id),
-      "the reaper deleted nothing — the two guards above prove nothing",
-    ).toBe(false);
+    expect(await present(control.id), "the reaper deleted nothing — the guards above prove nothing").toBe(false);
   });
 });
 

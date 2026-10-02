@@ -2,8 +2,10 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
+import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { verifyPassword } from "../src/auth/password";
 import { createResetToken } from "../src/auth/password-reset";
+import { releaseReservedEmail } from "../src/auth/reserved-email";
 import { withClient } from "../src/db/client";
 
 /**
@@ -204,4 +206,116 @@ describe("#50 — re-signup cannot touch a barred UNVERIFIED account", () => {
       expect(after.username).not.toBe(before.username);
     },
   );
+});
+
+// ---- POST /auth/signup — a deleted, banned account's address stays reserved -----
+
+/**
+ * AH-7 (account-legal-hold spec §4a, PM ruling B). A banned account deleted by
+ * the anonymise reaper loses its real email like any other, so the upsert's
+ * barred-row WHERE (unchanged, AH-6) no longer sees it. What refuses the
+ * address now is the hash the reaper stored, checked after the upsert, with the
+ * SAME 409 EMAIL_TAKEN as the barred case above.
+ *
+ * ⚠️ Each case first asserts the reaper really scrubbed the fixture. Otherwise
+ * the row would still hold the address, the barred-row guard would answer the
+ * 409, and the case would prove nothing about the hash.
+ *
+ * The reaper reads the SHARED test DB and other files run it in parallel, so
+ * fixtures get a unique far-past `deletion_requested_at` (it sorts them into
+ * every run's batch) and only their end state is asserted.
+ */
+async function seedDeleted(banned: boolean): Promise<Seeded> {
+  const user = await seedUser(banned ? "disabled" : "ordinary", true);
+  await query(
+    `UPDATE users
+        SET deletion_requested_at = timestamptz '2000-01-01' + (random() * interval '1000 days'),
+            disabled_reason = CASE WHEN disabled_at IS NULL THEN NULL ELSE 'ban' END
+      WHERE id = $1`,
+    [user.userId],
+  );
+  const ctx = createExecutionContext();
+  await anonymiseExpiredAccounts(env, ctx);
+  await waitOnExecutionContext(ctx);
+
+  const [row] = await query<{ email: string; anonymised_at: Date | null }>(
+    "SELECT email, anonymised_at FROM users WHERE id = $1",
+    [user.userId],
+  );
+  expect(row!.anonymised_at, "precondition: the reaper did not anonymise the fixture").not.toBeNull();
+  expect(row!.email).toBe(`deleted-${user.userId}@invalid.thinkersjournal.local`);
+  return user;
+}
+
+/** Track a row a successful re-signup created, for `afterEach`. */
+async function trackSignup(email: string): Promise<void> {
+  const rows = await query<{ id: string }>("SELECT id FROM users WHERE email = $1", [email]);
+  expect(rows).toHaveLength(1);
+  createdUserIds.push(rows[0]!.id);
+}
+
+async function expectEmailTaken(res: Response, email: string): Promise<void> {
+  // A wrongly accepted signup created a row: track it so a failure leaves no residue.
+  if (res.status === 201) {
+    for (const r of await query<{ id: string }>("SELECT id FROM users WHERE email = $1", [email])) {
+      createdUserIds.push(r.id);
+    }
+  }
+  expect(res.status).toBe(409);
+  expect(((await res.json()) as { code: string }).code).toBe("EMAIL_TAKEN");
+  expect(res.headers.get("Set-Cookie")).toBeNull();
+  expect(await query("SELECT id FROM users WHERE email = $1", [email])).toEqual([]);
+}
+
+describe("AH-7 — a deleted, banned account's address is reserved against re-signup", () => {
+  it("re-signup with the address, in any letter case: the same 409 EMAIL_TAKEN, no session, no row", async () => {
+    const user = await seedDeleted(true);
+
+    await expectEmailTaken(await resignup(user.email), user.email);
+    await expectEmailTaken(await resignup(user.email.toUpperCase()), user.email);
+  });
+
+  it("CONTROL: a deleted, UNBANNED account's address is free for a new signup", async () => {
+    const user = await seedDeleted(false);
+
+    const res = await resignup(user.email);
+
+    expect(res.status).toBe(201);
+    expect(res.headers.get("Set-Cookie")).toMatch(/^tj_session=/);
+    await trackSignup(user.email);
+  });
+
+  it("once the ban is lifted and releaseReservedEmail runs, the address can sign up", async () => {
+    const user = await seedDeleted(true);
+    await expectEmailTaken(await resignup(user.email), user.email);
+
+    const released = await (async () => {
+      const ctx = createExecutionContext();
+      const v = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+        await c.query("BEGIN");
+        try {
+          await c.query("UPDATE users SET disabled_at = NULL, disabled_reason = NULL WHERE id = $1", [user.userId]);
+          const ok = await releaseReservedEmail(c, user.userId);
+          await c.query("COMMIT");
+          return ok;
+        } catch (err) {
+          try {
+            await c.query("ROLLBACK");
+          } catch {
+            // keep the root error
+          }
+          throw err;
+        }
+      });
+      await waitOnExecutionContext(ctx);
+      return v;
+    })();
+    expect(released).toBe(true);
+
+    const res = await resignup(user.email);
+
+    expect(res.status).toBe(201);
+    expect(res.headers.get("Set-Cookie")).toMatch(/^tj_session=/);
+    await trackSignup(user.email);
+  });
 });
