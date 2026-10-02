@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -105,5 +106,84 @@ describe("apiFetch wires applyClientIpHeader in unconditionally and last", () =>
     const bodyResolveIndex = code.indexOf("resolveOutgoingBody(");
     expect(applyIndex).toBeGreaterThan(0);
     expect(bodyResolveIndex).toBeGreaterThan(applyIndex);
+  });
+
+  it("is called at the function's base indent, not nested inside a conditional", () => {
+    const lines = code.split("\n");
+    const callLine = lines.find((l) => l.includes("applyClientIpHeader("));
+    expect(callLine).toBeDefined();
+    // Every other top-level statement in apiFetch (headers.set/.delete calls,
+    // `const outgoingBody = ...`) sits at exactly two levels of indent (one
+    // for the function body). A deeper indent would mean this call is nested
+    // inside an `if`/block and so not truly unconditional.
+    expect(callLine).toMatch(/^ {2}applyClientIpHeader\(/);
+  });
+
+  it("no headers.set/.append runs between applyClientIpHeader and the env.API.fetch call", () => {
+    const applyIndex = code.indexOf("applyClientIpHeader(");
+    // Search FROM applyIndex, not from the start of the file: the file header
+    // mentions `env.API.fetch()` in prose before the real call site.
+    const dispatchIndex = code.indexOf("env.API.fetch(", applyIndex);
+    expect(dispatchIndex).toBeGreaterThan(applyIndex);
+    const between = code.slice(applyIndex + "applyClientIpHeader(".length, dispatchIndex);
+    expect(between).not.toMatch(/headers\.(set|append)\(/);
+  });
+});
+
+/**
+ * THE ENUMERATION PIN — every `API.fetch` call site in apps/web/src, found by
+ * grepping the source (not a hand-maintained list, so a NEW call site added
+ * later is caught automatically rather than silently skipped), must apply
+ * `applyClientIpHeader` before dispatching. This is the backstop for the
+ * confirmed second injection path (notifications-ws.ts / posts-live.ts
+ * forwarding `context.request.headers` WHOLESALE, which — unlike `apiFetch`'s
+ * hand-built `Headers` — could carry a browser-supplied `X-TJ-Client-IP`
+ * straight through to the api untouched).
+ */
+describe("every API.fetch call site in apps/web/src applies applyClientIpHeader", () => {
+  const SRC_DIR = join(import.meta.dirname, "../src");
+
+  /**
+   * Line-based `grep -rn`, filtered to actual invocations (drops prose
+   * mentions in comments, e.g. api.ts's own file header, which otherwise
+   * matches the same substring).
+   */
+  function grepApiFetchCallSites(): { file: string; line: number }[] {
+    const output = execFileSync(
+      "grep",
+      ["-rn", "API\\.fetch(", SRC_DIR],
+      { encoding: "utf8" },
+    );
+    return output
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((entry) => {
+        const match = /^(.+?):(\d+):(.*)$/.exec(entry);
+        if (!match) throw new Error(`unparsable grep line: ${entry}`);
+        return { file: match[1]!, line: Number(match[2]), text: match[3]! };
+      })
+      .filter(({ text }) => {
+        const trimmed = text.trim();
+        return !trimmed.startsWith("//") && !trimmed.startsWith("*");
+      })
+      .map(({ file, line }) => ({ file, line }));
+  }
+
+  const callSites = grepApiFetchCallSites();
+
+  // ⚠️ POSITIVE CONTROL: proves the grep itself still works. Without this, a
+  // grep that started matching nothing (a quoting mistake, a moved src/ dir)
+  // would make every case below vacuously pass via `it.each([])`.
+  it("finds at least one real API.fetch call site (positive control)", () => {
+    expect(callSites.length).toBeGreaterThan(0);
+  });
+
+  const byFile = [...new Set(callSites.map((c) => c.file))];
+
+  it.each(byFile)("%s calls applyClientIpHeader before its API.fetch dispatch", (file) => {
+    const code = readFileSync(file, "utf8");
+    const applyCount = (code.match(/applyClientIpHeader\(/g) ?? []).length;
+    expect(applyCount).toBeGreaterThanOrEqual(1);
   });
 });

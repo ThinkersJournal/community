@@ -23,6 +23,7 @@
 import { env } from "cloudflare:workers";
 
 import { markPrivate } from "../../lib/cache";
+import { applyClientIpHeader, clientIpStore } from "../../lib/client-ip-store";
 
 import type { APIRoute } from "astro";
 
@@ -45,6 +46,12 @@ export const GET: APIRoute = async (context) => {
   const forwardHeaders = new Headers();
   const cookie = context.request.headers.get("Cookie");
   if (cookie !== null) forwardHeaders.set("Cookie", cookie);
+  // Same rule as apiFetch (src/lib/api.ts): the real client IP, UNCONDITIONAL
+  // and LAST. `forwardHeaders` is built from scratch above (only Cookie is
+  // copied across), so there is no live injection on THIS route today —
+  // applied anyway for consistency with every other Service-Binding call
+  // site (see client-ip-store.test.ts's enumeration test).
+  applyClientIpHeader(forwardHeaders, clientIpStore.getStore()?.clientIp ?? null);
 
   const upstream = await env.API.fetch(
     `https://api.internal/media/restricted/${sha256}?subject=post&subjectId=${encodeURIComponent(postId)}`,

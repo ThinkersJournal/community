@@ -16,13 +16,21 @@ describe("notifications-ws proxy", () => {
     expect(code).toContain("/notifications/ws");
     expect(code).toContain("API.fetch"); // over the Service Binding
     expect(code).toContain("Upgrade"); // gates on the upgrade
-    // ⚠️ ANTI-VACUITY: assert the headers are forwarded UNWRAPPED as the fetch
-    // init — not merely that the substring "context.request.headers" appears
-    // (it also appears in the `.get("Upgrade")` gate). A future
-    // `headers: filterHeaders(context.request.headers)` that dropped the
-    // Sec-WebSocket-* handshake headers — SPIKE FACT 2, which breaks the
-    // upgrade — would fail this.
-    expect(code).toMatch(/headers:\s*context\.request\.headers/);
+    // ⚠️ ANTI-VACUITY: assert the headers are forwarded (via a COPY, `h` — see
+    // the injection-closing test below) as the fetch init — not merely that
+    // the substring "context.request.headers" appears (it also appears in the
+    // `.get("Upgrade")` gate). A future `headers: filterHeaders(...)` that
+    // dropped the Sec-WebSocket-* handshake headers — SPIKE FACT 2, which
+    // breaks the upgrade — would fail this.
+    expect(code).toMatch(/new Headers\(context\.request\.headers\)/);
+    expect(code).toMatch(/headers:\s*h\b/);
+  });
+
+  it("applies applyClientIpHeader to the copy before dispatching — closes the X-TJ-Client-IP injection the wholesale forward would otherwise open", () => {
+    // Forwarding `context.request.headers` wholesale (the whole point of the
+    // test above) would otherwise let a browser's own `X-TJ-Client-IP` reach
+    // the api untouched — the second injection path fix round 1 found.
+    expect(code).toMatch(/applyClientIpHeader\(h,/);
   });
 
   it("hand-reconstructs the 101 as a fresh Response carrying the client webSocket (Task-0 spike: the adapter won't pass a raw 101 through)", () => {
