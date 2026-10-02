@@ -81,7 +81,10 @@ export const TEST_LAST_RESET_TOKEN_KEY = "__test:last-reset-token";
  * (account-legal-hold spec §4a, PM ruling B: no mail or authentication path
  * may reach a deleted account). forgot-password reads the row and then calls
  * this, so the reaper's scrub can commit in between; the INSERT … SELECT
- * re-checks `anonymised_at` in the same statement that writes.
+ * re-checks `anonymised_at` in the same statement that writes. `FOR KEY SHARE`
+ * makes it wait for an in-flight scrub's `FOR UPDATE` and, in READ COMMITTED,
+ * re-evaluate the WHERE against the committed row, so it inserts nothing. A
+ * plain SELECT would read its pre-scrub snapshot and insert.
  */
 export async function createResetToken(
   env: Env,
@@ -95,7 +98,8 @@ export async function createResetToken(
   const inserted = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rowCount } = await c.query(
       `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
-       SELECT id, $2, $3 FROM users WHERE id = $1 AND anonymised_at IS NULL`,
+       SELECT id, $2, $3 FROM users WHERE id = $1 AND anonymised_at IS NULL
+          FOR KEY SHARE`,
       [userId, tokenHash, expiresAt],
     );
     return (rowCount ?? 0) === 1;

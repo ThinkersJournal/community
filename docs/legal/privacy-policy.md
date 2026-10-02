@@ -111,12 +111,16 @@ where a moderator decided it.
   account was banned when its deletion took effect, we keep a one-way hash of
   its email address while the ban stands, so the address can't be used to
   create a new account. Our moderation log, which is append-only and kept as
-  the legal record of moderation decisions, keeps the email address recorded
-  at the time of any moderation decision about that account's content; it is
-  not used to contact you.
+  the legal record of moderation actions, keeps the email address recorded
+  at the time of any moderation decision about that account's content, and
+  the email address recorded each time the account's owner hid or unhid one
+  of their own posts; it is not used to contact you.
   [[Attorney: the three preceding sentences (hold-delayed deletion, the hashed
   email reservation, and the moderation log's retained email) are a DRAFT and
   have not had attorney review.]]
+  [[Attorney: the hash is an unsalted SHA-256 of the normalised address, so
+  anyone holding it can recover the address by hashing candidate addresses
+  and comparing. Confirm whether "one-way hash" needs that qualification.]]
 - **Security logs** are retained only as long as needed for abuse prevention.
 
 ## 6. Your choices and rights

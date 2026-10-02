@@ -33,7 +33,7 @@
 - TypeScript **6.0.3**; `errorResponse` with the closed `ApiErrorCode` union; admin POSTs are `checkOrigin` → `requireAdmin` and are listed in `pipeline-exempt.ts`.
 - **Deletion eligibility = no active hold. Nothing else** (spec §4). `disabled_at`/`suspended_until` must not appear in either reaper's eligibility predicate afterwards. The only `disabled_at` read left in `anonymise-accounts.ts` is the `CASE` that decides the hash.
 - **`signup.ts`'s barred-row guard (the upsert's `WHERE`) is unchanged** (spec §1; AH-6). Signup's only change is the reserved-hash refusal after the upsert (spec §4a).
-- **No mail or authentication path can reach a deleted account's address** (PM ruling B). Every anonymised row's `email` is the sentinel, and a banned one also gets `reserved_email_sha256`. ⚠️ The address is **not** gone everywhere: `moderation_actions.subject_label` keeps the author's email recorded at each content decision (`decide.ts:128`), as the append-only legal record, and nothing in this plan changes that (spec §4a). Don't write any new copy of it: label new log rows with the handle.
+- **No mail or authentication path can reach a deleted account's address** (PM ruling B). Every anonymised row's `email` is the sentinel, and a banned one also gets `reserved_email_sha256`. ⚠️ The address is **not** gone everywhere: `moderation_actions.subject_label` keeps the author's email recorded at each content decision (`applyDecision`, `decide.ts`), and `moderation_actions.actor_admin` keeps the author's own email on each author hide/unhide (`hidePost`/`unhidePost`, `author-hide.ts`), as the append-only legal record, and nothing in this plan changes that (spec §4a). Don't write any new copy of it: label new log rows with the handle.
 - **A deleted account can't act, and its pre-deletion sessions die** (spec §4, re-audit B1 and round 3). The reaper bumps each row's epoch before its scrub (skipping the row if that fails) and again after its COMMIT. The mutating pipeline refuses any session whose user has `anonymised_at` set. The GET-only residual is spec §4's accepted one.
 - CSAM holds are never released by app code (DB CHECK and route refusal).
 - A non-CSAM hold is released only by a **different** admin than the one who imposed it: compare with `sameAdminHand` (`@thinkersjournal/shared`, #98).
@@ -500,9 +500,11 @@ it("RF8: when every candidate fails, the run throws after the loop", async () =>
   await seedEligible();
   await seedEligible();
   const ctx = createExecutionContext();
-  // Every bump throws, so every candidate in this run fails, whatever else the
-  // shared DB holds: F === N.
-  await expect(anonymiseExpiredAccounts(recordingEnv(() => true, []), ctx)).rejects.toThrow(/all \d+ candidate\(s\) failed/);
+  // Every bump throws, so every candidate in this run fails and none is
+  // scrubbed, whatever else the shared DB holds.
+  await expect(anonymiseExpiredAccounts(recordingEnv(() => true, []), ctx)).rejects.toThrow(
+    /no candidate was anonymised and \d+ of \d+ failed/,
+  );
   await waitOnExecutionContext(ctx);
   // The partial case (one failing of two does NOT throw) is the test above:
   // X failed, Y was scrubbed, and the run resolved.
@@ -591,11 +593,15 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
   const summary = `anonymise-accounts: anonymised ${scrubbed}, skipped (re-check) ${skipped}, failed ${failed} of ${n}`;
   if (failed > 0) console.error(summary);
   else console.log(summary);
-  // ⚠️ EVERY row failing is not "a bad row": it is a dead connection or a
-  // down DO. Fail the cron visibly. A partial failure does not throw: the
-  // rows that worked are done, and the rest retry tomorrow.
-  if (n > 0 && failed === n) {
-    throw new Error(`anonymise-accounts: all ${n} candidate(s) failed; see the per-row errors above`);
+  // ⚠️ FAILURES WITH NOTHING SCRUBBED are not "a bad row": they are a dead
+  // connection or a down DO. Fail the cron visibly. Keyed on `scrubbed === 0`,
+  // not `failed === n`, so rows the re-check merely skipped (held, cancelled)
+  // can't mask a dead connection. A partial failure, with at least one row
+  // scrubbed, does not throw: those rows are done, and the rest retry tomorrow.
+  if (failed > 0 && scrubbed === 0) {
+    throw new Error(
+      `anonymise-accounts: no candidate was anonymised and ${failed} of ${n} failed; see the per-row errors above`,
+    );
   }
   return scrubbed;
 }
@@ -656,7 +662,7 @@ async function scrubOne(c: Client, id: string, email: string): Promise<boolean> 
 }
 ```
 
-  `AND email = $5` keeps the stored hash tied to the address actually replaced. No route changes `users.email` today (the only writer is this file), so it only matters if one is ever added. Rewrite the header comment: the hold, not a ban, is the gate (CireSnave's ruling, quoted verbatim from spec §0); a banned account's address is reserved by hash (PM ruling B, quoted from spec §0); each scrub locks and re-checks; each row bumps the epoch before its scrub and again after its COMMIT; a failed row is skipped and retried next run; and the run logs its counts and throws only if every candidate failed (spec §4; `main`'s reaper bumped only after the loop, which this closes).
+  `AND email = $5` keeps the stored hash tied to the address actually replaced. No route changes `users.email` today (the only writer is this file), so it only matters if one is ever added. Rewrite the header comment: the hold, not a ban, is the gate (CireSnave's ruling, quoted verbatim from spec §0); a banned account's address is reserved by hash (PM ruling B, quoted from spec §0); each scrub locks and re-checks; each row bumps the epoch before its scrub and again after its COMMIT; a failed row is skipped and retried next run; and the run logs its counts and throws when some row failed and none was scrubbed (spec §4, ruling M5; `main`'s reaper bumped only after the loop, which this closes).
   - **pipeline.ts (re-audit B1b).** `AccountGateRow` gains `readonly anonymised_at: Date | null;`, and `readAccountGate`'s SELECT reads it: `"SELECT email_verified_at, suspended_until, disabled_at, disabled_reason, anonymised_at FROM users WHERE id = $1"`. In `runMutatingPipeline`, right after `const account = await readAccountGate(env, ctx, session.userId);` and **before** the barred check, insert:
 
 ```ts

@@ -80,8 +80,9 @@ ALTER TABLE moderation_actions ADD CONSTRAINT moderation_actions_action_check
 
 -- Backfill (spec §5, AH-5): terminations made before holds existed must stay
 -- undeletable. Idempotent. ⚠️ Keep this statement byte-identical to
--- BACKFILL_TERMINATED_HOLDS_SQL in src/moderation/account-holds.ts — the
--- schema test runs that constant to prove this statement.
+-- BACKFILL_TERMINATED_HOLDS_SQL in src/moderation/account-holds-backfill.ts
+-- (re-exported by account-holds.ts) — the schema test runs that constant to
+-- prove this statement.
 INSERT INTO account_legal_holds (user_id, category, imposed_by, reason)
 SELECT id, 'csam', 'system', 'backfill: terminated before account holds existed'
   FROM users WHERE disabled_reason = 'terminate'

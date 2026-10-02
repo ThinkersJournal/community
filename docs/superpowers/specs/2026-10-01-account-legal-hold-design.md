@@ -179,8 +179,10 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   - on any per-row scrub failure (a lock timeout or any other error), logs the user id, skips the row and continues.
     A failed row is still unscrubbed, so skipping it is safe, and the next nightly run retries it;
   - counts the outcomes and logs `anonymised S, skipped (re-check) K, failed F of N` after the loop (`console.error`
-    when F > 0). When every candidate failed (N > 0 and F = N), it **throws** after the loop: that is a dead connection
-    or a down Durable Object, not a bad row, so the cron fails visibly. A partial failure doesn't throw.
+    when F > 0). When some row failed and none was scrubbed (`failed > 0 && scrubbed === 0`), it **throws** after the
+    loop: that is a dead connection or a down Durable Object, not a bad row, so the cron fails visibly. Keyed on
+    nothing scrubbed rather than F = N, so rows the re-check merely skipped (held, cancelled) can't mask a dead
+    connection (ruling M5). A partial failure, with at least one row scrubbed, doesn't throw.
 
   ⚠️ `main`'s current reaper has the same latent shape: it bumps epochs only **after** the loop, so an error mid-batch
   leaves every already-scrubbed account with its sessions live. This task closes that.
@@ -230,18 +232,26 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   scrub commits, its row still holds the address, so the upsert conflicts with that row and the barred clause refuses
   it. Once the upsert gets through without that conflict, the scrub has committed, and the next statement's snapshot
   sees its hash. A check run before the upsert could miss a scrub that commits between the two.
-- **The mail paths need no guard.** The audit found three paths that would have mailed a deleted, banned user if the
-  real email had been kept:
-  - the notification email drain (`email-drain.ts:29-44`, which has no `anonymised_at` filter);
-  - forgot-password → reset-password (`forgot-password.ts:111` → `reset-password.ts:129-133`, which would also have
-    written a working password);
-  - the decision notice (`sendModerationNotice(env, result.authorEmail, …)`, `admin.ts:183` ← `decide.ts:89`).
+- **The mail paths.** The audit found three paths that would have mailed a deleted, banned user if the real email had
+  been kept:
+  - the notification email drain (`runEmailDrain`'s `SELECT_ELIGIBLE`, `email-drain.ts`);
+  - forgot-password → reset-password (`handleForgotPassword` → `createResetToken` → `handleResetPassword`, which would
+    also have written a working password);
+  - the decision notice (`sendModerationNotice(env, result.authorEmail, …)` in `admin.ts`, fed by `applyDecision`).
 
-  Under ruling B the real address is no longer on the account row, and those paths read only `users.email`. Each of
-  them can therefore only address the sentinel, whose domain is never registered. Every anonymised account is already in
-  that state today, so none of the three gains a guard. Pinned
-  structurally (AH-7): after a banned account is anonymised, its `email` is the sentinel, its `password_hash` is
-  unusable, and forgot-password for the original address sends nothing.
+  Under ruling B the real address is no longer on the account row, and those paths read only `users.email`, so each of
+  them can only address the sentinel, whose domain is never registered. Pinned structurally (AH-7): after a banned
+  account is anonymised, its `email` is the sentinel, its `password_hash` is unusable, and forgot-password for the
+  original address sends nothing. The first two paths are **also guarded** against an anonymised row (rulings I2 and
+  M7, Task 3 fix round 1), because a scrub can commit between a path's read and its write:
+  - the drain's `SELECT_ELIGIBLE` filters `u.anonymised_at IS NULL`, so nothing is ever sent to the sentinel;
+  - `createResetToken` inserts with `INSERT … SELECT … FROM users WHERE id = $1 AND anonymised_at IS NULL FOR KEY
+    SHARE` and returns `null` when it inserted nothing; forgot-password then mails nothing and answers the same `202`.
+    `FOR KEY SHARE` makes the insert wait for an in-flight scrub's `FOR UPDATE` and re-check the committed row;
+  - `handleResetPassword`'s password `UPDATE` requires `anonymised_at IS NULL`; on 0 rows it rolls back and answers
+    the generic `400 INVALID_RESET_TOKEN`, with no epoch bump and no session.
+
+  The decision notice is not guarded here; it can only address the sentinel, and a guard is a filed follow-up.
 - **"While the ban stands":** lifting the ban ends the reservation. `releaseReservedEmail(c, userId)`
   (`apps/api/src/auth/reserved-email.ts`) sets `reserved_email_sha256 = NULL` once `disabled_at` is NULL, and does
   nothing otherwise. There's nothing to scrub, because the address is already gone from the account row, so after the
@@ -254,16 +264,25 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   email-change route, say) ever reserved a hash twice, every such row's scrub would fail on the violation, night after
   night. The reaper would skip only that row (a per-row error is logged, the row is retried nightly, and the failure
   count is visible, §4), but the account would never be deleted.
-- ⚠️ **What still holds the address (re-audit S2).** The moderation log keeps it. `moderation_actions.subject_label`
-  records the author's email at the time of each content decision about their posts or comments (`decide.ts:128`,
-  `subjectLabel: row.email`). Plan A's account actions label with the handle (`admin-accounts.ts:144`). That table is append-only and is kept as the legal record,
-  so anonymisation doesn't touch it. No mail or authentication path reads it. The guarantee this design makes is
+- ⚠️ **What still holds the address (re-audit S2, final review).** The moderation log keeps it, in two columns:
+  - `moderation_actions.subject_label` records the author's email at the time of each content decision about their
+    posts or comments (`applyDecision`, `decide.ts`: `subjectLabel: row.email`);
+  - `moderation_actions.actor_admin` records the author's **own** email on every author hide and unhide of their own
+    post (`hidePost` and `unhidePost`, `moderation/author-hide.ts`: `actorAdmin: row.email`, #61).
+
+  Plan A's account actions label with the handle (`handleAdminAccountAction`, `admin-accounts.ts`:
+  `subjectLabel: account.username`). That table is append-only and is kept as the legal record, so anonymisation
+  doesn't touch either column. No mail or authentication path reads it. The guarantee this design makes is
   therefore that **no mail or authentication path can reach a deleted account's address**, not that the address
   exists nowhere. A manual hold (T3) labels its log row with the handle, not the email, so it adds no new copy. The
   privacy policy says this (plan Task 6, for attorney review).
 - **Privacy.** A SHA-256 of an email isn't anonymous: anyone holding the table can test a guessed address. It's kept
   only for a banned account, only while the ban stands, and in place of the address itself. That's the data-minimising
   choice the PM ruled. The privacy policy discloses it (plan Task 6).
+- **A hold on an already-anonymised account is invisible to the admin UI.** The account admin routes resolve
+  `:handle` with `findByHandle` (`admin-accounts.ts`), which filters `anonymised_at IS NULL`, so such a hold can't be
+  viewed or released there. That is harmless, because the scrub has already happened and the hold blocks nothing; an
+  operator can release it with SQL if ever needed.
 - **The unverified reaper** hard-DELETEs rows, so a banned unverified account with no hold is deleted outright, and no
   hash is stored. That reopens the evasion only for an account that **never verified its email**, which couldn't post.
   It's accepted and stated, and it's consistent with the PM's AC-3 ruling (a hold, not a ban, protects).

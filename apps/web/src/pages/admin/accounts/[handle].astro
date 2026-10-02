@@ -48,6 +48,8 @@ setPublicPageCsp(Astro);
 const handle = Astro.params.handle ?? "";
 let actionError: string | null = null;
 let actionOk = false;
+// A 200 that changed nothing (an impose of a category already actively held).
+let actionNotice: string | null = null;
 
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
@@ -55,13 +57,18 @@ if (Astro.request.method === "POST") {
   const origin = Astro.request.headers.get("Origin") ?? "";
 
   if (intent === "hold_impose") {
-    const res = await adminApiFetch(`/admin/accounts/${encodeURIComponent(handle)}/holds`, {
+    const res = await adminApiFetch<{ created: boolean }>(`/admin/accounts/${encodeURIComponent(handle)}/holds`, {
       method: "POST",
       accessJwt,
       origin,
       body: { category: form.get("category"), reason: form.get("reason") },
     });
-    if (res.status === 200) actionOk = true;
+    // `{ created: false }`: an active hold of this category already exists, so
+    // nothing was imposed and nothing was logged (Review Focus 5). Say so,
+    // rather than "Action recorded."
+    if (res.status === 200 && res.data?.created === false) {
+      actionNotice = `This account already has an active ${String(form.get("category"))} hold.`;
+    } else if (res.status === 200) actionOk = true;
     else actionError = adminApiErrorCode(res) ?? "ACTION_FAILED";
   } else if (intent === "hold_release") {
     const holdId = form.get("holdId");
@@ -131,6 +138,7 @@ function stateLine(account: AdminAccountResponse): string {
     <p class="admin-nav"><a class="link" href="/admin/queue">← Moderation queue</a></p>
     {actionError && <p class="err">Action failed: {actionError}</p>}
     {actionOk && <p class="ok">Action recorded.</p>}
+    {actionNotice && <p class="notice">{actionNotice}</p>}
     {loadError && <p class="err">Could not load the account: {loadError}</p>}
     {
       account && (

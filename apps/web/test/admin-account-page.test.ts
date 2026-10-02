@@ -79,6 +79,17 @@ describe("/admin/accounts/[handle]", () => {
       expect(imposeFormMatch![0]).not.toMatch(/LEGAL_HOLD_CATEGORIES\.map\(/);
     });
 
+    it("an impose answered { created: false } says the hold already exists, not \"Action recorded.\"", () => {
+      // The api answers 200 { created: false } when an active hold of that
+      // category already exists (account-legal-hold Review Focus 5). Treating
+      // that as a plain success would tell the moderator a hold was imposed.
+      const imposeBranch = source.match(/if \(intent === "hold_impose"\) \{[\s\S]*?\} else if \(intent === "hold_release"\)/);
+      expect(imposeBranch).not.toBeNull();
+      expect(imposeBranch![0]).toMatch(/res\.data\?\.created === false/);
+      expect(imposeBranch![0]).toMatch(/This account already has an active \$\{[^}]+\} hold\./);
+      expect(source).toMatch(/\{actionNotice && <p class="notice">\{actionNotice\}<\/p>\}/);
+    });
+
     it("a csam hold shows no release control", () => {
       expect(source).toMatch(/cannot be released in the app/);
       expect(source).toMatch(/hold\.category\s*===\s*"csam"/);

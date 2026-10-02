@@ -385,3 +385,77 @@ describe("AH-7 — no reset token or mail for an anonymised account", () => {
     expect(await sql("SELECT 1 FROM password_reset_tokens WHERE user_id = $1", [deleted.userId])).toEqual([]);
   });
 });
+
+/**
+ * `createResetToken`'s INSERT … SELECT takes `FOR KEY SHARE` on the user row.
+ * In READ COMMITTED it therefore waits for an in-flight scrub's `FOR UPDATE`
+ * and re-evaluates `anonymised_at IS NULL` against the committed row, so a
+ * scrub that commits while the mint waits leaves no token. Without it, the
+ * SELECT reads its pre-scrub snapshot and inserts.
+ *
+ * The user is never due for deletion (no `deletion_requested_at`), so no
+ * reaper touches it; this test plays the scrub itself.
+ */
+describe("createResetToken waits for an in-flight scrub and re-checks the committed row", () => {
+  it("a scrub that commits while the mint is blocked on its row lock: null, and no token row", async () => {
+    const actor = await createVerifiedActor();
+    const mintCtx = createExecutionContext();
+    let mint: Promise<string | null> | undefined;
+    try {
+      const ctx = createExecutionContext();
+      await withClient(env.HYPERDRIVE_FRESH, ctx, async (holder) => {
+        await holder.query("BEGIN");
+        try {
+          await holder.query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE", [actor.userId]);
+          const { rows } = await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+          const holderPid = rows[0]!.pid;
+
+          mint = createResetToken(env, mintCtx, actor.userId);
+          mint.catch(() => undefined); // awaited below
+
+          // Poll (50 ms steps, 2 s max) until the mint is blocked by the holder,
+          // directly or behind one other waiter.
+          const blocked = await (async () => {
+            const deadline = Date.now() + 2000;
+            while (Date.now() < deadline) {
+              const r = await sql(
+                `SELECT 1 FROM pg_stat_activity w
+                  WHERE pg_blocking_pids(w.pid) @> ARRAY[$1::int]
+                     OR EXISTS (SELECT 1 FROM unnest(pg_blocking_pids(w.pid)) AS bp(pid)
+                                 WHERE pg_blocking_pids(bp.pid) @> ARRAY[$1::int])`,
+                [holderPid],
+              );
+              if (r.length > 0) return true;
+              await new Promise((res) => setTimeout(res, 50));
+            }
+            return false;
+          })();
+          if (!blocked) throw new Error(`timed out after 2s waiting for createResetToken to block on holder pid ${holderPid}`);
+
+          await holder.query(
+            `UPDATE users
+                SET anonymised_at = now(), password_hash = '!anonymised!',
+                    email = 'deleted-' || id || '@invalid.thinkersjournal.local'
+              WHERE id = $1`,
+            [actor.userId],
+          );
+          await holder.query("COMMIT");
+        } catch (err) {
+          try {
+            await holder.query("ROLLBACK");
+          } catch {
+            // keep the root error
+          }
+          throw err;
+        }
+      });
+      await waitOnExecutionContext(ctx);
+    } finally {
+      if (mint !== undefined) await Promise.allSettled([mint]);
+      await waitOnExecutionContext(mintCtx);
+    }
+
+    expect(await mint, "a token was minted for a row scrubbed while the mint waited").toBeNull();
+    expect(await sql("SELECT 1 FROM password_reset_tokens WHERE user_id = $1", [actor.userId])).toEqual([]);
+  });
+});
