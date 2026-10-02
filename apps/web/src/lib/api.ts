@@ -20,6 +20,16 @@
  *     legitimately appear MORE THAN ONCE, so it must be copied with
  *     `getSetCookie()` / `headers.append` — `headers.set(...)` would collapse
  *     multiple cookies into one malformed value.
+ *  3. CLIENT-IP FORWARDING (browser -> api). Same problem as (1) for a
+ *     different header: `env.API.fetch()`'s brand-new request also carries no
+ *     `CF-Connecting-IP`, so every api rate limiter that reads it saw null and
+ *     fell back to "unknown" — in production this collapsed `SEARCH_LIMITER`
+ *     into one global bucket shared by every client. `middleware.ts` stashes
+ *     the real IP in `clientIpStore` (./client-ip-store.ts) for the lifetime
+ *     of the request; `applyClientIpHeader` below reads it back and sets
+ *     `CLIENT_IP_HEADER` (`@thinkersjournal/shared`) UNCONDITIONALLY and LAST,
+ *     after every other header this function sets, so nothing above —
+ *     caller-supplied or otherwise — can inject or override it.
  *
  * ⚠️ WHERE THE BINDING COMES FROM. `env` is imported from `cloudflare:workers`,
  * NOT read off `Astro.locals.runtime.env` — that property was REMOVED in Astro
@@ -33,6 +43,7 @@ import { env } from "cloudflare:workers";
 
 import { isApiErrorBody, type ApiErrorCode } from "@thinkersjournal/shared";
 
+import { applyClientIpHeader, clientIpStore } from "./client-ip-store";
 import { resolveOutgoingBody } from "./outgoing-body";
 
 /** What every call through this module returns. */
@@ -178,6 +189,12 @@ export async function apiFetch<T = unknown>(
   if (body !== undefined) {
     headers.set("content-type", "application/json");
   }
+
+  // (3) The client's real IP (see point 3 in the file header). LAST, after
+  // every header above, and UNCONDITIONAL: `applyClientIpHeader` deletes any
+  // pre-existing value before (re)setting it, so nothing set above can
+  // inject or override it.
+  applyClientIpHeader(headers, clientIpStore.getStore()?.clientIp ?? null);
 
   // `body` (JSON) and `rawBody` (passthrough) are mutually exclusive; rawBody
   // wins if both are somehow set, and the type comment says not to. Pulled
