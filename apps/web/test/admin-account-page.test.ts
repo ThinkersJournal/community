@@ -84,21 +84,56 @@ describe("/admin/accounts/[handle]", () => {
       expect(source).toMatch(/hold\.category\s*===\s*"csam"/);
     });
 
+    /**
+     * ⚠️ STRUCTURAL, not textual. A plain `indexOf("Legal holds") >
+     * indexOf('account.disabledAt ? (')` check would still pass if the hold
+     * section were pasted INSIDE the else-arm (right before that arm's own
+     * closing `</form>` / `)`) — exactly the regression this test exists to
+     * catch, since "Legal holds" textually follows the ternary's START
+     * either way. So this walks a paren-depth counter from the `(` that
+     * opens the `disabledAt ? (` arm, to find where THAT arm closes, then
+     * does the same for the `: (` arm, and asserts the hold section starts
+     * strictly after the SECOND arm's closing paren — i.e. after the whole
+     * ternary expression, not merely after its first token.
+     */
+    function findMatchingParenClose(src: string, openIdx: number): number {
+      let depth = 0;
+      for (let i = openIdx; i < src.length; i++) {
+        if (src[i] === "(") depth++;
+        else if (src[i] === ")") {
+          depth--;
+          if (depth === 0) return i;
+        }
+      }
+      return -1;
+    }
+
     it("⚠️ the hold section is rendered OUTSIDE the disabledAt ? banned : form branch, so a banned account still shows it", () => {
-      const bannedBranchAt = source.indexOf('account.disabledAt ? (');
-      expect(bannedBranchAt).toBeGreaterThan(-1);
-      // Find the matching close of that ternary expression by locating the
-      // "Legal holds" heading and asserting it comes AFTER the whole
-      // disabledAt-ternary's closing, not nested inside either arm.
+      const ternaryAt = source.indexOf("account.disabledAt ? (");
+      expect(ternaryAt).toBeGreaterThan(-1);
+
+      // The '(' that opens the first (banned) arm is the last character of
+      // the matched text above.
+      const firstOpen = ternaryAt + "account.disabledAt ? (".length - 1;
+      expect(source[firstOpen]).toBe("(");
+      const firstClose = findMatchingParenClose(source, firstOpen);
+      expect(firstClose).toBeGreaterThan(firstOpen);
+
+      // Immediately after the first arm closes, expect `) : (` and find the
+      // '(' that opens the second (form) arm.
+      const betweenArms = source.slice(firstClose, firstClose + 20);
+      expect(betweenArms).toMatch(/^\)\s*:\s*\(/);
+      const secondOpen = firstClose + betweenArms.indexOf("(", 1);
+      expect(source[secondOpen]).toBe("(");
+      const secondClose = findMatchingParenClose(source, secondOpen);
+      expect(secondClose).toBeGreaterThan(secondOpen);
+
+      // The whole ternary expression ends at secondClose. The hold section
+      // — its heading AND its impose form — must start strictly after it.
       const legalHoldsAt = source.indexOf("Legal holds");
-      expect(legalHoldsAt).toBeGreaterThan(bannedBranchAt);
-      // The hold-impose form itself (present regardless of disabledAt) must
-      // not be textually inside the `<form method="POST" class="action-form">`
-      // branch, which only renders when NOT disabled.
-      const actionFormAt = source.indexOf('class="action-form"');
-      expect(actionFormAt).toBeGreaterThan(-1);
       const imposeFormAt = source.indexOf('class="hold-impose-form"');
-      expect(imposeFormAt).toBeGreaterThan(actionFormAt);
+      expect(legalHoldsAt).toBeGreaterThan(secondClose);
+      expect(imposeFormAt).toBeGreaterThan(secondClose);
     });
 
     it("still guards first, even with the new section", () => {

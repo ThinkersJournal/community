@@ -287,6 +287,11 @@ export async function handleAdminReleaseAccountHold(
   );
   if (outcome.kind === "not_found") return errorResponse("NOT_FOUND", 404);
   if (outcome.kind === "same_admin") {
+    // 403, not 404 like media-access's self-approval: the hold's existence
+    // is already visible on the admin account page (GET returns it in
+    // `holds`), so telling this admin "you imposed this" reveals nothing a
+    // 404 would have hidden — unlike a media-access request, which a 404
+    // keeps from confirming exists at all to its own requester.
     return errorResponse("FORBIDDEN", 403, { message: "a different admin must release this hold" });
   }
   if (outcome.kind === "csam" || outcome.kind === "already_released") {
