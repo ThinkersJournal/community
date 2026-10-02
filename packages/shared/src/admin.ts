@@ -200,3 +200,15 @@ export interface AdminDsaNotice {
 export interface AdminDsaNoticesResponse {
   notices: AdminDsaNotice[];
 }
+
+/** One row of an account's legal-hold history (account-legal-hold spec §2). ISO strings. */
+export interface AdminAccountHold {
+  readonly id: string;
+  readonly category: LegalHoldCategoryWire;
+  readonly reason: string;
+  readonly imposedBy: string;
+  readonly imposedAt: string;
+  readonly releasedAt: string | null;
+  readonly releasedBy: string | null;
+  readonly releaseReason: string | null;
+}

@@ -26,11 +26,23 @@ import { USERNAME_PATTERN } from './social';
  *
  * Order is deliberate: `z.email()` validates first (its check is
  * case-insensitive, so nothing valid is rejected), then the value is
- * lowercased. Verified against the installed zod 4.4.3: `toLowerCase()` is
- * inherited from the string base by `ZodEmail` and rewrites the OUTPUT while
- * leaving format validation intact.
+ * lowercased via `.overwrite(normalizeEmail)`. Verified against the installed
+ * zod 4.6.5.
  */
-const NormalizedEmail = z.email().toLowerCase();
+
+/**
+ * THE email normaliser. `NormalizedEmail` applies it (so signup, login and
+ * forgot-password all store and look up its output), and the reserved-email
+ * hash (apps/api/src/auth/reserved-email.ts, account-legal-hold spec §4a)
+ * hashes its output. One function, so the two can never disagree about which
+ * addresses are "the same". Identical to the zod 4.6.5 `toLowerCase()` it
+ * replaces, which is `_overwrite((input) => input.toLowerCase())`.
+ */
+export function normalizeEmail(email: string): string {
+  return email.toLowerCase();
+}
+
+const NormalizedEmail = z.email().overwrite(normalizeEmail);
 
 export const SignupInput = z.object({
   email: NormalizedEmail,
