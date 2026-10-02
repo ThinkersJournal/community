@@ -152,6 +152,10 @@ counts**, and a free-text `reason` alone would force text-mining to produce them
 `action_expires_at` records a suspension's intended duration **on the action**, so the log stays
 truthful after `users.suspended_until` has moved on — an audit log must record what was *done*,
 never depend on current state to explain itself.
+*Ruling 2026-10-02 (#113 plan B pre-flight, B2):* that is the action's **own** end
+(`now() + hours`), never the effective end. `users.suspended_until` alone holds the effective
+bar (the GREATEST of the suspensions in force), so granting an appeal against one of two
+overlapping suspensions can recompute the bar from the others' own ends (§6).
 
 ### 3.2 Account status on `users`
 
