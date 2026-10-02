@@ -316,34 +316,82 @@ describe("GET /public/search", () => {
   });
 
   /**
+   * ⚠️ WINDOW-ROLLOVER GUARD (fix round 1, item 4). Miniflare's `RateLimit`
+   * binding is a FIXED wall-clock window — `epoch = floor(now / 60000)`, not
+   * a sliding window counted from a burst's own first request. A burst that
+   * straddles a minute boundary can reset mid-burst and never trip 429 at
+   * all; this is what made the X-TJ-Client-IP case below flake under
+   * full-suite DB contention (slower per-request latency makes crossing a
+   * boundary more likely over the same 35 iterations). Guarded two ways:
+   *   - a UNIQUE key per invocation (`crypto.randomUUID()`), so a retried
+   *     attempt never inherits a partial count left over from the one it's
+   *     retrying;
+   *   - read the epoch before and after the whole case and retry ONCE if it
+   *     rolled over mid-burst.
+   */
+  function minuteEpoch(): number {
+    return Math.floor(Date.now() / 60000);
+  }
+
+  async function withWindowRolloverRetry(attempt: () => Promise<void>): Promise<void> {
+    const before = minuteEpoch();
+    await attempt();
+    if (minuteEpoch() !== before) {
+      await attempt();
+    }
+  }
+
+  async function searchWithIp(ip: string): Promise<Response> {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`${U}/public/search?q=ratelimittest&type=posts`, {
+        headers: { "CF-Connecting-IP": ip },
+      }),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    return response;
+  }
+
+  async function searchWithClientIpHeader(ip: string): Promise<Response> {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`${U}/public/search?q=ratelimittest&type=posts`, {
+        headers: { [CLIENT_IP_HEADER]: ip },
+      }),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    return response;
+  }
+
+  /**
    * Enumeration/DoS-hardening fix (spec-vs-code audit, 2026-09-27):
-   * SEARCH_LIMITER. IP-keyed only (no session on this route) — a DEDICATED
-   * `CF-Connecting-IP` (a TEST-NET-3 address, never a real one) so this
-   * test's own budget burn cannot pollute or be polluted by the rest of this
-   * file, which sends no `CF-Connecting-IP` at all and shares the "unknown"
-   * bucket among themselves (same convention as test/login.test.ts).
+   * SEARCH_LIMITER. IP-keyed only (no session on this route) — a UNIQUE key
+   * per invocation (see the window-rollover guard above) so this test's own
+   * budget burn cannot pollute or be polluted by the rest of this file, which
+   * sends no `CF-Connecting-IP` at all and shares the "unknown" bucket among
+   * themselves (same convention as test/login.test.ts).
    */
   it("throttles a burst of searches from one IP (429 RATE_LIMITED)", async () => {
-    const ip = "203.0.113.50";
-    let sawRateLimited = false;
-    for (let i = 0; i < 35 && !sawRateLimited; i++) {
-      const ctx = createExecutionContext();
-      const response = await worker.fetch(
-        new Request(`${U}/public/search?q=ratelimittest&type=posts`, {
-          headers: { "CF-Connecting-IP": ip },
-        }),
-        env,
-        ctx,
-      );
-      await waitOnExecutionContext(ctx);
-      if (response.status === 429) {
-        expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
-        sawRateLimited = true;
-      } else {
-        expect(response.status).toBe(200);
+    await withWindowRolloverRetry(async () => {
+      const ip = `test-${crypto.randomUUID()}`;
+      let sawRateLimited = false;
+      for (let i = 0; i < 35 && !sawRateLimited; i++) {
+        const response = await searchWithIp(ip);
+        if (response.status === 429) {
+          expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
+          sawRateLimited = true;
+        } else {
+          expect(response.status).toBe(200);
+        }
       }
-    }
-    expect(sawRateLimited).toBe(true);
+      expect(sawRateLimited).toBe(true);
+      // Immediately after the burst: the SAME ip is still throttled right now.
+      expect((await searchWithIp(ip)).status).toBe(429);
+    });
   });
 
   /**
@@ -351,43 +399,32 @@ describe("GET /public/search", () => {
    * longer rely on `CF-Connecting-IP` surviving the Service Binding, so it
    * re-sends the browser's IP as `CLIENT_IP_HEADER` and `clientIp()`
    * (src/http/client-ip.ts) reads THAT first. Mirrors the burst test just
-   * above but keyed on the new header, with its own dedicated TEST-NET-3
-   * addresses so neither test's budget burn can pollute the other.
+   * above but keyed on the new header, with its own unique per-invocation
+   * keys so neither test's budget burn can pollute the other.
    */
   it("SEARCH_LIMITER buckets on X-TJ-Client-IP — different values don't share a bucket, the same value does", async () => {
-    const ipA = "203.0.113.60";
-    const ipB = "203.0.113.70";
+    await withWindowRolloverRetry(async () => {
+      const ipA = `test-${crypto.randomUUID()}`;
+      const ipB = `test-${crypto.randomUUID()}`;
 
-    async function searchAs(ip: string): Promise<Response> {
-      const ctx = createExecutionContext();
-      const response = await worker.fetch(
-        new Request(`${U}/public/search?q=ratelimittest&type=posts`, {
-          headers: { [CLIENT_IP_HEADER]: ip },
-        }),
-        env,
-        ctx,
-      );
-      await waitOnExecutionContext(ctx);
-      return response;
-    }
-
-    // Burst ipA until it is throttled.
-    let sawRateLimitedA = false;
-    for (let i = 0; i < 35 && !sawRateLimitedA; i++) {
-      const response = await searchAs(ipA);
-      if (response.status === 429) {
-        expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
-        sawRateLimitedA = true;
-      } else {
-        expect(response.status).toBe(200);
+      // Burst ipA until it is throttled.
+      let sawRateLimitedA = false;
+      for (let i = 0; i < 35 && !sawRateLimitedA; i++) {
+        const response = await searchWithClientIpHeader(ipA);
+        if (response.status === 429) {
+          expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
+          sawRateLimitedA = true;
+        } else {
+          expect(response.status).toBe(200);
+        }
       }
-    }
-    expect(sawRateLimitedA).toBe(true);
+      expect(sawRateLimitedA).toBe(true);
 
-    // A DIFFERENT X-TJ-Client-IP is NOT throttled by ipA's exhausted bucket.
-    expect((await searchAs(ipB)).status).toBe(200);
+      // Immediately after the burst: ipA is still throttled right now.
+      expect((await searchWithClientIpHeader(ipA)).status).toBe(429);
 
-    // The SAME X-TJ-Client-IP (ipA) still shares the bucket it just exhausted.
-    expect((await searchAs(ipA)).status).toBe(429);
+      // A DIFFERENT X-TJ-Client-IP is NOT throttled by ipA's exhausted bucket.
+      expect((await searchWithClientIpHeader(ipB)).status).toBe(200);
+    });
   });
 });

@@ -35,9 +35,6 @@ describe("clientIp", () => {
   });
 
   it("never falls back when CLIENT_IP_HEADER is present but empty — empty string is a valid header value, not absence", () => {
-    // Headers.get never returns "" for a header set to the empty string via
-    // the constructor form used here — guard against that surprising edge by
-    // asserting the literal value, not just truthiness.
     const request = new Request("https://api.test/some-endpoint", {
       headers: { [CLIENT_IP_HEADER]: "", "CF-Connecting-IP": "198.51.100.9" },
     });
