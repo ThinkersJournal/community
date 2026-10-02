@@ -8,7 +8,7 @@ import {
 import worker from "../src";
 import { withClient } from "../src/db/client";
 
-import { withWindowRolloverRetry } from "./helpers/window-rollover-retry";
+import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 
 const created: string[] = [];
 afterAll(async () => {
@@ -318,21 +318,18 @@ describe("GET /public/search", () => {
   });
 
   /**
-   * ⚠️ WINDOW-ROLLOVER GUARD (fix rounds 1 and 2). Miniflare's `RateLimit`
-   * binding is a FIXED wall-clock window — `epoch = floor(now / 60000)`, not
-   * a sliding window counted from a burst's own first request. A burst that
-   * straddles a minute boundary can reset mid-burst and never trip 429 at
-   * all; this is what made the X-TJ-Client-IP case below flake under
-   * full-suite DB contention (slower per-request latency makes crossing a
-   * boundary more likely over the same 35 iterations). Guarded two ways:
-   *   - a UNIQUE key per invocation (`crypto.randomUUID()`), so a retried
-   *     attempt never inherits a partial count left over from the one it's
-   *     retrying;
-   *   - `withWindowRolloverRetry` (./helpers/window-rollover-retry.ts) reads
-   *     the epoch before and after the whole case and retries ONCE if it
-   *     rolled over mid-burst — including when the roll-over made the burst's
-   *     OWN assertion throw (round 1's version only retried on success; see
-   *     that file's header for the CI failure that found the gap).
+   * ⚠️ WINDOW-ROLLOVER GUARD (fix round 3 — superseding rounds 1 and 2's
+   * retry-after-the-fact approach, which round 2's CI failure showed was
+   * still incomplete). Miniflare's `RateLimit` binding is a FIXED wall-clock
+   * window — `epoch = floor(now / 60000)`, not a sliding window counted from
+   * a burst's own first request — so a burst that straddles a minute
+   * boundary can have its count silently reset mid-flight. `awaitLimiterBurstWindow`
+   * (./helpers/limiter-window.ts, already used by login/signup/forgot-password/
+   * dsa-notice-route) holds the burst off until there is a full budget of the
+   * CURRENT window left, rather than detecting a roll-over after it already
+   * broke the assertion. Combined with a UNIQUE key per test run
+   * (`crypto.randomUUID()`), so no two runs — or this test and any other in
+   * the file — ever share a bucket.
    */
   async function searchWithIp(ip: string): Promise<Response> {
     const ctx = createExecutionContext();
@@ -360,31 +357,32 @@ describe("GET /public/search", () => {
     return response;
   }
 
+  // Matches SEARCH_LIMITER's `simple: { limit: 30, period: 60 }` in
+  // apps/api/wrangler.jsonc — exactly `SEARCH_LIMIT` requests are allowed,
+  // the next one is the 429.
+  const SEARCH_LIMIT = 30;
+
   /**
    * Enumeration/DoS-hardening fix (spec-vs-code audit, 2026-09-27):
    * SEARCH_LIMITER. IP-keyed only (no session on this route) — a UNIQUE key
-   * per invocation (see the window-rollover guard above) so this test's own
-   * budget burn cannot pollute or be polluted by the rest of this file, which
-   * sends no `CF-Connecting-IP` at all and shares the "unknown" bucket among
+   * per run (see the window-rollover guard above) so this test's own budget
+   * burn cannot pollute or be polluted by the rest of this file, which sends
+   * no `CF-Connecting-IP` at all and shares the "unknown" bucket among
    * themselves (same convention as test/login.test.ts).
    */
   it("throttles a burst of searches from one IP (429 RATE_LIMITED)", async () => {
-    await withWindowRolloverRetry(async () => {
-      const ip = `test-${crypto.randomUUID()}`;
-      let sawRateLimited = false;
-      for (let i = 0; i < 35 && !sawRateLimited; i++) {
-        const response = await searchWithIp(ip);
-        if (response.status === 429) {
-          expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
-          sawRateLimited = true;
-        } else {
-          expect(response.status).toBe(200);
-        }
-      }
-      expect(sawRateLimited).toBe(true);
-      // Immediately after the burst: the SAME ip is still throttled right now.
-      expect((await searchWithIp(ip)).status).toBe(429);
-    });
+    const ip = `test-${crypto.randomUUID()}`;
+    await awaitLimiterBurstWindow();
+
+    for (let i = 0; i < SEARCH_LIMIT; i++) {
+      expect((await searchWithIp(ip)).status).toBe(200);
+    }
+    const limited = await searchWithIp(ip);
+    expect(limited.status).toBe(429);
+    expect(((await limited.json()) as { code: string }).code).toBe("RATE_LIMITED");
+
+    // Immediately after the burst: the SAME ip is still throttled right now.
+    expect((await searchWithIp(ip)).status).toBe(429);
   });
 
   /**
@@ -392,32 +390,25 @@ describe("GET /public/search", () => {
    * longer rely on `CF-Connecting-IP` surviving the Service Binding, so it
    * re-sends the browser's IP as `CLIENT_IP_HEADER` and `clientIp()`
    * (src/http/client-ip.ts) reads THAT first. Mirrors the burst test just
-   * above but keyed on the new header, with its own unique per-invocation
-   * keys so neither test's budget burn can pollute the other.
+   * above but keyed on the new header, with its own unique per-run keys so
+   * neither test's budget burn can pollute the other.
    */
   it("SEARCH_LIMITER buckets on X-TJ-Client-IP — different values don't share a bucket, the same value does", async () => {
-    await withWindowRolloverRetry(async () => {
-      const ipA = `test-${crypto.randomUUID()}`;
-      const ipB = `test-${crypto.randomUUID()}`;
+    const ipA = `test-${crypto.randomUUID()}`;
+    const ipB = `test-${crypto.randomUUID()}`;
+    await awaitLimiterBurstWindow();
 
-      // Burst ipA until it is throttled.
-      let sawRateLimitedA = false;
-      for (let i = 0; i < 35 && !sawRateLimitedA; i++) {
-        const response = await searchWithClientIpHeader(ipA);
-        if (response.status === 429) {
-          expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
-          sawRateLimitedA = true;
-        } else {
-          expect(response.status).toBe(200);
-        }
-      }
-      expect(sawRateLimitedA).toBe(true);
+    for (let i = 0; i < SEARCH_LIMIT; i++) {
+      expect((await searchWithClientIpHeader(ipA)).status).toBe(200);
+    }
+    const limited = await searchWithClientIpHeader(ipA);
+    expect(limited.status).toBe(429);
+    expect(((await limited.json()) as { code: string }).code).toBe("RATE_LIMITED");
 
-      // Immediately after the burst: ipA is still throttled right now.
-      expect((await searchWithClientIpHeader(ipA)).status).toBe(429);
+    // Immediately after the burst: ipA is still throttled right now.
+    expect((await searchWithClientIpHeader(ipA)).status).toBe(429);
 
-      // A DIFFERENT X-TJ-Client-IP is NOT throttled by ipA's exhausted bucket.
-      expect((await searchWithClientIpHeader(ipB)).status).toBe(200);
-    });
+    // A DIFFERENT X-TJ-Client-IP is NOT throttled by ipA's exhausted bucket.
+    expect((await searchWithClientIpHeader(ipB)).status).toBe(200);
   });
 });
