@@ -1,9 +1,10 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
 import { handlePurgeRequest } from "../src/lib/purge";
+import { readRouteManifest, serverBuilt } from "./helpers/route-manifest";
 
 import type { PurgeContext } from "../src/lib/purge";
 
@@ -43,8 +44,6 @@ const SECRET = "dev-purge-secret-not-for-production";
  */
 const PAGES_DIR = join(import.meta.dirname, "../src/pages");
 const ROUTE_FILE = join(PAGES_DIR, "internal/purge.ts");
-/** The built server bundle — present only after `pnpm --filter ...web build`. */
-const SERVER_ENTRY = join(import.meta.dirname, "../dist/server/entry.mjs");
 
 /** Every file under `dir`, recursively. Mirrors page-cache-inventory.test.ts. */
 function allFiles(dir: string): string[] {
@@ -84,13 +83,13 @@ describe("⚠️ the purge route is ROUTABLE (not just correct)", () => {
   // greps the real built manifest. Skipped without a build (a fresh clone has no
   // dist/), which is why it backs the location tests up rather than replacing them;
   // `pnpm exec playwright test` always builds first, so CI does exercise it.
-  it.skipIf(!existsSync(SERVER_ENTRY))(
+  it.skipIf(!serverBuilt)(
     "is present in the BUILT server manifest (the only real proof)",
     () => {
-      const entry = readFileSync(SERVER_ENTRY, "utf8");
+      const manifest = readRouteManifest();
       expect(
-        entry.includes('"route":"/internal/purge"'),
-        'dist/server/entry.mjs has no "route":"/internal/purge". The route did not survive the build — Astro dropped it (an "_"-prefixed segment?) or it was moved. api will POST into a 404 and every purge will silently fail.',
+        manifest.includes('"route":"/internal/purge"'),
+        'dist/server has no "route":"/internal/purge" anywhere under it. The route did not survive the build — Astro dropped it (an "_"-prefixed segment?) or it was moved. api will POST into a 404 and every purge will silently fail.',
       ).toBe(true);
     },
   );

@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { readRouteManifest, serverBuilt } from "./helpers/route-manifest";
+
 /**
  * THE PUBLIC POST PAGE — src/pages/[handle]/[slug].astro.
  *
@@ -253,14 +255,8 @@ describe("comments SSR (M2.2)", () => {
  * on-the-wire capture in the report instead of asserted vacuously.
  */
 describe("built route manifest (when dist/ is present)", () => {
-  const serverDir = join(import.meta.dirname, "../dist/server");
-  const built = existsSync(serverDir);
-
-  it.runIf(built)("contains the /[handle]/[slug] route and neither trap route", () => {
-    const manifest = readdirSync(serverDir)
-      .filter((f) => f.endsWith(".mjs"))
-      .map((f) => readFileSync(join(serverDir, f), "utf8"))
-      .join("\n");
+  it.runIf(serverBuilt)("contains the /[handle]/[slug] route and neither trap route", () => {
+    const manifest = readRouteManifest();
     expect(manifest).toContain('"route":"/[handle]/[slug]"');
     // Positive proved; now the `@[username]` trap route must be absent. (The
     // `_`-prefix trap is covered build-independently by the src/pages source
@@ -269,7 +265,7 @@ describe("built route manifest (when dist/ is present)", () => {
     expect(manifest).not.toContain('"route":"/@');
   });
 
-  it.skipIf(built)("SKIPPED: no dist/ — reachability is deploy-gate + report-verified", () => {
-    expect(built).toBe(false);
+  it.skipIf(serverBuilt)("SKIPPED: no dist/ — reachability is deploy-gate + report-verified", () => {
+    expect(serverBuilt).toBe(false);
   });
 });

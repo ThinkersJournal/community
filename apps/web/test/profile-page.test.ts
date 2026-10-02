@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { readRouteManifest, serverBuilt } from "./helpers/route-manifest";
+
 /**
  * THE PUBLIC PROFILE PAGE — src/pages/[handle]/index.astro.
  *
@@ -226,18 +228,11 @@ describe("no `_`-prefixed or `@`-prefixed segment anywhere under src/pages", () 
  * MANIFEST REACHABILITY — build-gated, same rationale as test/post-page.test.ts.
  */
 describe("built route manifest (when dist/ is present)", () => {
-  const serverDir = join(import.meta.dirname, "../dist/server");
-  const built = existsSync(serverDir);
-
-  it.runIf(built)("contains the /[handle] route", () => {
-    const manifest = readdirSync(serverDir)
-      .filter((f) => f.endsWith(".mjs"))
-      .map((f) => readFileSync(join(serverDir, f), "utf8"))
-      .join("\n");
-    expect(manifest).toContain('"route":"/[handle]"');
+  it.runIf(serverBuilt)("contains the /[handle] route", () => {
+    expect(readRouteManifest()).toContain('"route":"/[handle]"');
   });
 
-  it.skipIf(built)("SKIPPED: no dist/ — reachability is deploy-gate + report-verified", () => {
-    expect(built).toBe(false);
+  it.skipIf(serverBuilt)("SKIPPED: no dist/ — reachability is deploy-gate + report-verified", () => {
+    expect(serverBuilt).toBe(false);
   });
 });

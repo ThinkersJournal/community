@@ -1,10 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { readRouteManifest, serverBuilt } from "./helpers/route-manifest";
+
 const DIR = join(import.meta.dirname, "../src/pages/api");
-const SERVER_ENTRY = join(import.meta.dirname, "../dist/server/entry.mjs");
 
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
@@ -75,14 +76,13 @@ describe("mutating proxies forward the CSRF token + origin", () => {
 });
 
 describe("built route manifest (when dist/ is present)", () => {
-  const built = existsSync(SERVER_ENTRY);
-  it.runIf(built)("contains all three /api/* routes", () => {
-    const entry = readFileSync(SERVER_ENTRY, "utf8");
-    expect(entry).toContain('"route":"/api/follow"');
-    expect(entry).toContain('"route":"/api/unfollow"');
-    expect(entry).toContain('"route":"/api/social"');
+  it.runIf(serverBuilt)("contains all three /api/* routes", () => {
+    const manifest = readRouteManifest();
+    expect(manifest).toContain('"route":"/api/follow"');
+    expect(manifest).toContain('"route":"/api/unfollow"');
+    expect(manifest).toContain('"route":"/api/social"');
   });
-  it.skipIf(built)("SKIPPED: no dist/ — reachability is E2E + deploy-gate verified", () => {
-    expect(built).toBe(false);
+  it.skipIf(serverBuilt)("SKIPPED: no dist/ — reachability is E2E + deploy-gate verified", () => {
+    expect(serverBuilt).toBe(false);
   });
 });
