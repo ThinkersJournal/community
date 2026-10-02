@@ -166,6 +166,11 @@ writes exactly one. Every legal hold and every `csam_cases` row references it, s
    applies: plan A's `already_disabled` early-out excludes `terminate` by construction, and on an already-barred
    account it keeps the original `disabled_at` and sets `disabled_reason = 'terminate'`. The only other outcome is
    `not_found`, for an uploader deleted mid-intake, which is skipped.
+7a. For **every** uploader in step 3's set, in id order (lock order): `imposeAccountHoldInTx(c, { userId, category:
+    "csam", imposedBy: actorAdmin, reason: <case text>, moderationActionId: holdActionId })` (account-legal-hold spec
+    §3 T2). This is **not** a line inside step 7: step 7 loops only over the uploaders §3.4 bars, so adding it there
+    would leave every unbarred uploader deletable. Every uploader in a case gets a `csam` account hold in the intake
+    transaction, whether or not R1 bars them — a hold blocks deletion, not access.
 8. `INSERT csam_case_files` (case id, key, sha256, `viewed_by_esp`). For **each uploader**, `INSERT ncmec_reports`
    (`pending`, or `awaiting_credentials` per §4.4) plus one `ncmec_report_files` row for **each of the case's files
    that uploader's own `media` row holds**. A report attaches only what that person uploaded (R3).

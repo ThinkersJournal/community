@@ -174,9 +174,13 @@ Soft-disable, never a row delete — the row and its content are evidence. Two c
 - **Login and the mutating pipeline refuse** a user with `disabled_at IS NOT NULL` or
   `suspended_until > now()`, and the action **bumps the security epoch** to kill live sessions.
   Existing-session kill + login refusal together are what actually make a ban stick.
-- ⚠️ **The unverified-account reaper must skip these.** `auth/reap-unverified.ts:46-55` hard
-  `DELETE`s unverified accounts older than 7 days; a banned or CSAM-terminated account could be
-  unverified. It gains `AND disabled_at IS NULL AND suspended_until IS NULL`.
+- ⚠️ **The unverified-account reaper must skip a legally held account, not merely a banned one**
+  (Reworded 2026-10-01: a ban alone is access control, not a hold, per CireSnave). `disabled_at` and
+  `suspended_until` are access control only, so a banned or CSAM-terminated account with no hold is
+  reaped like any other unverified account. `auth/reap-unverified.ts` hard `DELETE`s unverified
+  accounts older than 7 days; one subject to an active legal hold could be unverified. It gains
+  `AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id AND h.released_at IS NULL)`
+  (account-legal-hold spec §4, AC-3 as reworded there).
 
 **Warnings need no column** — a warning is a `moderation_actions` row, and "history" for the
 proportionality ladder is a count of prior actions against that user.
@@ -488,6 +492,6 @@ Collected so the implementation PR is checked against a list rather than a reade
 |---|---|---|
 | **AC-1** | A DSA notice never counts toward auto-hide (§8) | Three throwaway addresses could otherwise hide any post |
 | **AC-2** | The append-only trigger is proven to **reject** an UPDATE *and* a DELETE | A guard never shown to fire is a claim, not a guard |
-| **AC-3** | A disabled/suspended unverified account **survives** `reapUnverifiedAccounts` | Otherwise a banned user, and the evidence, is silently deleted after 7 days (issue #35) |
+| **AC-3** | A **legally held** unverified account survives `reapUnverifiedAccounts`. | Otherwise the evidence a hold protects is silently deleted after 7 days. (Reworded 2026-10-01: a ban alone is access control, not a hold, per CireSnave.) |
 | **AC-4** | A suspended user is refused at **login** as well as on mutations | Killing live sessions alone does not stop re-entry (issue #35) |
 | **AC-5** | No second visibility predicate is introduced on `posts`/`comments` | The structural guard enforces `hidden_at` only; a second column widens the leak surface unguarded (§4.3) |
