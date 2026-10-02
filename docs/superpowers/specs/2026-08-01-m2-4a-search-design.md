@@ -151,7 +151,7 @@ export const SEARCH_MAX_OFFSET = 200;
 1. **Anonymous + viewer-independent.** `/public/search` reads no session; the web page calls `apiFetch` with no `request` (cookie never forwarded) — the same structural anti-leak defense as every `/public/*` read, so edge-caching cannot serve one viewer's data to another (there is none).
 2. **No draft / un-onboarded leakage.** Posts filtered `status = 'published'`; people filtered `username_chosen = true` (both enforced in the query AND the partial index predicate).
 3. **Parameterized, no metacharacter injection.** `$q` is always a bind parameter; the similarity operator (not `ILIKE`) makes `%`/`_` literal — no escaping, no injection.
-4. **Bounded cost.** min/max `q` length + `offset` cap + `LIMIT PAGE_SIZE+1` + the GIN index keep every query bounded. Cloudflare fronts crude DoS. App-level IP rate limiting is a documented deferral (there is no IP-keyed limiter in the codebase yet).
+4. **Bounded cost.** min/max `q` length + `offset` cap + `LIMIT PAGE_SIZE+1` + the GIN index keep every query bounded. Cloudflare fronts crude DoS. App-level IP rate limiting has since shipped: `SEARCH_LIMITER` (#117, spec-vs-code audit 2026-09-27), keyed via `clientIp(request)` (apps/api/src/http/client-ip.ts).
 5. **HTML safety.** The web page renders user-derived text (titles, names, bios, excerpts) through Astro's default escaping / `textContent`, same as the existing listing pages — never raw markup.
 
 ## Section 7 — Testing
@@ -184,7 +184,7 @@ Whole-branch adversarial review (Ultracode) at the end; CI-gated PR → merge (f
 
 ## Section 10 — Deferred / future (documented)
 
-- App-level **IP rate limiting** for `/public/*` (no IP-keyed limiter exists yet; Cloudflare fronts DoS meanwhile).
+- ~~App-level **IP rate limiting** for `/public/*`~~ — SHIPPED for `/public/search` as `SEARCH_LIMITER` (#117), keyed via `clientIp(request)`. Still deferred for any OTHER `/public/*` route.
 - **Search-by-tag** and tag facets — fold in at **M2.4c Tags**.
 - Result **snippets / highlighting** (trigram highlighting is harder than FTS `ts_headline`).
 - **Autocomplete / suggestions** (typeahead).

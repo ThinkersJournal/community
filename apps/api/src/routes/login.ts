@@ -208,11 +208,17 @@ export async function handleLogin(
   // file used to claim the single `ip:email` key gave both properties; it never
   // did — only the "one IP cannot spray many addresses" half was ever true.)
   //
-  // `CF-Connecting-IP` is absent off Cloudflare (and in tests), hence the
-  // stable placeholder. The `email:` prefix on (b) cannot practically collide
-  // with (a)'s `<ip>:<email>` shape: Cloudflare sets `CF-Connecting-IP` itself,
-  // so it is never the literal string "email" — and were it ever spoofed to
-  // collide, the two keys would merely SHARE a bucket, which is stricter.
+  // Every real request arrives over the web→api Service Binding, which does
+  // NOT forward `CF-Connecting-IP` — the web Worker's middleware reads it off
+  // the browser's request and re-sends it as `X-TJ-Client-IP`; `clientIp()`
+  // (apps/api/src/http/client-ip.ts) reads that first and falls back to
+  // `CF-Connecting-IP` only for a direct `worker.fetch()` call that bypasses
+  // `web` entirely (every test in this file). Either way, an absent IP still
+  // falls back to the stable "unknown" placeholder below. The `email:` prefix
+  // on (b) cannot practically collide with (a)'s `<ip>:<email>` shape:
+  // Cloudflare sets `CF-Connecting-IP` itself, so it is never the literal
+  // string "email" — and were it ever spoofed to collide, the two keys would
+  // merely SHARE a bucket, which is stricter.
   //
   // ⚠️ `email` here is the PARSED value, which `LoginInput` has already
   // lowercased — do NOT rebuild either key from the raw request body. The DB
