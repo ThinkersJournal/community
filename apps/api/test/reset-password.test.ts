@@ -50,6 +50,7 @@ async function mintToken(userId: string): Promise<string> {
   const ctx = createExecutionContext();
   const token = await createResetToken(env, ctx, userId);
   await waitOnExecutionContext(ctx);
+  if (token === null) throw new Error(`createResetToken minted nothing for ${userId}`);
   return token;
 }
 
@@ -226,5 +227,44 @@ describe("POST /auth/reset-password", () => {
     // The token must still be UNREDEEMED — the origin rejection happened
     // before the token was ever looked up.
     expect((await resetPassword({ token, password: NEW_PASSWORD })).status).toBe(200);
+  });
+});
+
+/**
+ * Account-legal-hold (PM ruling B: no mail or authentication path can reach a
+ * deleted account). A reset token minted just before the reaper's scrub
+ * committed must not write a working password onto the anonymised row, nor
+ * mint a session for it. The token row is inserted directly, since
+ * createResetToken itself refuses an anonymised id.
+ */
+describe("POST /auth/reset-password — an anonymised account", () => {
+  it("400 INVALID_RESET_TOKEN, password_hash stays '!anonymised!', no session, no epoch bump", async () => {
+    const actor = await createVerifiedActor();
+    const token = crypto.randomUUID() + crypto.randomUUID();
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      await c.query(
+        `UPDATE users
+            SET anonymised_at = now(), password_hash = '!anonymised!',
+                email = 'deleted-' || id || '@invalid.thinkersjournal.local'
+          WHERE id = $1`,
+        [actor.userId],
+      );
+      await c.query(
+        `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, now() + interval '1 hour')`,
+        [actor.userId, await sha256Hex(token)],
+      );
+    });
+    await waitOnExecutionContext(ctx);
+    const epoch = await env.USER_SECURITY.getByName(actor.userId).getEpoch();
+
+    const response = await resetPassword({ token, password: NEW_PASSWORD });
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { code: string }).code).toBe("INVALID_RESET_TOKEN");
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+    expect((await userRow(actor.userId)).password_hash).toBe("!anonymised!");
+    expect(await env.USER_SECURITY.getByName(actor.userId).getEpoch()).toBe(epoch);
   });
 });

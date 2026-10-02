@@ -276,3 +276,27 @@ describe("runEmailDrain", () => {
     await resetLock();
   });
 });
+
+describe("runEmailDrain — an anonymised recipient (account-legal-hold, PM ruling B)", () => {
+  it("NEVER emails an anonymised recipient's sentinel address; CONTROL: a live recipient in the same pass is emailed", async () => {
+    await resetLock();
+    const deleted = await createVerifiedActor();
+    const live = await createVerifiedActor();
+    const actor = await createVerifiedActor();
+    const deletedId = await seedNotif(deleted.userId, actor.userId, "post_comment"); // direct → instant
+    const liveId = await seedNotif(live.userId, actor.userId, "post_comment");
+    const sentinel = `deleted-${deleted.userId}@invalid.thinkersjournal.local`;
+    await ctxRun((c) =>
+      c.query("UPDATE users SET anonymised_at = now(), email = $2 WHERE id = $1", [deleted.userId, sentinel]),
+    );
+    const liveEmail = await emailOf(live.userId);
+    const sends = stubPostmark();
+
+    await drain("instant");
+
+    expect(sends.filter((s) => s.to === sentinel)).toHaveLength(0);
+    expect(await emailedAt(deletedId)).toBeNull();
+    expect(sends.filter((s) => s.to === liveEmail)).toHaveLength(1);
+    expect(await emailedAt(liveId)).not.toBeNull();
+  });
+});

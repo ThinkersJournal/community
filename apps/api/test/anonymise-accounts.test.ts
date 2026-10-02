@@ -359,9 +359,11 @@ describe("anonymiseExpiredAccounts — a held account is never scrubbed; a ban a
 
   it("AH-1 / RF2: a held account is not anonymised, whatever its ban state; after a dmca release the next run proceeds", async () => {
     // Held but neither banned nor suspended: proves the hold ALONE gates it.
-    const heldPlain = await seedAccount();
-    const heldBanned = await seedAccount({ banned: true });
-    const heldSuspended = await seedAccount({ suspendedUntil: new Date(Date.now() + 864e5) });
+    // Seeded INELIGIBLE, held, and only THEN made due, so no parallel file's
+    // reaper can scrub a fixture before its hold exists (same order as RF6).
+    const heldPlain = await seedAccount({ eligible: false });
+    const heldBanned = await seedAccount({ eligible: false, banned: true });
+    const heldSuspended = await seedAccount({ eligible: false, suspendedUntil: new Date(Date.now() + 864e5) });
     const control = await seedAccount();
     const dmcaHoldId = await ctxRun(async (c) => {
       const holdId = await imposeHold(c, heldPlain.id, "dmca");
@@ -369,6 +371,7 @@ describe("anonymiseExpiredAccounts — a held account is never scrubbed; a ban a
       await imposeHold(c, heldSuspended.id, "other");
       return holdId;
     });
+    for (const f of [heldPlain, heldBanned, heldSuspended]) await makeEligible(f.id);
 
     await runReaper();
 
@@ -507,13 +510,18 @@ describe("anonymiseExpiredAccounts — one row's failure never stops the batch (
           await makeEligible(x.id);
 
           const ctx = createExecutionContext();
+          const start = Date.now();
           const outcome = await anonymiseExpiredAccounts(env, ctx).then(
             (n) => ({ ok: true as const, n }),
             (err: unknown) => ({ ok: false as const, err }),
           );
+          const waited = Date.now() - start;
           await waitOnExecutionContext(ctx);
 
           expect(outcome, "the reaper threw on one locked row").toMatchObject({ ok: true });
+          // The run really waited out X's lock_timeout. Without this, a batch
+          // that never included X would pass every assertion below vacuously.
+          expect(waited, "the reaper never waited on X's lock").toBeGreaterThanOrEqual(5000);
           expect(await anonymisedAt(x.id), "a row locked past lock_timeout was scrubbed").toBeNull();
           expect(await anonymisedAt(y.id), "the locked row stopped the batch").not.toBeNull();
           expect(
@@ -596,12 +604,43 @@ describe("anonymiseExpiredAccounts — revoke before the scrub and after it (RF8
     await seedEligible();
     await seedEligible();
     const ctx = createExecutionContext();
-    // Every bump throws, so every candidate in this run fails, whatever else the
-    // shared DB holds: F === N.
-    await expect(anonymiseExpiredAccounts(recordingEnv(() => true, []), ctx)).rejects.toThrow(/all \d+ candidate\(s\) failed/);
+    // Every bump throws, so every candidate in this run fails and none is
+    // scrubbed, whatever else the shared DB holds.
+    await expect(anonymiseExpiredAccounts(recordingEnv(() => true, []), ctx)).rejects.toThrow(
+      /no candidate was anonymised and \d+ of \d+ failed/,
+    );
     await waitOnExecutionContext(ctx);
     // The partial case (one failing of two does NOT throw) is the test above:
     // X failed, Y was scrubbed, and the run resolved.
+  });
+
+  it("M5: a run that scrubs nothing still throws when the rows that did not fail were only skipped", async () => {
+    // Z's pre-scrub bump imposes a hold on Z first, so Z's re-check says no
+    // (skipped). Every other candidate's bump throws (failed). Nothing is
+    // scrubbed, so the failures are a dead connection or a down DO, and the
+    // skipped row must not mask them.
+    const z = await seedEligible();
+    await seedEligible();
+    const real = env.USER_SECURITY;
+    const stub = {
+      getByName(userId: string) {
+        const inner = real.getByName(userId);
+        return {
+          getEpoch: () => inner.getEpoch(),
+          bumpEpoch: async () => {
+            if (userId !== z) throw new Error("forced pre-scrub bump failure");
+            await ctxRun((c) => imposeHold(c, z, "other"));
+            return inner.bumpEpoch();
+          },
+        };
+      },
+    };
+    const e = { ...env, USER_SECURITY: stub as unknown as Env["USER_SECURITY"] };
+
+    const ctx = createExecutionContext();
+    await expect(anonymiseExpiredAccounts(e, ctx)).rejects.toThrow(/no candidate was anonymised and \d+ of \d+ failed/);
+    await waitOnExecutionContext(ctx);
+    expect(await anonymisedAt(z), "the held row was scrubbed").toBeNull();
   });
 });
 

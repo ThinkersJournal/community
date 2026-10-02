@@ -21,8 +21,11 @@
  * PM applied the same principle to this reaper. `disabled_at`/`suspended_until`
  * are access control only, so a banned or suspended unverified account with no
  * hold is deleted like any other (spec §4a accepts that for an account that
- * never verified, and so could never post). It deletes in ONE statement, so it
- * needs no row lock: a deleted row has no hash and no profile left to scrub.
+ * never verified, and so could never post). It deletes in ONE statement, and
+ * its inner SELECT takes `FOR UPDATE SKIP LOCKED`: every hold imposer locks the
+ * `users` row before inserting its hold, so a row locked by an imposer (or by
+ * anything else) is skipped, never deleted out from under it, and the next
+ * nightly run reconsiders it.
  */
 import { withClient } from "../db/client";
 
@@ -67,6 +70,7 @@ export async function reapUnverifiedAccounts(
                               WHERE h.user_id = users.id AND h.released_at IS NULL)
            ORDER BY created_at
            LIMIT $1
+           FOR UPDATE SKIP LOCKED
         )`,
       [REAP_BATCH],
     );

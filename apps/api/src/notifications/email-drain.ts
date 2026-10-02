@@ -42,6 +42,9 @@ const SELECT_ELIGIBLE = `
    WHERE n.emailed_at IS NULL
      AND n.read_at IS NULL
      AND u.email_verified_at IS NOT NULL
+     -- A deleted account's email is the undeliverable sentinel (account-legal-hold
+     -- spec §4a): never mail it.
+     AND u.anonymised_at IS NULL
      AND COALESCE(np.master_enabled, true) = true
      AND CASE
            WHEN n.kind IN ('post_comment','comment_reply')   THEN COALESCE(np.direct, 'instant')

@@ -265,7 +265,8 @@ describe("GET /__test/last-reset-token", () => {
   it("does not stash the raw token when TEST_ROUTES is unset", async () => {
     // `password_reset_tokens.user_id` is a real FK (unlike verification
     // tokens, which live in KV with no such constraint) — a made-up id would
-    // throw, so this needs a real user, not a random uuid.
+    // mint nothing (createResetToken's INSERT … SELECT finds no row), so this
+    // needs a real user, not a random uuid.
     const actor = await createVerifiedActor();
     const prodEnv = { ...env, TEST_ROUTES: undefined } as unknown as Env;
     const ctx = createExecutionContext();
@@ -326,5 +327,57 @@ describe("AH-7 — forgot-password for a deleted, banned account's original addr
     expect(
       await sql("SELECT 1 FROM password_reset_tokens WHERE user_id = $1", [actor.userId]),
     ).toEqual([]);
+  });
+});
+
+/**
+ * Account-legal-hold (PM ruling B). forgot-password reads `id, email`, then
+ * mints a token; a scrub can commit in between. `createResetToken` therefore
+ * inserts only for a row that is not anonymised, and forgot-password mails
+ * only when a token was minted, answering the same 202 either way.
+ */
+describe("AH-7 — no reset token or mail for an anonymised account", () => {
+  async function anonymise(userId: string): Promise<string> {
+    const sentinel = `deleted-${userId}@invalid.thinkersjournal.local`;
+    await sql("UPDATE users SET anonymised_at = now(), email = $2, password_hash = '!anonymised!' WHERE id = $1", [
+      userId,
+      sentinel,
+    ]);
+    return sentinel;
+  }
+
+  it("createResetToken on an anonymised id returns null and inserts nothing", async () => {
+    const actor = await createVerifiedActor();
+    await anonymise(actor.userId);
+
+    const ctx = createExecutionContext();
+    const token = await createResetToken(env, ctx, actor.userId);
+    await waitOnExecutionContext(ctx);
+
+    expect(token).toBeNull();
+    expect(await sql("SELECT 1 FROM password_reset_tokens WHERE user_id = $1", [actor.userId])).toEqual([]);
+  });
+
+  it("a request that reaches an anonymised row sends no mail and answers exactly as the normal case", async () => {
+    // The sentinel address is the one thing a request can name that still
+    // finds the row after the scrub, so it stands in for the race window.
+    const normal = await createVerifiedActor();
+    const normalEmail = (await lookupEmail(normal.userId))!;
+    const deleted = await createVerifiedActor();
+    const sentinel = await anonymise(deleted.userId);
+
+    const normalCalls = stubFetch(true);
+    const normalRes = await forgotPassword(validBody(normalEmail));
+    expect(normalCalls, "CONTROL: the normal case mails").toHaveLength(1);
+    vi.unstubAllGlobals();
+
+    const calls = stubFetch(true);
+    const res = await forgotPassword(validBody(sentinel));
+
+    expect(res.status).toBe(normalRes.status);
+    expect(res.status).toBe(202);
+    expect(await res.text()).toBe(await normalRes.text());
+    expect(calls).toHaveLength(0);
+    expect(await sql("SELECT 1 FROM password_reset_tokens WHERE user_id = $1", [deleted.userId])).toEqual([]);
   });
 });

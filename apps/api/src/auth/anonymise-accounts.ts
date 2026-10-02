@@ -36,8 +36,8 @@
  * Each row's security epoch is bumped BEFORE its scrub (a failed bump skips the
  * row, unscrubbed) and again right after its COMMIT. A row whose scrub fails (a
  * lock timeout, any error) is logged, skipped and retried by the next run. The
- * run logs `anonymised S, skipped (re-check) K, failed F of N`, and throws only
- * if every candidate failed. `main`'s reaper bumped epochs only after the whole
+ * run logs `anonymised S, skipped (re-check) K, failed F of N`, and throws when
+ * some row failed and none was scrubbed. `main`'s reaper bumped epochs only after the whole
  * loop, so an error mid-batch left every already-scrubbed account's sessions
  * live; this closes that.
  */
@@ -88,7 +88,7 @@ function scrubbedUsername(userId: string): string {
 /**
  * Scrub accounts whose 30-day grace period has passed with no cancel and no
  * active legal hold. Returns the number anonymised, for the caller to
- * log/observe. Throws only when every candidate failed.
+ * log/observe. Throws when some candidate failed and none was scrubbed.
  */
 export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext): Promise<number> {
   const candidates = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
@@ -120,6 +120,8 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
       // been logged out (they asked for deletion 30+ days ago, or a hold has
       // just landed). Bump #2 closes the window for a login that lands
       // between bump #1 and the COMMIT.
+      // A connection lost mid-batch logs out every remaining candidate without
+      // scrubbing it. Intended: each asked for deletion 30+ days ago.
       try {
         await env.USER_SECURITY.getByName(id).bumpEpoch();
       } catch (err) {
@@ -159,11 +161,15 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
   const summary = `anonymise-accounts: anonymised ${scrubbed}, skipped (re-check) ${skipped}, failed ${failed} of ${n}`;
   if (failed > 0) console.error(summary);
   else console.log(summary);
-  // ⚠️ EVERY row failing is not "a bad row": it is a dead connection or a
-  // down DO. Fail the cron visibly. A partial failure does not throw: the
-  // rows that worked are done, and the rest retry tomorrow.
-  if (n > 0 && failed === n) {
-    throw new Error(`anonymise-accounts: all ${n} candidate(s) failed; see the per-row errors above`);
+  // ⚠️ FAILURES WITH NOTHING SCRUBBED are not "a bad row": they are a dead
+  // connection or a down DO. Fail the cron visibly. Keyed on `scrubbed === 0`,
+  // not `failed === n`, so rows the re-check merely skipped (held, cancelled)
+  // can't mask a dead connection. A partial failure, with at least one row
+  // scrubbed, does not throw: those rows are done, and the rest retry tomorrow.
+  if (failed > 0 && scrubbed === 0) {
+    throw new Error(
+      `anonymise-accounts: no candidate was anonymised and ${failed} of ${n} failed; see the per-row errors above`,
+    );
   }
   return scrubbed;
 }

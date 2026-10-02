@@ -124,6 +124,12 @@ export async function handleForgotPassword(
   // See the file header: awaiting it here would make the response itself
   // carry the network-latency gap between "found" and "not found".
   const token = await createResetToken(env, ctx, user.id);
+  // null: the account was anonymised after the lookup above (the reaper's
+  // scrub committed in between). Nothing was minted, so nothing is mailed, and
+  // the answer is the same 202 as every other path.
+  if (token === null) {
+    return accepted();
+  }
   const resetUrl = `${verificationLinkOrigin(request)}/reset-password?token=${encodeURIComponent(token)}`;
   ctx.waitUntil(sendPasswordResetEmail(env, user.email, resetUrl));
 

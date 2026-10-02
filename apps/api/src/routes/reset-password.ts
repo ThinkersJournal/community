@@ -125,14 +125,23 @@ export async function handleResetPassword(
 
       // RETURNING the barring columns from the row just written, so step 5's
       // bar check judges the same row state this transaction saw.
+      // `anonymised_at IS NULL`: a token minted just before the reaper's scrub
+      // committed must not write a working password onto a deleted account
+      // (account-legal-hold spec §4a, PM ruling B). 0 rows: roll back (the
+      // token stays unspent, and useless) and answer the generic invalid token,
+      // with no epoch bump and no session.
       const { rows: updated } = await c.query<AccountStatusRow>(
         `UPDATE users
             SET password_hash = $1,
                 email_verified_at = COALESCE(email_verified_at, now())
-          WHERE id = $2
+          WHERE id = $2 AND anonymised_at IS NULL
         RETURNING suspended_until, disabled_at`,
         [passwordHash, row.user_id],
       );
+      if (updated.length === 0) {
+        await c.query("ROLLBACK");
+        return null;
+      }
 
       // ---- Epoch bump — BEFORE THE COMMIT, see the file header ------------
       await env.USER_SECURITY.getByName(row.user_id).bumpEpoch();

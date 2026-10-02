@@ -270,3 +270,57 @@ describe("POST /__test/reap-unverified", () => {
     expect(response.status).toBe(404);
   });
 });
+
+/**
+ * The reaper's inner SELECT takes `FOR UPDATE SKIP LOCKED`: a row another
+ * transaction has locked (every hold imposer locks the `users` row first) is
+ * skipped, never waited on and never deleted under the imposer's feet.
+ */
+describe("reapUnverifiedAccounts — a row another transaction has locked is skipped (SKIP LOCKED)", () => {
+  it("a row held FOR NO KEY UPDATE survives the run, the run does not wait on it, and an unlocked row is still reaped", async () => {
+    // Seeded NOT yet eligible, so no parallel run can reap it before the lock
+    // is held. KEY SHARE first, so the third client's autocommit UPDATE of a
+    // non-key column (NO KEY UPDATE) can make it eligible; the holder then
+    // upgrades to FOR NO KEY UPDATE, which its own KEY SHARE never blocks.
+    const locked = await seed({ verified: false, ageDays: 1 });
+    const control = await seed({ verified: false, ageDays: 8 });
+
+    await ctxRun(async (holder) => {
+      await holder.query("BEGIN");
+      try {
+        await holder.query("SELECT 1 FROM users WHERE id = $1 FOR KEY SHARE", [locked.id]);
+        await ctxRun((c) =>
+          c.query("UPDATE users SET created_at = now() - interval '8 days' WHERE id = $1", [locked.id]),
+        );
+        await holder.query("SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE", [locked.id]);
+
+        const ctx = createExecutionContext();
+        const reaper = reapUnverifiedAccounts(env, ctx);
+        const finished = await Promise.race([
+          reaper.then(() => true),
+          new Promise<boolean>((r) => setTimeout(() => r(false), 3000)),
+        ]);
+        if (!finished) {
+          // Release the lock so the blocked reaper can finish, then fail.
+          await holder.query("COMMIT");
+          await Promise.allSettled([reaper]);
+          await waitOnExecutionContext(ctx);
+          throw new Error("the reaper waited on a locked row instead of skipping it");
+        }
+        await waitOnExecutionContext(ctx);
+        await holder.query("COMMIT");
+      } catch (err) {
+        try {
+          await holder.query("ROLLBACK");
+        } catch {
+          // keep the root error
+        }
+        throw err;
+      }
+    });
+
+    expect(await present(locked.id), "a locked row was deleted").toBe(true);
+    // CONTROL, same run: the reaper did run.
+    expect(await present(control.id), "the reaper deleted nothing").toBe(false);
+  });
+});
