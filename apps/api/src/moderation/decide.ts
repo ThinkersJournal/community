@@ -17,6 +17,9 @@
 import type { Client } from "pg";
 
 import { BEGIN_BOUNDED_TX } from "../db/client";
+import type { LegalHoldCategory } from "../media/legal-hold";
+
+import { imposeAccountHoldInTx } from "./account-holds";
 import { recordModerationAction, type ModerationActionKind, type ViolationCategory } from "./actions";
 import { loadPostTagSlugs, type PurgeTarget } from "./purge-target";
 
@@ -32,6 +35,8 @@ export interface DecisionInput {
   readonly actorAdmin: string;
   readonly violationCategory?: ViolationCategory;
   readonly internalNote?: string;
+  /** Spec §3 T1: the author's account is held in THIS SAME transaction. */
+  readonly accountHold?: { readonly category: LegalHoldCategory };
 }
 
 export interface DecisionResult {
@@ -143,6 +148,18 @@ export async function applyDecision(
         RETURNING id, reporter_email`,
       [row.id, actionId],
     );
+
+    if (input.accountHold !== undefined) {
+      // Spec §3 T1: the author's account is held in THE SAME transaction as the
+      // decision — unlike the image hold, which stays post-commit and best-effort.
+      await imposeAccountHoldInTx(c, {
+        userId: row.author_id,
+        category: input.accountHold.category,
+        imposedBy: input.actorAdmin,
+        reason: input.reason,
+        moderationActionId: actionId,
+      });
+    }
 
     const purge: PurgeTarget =
       input.subject === "post"

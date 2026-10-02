@@ -5,7 +5,7 @@ import worker from "../src/index";
 import { __resetJwksCacheForTests } from "../src/admin/access-jwt";
 import { withClient } from "../src/db/client";
 
-import type { DecisionInput } from "../src/moderation/decide";
+import { applyDecision, type DecisionInput } from "../src/moderation/decide";
 
 const TEAM = "testteam.cloudflareaccess.com";
 const AUD = "test-aud-tag";
@@ -781,5 +781,164 @@ describe("POST /admin/decision — #61 media visibility", () => {
     const res = await decide({ subject: "post", subjectId: post, decision: "restore", reason: "x" });
     expect(res.status).toBe(200);
     expect(await env.MEDIA.head(keyFor(sha))).not.toBeNull();
+  });
+});
+
+describe("POST /admin/decision — T1 account legal hold", () => {
+  async function activeHoldFor(userId: string): Promise<{ category: string; moderation_action_id: string | null } | null> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ category: string; moderation_action_id: string | null }>(
+        `SELECT category, moderation_action_id FROM account_legal_holds
+          WHERE user_id = $1 AND released_at IS NULL`,
+        [userId],
+      );
+      return rows[0] ?? null;
+    });
+  }
+
+  async function lastActionId(subjectId: string): Promise<string> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `SELECT id FROM moderation_actions
+          WHERE post_id = $1 OR comment_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [subjectId],
+      );
+      return rows[0]!.id;
+    });
+  }
+
+  it("remove with legalHold: true, legalHoldCategory: dmca holds the author's account, tied to the decision's action", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const res = await decide({
+      subject: "post",
+      subjectId: post.id,
+      decision: "remove",
+      reason: "x",
+      legalHold: true,
+      legalHoldCategory: "dmca",
+    } as unknown as Partial<DecisionInput> & { subject: "post"; subjectId: string; decision: "remove" });
+    expect(res.status).toBe(200);
+
+    const actionId = await lastActionId(post.id);
+    const hold = await activeHoldFor(userId);
+    expect(hold).not.toBeNull();
+    expect(hold?.category).toBe("dmca");
+    expect(hold?.moderation_action_id).toBe(actionId);
+  });
+
+  it("a decision without a legal hold leaves the author with no account hold", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const res = await decide({ subject: "post", subjectId: post.id, decision: "remove", reason: "x" });
+    expect(res.status).toBe(200);
+
+    const hold = await activeHoldFor(userId);
+    expect(hold).toBeNull();
+  });
+
+  it("AH-3: a commit-time failure after the account-hold insert leaves neither the decision nor the hold", async () => {
+    const authorId = await seedUser();
+    const post = await seedPost(authorId);
+    // Unique names: the test DB is shared across files, and the WHEN clause
+    // scopes the trigger to THIS author, so no other file's holds are affected.
+    const suffix = crypto.randomUUID().replace(/-/g, "");
+    const fnName = `test_fail_on_account_hold_${suffix}`;
+    const trgName = `test_fail_account_hold_${suffix}`;
+    await ctxRun(async (c) => {
+      await c.query(
+        `CREATE FUNCTION ${fnName}() RETURNS trigger AS $$
+         BEGIN
+           RAISE EXCEPTION 'forced failure after account hold';
+         END;
+         $$ LANGUAGE plpgsql`,
+      );
+      // DEFERRED: fires at COMMIT, strictly after decide.ts's hold INSERT (and
+      // every other write) has run in the still-open transaction.
+      await c.query(
+        `CREATE CONSTRAINT TRIGGER ${trgName}
+           AFTER INSERT ON account_legal_holds
+           DEFERRABLE INITIALLY DEFERRED
+           FOR EACH ROW
+           WHEN (NEW.user_id = '${authorId}'::uuid)
+           EXECUTE FUNCTION ${fnName}()`,
+      );
+    });
+    try {
+      await expect(
+        ctxRun((c) =>
+          applyDecision(c, {
+            subject: "post",
+            subjectId: post.id,
+            decision: "remove",
+            reason: "x",
+            actorAdmin: adminEmail,
+            accountHold: { category: "dmca" },
+          }),
+        ),
+      ).rejects.toThrow(/forced failure after account hold/);
+
+      const after = await ctxRun(async (c) => {
+        const hidden = await c.query<{ hidden_at: Date | null }>(`SELECT hidden_at FROM posts WHERE id = $1`, [post.id]);
+        const actions = await c.query(`SELECT 1 FROM moderation_actions WHERE post_id = $1`, [post.id]);
+        const holds = await c.query(`SELECT 1 FROM account_legal_holds WHERE user_id = $1`, [authorId]);
+        return { hiddenAt: hidden.rows[0]!.hidden_at, actions: actions.rowCount, holds: holds.rowCount };
+      });
+      expect(after).toEqual({ hiddenAt: null, actions: 0, holds: 0 });
+    } finally {
+      await ctxRun(async (c) => {
+        await c.query(`DROP TRIGGER IF EXISTS ${trgName} ON account_legal_holds`);
+        await c.query(`DROP FUNCTION IF EXISTS ${fnName}()`);
+      });
+    }
+  });
+
+  it("control: the same deferred-failure setup scoped to an unrelated author succeeds and leaves a hold", async () => {
+    const authorId = await seedUser();
+    const post = await seedPost(authorId);
+    const unrelatedId = crypto.randomUUID();
+    const suffix = crypto.randomUUID().replace(/-/g, "");
+    const fnName = `test_fail_on_account_hold_${suffix}`;
+    const trgName = `test_fail_account_hold_${suffix}`;
+    await ctxRun(async (c) => {
+      await c.query(
+        `CREATE FUNCTION ${fnName}() RETURNS trigger AS $$
+         BEGIN
+           RAISE EXCEPTION 'forced failure after account hold';
+         END;
+         $$ LANGUAGE plpgsql`,
+      );
+      await c.query(
+        `CREATE CONSTRAINT TRIGGER ${trgName}
+           AFTER INSERT ON account_legal_holds
+           DEFERRABLE INITIALLY DEFERRED
+           FOR EACH ROW
+           WHEN (NEW.user_id = '${unrelatedId}'::uuid)
+           EXECUTE FUNCTION ${fnName}()`,
+      );
+    });
+    try {
+      const result = await ctxRun((c) =>
+        applyDecision(c, {
+          subject: "post",
+          subjectId: post.id,
+          decision: "remove",
+          reason: "x",
+          actorAdmin: adminEmail,
+          accountHold: { category: "dmca" },
+        }),
+      );
+      expect(result).not.toBeNull();
+      const hold = await activeHoldFor(authorId);
+      expect(hold).not.toBeNull();
+      expect(hold?.category).toBe("dmca");
+    } finally {
+      await ctxRun(async (c) => {
+        await c.query(`DROP TRIGGER IF EXISTS ${trgName} ON account_legal_holds`);
+        await c.query(`DROP FUNCTION IF EXISTS ${fnName}()`);
+      });
+    }
   });
 });
