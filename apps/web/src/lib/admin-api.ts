@@ -24,6 +24,7 @@ import { env } from "cloudflare:workers";
 
 import { ACCESS_JWT_HEADER, isApiErrorBody, type ApiErrorCode } from "@thinkersjournal/shared";
 
+import { applyClientIpHeader, clientIpStore } from "./client-ip-store";
 import { resolveOutgoingBody } from "./outgoing-body";
 
 import type { ApiResponse } from "./api";
@@ -54,6 +55,14 @@ export async function adminApiFetch<T = unknown>(
   headers.set(ACCESS_JWT_HEADER, accessJwt);
   if (origin !== undefined) headers.set("Origin", origin);
   if (body !== undefined) headers.set("content-type", "application/json");
+
+  // Same rule as apiFetch (src/lib/api.ts): the real client IP, UNCONDITIONAL
+  // and LAST, so nothing above can inject or override it. This path builds
+  // its own `headers` from scratch (no caller/browser headers forwarded), so
+  // there is no live injection here today — applied anyway for consistency
+  // with every other Service-Binding call site (see client-ip-store.test.ts's
+  // enumeration test, which checks all of them).
+  applyClientIpHeader(headers, clientIpStore.getStore()?.clientIp ?? null);
 
   const outgoingBody = resolveOutgoingBody(body, undefined);
 

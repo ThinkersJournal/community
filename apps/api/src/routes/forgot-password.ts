@@ -50,6 +50,7 @@ import { createResetToken, sendPasswordResetEmail } from "../auth/password-reset
 import { enforceRateLimit } from "../auth/ratelimit";
 import { verifyTurnstile } from "../auth/turnstile";
 import { withClient } from "../db/client";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 
 /** The one 202 this route ever answers, on every reachable path. */
@@ -83,10 +84,10 @@ export async function handleForgotPassword(
   const { email, turnstileToken } = parsed.data;
 
   // ---- 3. Rate limit — two buckets, same reasoning as signup/login ----------
-  const clientIp = request.headers.get("CF-Connecting-IP");
+  const ip = clientIp(request);
   const ipLimited = await enforceRateLimit(
     env.RESET_LIMITER,
-    `${clientIp ?? "unknown"}:${email}`,
+    `${ip ?? "unknown"}:${email}`,
   );
   if (ipLimited !== null) return ipLimited;
   const emailLimited = await enforceRateLimit(env.RESET_LIMITER, `email:${email}`);
@@ -96,7 +97,7 @@ export async function handleForgotPassword(
   // never itself becomes a registered/unregistered timing signal ------------
   let turnstileOk: boolean;
   try {
-    turnstileOk = await verifyTurnstile(env, turnstileToken, clientIp ?? undefined);
+    turnstileOk = await verifyTurnstile(env, turnstileToken, ip ?? undefined);
   } catch (err) {
     console.error("turnstile verification errored", err);
     turnstileOk = false;

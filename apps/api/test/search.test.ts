@@ -1,10 +1,14 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { SEARCH_MAX_OFFSET, SEARCH_PAGE_SIZE, SEARCH_Q_MAX, SEARCH_Q_MIN } from "@thinkersjournal/shared";
+import {
+  CLIENT_IP_HEADER, SEARCH_MAX_OFFSET, SEARCH_PAGE_SIZE, SEARCH_Q_MAX, SEARCH_Q_MIN,
+} from "@thinkersjournal/shared";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
+
+import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 
 const created: string[] = [];
 afterAll(async () => {
@@ -314,33 +318,97 @@ describe("GET /public/search", () => {
   });
 
   /**
+   * ⚠️ WINDOW-ROLLOVER GUARD (fix round 3 — superseding rounds 1 and 2's
+   * retry-after-the-fact approach, which round 2's CI failure showed was
+   * still incomplete). Miniflare's `RateLimit` binding is a FIXED wall-clock
+   * window — `epoch = floor(now / 60000)`, not a sliding window counted from
+   * a burst's own first request — so a burst that straddles a minute
+   * boundary can have its count silently reset mid-flight. `awaitLimiterBurstWindow`
+   * (./helpers/limiter-window.ts, already used by login/signup/forgot-password/
+   * dsa-notice-route) holds the burst off until there is a full budget of the
+   * CURRENT window left, rather than detecting a roll-over after it already
+   * broke the assertion. Combined with a UNIQUE key per test run
+   * (`crypto.randomUUID()`), so no two runs — or this test and any other in
+   * the file — ever share a bucket.
+   */
+  async function searchWithIp(ip: string): Promise<Response> {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`${U}/public/search?q=ratelimittest&type=posts`, {
+        headers: { "CF-Connecting-IP": ip },
+      }),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    return response;
+  }
+
+  async function searchWithClientIpHeader(ip: string): Promise<Response> {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(`${U}/public/search?q=ratelimittest&type=posts`, {
+        headers: { [CLIENT_IP_HEADER]: ip },
+      }),
+      env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    return response;
+  }
+
+  // Matches SEARCH_LIMITER's `simple: { limit: 30, period: 60 }` in
+  // apps/api/wrangler.jsonc — exactly `SEARCH_LIMIT` requests are allowed,
+  // the next one is the 429.
+  const SEARCH_LIMIT = 30;
+
+  /**
    * Enumeration/DoS-hardening fix (spec-vs-code audit, 2026-09-27):
-   * SEARCH_LIMITER. IP-keyed only (no session on this route) — a DEDICATED
-   * `CF-Connecting-IP` (a TEST-NET-3 address, never a real one) so this
-   * test's own budget burn cannot pollute or be polluted by the rest of this
-   * file, which sends no `CF-Connecting-IP` at all and shares the "unknown"
-   * bucket among themselves (same convention as test/login.test.ts).
+   * SEARCH_LIMITER. IP-keyed only (no session on this route) — a UNIQUE key
+   * per run (see the window-rollover guard above) so this test's own budget
+   * burn cannot pollute or be polluted by the rest of this file, which sends
+   * no `CF-Connecting-IP` at all and shares the "unknown" bucket among
+   * themselves (same convention as test/login.test.ts).
    */
   it("throttles a burst of searches from one IP (429 RATE_LIMITED)", async () => {
-    const ip = "203.0.113.50";
-    let sawRateLimited = false;
-    for (let i = 0; i < 35 && !sawRateLimited; i++) {
-      const ctx = createExecutionContext();
-      const response = await worker.fetch(
-        new Request(`${U}/public/search?q=ratelimittest&type=posts`, {
-          headers: { "CF-Connecting-IP": ip },
-        }),
-        env,
-        ctx,
-      );
-      await waitOnExecutionContext(ctx);
-      if (response.status === 429) {
-        expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
-        sawRateLimited = true;
-      } else {
-        expect(response.status).toBe(200);
-      }
+    const ip = `test-${crypto.randomUUID()}`;
+    await awaitLimiterBurstWindow();
+
+    for (let i = 0; i < SEARCH_LIMIT; i++) {
+      expect((await searchWithIp(ip)).status).toBe(200);
     }
-    expect(sawRateLimited).toBe(true);
+    const limited = await searchWithIp(ip);
+    expect(limited.status).toBe(429);
+    expect(((await limited.json()) as { code: string }).code).toBe("RATE_LIMITED");
+
+    // Immediately after the burst: the SAME ip is still throttled right now.
+    expect((await searchWithIp(ip)).status).toBe(429);
+  });
+
+  /**
+   * The web->api forwarding fix (confirmed production bug): `apiFetch` can no
+   * longer rely on `CF-Connecting-IP` surviving the Service Binding, so it
+   * re-sends the browser's IP as `CLIENT_IP_HEADER` and `clientIp()`
+   * (src/http/client-ip.ts) reads THAT first. Mirrors the burst test just
+   * above but keyed on the new header, with its own unique per-run keys so
+   * neither test's budget burn can pollute the other.
+   */
+  it("SEARCH_LIMITER buckets on X-TJ-Client-IP — different values don't share a bucket, the same value does", async () => {
+    const ipA = `test-${crypto.randomUUID()}`;
+    const ipB = `test-${crypto.randomUUID()}`;
+    await awaitLimiterBurstWindow();
+
+    for (let i = 0; i < SEARCH_LIMIT; i++) {
+      expect((await searchWithClientIpHeader(ipA)).status).toBe(200);
+    }
+    const limited = await searchWithClientIpHeader(ipA);
+    expect(limited.status).toBe(429);
+    expect(((await limited.json()) as { code: string }).code).toBe("RATE_LIMITED");
+
+    // Immediately after the burst: ipA is still throttled right now.
+    expect((await searchWithClientIpHeader(ipA)).status).toBe(429);
+
+    // A DIFFERENT X-TJ-Client-IP is NOT throttled by ipA's exhausted bucket.
+    expect((await searchWithClientIpHeader(ipB)).status).toBe(200);
   });
 });

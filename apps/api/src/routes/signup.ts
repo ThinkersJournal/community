@@ -56,6 +56,7 @@ import { verifyTurnstile } from "../auth/turnstile";
 import { suggestUsernames } from "../auth/username-suggest";
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
 import { isUniqueViolation } from "../db/errors";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 
 /**
@@ -126,9 +127,15 @@ export async function handleSignup(
   // file used to claim the single `ip:email` key gave both properties; it never
   // did — only the "one IP cannot spray many addresses" half was ever true.)
   //
-  // `CF-Connecting-IP` is absent off Cloudflare (and in tests), hence the stable
-  // placeholder for the KEY — but `undefined`, not the placeholder, is what
-  // reaches Turnstile below, which expects a real IP or none at all.
+  // Every real request arrives over the web→api Service Binding, which does
+  // NOT forward `CF-Connecting-IP` — the web Worker's middleware reads it off
+  // the browser's request and re-sends it as `X-TJ-Client-IP`; `clientIp()`
+  // (apps/api/src/http/client-ip.ts) reads that first and falls back to
+  // `CF-Connecting-IP` only for a direct `worker.fetch()` call that bypasses
+  // `web` entirely (every test in this file). Either way, an absent IP still
+  // falls back to the stable "unknown" placeholder for the KEY — but
+  // `undefined`, not the placeholder, is what reaches Turnstile below, which
+  // expects a real IP or none at all.
   //
   // The `email:` prefix on (b) cannot practically collide with (a)'s
   // `<ip>:<email>` shape: Cloudflare sets `CF-Connecting-IP` itself, so it is
@@ -147,10 +154,10 @@ export async function handleSignup(
   // consistent, so (b) is a real ceiling per Cloudflare location, not a global
   // one. It still collapses an unbounded per-IP multiplier down to a bounded
   // per-location one, which is the property being bought here.
-  const clientIp = request.headers.get("CF-Connecting-IP");
+  const ip = clientIp(request);
   const ipLimited = await enforceRateLimit(
     env.SIGNUP_LIMITER,
-    `${clientIp ?? "unknown"}:${email}`,
+    `${ip ?? "unknown"}:${email}`,
   );
   if (ipLimited !== null) {
     return ipLimited;
@@ -163,7 +170,7 @@ export async function handleSignup(
   // ---- 4. Turnstile --------------------------------------------------------
   let turnstileOk: boolean;
   try {
-    turnstileOk = await verifyTurnstile(env, turnstileToken, clientIp ?? undefined);
+    turnstileOk = await verifyTurnstile(env, turnstileToken, ip ?? undefined);
   } catch (err) {
     // verifyTurnstile REJECTS on a network/non-JSON failure; its contract says
     // to treat that exactly like a failed verification, never to proceed.

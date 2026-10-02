@@ -24,10 +24,17 @@
  * `Sec-WebSocket-Key`/`-Version`/`-Extensions` and `Connection`. Wholesale
  * forwarding is what carries Cookie + Origin — the auth/origin-check this
  * route exists for — AND the handshake headers the upgrade itself needs.
+ *
+ * ⚠️ "Wholesale" is exactly why `applyClientIpHeader` runs below: forwarding
+ * `context.request.headers` verbatim would also forward a browser-supplied
+ * `X-TJ-Client-IP` straight through to the api — the same injection
+ * `applyClientIpHeader` closes in `apiFetch` (src/lib/api.ts). It is applied
+ * to a COPY of the headers, last, so it can both override and remove.
  */
 import { env } from "cloudflare:workers";
 
 import { markPrivate } from "../../lib/cache";
+import { applyClientIpHeader, clientIpStore } from "../../lib/client-ip-store";
 
 import type { APIRoute } from "astro";
 
@@ -50,10 +57,16 @@ export const GET: APIRoute = async (context) => {
   // Cookie + Origin (api auths the session and origin-checks) plus the
   // Sec-WebSocket-* handshake headers the upgrade itself needs. The api
   // resolves the target DO and returns the 101.
+  //
+  // A COPY, not `context.request.headers` itself: `applyClientIpHeader` must
+  // delete/overwrite `X-TJ-Client-IP` on what we SEND, never mutate the
+  // incoming request out from under the rest of this handler.
+  const h = new Headers(context.request.headers);
+  applyClientIpHeader(h, clientIpStore.getStore()?.clientIp ?? null);
   const upstream = await (
     env as unknown as { API: { fetch: (url: string, init: RequestInit) => Promise<Response> } }
   ).API.fetch("https://api.internal/notifications/ws", {
-    headers: context.request.headers,
+    headers: h,
   });
 
   // ⚠️ SPIKE FINDING (Task 0): returning `upstream` verbatim yields a 500

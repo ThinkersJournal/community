@@ -28,16 +28,17 @@
  * ⚠️ NO RATE LIMITER HERE, DELIBERATELY (fix round 1 ruling, review #13 first
  * half). This route is reached ONLY over the api's Service Binding from
  * `web`'s proxy (apps/web/src/pages/health/schema.ts) — never directly from
- * the public internet — and whether `CF-Connecting-IP` survives that hop at
- * all is UNVERIFIED (open item on CireSnave's board). An IP-keyed limiter
- * behind a Service Binding could therefore collapse to one single global
- * bucket shared by every caller, and the gate script's OWN repeated polling
- * (every build, possibly retried) could exhaust that bucket and block
- * deploys — the opposite of what a rate limiter is for here. The query this
- * route runs is a single indexed-equality `SELECT` against a table that has
- * historically held under 20 rows (`pgmigrations`), so the cost of leaving it
- * unlimited is negligible. Do not add one without first resolving the
- * CF-Connecting-IP-over-Service-Binding question.
+ * the public internet. Whether `CF-Connecting-IP` survives that hop was an
+ * open item on CireSnave's board; it does NOT — confirmed via `wrangler tail`
+ * against production on 2026-10-02 (every real request arrived with
+ * `headers: {}`) — and is now FIXED, by this same PR: `web`'s middleware reads
+ * `CF-Connecting-IP` and re-sends it as `X-TJ-Client-IP`, and `clientIp()`
+ * (./client-ip.ts) reads that first. An IP-keyed limiter here is therefore no
+ * longer structurally unworkable — it is still SKIPPED, on cost grounds: the
+ * query this route runs is a single indexed-equality `SELECT` against a table
+ * that has historically held under 20 rows (`pgmigrations`), and the gate
+ * script's OWN repeated polling (every build, possibly retried) is a caller
+ * this route must never throttle. Revisit if that query ever gets heavier.
  */
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";

@@ -13,6 +13,7 @@
  */
 import { enforceRateLimit } from "../auth/ratelimit";
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 import { PEOPLE_SQL, POSTS_SQL } from "./search-sql";
 
@@ -67,8 +68,8 @@ export async function handlePublicSearch(
   // (same "spend quota only on requests that already passed the free
   // checks" ordering as every other limiter in this codebase) and BEFORE any
   // database work.
-  const clientIp = request.headers.get("CF-Connecting-IP") ?? "unknown";
-  const limited = await enforceRateLimit(env.SEARCH_LIMITER, clientIp);
+  const ip = clientIp(request) ?? "unknown";
+  const limited = await enforceRateLimit(env.SEARCH_LIMITER, ip);
   if (limited !== null) return limited;
 
   const limit = SEARCH_PAGE_SIZE + 1;
