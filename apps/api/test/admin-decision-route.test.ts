@@ -422,13 +422,75 @@ describe("POST /admin/decision", () => {
 
     it("a restore of hidden content mints NO token", async () => {
       const { postId, authorEmail } = await seedHiddenPost();
-      await decide({ subject: "post", subjectId: postId, decision: "restore", reason: "Mistaken." });
+      const res = await decide({ subject: "post", subjectId: postId, decision: "restore", reason: "Mistaken." });
+      // CONTROL: the restore itself succeeded and sent its own notice — without
+      // this, "no token row" would be indistinguishable from "the decision
+      // never ran at all".
+      expect(res.status).toBe(200);
+      expect(sentEmails).toHaveLength(1);
 
       const authorId = await ctxRun(async (c) => {
         const { rows } = await c.query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [authorEmail]);
         return rows[0]!.id;
       });
       expect(await appealTokenRowsFor(authorId)).toEqual([]);
+    });
+
+    // ⚠️ A mint failure must not fail an action that already happened (the
+    // brief's rule). Forces a real INSERT failure — a trigger on the token
+    // table scoped to THIS author — rather than any module mock, since this
+    // codebase has no module-mocking precedent against the workerd pool.
+    it("a mint that throws still sends the notice, without a link, and logs it", async () => {
+      const userId = await seedUser();
+      const authorEmail = await ctxRun(async (c) => {
+        const { rows } = await c.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId]);
+        return rows[0]!.email;
+      });
+      const post = await seedPost(userId, new Date());
+      await seedReport(post.id);
+
+      const suffix = crypto.randomUUID().replace(/-/g, "");
+      const fnName = `test_fail_on_token_insert_${suffix}`;
+      const trgName = `test_fail_token_insert_${suffix}`;
+      await ctxRun(async (c) => {
+        await c.query(
+          `CREATE FUNCTION ${fnName}() RETURNS trigger AS $$
+           BEGIN
+             RAISE EXCEPTION 'forced mint failure';
+           END;
+           $$ LANGUAGE plpgsql`,
+        );
+        await c.query(
+          `CREATE TRIGGER ${trgName}
+             BEFORE INSERT ON moderation_action_tokens
+             FOR EACH ROW
+             WHEN (NEW.user_id = '${userId}'::uuid)
+             EXECUTE FUNCTION ${fnName}()`,
+        );
+      });
+
+      try {
+        const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+        const res = await decide({ subject: "post", subjectId: post.id, decision: "remove", reason: "x" });
+
+        // The decision itself still succeeds, and the notice still goes out —
+        // just without the link.
+        expect(res.status).toBe(200);
+        const { actionId } = (await res.json()) as { actionId: string };
+        expect(sentEmails).toHaveLength(1);
+        expect(sentEmails[0]).toMatchObject({ To: authorEmail });
+        expect(String(sentEmails[0]!["TextBody"])).not.toContain("/appeal?token=");
+
+        const mintLogs = errorLog.mock.calls.filter((args) => args[0] === "appeal link not minted");
+        expect(mintLogs).toEqual([["appeal link not minted", { actionId, err: expect.anything() }]]);
+
+        expect(await appealTokenRowsFor(userId)).toEqual([]);
+      } finally {
+        await ctxRun(async (c) => {
+          await c.query(`DROP TRIGGER IF EXISTS ${trgName} ON moderation_action_tokens`);
+          await c.query(`DROP FUNCTION IF EXISTS ${fnName}()`);
+        });
+      }
     });
   });
 

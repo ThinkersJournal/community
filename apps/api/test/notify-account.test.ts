@@ -55,11 +55,16 @@ describe("#113 plan B — the appeal and delete-request links", () => {
   const appealUrl = "https://community.thinkersjournal.com/appeal?token=a";
   const deleteRequestUrl = "https://community.thinkersjournal.com/account/delete-request?token=d";
 
-  it("warn carries the appeal link only", async () => {
-    await sendAccountActionNotice(env, "u@example.test", { kind: "warn", reason: "r", appealUrl });
+  it("warn carries the appeal link only, even when a caller passes a deleteRequestUrl too", async () => {
+    // ⚠️ A deleteRequestUrl IS passed here, deliberately — the point of this
+    // test is that `kind !== "warn"` actually gates the rendering, not that
+    // the caller never supplies one. Without the url present, a bug that
+    // dropped the whole kind check would pass this test vacuously.
+    await sendAccountActionNotice(env, "u@example.test", { kind: "warn", reason: "r", appealUrl, deleteRequestUrl });
     expect(String(sent[0]!.TextBody)).toContain(appealUrl);
     expect(String(sent[0]!.TextBody)).toContain("within 30 days");
     expect(String(sent[0]!.TextBody)).not.toContain("/account/delete-request");
+    expect(String(sent[0]!.TextBody)).not.toContain("You can also ask for your account to be deleted");
   });
 
   it("suspend and ban carry both links and say what a deletion request does", async () => {

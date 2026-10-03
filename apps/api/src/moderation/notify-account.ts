@@ -51,7 +51,7 @@ export async function sendAccountActionNotice(env: Env, to: string, notice: Acco
     const text = lead(notice);
 
     const appealTextLine =
-      notice.appealUrl === undefined ? "" : `\n\nYou can appeal this decision within ${APPEAL_WINDOW_DAYS} days: ${notice.appealUrl}`;
+      notice.appealUrl === undefined ? "" : `\nYou can appeal this decision within ${APPEAL_WINDOW_DAYS} days: ${notice.appealUrl}`;
     const appealHtmlLine =
       notice.appealUrl === undefined
         ? ""

@@ -3,8 +3,10 @@
  * the admin routes AFTER the action has committed, on its own connection.
  *
  * A link is omitted when its mint returns null: the account was anonymised
- * (B3), so there is no one to send it to. The caller sends no notice to an
- * anonymised account anyway; this is the second layer.
+ * (B3), so there is no one to send it to. Whether a notice is sent AT ALL is
+ * the caller's business, not this function's — admin.ts sends one regardless
+ * (tracked as issue #138); this only ever controls whether that notice's
+ * link is present.
  */
 import type { Client } from "pg";
 

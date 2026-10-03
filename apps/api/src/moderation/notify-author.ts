@@ -86,7 +86,7 @@ export async function sendModerationNotice(
   // ⚠️ A `restore` NEVER renders the appeal link, even when a caller passes
   // one — there is nothing left to appeal once the content is back.
   const url = notice.decision === "restore" ? undefined : notice.appealUrl;
-  const appealTextLine = url === undefined ? "" : `\n\nYou can appeal this decision within ${APPEAL_WINDOW_DAYS} days: ${url}`;
+  const appealTextLine = url === undefined ? "" : `\nYou can appeal this decision within ${APPEAL_WINDOW_DAYS} days: ${url}`;
   const appealHtmlLine = url === undefined ? "" : `<p>You can appeal this decision within ${APPEAL_WINDOW_DAYS} days: <a href="${escapeHtml(url)}">${escapeHtml(url)}</a></p>`;
 
   return await postmarkSend(env, {
