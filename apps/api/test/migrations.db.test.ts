@@ -180,13 +180,14 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "moderation_snapshots")).toBe(true);
       // 0022_account_legal_holds.sql — account legal holds + reserved-email hash.
       expect(await tableExists(client, "account_legal_holds")).toBe(true);
-      expect(await columnExists(client, "users", "reserved_email_sha256")).toBe(true);
       // 0023_reserved_email_hmac.sql — the keyed reservation fingerprint.
       expect(await columnExists(client, "users", "reserved_email_hmac")).toBe(true);
       expect(await indexExists(client, "users_reserved_email_hmac_idx")).toBe(true);
       // 0024_appeals.sql — appeals + per-purpose moderation action tokens.
       expect(await tableExists(client, "appeals")).toBe(true);
       expect(await tableExists(client, "moderation_action_tokens")).toBe(true);
+      // 0025 — the legacy unsalted reservation column is gone.
+      expect(await columnExists(client, "users", "reserved_email_sha256")).toBe(false);
     });
 
     await migrate("down");
@@ -242,11 +243,12 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "dsa_notices")).toBe(true);
       expect(await tableExists(client, "moderation_snapshots")).toBe(true);
       expect(await tableExists(client, "account_legal_holds")).toBe(true);
-      expect(await columnExists(client, "users", "reserved_email_sha256")).toBe(true);
       expect(await columnExists(client, "users", "reserved_email_hmac")).toBe(true);
       expect(await indexExists(client, "users_reserved_email_hmac_idx")).toBe(true);
       expect(await tableExists(client, "appeals")).toBe(true);
       expect(await tableExists(client, "moderation_action_tokens")).toBe(true);
+      // 0025 — absent again after the full down/up round-trip re-applies it.
+      expect(await columnExists(client, "users", "reserved_email_sha256")).toBe(false);
     });
     // Intentionally left in the migrated (up) state.
   });

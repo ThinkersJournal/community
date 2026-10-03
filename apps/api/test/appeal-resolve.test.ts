@@ -337,11 +337,10 @@ async function userRow(userId: string): Promise<{
   disabled_reason: string | null;
   suspended_until: Date | null;
   reserved_email_hmac: string | null;
-  reserved_email_sha256: string | null;
 }> {
   return ctxRun(async (c) => {
     const { rows } = await c.query(
-      `SELECT disabled_at, disabled_reason, suspended_until, reserved_email_hmac, reserved_email_sha256 FROM users WHERE id = $1`,
+      `SELECT disabled_at, disabled_reason, suspended_until, reserved_email_hmac FROM users WHERE id = $1`,
       [userId],
     );
     return rows[0] as never;
@@ -525,7 +524,6 @@ describe("resolveAppeal — the action kinds", () => {
     const after = await userRow(u);
     expect(after.disabled_at).toBeNull();
     expect(after.reserved_email_hmac).toBeNull();
-    expect(after.reserved_email_sha256).toBeNull();
     const accepted = await signup(email);
     expect(accepted.status).toBe(201);
   });
