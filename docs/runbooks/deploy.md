@@ -91,6 +91,10 @@ and only then for both Workers.
 
 ## Shipping a PR with an additive migration
 
+0. **Step 0 (one-time, before the first deploy containing `reserved_email_hmac`):**
+   set the `RESERVED_EMAIL_KEY` secret — see
+   [One-time secret: `RESERVED_EMAIL_KEY`](#one-time-secret-reserved_email_key-0023-before-that-deploy-ships) below.
+
 1. **Merge.** **Both Workers** carry the gate (per the dashboard change
    above), so the next build for **each** of `thinkersjournal-web` and
    `thinkersjournal-api` **fails at the gate** — this is expected, not a
@@ -128,12 +132,39 @@ and only then for both Workers.
    leave it in the shell's environment to begin with).
 
 3. **Retry the build** in the Cloudflare dashboard, **for both Workers**
+   (for the 0023 deploy: only after Step 0's `RESERVED_EMAIL_KEY` is set)
    (whichever of them failed at step 1 — ordinarily both, since both carry
    the gate). The gate now sees `{"applied":true}` and each build proceeds —
    the deploy ships.
 
 4. **`prod-smoke.yml` runs after the push**, as it already does for every
    push to `main` (unchanged by this work — see that workflow).
+
+## One-time secret: `RESERVED_EMAIL_KEY` (0023, BEFORE that deploy ships)
+
+`0023_reserved_email_hmac` makes a banned account's email reservation an
+HMAC-SHA-256 keyed by the `api` Worker secret `RESERVED_EMAIL_KEY`
+(`apps/api/src/auth/reserved-email.ts`). **Set the secret before the code that
+needs it deploys**, i.e. before step 3's build retry for the 0023 PR:
+
+```
+openssl rand -base64 32 | npx wrangler secret put RESERVED_EMAIL_KEY --name thinkersjournal-api
+```
+
+(or the dashboard equivalent: Workers & Pages → `thinkersjournal-api` →
+Settings → Variables and Secrets → add a **Secret** named `RESERVED_EMAIL_KEY`
+holding 32 random bytes, base64-encoded). Never commit it, and never paste it
+into a chat, an issue or a log.
+
+Without it the code fails closed, by design: **every signup answers
+`503 SERVICE_UNAVAILABLE`**, and the anonymisation reaper leaves each
+**banned** account that is due for deletion unscrubbed (logged as a failed
+row, retried nightly) while it scrubs the others normally.
+
+⚠️ **Never rotate this key casually.** Every reservation stored under the old
+key stops matching, which silently frees those banned users' addresses for a
+new signup. A rotation needs a plan for the existing rows; there is none
+today.
 
 ## Destructive migrations
 
@@ -205,6 +236,7 @@ any rollback automation.
 
 ## Current order constraint
 
-Production migrations apply in this order: **0020 → 0021 → 0022** (plan C →
-#126 → the account-legal-hold work). Do not apply a later one before an
+Production migrations apply in this order: **0020 → 0021 → 0022 → 0023**
+(plan C → #126 → the account-legal-hold work → the keyed email reservation,
+whose secret must be set first; see above). Do not apply a later one before an
 earlier one in this list has landed.

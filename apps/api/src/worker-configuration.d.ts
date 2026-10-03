@@ -41,6 +41,11 @@ interface __BaseEnv_Env {
 	PREVIEW_ORIGIN?: string;
 	PURGE_SECRET: string;
 	UNSUBSCRIBE_SIGNING_KEY: string;
+	// Migration 0023 — HMAC key for a banned account's email reservation
+	// (src/auth/reserved-email.ts). A Workers secret, set with `wrangler secret
+	// put RESERVED_EMAIL_KEY` (docs/runbooks/deploy.md); added by hand, same
+	// reason as CF_ACCESS_* below. Code treats missing or empty as fail-closed.
+	RESERVED_EMAIL_KEY: string;
 	// Cloudflare Access config for the admin gate (M4 2a) — supplied via
 	// `.dev.vars`/`--var`, not `wrangler.jsonc`, exactly like TEST_ROUTES.
 	// `wrangler types` does not know about these (they are not declared in
@@ -82,7 +87,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "TURNSTILE_SECRET_KEY" | "POSTMARK_SERVER_TOKEN" | "TEST_ROUTES" | "PURGE_SECRET" | "UNSUBSCRIBE_SIGNING_KEY">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "TURNSTILE_SECRET_KEY" | "POSTMARK_SERVER_TOKEN" | "TEST_ROUTES" | "PURGE_SECRET" | "UNSUBSCRIBE_SIGNING_KEY" | "RESERVED_EMAIL_KEY">> {}
 }
 
 // Begin runtime types

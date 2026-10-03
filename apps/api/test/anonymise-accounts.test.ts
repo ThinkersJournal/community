@@ -243,20 +243,36 @@ async function anonymisedAt(id: string): Promise<Date | null> {
   });
 }
 
+/**
+ * The row's reservation fingerprint (migration 0023's HMAC column). Also
+ * asserts the LEGACY unsalted column stayed NULL: the reaper must never write it.
+ */
 async function reservedHash(id: string): Promise<string | null> {
   return ctxRun(async (c) => {
-    const { rows } = await c.query<{ reserved_email_sha256: string | null }>(
-      "SELECT reserved_email_sha256 FROM users WHERE id = $1",
+    const { rows } = await c.query<{ reserved_email_hmac: string | null; reserved_email_sha256: string | null }>(
+      "SELECT reserved_email_hmac, reserved_email_sha256 FROM users WHERE id = $1",
       [id],
     );
-    return rows[0]!.reserved_email_sha256;
+    expect(rows[0]!.reserved_email_sha256, "the reaper wrote the legacy unsalted column").toBeNull();
+    return rows[0]!.reserved_email_hmac;
   });
 }
 
-/** Computed here, independently of src/auth/reserved-email.ts: lowercase-hex sha256 of the lowercased address. */
+/**
+ * Computed here, independently of src/auth/reserved-email.ts: lowercase-hex
+ * HMAC-SHA-256 of the lowercased address, keyed by the pool's fixed
+ * RESERVED_EMAIL_KEY (vitest.config.ts). Never the plain SHA-256.
+ */
 async function expectedHash(email: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(email.toLowerCase()));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.RESERVED_EMAIL_KEY),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(email.toLowerCase()));
+  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** One reaper run, serialised against every other file's (helpers/anonymise-reaper-lock.ts). */
@@ -410,8 +426,8 @@ describe("anonymiseExpiredAccounts — a held account is never scrubbed; a ban a
   });
 });
 
-describe("anonymiseExpiredAccounts — a banned account's address is reserved by hash (AH-7 / RF1)", () => {
-  it("a banned, unheld account is scrubbed like any other and reserved_email_sha256 = sha256(lowercased original email)", async () => {
+describe("anonymiseExpiredAccounts — a banned account's address is reserved by a keyed fingerprint (AH-7 / RF1, 0023)", () => {
+  it("a banned, unheld account is scrubbed like any other and reserved_email_hmac = HMAC(key, lowercased original email)", async () => {
     const f = await seedAccount({ banned: true });
 
     await runReaper();
@@ -426,7 +442,7 @@ describe("anonymiseExpiredAccounts — a banned account's address is reserved by
     expect(await reservedHash(f.id)).toBe(await expectedHash(f.email));
   });
 
-  it("CONTROL: a non-banned account is scrubbed the same way with reserved_email_sha256 NULL", async () => {
+  it("CONTROL: a non-banned account is scrubbed the same way with reserved_email_hmac NULL", async () => {
     const f = await seedAccount();
 
     await runReaper();
@@ -440,6 +456,55 @@ describe("anonymiseExpiredAccounts — a banned account's address is reserved by
     expect(r.bio).toBeNull();
     expect(await reservedHash(f.id)).toBeNull();
   });
+});
+
+describe("anonymiseExpiredAccounts — fails closed without RESERVED_EMAIL_KEY (0023)", () => {
+  it.each([
+    ["empty", ""],
+    ["missing", undefined],
+  ])(
+    "key %s: a banned row is a per-row failure (not anonymised, retried), a non-banned row still scrubs, the run resolves",
+    async (_label, key) => {
+      const banned = await seedAccount({ eligible: false, banned: true });
+      const plain = await seedAccount({ eligible: false });
+      const noKey = { ...env, RESERVED_EMAIL_KEY: key as unknown as string };
+      const errors: string[] = [];
+      const realError = console.error;
+      console.error = (...args: unknown[]) => {
+        errors.push(args.map(String).join(" "));
+      };
+      try {
+        await withAnonymiseReaperLock(async () => {
+          await makeEligible(banned.id);
+          await makeEligible(plain.id);
+          const ctx = createExecutionContext();
+          // Resolves: the plain row was scrubbed, so this is a partial failure.
+          await expect(anonymiseExpiredAccounts(noKey, ctx)).resolves.toBeTypeOf("number");
+          await waitOnExecutionContext(ctx);
+        });
+      } finally {
+        console.error = realError;
+      }
+
+      const b = await row(banned.id);
+      expect(b.anonymisedAt, "a banned account was anonymised with no key to reserve its address").toBeNull();
+      expect(b.email, "the banned row's address was replaced without a reservation").toBe(banned.email);
+      expect(await reservedHash(banned.id)).toBeNull();
+      // Counted and logged as a failure, naming the row.
+      expect(errors.some((e) => e.includes(banned.id) && e.includes("RESERVED_EMAIL_KEY"))).toBe(true);
+      expect(errors.some((e) => /failed [1-9]\d* of \d+/.test(e))).toBe(true);
+
+      // CONTROL: the non-banned row in the same run was scrubbed normally.
+      expect((await row(plain.id)).anonymisedAt).not.toBeNull();
+      expect(await reservedHash(plain.id)).toBeNull();
+
+      // Retried: the next run, with the key, scrubs the banned row and reserves it.
+      await runReaper();
+      expect((await row(banned.id)).anonymisedAt).not.toBeNull();
+      expect(await reservedHash(banned.id)).toBe(await expectedHash(banned.email));
+    },
+    30_000,
+  );
 });
 
 describe("anonymiseExpiredAccounts — each scrub locks the row and re-checks it (RF6)", () => {
@@ -456,7 +521,7 @@ describe("anonymiseExpiredAccounts — each scrub locks the row and re-checks it
     expect(r.bio).toBe("A real bio");
   });
 
-  it("disabled_at cleared while the reaper waits (banned at SELECT time): anonymised with reserved_email_sha256 NULL", async () => {
+  it("disabled_at cleared while the reaper waits (banned at SELECT time): anonymised with reserved_email_hmac NULL", async () => {
     const f = await seedAccount({ eligible: false, banned: true });
 
     await whileReaperWaits(f.id, (locker) =>

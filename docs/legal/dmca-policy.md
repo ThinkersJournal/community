@@ -1,4 +1,4 @@
-# Copyright / DMCA Policy — DRAFT for attorney review
+# Copyright / DMCA Policy — DRAFT (not in force; not reviewed by an attorney)
 
 > ⚠️ DRAFT. Not in force. See `README.md`. `[[BRACKETED]]` = to be filled. The
 > DMCA Designated Agent must be **registered with the U.S. Copyright Office** before

@@ -172,6 +172,11 @@ export default defineConfig({
                 PURGE_SECRET: "dev-purge-secret-not-for-production",
                 // A SECRET (src/notifications/unsub-token.ts). Dummy HMAC key for tests.
                 UNSUBSCRIBE_SIGNING_KEY: "test-unsub-signing-key",
+                // A SECRET (src/auth/reserved-email.ts, migration 0023): the HMAC
+                // key for a banned account's email reservation. A fixed dummy, so
+                // test/reserved-email.test.ts can compare against an HMAC computed
+                // independently with openssl. Never the production key.
+                RESERVED_EMAIL_KEY: "test-reserved-email-key",
                 // Cloudflare Access config for the admin gate (M4 2a). NOT
                 // secrets — the team domain and AUD tag are public identifiers —
                 // but supplied here for the same reason as the others: the suite

@@ -2,12 +2,24 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { afterEach, describe, expect, it } from "vitest";
 
 import { withClient } from "../src/db/client";
-import { isEmailReserved, releaseReservedEmail, reservedEmailSha256 } from "../src/auth/reserved-email";
+import {
+  isEmailReserved,
+  releaseReservedEmail,
+  ReservedEmailKeyMissingError,
+  reservedEmailHmac,
+  reservedEmailSha256,
+} from "../src/auth/reserved-email";
 
 /**
- * account-legal-hold spec §4a (Task 2) — reserved-email hash. Pool project:
- * real workerd + the test DB through HYPERDRIVE_FRESH, same as
+ * account-legal-hold spec §4a (Task 2) — the reserved-email fingerprint. Pool
+ * project: real workerd + the test DB through HYPERDRIVE_FRESH, same as
  * account-actions.test.ts.
+ *
+ * Migration 0023: the fingerprint is an HMAC-SHA-256 keyed by the
+ * RESERVED_EMAIL_KEY secret (vitest.config.ts gives the pool the fixed test key
+ * "test-reserved-email-key"). The legacy unsalted `reserved_email_sha256`
+ * column is still READ (a row 0022 wrote stays reserved) and still CLEARED on
+ * release, but nothing writes it any more.
  */
 const madeUsers: string[] = [];
 
@@ -23,82 +35,152 @@ afterEach(async () => {
   madeUsers.length = 0;
 });
 
-/** An anonymised row (anonymised_at set) so reserved_email_sha256 is legal to set. */
-async function mkAnonymisedUser(opts?: { disabledAt?: boolean; reservedHash?: string | null }): Promise<string> {
+/** An anonymised row (anonymised_at set) so either reservation column is legal to set. */
+async function mkAnonymisedUser(opts?: {
+  disabledAt?: boolean;
+  reservedSha256?: string | null;
+  reservedHmac?: string | null;
+}): Promise<string> {
   const id = crypto.randomUUID();
   await ctxRun((c) =>
     c.query(
-      `INSERT INTO users (id, email, password_hash, email_verified_at, anonymised_at, disabled_at, reserved_email_sha256)
-       VALUES ($1, $2, 'h', now(), now(), $3, $4)`,
-      [id, `anon-${id}@holds.test`, opts?.disabledAt ?? false ? new Date() : null, opts?.reservedHash ?? null],
+      `INSERT INTO users (id, email, password_hash, email_verified_at, anonymised_at, disabled_at,
+                          reserved_email_sha256, reserved_email_hmac)
+       VALUES ($1, $2, 'h', now(), now(), $3, $4, $5)`,
+      [
+        id,
+        `anon-${id}@holds.test`,
+        (opts?.disabledAt ?? false) ? new Date() : null,
+        opts?.reservedSha256 ?? null,
+        opts?.reservedHmac ?? null,
+      ],
     ),
   );
   madeUsers.push(id);
   return id;
 }
 
-describe("reservedEmailSha256", () => {
-  it("is case-insensitive and equals the sha256 hex of the normalised address", async () => {
-    const a = await reservedEmailSha256("Ada@Example.COM");
-    const b = await reservedEmailSha256("ada@example.com");
+async function columns(id: string): Promise<{ sha256: string | null; hmac: string | null }> {
+  const { rows } = await ctxRun((c) =>
+    c.query<{ reserved_email_sha256: string | null; reserved_email_hmac: string | null }>(
+      `SELECT reserved_email_sha256, reserved_email_hmac FROM users WHERE id = $1`,
+      [id],
+    ),
+  );
+  return { sha256: rows[0]!.reserved_email_sha256, hmac: rows[0]!.reserved_email_hmac };
+}
+
+describe("reservedEmailHmac", () => {
+  it("is the HMAC-SHA-256 of the normalised address under RESERVED_EMAIL_KEY, not its plain SHA-256", async () => {
+    const a = await reservedEmailHmac(env, "Ada@Example.COM");
+    const b = await reservedEmailHmac(env, "ada@example.com");
     expect(a).toBe(b);
     expect(a).toMatch(/^[0-9a-f]{64}$/);
 
-    // Literal expected digest for "ada@example.com", computed independently
-    // (fix round 1, minor #2) with TWO external tools, outside this test:
-    //   printf '%s' "ada@example.com" | sha256sum
-    //   printf '%s' "ada@example.com" | openssl dgst -sha256
-    // Both: b5fc85e55755f9e0d030a10ab4429b6b2944855f9a0d60077fe832becbc41d72
-    expect(a).toBe("b5fc85e55755f9e0d030a10ab4429b6b2944855f9a0d60077fe832becbc41d72");
+    // Literal expected HMAC, computed independently, outside this test, with
+    // TWO external tools:
+    //   printf '%s' "ada@example.com" | openssl dgst -sha256 -hmac "test-reserved-email-key"
+    //   python: hmac.new(b"test-reserved-email-key", b"ada@example.com", hashlib.sha256).hexdigest()
+    // Both: 6ed032f9dd97c94d02757691d9beeb51e660d7554a9bf3b7940d9ec9e017b1c3
+    expect(env.RESERVED_EMAIL_KEY).toBe("test-reserved-email-key");
+    expect(a).toBe("6ed032f9dd97c94d02757691d9beeb51e660d7554a9bf3b7940d9ec9e017b1c3");
+    // ...and it is NOT the reversible unsalted digest 0022 stored.
+    expect(a).not.toBe(await reservedEmailSha256("ada@example.com"));
+  });
+
+  it("the same address under a different key gives a different value", async () => {
+    const other = await reservedEmailHmac({ RESERVED_EMAIL_KEY: "another-key" }, "ada@example.com");
+    // openssl dgst -sha256 -hmac "another-key", as above.
+    expect(other).toBe("e92576a38f1a3a172f18943b1340fdbfdc4fb428b4634592c8d7e0bdcd282541");
+    expect(other).not.toBe(await reservedEmailHmac(env, "ada@example.com"));
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", " \u0009\u000a "],
+    ["missing", undefined],
+  ])("fails closed when the key is %s: throws ReservedEmailKeyMissingError", async (_label, key) => {
+    await expect(
+      reservedEmailHmac({ RESERVED_EMAIL_KEY: key as unknown as string }, "ada@example.com"),
+    ).rejects.toBeInstanceOf(ReservedEmailKeyMissingError);
+  });
+});
+
+describe("reservedEmailSha256 (legacy, read-only)", () => {
+  it("still equals the sha256 hex of the normalised address, so 0022's rows stay findable", async () => {
+    // printf '%s' "ada@example.com" | sha256sum (and openssl dgst -sha256): both agree.
+    expect(await reservedEmailSha256("Ada@Example.COM")).toBe(
+      "b5fc85e55755f9e0d030a10ab4429b6b2944855f9a0d60077fe832becbc41d72",
+    );
   });
 });
 
 describe("isEmailReserved", () => {
-  it("is true for an anonymised row holding that hash, and false for a different address (control)", async () => {
-    // Random local part per run (fix round 1, minor #5): avoids any collision
-    // with another lane's concurrent run against the shared test DB.
+  it("is true for an anonymised row holding the address's HMAC, and false for a different address (control)", async () => {
+    // Random local parts: no collision with another lane's run against the shared test DB.
     const target = `reserved-target-${crypto.randomUUID()}@holds.test`;
     const other = `nobody-reserved-this-${crypto.randomUUID()}@holds.test`;
-    const hash = await reservedEmailSha256(target);
-    await mkAnonymisedUser({ reservedHash: hash });
+    await mkAnonymisedUser({ reservedHmac: await reservedEmailHmac(env, target) });
 
-    expect(await ctxRun((c) => isEmailReserved(c, target))).toBe(true);
-    expect(await ctxRun((c) => isEmailReserved(c, target.toUpperCase()))).toBe(true);
-    // Control: a different address, never reserved, is false.
-    expect(await ctxRun((c) => isEmailReserved(c, other))).toBe(false);
+    expect(await ctxRun((c) => isEmailReserved(c, env, target))).toBe(true);
+    expect(await ctxRun((c) => isEmailReserved(c, env, target.toUpperCase()))).toBe(true);
+    expect(await ctxRun((c) => isEmailReserved(c, env, other))).toBe(false);
+  });
+
+  it("is true for a LEGACY-only row (reserved_email_sha256 set by 0022, no HMAC): the dual check", async () => {
+    const target = `legacy-target-${crypto.randomUUID()}@holds.test`;
+    const other = `legacy-nobody-${crypto.randomUUID()}@holds.test`;
+    await mkAnonymisedUser({ reservedSha256: await reservedEmailSha256(target) });
+
+    expect(await ctxRun((c) => isEmailReserved(c, env, target))).toBe(true);
+    expect(await ctxRun((c) => isEmailReserved(c, env, other))).toBe(false);
+  });
+
+  it("fails closed without the key: throws rather than answering false", async () => {
+    const target = `nokey-${crypto.randomUUID()}@holds.test`;
+    await expect(ctxRun((c) => isEmailReserved(c, { RESERVED_EMAIL_KEY: "" }, target))).rejects.toBeInstanceOf(
+      ReservedEmailKeyMissingError,
+    );
   });
 });
 
 describe("releaseReservedEmail", () => {
-  it("an anonymised, no longer banned row → hash NULL, true", async () => {
-    const hash = await reservedEmailSha256(`release-me-${crypto.randomUUID()}@holds.test`);
-    const u = await mkAnonymisedUser({ disabledAt: false, reservedHash: hash });
+  it("an anonymised, no longer banned row holding BOTH columns → both NULL, true", async () => {
+    const email = `release-me-${crypto.randomUUID()}@holds.test`;
+    const u = await mkAnonymisedUser({
+      disabledAt: false,
+      reservedSha256: await reservedEmailSha256(email),
+      reservedHmac: await reservedEmailHmac(env, email),
+    });
 
-    const result = await ctxRun((c) => releaseReservedEmail(c, u));
-    expect(result).toBe(true);
+    expect(await ctxRun((c) => releaseReservedEmail(c, u))).toBe(true);
+    expect(await columns(u)).toEqual({ sha256: null, hmac: null });
+  });
 
-    const { rows } = await ctxRun((c) =>
-      c.query<{ reserved_email_sha256: string | null }>(`SELECT reserved_email_sha256 FROM users WHERE id = $1`, [u]),
+  it.each(["sha256", "hmac"] as const)("a row holding only the %s column → NULL, true", async (which) => {
+    const email = `release-one-${crypto.randomUUID()}@holds.test`;
+    const u = await mkAnonymisedUser(
+      which === "sha256"
+        ? { reservedSha256: await reservedEmailSha256(email) }
+        : { reservedHmac: await reservedEmailHmac(env, email) },
     );
-    expect(rows[0]!.reserved_email_sha256).toBeNull();
+
+    expect(await ctxRun((c) => releaseReservedEmail(c, u))).toBe(true);
+    expect(await columns(u)).toEqual({ sha256: null, hmac: null });
   });
 
   it("an anonymised row still banned → unchanged, false", async () => {
-    const hash = await reservedEmailSha256(`still-banned-${crypto.randomUUID()}@holds.test`);
-    const u = await mkAnonymisedUser({ disabledAt: true, reservedHash: hash });
+    const email = `still-banned-${crypto.randomUUID()}@holds.test`;
+    const sha256 = await reservedEmailSha256(email);
+    const hmac = await reservedEmailHmac(env, email);
+    const u = await mkAnonymisedUser({ disabledAt: true, reservedSha256: sha256, reservedHmac: hmac });
 
-    const result = await ctxRun((c) => releaseReservedEmail(c, u));
-    expect(result).toBe(false);
-
-    const { rows } = await ctxRun((c) =>
-      c.query<{ reserved_email_sha256: string | null }>(`SELECT reserved_email_sha256 FROM users WHERE id = $1`, [u]),
-    );
-    expect(rows[0]!.reserved_email_sha256).toBe(hash);
+    expect(await ctxRun((c) => releaseReservedEmail(c, u))).toBe(false);
+    expect(await columns(u)).toEqual({ sha256, hmac });
   });
 
-  it("a row with no hash → false", async () => {
-    const u = await mkAnonymisedUser({ disabledAt: false, reservedHash: null });
-    const result = await ctxRun((c) => releaseReservedEmail(c, u));
-    expect(result).toBe(false);
+  it("a row with nothing reserved → false", async () => {
+    const u = await mkAnonymisedUser({ disabledAt: false });
+    expect(await ctxRun((c) => releaseReservedEmail(c, u))).toBe(false);
   });
 });

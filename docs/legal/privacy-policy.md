@@ -1,8 +1,8 @@
-# Privacy Policy — DRAFT for attorney review
+# Privacy Policy — DRAFT (not in force; not reviewed by an attorney)
 
 > ⚠️ DRAFT. Not in force. See `README.md`. `[[BRACKETED]]` = to be filled. Data
-> practices below are grounded in the current implementation; the attorney should
-> verify each against the final build.
+> practices below are grounded in the current code and are the operator's
+> best-effort description of it.
 
 **Effective:** [[EFFECTIVE_DATE]] · Controller: [[LEGAL_ENTITY]]
 
@@ -35,7 +35,7 @@ This policy explains what we collect, why, who processes it, and your choices.
 **We deliberately minimize:**
 - Uploaded images are converted to WebP and **EXIF metadata is stripped**, so
   location and camera data embedded in your photos are removed before storage.
-- We do not knowingly collect data from children under 13 (see §7).
+- We do not knowingly collect data from children below the minimum age in §7.
 
 ## 2. Why we use it
 
@@ -79,11 +79,16 @@ report's contents are designed.]]
 **DSA notice reporter information** — your name and email from a legal complaint
 you file — is shown to moderators reviewing the report, so they can respond to
 you. It is **never** disclosed to the author of the content you are reporting.
-Retention of confirmed notices is not yet implemented; they are retained
-indefinitely in the notice record itself, including after the reported content
-is deleted, alongside a reference to the moderation decision that resolved it,
-where a moderator decided it.
-[[Attorney to confirm retention period for confirmed DSA notices.]]
+
+**How long we keep DSA notices.** A notice you never confirm is deleted
+automatically: once a day, we delete unconfirmed notices that are more than 7
+days old. A confirmed notice is not deleted automatically: there is no
+retention period for confirmed notices today, and we keep them in the notice
+record. That record holds your name, email address, the category, your
+statement, the title of the reported post or the first 120 characters of the
+reported comment (captured when you filed the notice), and, once a moderator
+has resolved it, a record of how it was resolved. If the reported content is
+later deleted, the notice and that captured title or excerpt are kept.
 
 ## 5. Retention
 
@@ -101,26 +106,33 @@ where a moderator decided it.
   is kept in that notice's own record, as described above.
 - **An account you delete is not erased.** After a 30-day grace period (during
   which you can cancel the deletion), we anonymise it: your email, password,
-  and profile details are scrubbed and your handle is released. Your posts and
+  and profile details are scrubbed and your handle is released for reuse on
+  the Service (the moderation log may still record it; see below). Your posts and
   comments remain hosted and displayed, attributed to a generic "deleted user"
   rather than your identity, so that conversations other people are part of
   are not broken. Reasonable backup and legal-compliance copies of the
   anonymised account may persist for a limited period.
-  A deletion request is delayed, not refused, while the account is subject to
-  a legal hold (for example, during a legal or safety investigation). If an
-  account was banned when its deletion took effect, we keep a one-way hash of
-  its email address while the ban stands, so the address can't be used to
-  create a new account. Our moderation log, which is append-only and kept as
-  the legal record of moderation actions, keeps the email address recorded
-  at the time of any moderation decision about that account's content, and
-  the email address recorded each time the account's owner hid or unhid one
-  of their own posts; it is not used to contact you.
-  [[Attorney: the three preceding sentences (hold-delayed deletion, the hashed
-  email reservation, and the moderation log's retained email) are a DRAFT and
-  have not had attorney review.]]
-  [[Attorney: the hash is an unsalted SHA-256 of the normalised address, so
-  anyone holding it can recover the address by hashing candidate addresses
-  and comparing. Confirm whether "one-way hash" needs that qualification.]]
+  **Legal holds.** While an account is under a legal hold (for example,
+  during a legal or safety investigation), its deletion is delayed, not
+  refused: the request stays recorded, and the deletion goes ahead after the
+  hold is released. An account under a legal hold for child sexual abuse
+  material is never anonymised or deleted, because that kind of hold is never
+  released.
+  **Banned accounts.** If an account was banned when its deletion took
+  effect, its email address is replaced like any other account's, and we keep
+  a fingerprint of the address so that it can't be used to create a new
+  account while the ban stands. The fingerprint is a keyed hash
+  (HMAC-SHA-256) made with a secret key that is stored separately from our
+  database, so someone who has the fingerprint but not the key can't use it
+  to find out or confirm the address.
+  **Moderation log.** Our moderation log is append-only and is kept as the
+  legal record of moderation actions. Deleting an account does not remove
+  from it the email address recorded at the time of any moderation decision
+  about that account's content, or the email address recorded each time the
+  account's owner hid or unhid one of their own posts. Nor does it remove the
+  account's handle as recorded at any moderation action on the account itself
+  (a warning, suspension, ban or termination, or a legal hold being imposed or
+  released). The log is not used to contact you.
 - **Security logs** are retained only as long as needed for abuse prevention.
 
 ## 6. Your choices and rights
@@ -135,9 +147,13 @@ where a moderator decided it.
 
 ## 7. Children
 
-The Service is not directed to children under 13, and we do not knowingly collect
-their personal information. If we learn we have, we will delete it. [[Attorney to
-confirm COPPA posture and any 13–16 consent handling for the EEA.]]
+You must be at least 13 years old, or older if the minimum age for consenting
+to online services where you live is higher, to use the Service (Terms of
+Service §1). The Service is not directed to anyone below that age, and we do not
+knowingly collect their personal information. We do not ask for your date of
+birth and do not verify ages: signing up asks only for an email address, a
+handle and a password. If we learn that an account belongs to someone below that
+age, we will delete the account and the personal information it holds.
 
 ## 8. Security
 
@@ -147,8 +163,16 @@ your data. No system is perfectly secure, and we cannot guarantee absolute secur
 
 ## 9. International transfers
 
-Our providers may process data in the United States and other countries.
-[[Attorney: transfer mechanism (e.g. SCCs) if serving EEA/UK users.]]
+The Service is operated from the United States. If you use it from outside the
+United States, including from the EEA or the UK, your personal data is
+transferred to and processed in the United States and in other countries where
+the providers listed in §3 operate, under those providers' standard
+data-processing terms. For example, Cloudflare runs the Service on its network
+of data centres in many countries, so a request you make may be handled in a
+data centre outside the United States.
+We have not put in place any other transfer mechanism: we have not signed
+standard contractual clauses of our own, and we do not rely on an adequacy
+decision.
 
 ## 10. Changes
 

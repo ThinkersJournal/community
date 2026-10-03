@@ -1,4 +1,4 @@
-# Terms of Service — DRAFT for attorney review
+# Terms of Service — DRAFT (not in force; not reviewed by an attorney)
 
 > ⚠️ DRAFT. Not in force. See `README.md`. `[[BRACKETED]]` = to be filled.
 
@@ -97,8 +97,11 @@ Content or your violation of these Terms or the law, to the extent permitted by 
 ## 11. Governing law and disputes
 
 These Terms are governed by the laws of [[JURISDICTION]], without regard to conflict
-of laws. [[DISPUTE_RESOLUTION — venue / arbitration / class-action waiver: attorney
-to decide.]]
+of laws. Any dispute about these Terms or the Service will be decided by the courts
+of [[JURISDICTION]]. These Terms contain no arbitration agreement and no class-action
+waiver: you keep any right you have to bring a claim in court and to take part in a
+class or collective action. If the law where you live gives you the right to bring a
+claim in your own local courts, these Terms do not take that right away.
 
 ## 12. Changes
 
