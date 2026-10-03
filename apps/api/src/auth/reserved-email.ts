@@ -13,12 +13,12 @@
  * The reservation ends when the ban does (`releaseReservedEmail`, called by
  * plan B's ban-lift path).
  *
- * ⚠️ WHY KEYED. 0022 stored an UNSALTED SHA-256 (`reserved_email_sha256`).
+ * ⚠️ WHY KEYED. 0022 stored an UNSALTED SHA-256, in a since-dropped column.
  * Anyone holding that column could recover the address by hashing candidate
  * addresses and comparing. Without the key, an HMAC can't be tested that way.
- * The legacy column is still READ by `isEmailReserved` and CLEARED by
- * `releaseReservedEmail`, so a row 0022's reaper wrote stays reserved; nothing
- * writes it any more. A later migration drops it once production shows 0 rows.
+ * 0023 kept that legacy column read-only until production showed 0 rows;
+ * migration 0025 dropped it (2026-10-03). `isEmailReserved` and
+ * `releaseReservedEmail` now touch only `reserved_email_hmac`.
  *
  * ⚠️ ROTATING THE KEY RELEASES EVERY HMAC RESERVATION: an old fingerprint never
  * matches a new key's. See docs/runbooks/deploy.md.
@@ -29,8 +29,6 @@
  */
 import { normalizeEmail } from "@thinkersjournal/shared";
 import type { Client } from "pg";
-
-import { sha256Hex } from "./encoding";
 
 /** Thrown when `RESERVED_EMAIL_KEY` is missing, empty or whitespace-only. Never caught as "not reserved". */
 export class ReservedEmailKeyMissingError extends Error {
@@ -70,39 +68,31 @@ export async function reservedEmailHmac(env: KeyEnv, email: string): Promise<str
 }
 
 /**
- * LEGACY, READ-ONLY: the unsalted digest 0022's reaper stored. Used only to
- * find those rows; never written.
- */
-export function reservedEmailSha256(email: string): Promise<string> {
-  return sha256Hex(normalizeEmail(email));
-}
-
-/**
- * True if a deleted, banned account still reserves this address, by either
- * column. Throws `ReservedEmailKeyMissingError` without a key (fail closed).
+ * True if a deleted, banned account still reserves this address. Throws
+ * `ReservedEmailKeyMissingError` without a key (fail closed).
  */
 export async function isEmailReserved(c: Client, env: KeyEnv, email: string): Promise<boolean> {
   const hmac = await reservedEmailHmac(env, email);
   const { rowCount } = await c.query(
     `SELECT 1 FROM users
-      WHERE reserved_email_hmac = $1 OR reserved_email_sha256 = $2
+      WHERE reserved_email_hmac = $1
       LIMIT 1`,
-    [hmac, await reservedEmailSha256(email)],
+    [hmac],
   );
   return (rowCount ?? 0) > 0;
 }
 
 /**
- * Ends the reservation once the account is no longer banned, clearing BOTH
- * columns. A no-op (false) while `disabled_at` is still set, or when nothing
- * is reserved. Call it in the same transaction that clears `disabled_at`,
- * after that UPDATE. Needs no key.
+ * Ends the reservation once the account is no longer banned, clearing
+ * `reserved_email_hmac`. A no-op (false) while `disabled_at` is still set, or
+ * when nothing is reserved. Call it in the same transaction that clears
+ * `disabled_at`, after that UPDATE. Needs no key.
  */
 export async function releaseReservedEmail(c: Client, userId: string): Promise<boolean> {
   const { rowCount } = await c.query(
-    `UPDATE users SET reserved_email_hmac = NULL, reserved_email_sha256 = NULL
+    `UPDATE users SET reserved_email_hmac = NULL
       WHERE id = $1 AND disabled_at IS NULL
-        AND (reserved_email_hmac IS NOT NULL OR reserved_email_sha256 IS NOT NULL)`,
+        AND reserved_email_hmac IS NOT NULL`,
     [userId],
   );
   return (rowCount ?? 0) > 0;

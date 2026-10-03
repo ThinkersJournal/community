@@ -202,10 +202,10 @@ export async function resolveAppeal(
           if ((rowCount ?? 0) === 0) return await rollback(c, { kind: "terminated" });
           // Board item 93 / PM ruling B (account-legal-hold spec §4a): a banned
           // account deleted while banned reserves its address by hash
-          // (users.reserved_email_hmac, or the legacy reserved_email_sha256).
-          // Now the ban is lifted, the reservation ends; releaseReservedEmail
-          // clears both columns. A no-op for an account that was never
-          // anonymised (nothing reserved).
+          // (users.reserved_email_hmac; the legacy unsalted reservation column
+          // was dropped in 0025). Now the ban is lifted, the reservation ends;
+          // releaseReservedEmail clears it. A no-op for an account that was
+          // never anonymised (nothing reserved).
           await releaseReservedEmail(c, ap.subject_user_id!);
           break;
         }

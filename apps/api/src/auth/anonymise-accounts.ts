@@ -213,8 +213,8 @@ async function scrubOne(c: Client, env: Env, id: string, email: string): Promise
           SET email = $2, password_hash = $3, anonymised_at = now(),
               -- PM ruling B (spec §4a): a BANNED account's address is
               -- reserved by its keyed fingerprint (0023); the address itself
-              -- is replaced, as for every account. The legacy
-              -- reserved_email_sha256 column is never written.
+              -- is replaced, as for every account. The legacy unsalted
+              -- reservation column (0022) is gone (dropped by 0025).
               reserved_email_hmac = CASE WHEN disabled_at IS NOT NULL THEN $4 ELSE NULL END
         WHERE id = $1
           AND email = $5
