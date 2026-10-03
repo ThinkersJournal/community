@@ -89,4 +89,6 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // directly above.
   "POST /admin/accounts/:handle/holds",
   "POST /admin/accounts/:handle/holds/:id/release",
+  // #113 — no session exists for a barred appellant; inline checkOrigin, single-use token.
+  "POST /appeals/by-token",
 ]);

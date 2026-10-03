@@ -39,6 +39,12 @@ import {
   handleAdminImposeAccountHold,
   handleAdminReleaseAccountHold,
 } from "./routes/admin-accounts";
+import {
+  handleAppealByToken,
+  handleAppealForPost,
+  handleAppealSignedIn,
+  handlePeekAppealToken,
+} from "./routes/appeals";
 import { handleBlock, handleBlockStatus, handleListBlocks, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
@@ -435,6 +441,14 @@ export const ROUTES: readonly RouteDef[] = [
   // domain and inline-checkOrigin shape as the routes above.
   { method: "POST", pattern: "/admin/accounts/:handle/holds", handler: handleAdminImposeAccountHold },
   { method: "POST", pattern: "/admin/accounts/:handle/holds/:id/release", handler: handleAdminReleaseAccountHold },
+
+  // #113 plan B — appeals. by-token is session-less (the emailed token is the
+  // authority) and defends itself with inline checkOrigin; the signed-in POST
+  // runs the pipeline, so a barred session is refused and uses its token.
+  { method: "GET", pattern: "/appeals/token", handler: handlePeekAppealToken },
+  { method: "POST", pattern: "/appeals/by-token", handler: handleAppealByToken },
+  { method: "POST", pattern: "/appeals", handler: handleAppealSignedIn },
+  { method: "GET", pattern: "/appeals/for-post/:postId", handler: handleAppealForPost },
 
   // TEST-ONLY. `handleTestRoute` returns null when `TEST_ROUTES` is unset (i.e.
   // in production), and we fall through to the SAME notFoundResponse() every

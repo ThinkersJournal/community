@@ -106,7 +106,17 @@ export type ApiErrorCode =
   // NOT_FOUND, not this. The `same_admin` refusal is a separate, distinct
   // FORBIDDEN (it is about WHO is asking, not whether the hold itself can
   // ever be released).
-  | "HOLD_NOT_RELEASABLE";
+  | "HOLD_NOT_RELEASABLE"
+  // 409 — #113 plan B appeals. APPEAL_EXISTS: this action already has an
+  // appeal (one per action). APPEAL_WINDOW_CLOSED: the action is older than
+  // APPEAL_WINDOW_DAYS. NOT_APPEALABLE: the action is not in
+  // APPEALABLE_ACTIONS (user_terminate, #114), or a ban's grant would lift a
+  // later termination. APPEAL_RESOLVED: a moderator resolving an appeal that
+  // is already resolved.
+  | "APPEAL_EXISTS"
+  | "APPEAL_WINDOW_CLOSED"
+  | "NOT_APPEALABLE"
+  | "APPEAL_RESOLVED";
 
 export interface ApiErrorBody {
   code: ApiErrorCode;

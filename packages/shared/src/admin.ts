@@ -237,3 +237,13 @@ export const APPEALABLE_ACTIONS = [
   "user_ban",
 ] as const;
 export type AppealableAction = (typeof APPEALABLE_ACTIONS)[number];
+
+/** What the appellant sees about the action they are appealing. */
+export interface AppealTarget {
+  readonly actionId: string;
+  readonly action: AppealableAction;
+  readonly reason: string;
+  readonly createdAt: string;
+  readonly alreadyAppealed: boolean;
+  readonly windowClosesAt: string;
+}

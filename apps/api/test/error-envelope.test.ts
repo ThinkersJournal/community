@@ -486,6 +486,20 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /posts",
     build: () => new Request("https://api.test/posts"),
   },
+  // #113 plan B (Task 4) — both GETs, so LAYER 1 never reaches them. An
+  // unknown token is the token peek's simplest failure (400 INVALID_TOKEN,
+  // the same answer as an expired or wrong-purpose one); the for-post probe
+  // has no session (401 LOGIN_REQUIRED). test/appeals-route.test.ts owns the rest.
+  {
+    name: "400 appeal token peek with an unknown token",
+    route: "GET /appeals/token",
+    build: () => new Request("https://api.test/appeals/token?token=not-a-token"),
+  },
+  {
+    name: "401 appeal-for-post with no session",
+    route: "GET /appeals/for-post/:postId",
+    build: () => new Request("https://api.test/appeals/for-post/00000000-0000-7000-8000-000000000000"),
+  },
 ];
 
 /**
