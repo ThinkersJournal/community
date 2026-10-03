@@ -374,6 +374,8 @@ permanently — expiry affects escalation, never the record).
   becomes checkable — and until then it is honestly hedged, not falsely promised.
 - *Proposed appeal window: 30 days from the action.*
 
+**Status (2026-10-02):** BUILT — #113 plan B (docs/superpowers/plans/2026-10-01-m4-2c-appeals.md).
+
 ---
 
 ## 7. Telling users — a safety channel that bypasses preferences

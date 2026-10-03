@@ -133,6 +133,22 @@ later deleted, the notice and that captured title or excerpt are kept.
   account's handle as recorded at any moderation action on the account itself
   (a warning, suspension, ban or termination, or a legal hold being imposed or
   released). The log is not used to contact you.
+- **If your account is suspended or banned**, you can still ask for it to be
+  deleted, using the link in the notice we sent you or by asking for a new
+  link. The request is only recorded when you do this: after 30 days the
+  account is anonymised as described above, unless it is under a legal hold.
+  If it is banned at that point, we keep a fingerprint of its email address
+  while the ban stands, as described above. Because a restricted account
+  can't sign in, the request can't be cancelled while the restriction stands;
+  the link itself only works while the account is actually suspended or
+  banned, and it expires after a time.
+- **Appeals.** If you appeal a moderation decision, we keep the appeal — your
+  statement, the decision it responds to, and its outcome — indefinitely, on
+  the same basis as the moderation log above. The single-use link we email
+  you for an appeal or a deletion request is a random token; we store only a
+  cryptographic hash of it, never the token itself. Using it, or letting it
+  expire, does not remove that record — it only stops the link working. We
+  delete it when the account it belongs to is anonymised.
 - **Security logs** are retained only as long as needed for abuse prevention.
 
 ## 6. Your choices and rights
