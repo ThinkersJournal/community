@@ -8,16 +8,14 @@
 import { checkOrigin } from "../auth/csrf";
 import { errorResponse } from "../http/errors";
 import { applyDecision, type DecisionKind } from "../moderation/decide";
+import { afterContentDecision } from "../moderation/after-content-decision";
 import { sendModerationNotice } from "../moderation/notify-author";
 import { noticeLinks, type NoticeLinks } from "../moderation/notice-links";
-import { sendDsaOutcome, sendDsaOrphanedOutcome } from "../moderation/notify-reporter";
+import { sendDsaOrphanedOutcome } from "../moderation/notify-reporter";
 import { closeOrphanedDsaNotice, listOpenDsaNotices, orphanedDsaNoticeCandidate } from "../moderation/dsa-notices";
-import { purgeTags } from "../cache/purge";
-import { purgeTagsFor } from "../moderation/purge-target";
 import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { listOpenQueue } from "../moderation/queue";
-import { applyMediaVisibilityChange } from "../media/visibility-hook";
 import type { LegalHoldCategory } from "../media/legal-hold";
 import {
   requestMediaAccess,
@@ -152,32 +150,12 @@ export async function handleAdminDecision(
 
   if (result === null) return errorResponse("NOT_FOUND", 404);
 
-  // ⚠️ PURGE AFTER THE COMMIT. Without this a Remove leaves the content served
-  // from the edge cache for up to 25 hours (PUBLIC_MAX_AGE + PUBLIC_SWR).
-  // Canonical ids come from RETURNING. Awaited; purgeTags never throws. The
-  // 404 and the cross-origin 403 above return before this, so they purge nothing.
-  await purgeTags(env, purgeTagsFor(result.purge));
-
-  // ⚠️ #61 — MEDIA MOVE, AFTER THE COMMIT AND THE PAGE PURGE, AWAITED (not
-  // waitUntil): CireSnave's §5.3 standing rule is that a state-change purge
-  // happens immediately, and a restricted-media move is part of that same
-  // "stop being fetchable now" contract, not a background nicety. Runs for
-  // every non-restore decision that actually changed hidden_at (a dismissal —
-  // e.g. `keep_hidden` on content that was already hidden with no new media —
-  // still runs; applyMediaVisibilityChange no-ops when there is nothing to
-  // move).
-  await applyMediaVisibilityChange(env, ctx, {
+  await afterContentDecision(env, ctx, {
     subject,
-    subjectId: result.subjectId,
-    hidden: result.hidden,
-    legalHold:
-      legalHold === true
-        ? {
-            category: legalHoldCategory as LegalHoldCategory,
-            moderationActionId: result.actionId,
-            imposedBy: admin.email,
-          }
-        : undefined,
+    decision: decision as DecisionKind,
+    reason: reason.trim(),
+    result,
+    legalHold: legalHold === true ? { category: legalHoldCategory as LegalHoldCategory, imposedBy: admin.email } : undefined,
   });
 
   // #113 plan B — tokens are minted AFTER the action has committed, on a
@@ -215,22 +193,6 @@ export async function handleAdminDecision(
       }
     }),
   );
-
-  // DSA (spec §8): every CONFIRMED, open notice this ruling resolved (same
-  // transaction — see decide.ts) gets its reporter a statement of reasons.
-  // Same after-the-commit, waitUntil discipline as the author notice above.
-  for (const r of result.dsaReporters) {
-    ctx.waitUntil(
-      sendDsaOutcome(env, r.email, {
-        decision: decision as DecisionKind,
-        reason: reason.trim(),
-        subject,
-        postTitle: result.postTitle,
-      }).then((sent) => {
-        if (!sent) console.error("dsa outcome not sent", { noticeId: r.noticeId, actionId: result.actionId });
-      }),
-    );
-  }
 
   return new Response(JSON.stringify({ actionId: result.actionId }), {
     status: 200,

@@ -79,107 +79,124 @@ const HIDDEN_AT_SQL: Readonly<Record<DecisionKind, string>> = {
   remove: "COALESCE(t.hidden_at, now())",
 };
 
-export async function applyDecision(
-  c: Client,
-  input: DecisionInput,
-): Promise<DecisionResult | null> {
+/**
+ * The decision itself, INSIDE a transaction the caller owns. Transaction-
+ * NEUTRAL: no BEGIN, no COMMIT, no ROLLBACK, no try/catch — errors propagate
+ * to whoever owns the transaction. `applyDecision` below wraps it for a
+ * moderator's decision; `resolveAppeal` (appeals.ts) calls it inside the
+ * appeal's own transaction (#113 plan B), so the restore, the
+ * `appeal_granted` row and the appeal's resolution commit together.
+ */
+export async function applyDecisionInTx(c: Client, input: DecisionInput): Promise<DecisionResult | null> {
+  let row:
+    | { id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean; post_id?: string }
+    | undefined;
+
+  if (input.subject === "post") {
+    const { rows } = await c.query<{ id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean }>(
+      `UPDATE posts AS t
+          SET hidden_at = ${HIDDEN_AT_SQL[input.decision]}
+        FROM users u
+       WHERE t.id = $1 AND u.id = t.author_id
+       RETURNING t.id, t.author_id, u.email, t.title,
+                 (old.hidden_at IS NOT NULL) AS was_hidden,
+                 (t.hidden_at IS NOT NULL) AS hidden`,
+      [input.subjectId],
+    );
+    row = rows[0];
+  } else {
+    const { rows } = await c.query<{ id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean; post_id: string }>(
+      `UPDATE comments AS t
+          SET hidden_at = ${HIDDEN_AT_SQL[input.decision]}
+        FROM users u, posts p
+       WHERE t.id = $1 AND u.id = t.author_id AND p.id = t.post_id
+       RETURNING t.id, t.author_id, t.post_id, u.email, p.title,
+                 (old.hidden_at IS NOT NULL) AS was_hidden,
+                 (t.hidden_at IS NOT NULL) AS hidden`,
+      [input.subjectId],
+    );
+    row = rows[0];
+  }
+
+  // No such subject: append NO action row. An audit entry for content that
+  // does not exist is a lie in the log. ⚠️ No ROLLBACK here: this function
+  // does not own the transaction, and a ROLLBACK would abort the caller's.
+  if (row === undefined) return null;
+
+  const actionId = await recordModerationAction(c, {
+    actorAdmin: input.actorAdmin,
+    action: ACTION_FOR[input.decision],
+    reason: input.reason,
+    postId: input.subject === "post" ? row.id : undefined,
+    commentId: input.subject === "comment" ? row.id : undefined,
+    subjectUserId: row.author_id,
+    subjectLabel: row.email,
+    violationCategory: input.violationCategory,
+    internalNote: input.internalNote,
+  });
+
+  // DSA (spec §8): a ruling on this content answers every CONFIRMED, open
+  // notice about it — in the same transaction as the ruling, so the notices
+  // can never claim a resolution the log does not contain. Unconfirmed
+  // notices are inert and stay so (they are reaped, never resolved).
+  const { rows: dsaRows } = await c.query<{ id: string; reporter_email: string }>(
+    `UPDATE dsa_notices SET resolved_at = now(), resolution_action_id = $2
+      WHERE ${input.subject === "post" ? "post_id" : "comment_id"} = $1
+        AND email_verified_at IS NOT NULL AND resolved_at IS NULL
+      RETURNING id, reporter_email`,
+    [row.id, actionId],
+  );
+
+  if (input.accountHold !== undefined) {
+    // Spec §3 T1: the author's account is held in THE SAME transaction as the
+    // decision — unlike the image hold, which stays post-commit and best-effort.
+    await imposeAccountHoldInTx(c, {
+      userId: row.author_id,
+      category: input.accountHold.category,
+      imposedBy: input.actorAdmin,
+      reason: input.reason,
+      moderationActionId: actionId,
+    });
+  }
+
+  const purge: PurgeTarget =
+    input.subject === "post"
+      ? { kind: "post", postId: row.id, authorId: row.author_id, tagSlugs: await loadPostTagSlugs(c, row.id) }
+      : { kind: "comment", postId: row.post_id! };
+
+  return {
+    actionId,
+    subjectId: row.id,
+    authorEmail: row.email,
+    authorId: row.author_id,
+    wasHidden: row.was_hidden,
+    hidden: row.hidden,
+    postTitle: row.title,
+    purge,
+    dsaReporters: dsaRows.map((r) => ({ email: r.reporter_email, noticeId: r.id })),
+  };
+}
+
+export async function applyDecision(c: Client, input: DecisionInput): Promise<DecisionResult | null> {
   await c.query(BEGIN_BOUNDED_TX);
   try {
-    let row:
-      | { id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean; post_id?: string }
-      | undefined;
-
-    if (input.subject === "post") {
-      const { rows } = await c.query<{ id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean }>(
-        `UPDATE posts AS t
-            SET hidden_at = ${HIDDEN_AT_SQL[input.decision]}
-          FROM users u
-         WHERE t.id = $1 AND u.id = t.author_id
-         RETURNING t.id, t.author_id, u.email, t.title,
-                   (old.hidden_at IS NOT NULL) AS was_hidden,
-                   (t.hidden_at IS NOT NULL) AS hidden`,
-        [input.subjectId],
-      );
-      row = rows[0];
-    } else {
-      const { rows } = await c.query<{ id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean; post_id: string }>(
-        `UPDATE comments AS t
-            SET hidden_at = ${HIDDEN_AT_SQL[input.decision]}
-          FROM users u, posts p
-         WHERE t.id = $1 AND u.id = t.author_id AND p.id = t.post_id
-         RETURNING t.id, t.author_id, t.post_id, u.email, p.title,
-                   (old.hidden_at IS NOT NULL) AS was_hidden,
-                   (t.hidden_at IS NOT NULL) AS hidden`,
-        [input.subjectId],
-      );
-      row = rows[0];
-    }
-
-    if (row === undefined) {
-      // No such subject: commit nothing, and append NO action row. An audit
-      // entry for content that does not exist is a lie in the log.
+    const result = await applyDecisionInTx(c, input);
+    if (result === null) {
+      // No such subject: commit nothing (applyDecisionInTx wrote nothing
+      // either). ⚠️ Swallow a failed ROLLBACK here, exactly as before the
+      // split: the connection may already be dead (BEGIN_BOUNDED_TX's
+      // idle_in_transaction_session_timeout), and the true answer is still
+      // "no such subject" — returning null, not throwing, is unchanged
+      // behaviour.
       try {
         await c.query("ROLLBACK");
       } catch {
-        // Same reasoning as the catch below: a failed ROLLBACK must not become
-        // the caller's error when the real answer is "no such subject".
+        // Deliberately swallowed.
       }
       return null;
     }
-
-    const actionId = await recordModerationAction(c, {
-      actorAdmin: input.actorAdmin,
-      action: ACTION_FOR[input.decision],
-      reason: input.reason,
-      postId: input.subject === "post" ? row.id : undefined,
-      commentId: input.subject === "comment" ? row.id : undefined,
-      subjectUserId: row.author_id,
-      subjectLabel: row.email,
-      violationCategory: input.violationCategory,
-      internalNote: input.internalNote,
-    });
-
-    // DSA (spec §8): a ruling on this content answers every CONFIRMED, open
-    // notice about it — in the same transaction as the ruling, so the notices
-    // can never claim a resolution the log does not contain. Unconfirmed
-    // notices are inert and stay so (they are reaped, never resolved).
-    const { rows: dsaRows } = await c.query<{ id: string; reporter_email: string }>(
-      `UPDATE dsa_notices SET resolved_at = now(), resolution_action_id = $2
-        WHERE ${input.subject === "post" ? "post_id" : "comment_id"} = $1
-          AND email_verified_at IS NOT NULL AND resolved_at IS NULL
-        RETURNING id, reporter_email`,
-      [row.id, actionId],
-    );
-
-    if (input.accountHold !== undefined) {
-      // Spec §3 T1: the author's account is held in THE SAME transaction as the
-      // decision — unlike the image hold, which stays post-commit and best-effort.
-      await imposeAccountHoldInTx(c, {
-        userId: row.author_id,
-        category: input.accountHold.category,
-        imposedBy: input.actorAdmin,
-        reason: input.reason,
-        moderationActionId: actionId,
-      });
-    }
-
-    const purge: PurgeTarget =
-      input.subject === "post"
-        ? { kind: "post", postId: row.id, authorId: row.author_id, tagSlugs: await loadPostTagSlugs(c, row.id) }
-        : { kind: "comment", postId: row.post_id! };
-
     await c.query("COMMIT");
-    return {
-      actionId,
-      subjectId: row.id,
-      authorEmail: row.email,
-      authorId: row.author_id,
-      wasHidden: row.was_hidden,
-      hidden: row.hidden,
-      postTitle: row.title,
-      purge,
-      dsaReporters: dsaRows.map((r) => ({ email: r.reporter_email, noticeId: r.id })),
-    };
+    return result;
   } catch (err) {
     // ⚠️ THE ROLLBACK GETS ITS OWN try/catch SO IT CANNOT REPLACE THE ROOT
     // ERROR. If the connection is dead, ROLLBACK throws too and `throw err`
