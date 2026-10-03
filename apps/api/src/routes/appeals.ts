@@ -35,6 +35,15 @@ async function readBody(request: Request): Promise<Record<string, unknown> | Res
 
 const validBody = (b: unknown): b is string => typeof b === "string" && b.trim() !== "" && b.length <= MAX_BODY;
 
+/**
+ * ⚠️ NEITHER TOKEN ROUTE BELOW RATE-LIMITS. Same reasoning as
+ * `reset-password.ts`'s header (lines 16-25): the token is 32 bytes of
+ * CSPRNG output (256 bits), single-use and time-boxed — guessing it is not a
+ * viable attack regardless of how many attempts are allowed, so a
+ * request-volume limiter would defend nothing a limiter is good at defending.
+ * The entropy IS the defense.
+ */
+
 /** GET /appeals/token?token= — PEEK ONLY (Review Focus 2). */
 export async function handlePeekAppealToken(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const token = new URL(request.url).searchParams.get("token") ?? "";
@@ -42,6 +51,13 @@ export async function handlePeekAppealToken(request: Request, env: Env, ctx: Exe
     const t = await peekActionToken(c, token, "appeal");
     return t === null ? null : describeAppealTarget(c, t.actionId);
   });
+  // `target === null` covers two different causes on purpose: an unknown/
+  // expired/wrong-purpose token (peekActionToken returned null), AND a
+  // genuine token whose action is no longer appealable (describeAppealTarget
+  // returned null — e.g. a user_terminate action, #114). Both get the SAME
+  // 400 INVALID_TOKEN: telling them apart would let a caller learn "this
+  // token is real but its action isn't appealable" from a bare peek, which
+  // is more than a token holder needs to know.
   return target === null ? errorResponse("INVALID_TOKEN", 400) : json({ target });
 }
 
@@ -50,7 +66,8 @@ export async function handleAppealByToken(request: Request, env: Env, ctx: Execu
   if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
   const b = await readBody(request);
   if (b instanceof Response) return b;
-  if (typeof b["token"] !== "string" || !validBody(b["body"])) return errorResponse("INVALID_INPUT", 400);
+  if (typeof b["token"] !== "string") return errorResponse("INVALID_INPUT", 400, { fields: ["token"] });
+  if (!validBody(b["body"])) return errorResponse("INVALID_INPUT", 400, { fields: ["body"] });
   const token = b["token"];
   const body = (b["body"] as string).trim();
 
@@ -85,7 +102,8 @@ export async function handleAppealSignedIn(request: Request, env: Env, ctx: Exec
   if (result instanceof Response) return result;
   const b = await readBody(request);
   if (b instanceof Response) return b;
-  if (typeof b["actionId"] !== "string" || !validBody(b["body"])) return errorResponse("INVALID_INPUT", 400);
+  if (typeof b["actionId"] !== "string") return errorResponse("INVALID_INPUT", 400, { fields: ["actionId"] });
+  if (!validBody(b["body"])) return errorResponse("INVALID_INPUT", 400, { fields: ["body"] });
   const actionId = b["actionId"];
   const body = (b["body"] as string).trim();
   let outcome: FileAppealOutcome;
@@ -108,8 +126,14 @@ export async function handleAppealForPost(request: Request, env: Env, ctx: Execu
   if (session instanceof Response) return session;
   try {
     return await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      // ⚠️ B3/minor(2): the JOIN's `u.anonymised_at IS NULL` is a second,
+      // independent guard — a surviving session (epoch not yet bumped) for an
+      // account the scrub has already anonymised must read NOTHING here, same
+      // "no path reaches a deleted account" guarantee as the action tokens.
       const { rows: own } = await c.query<{ hidden: boolean }>(
-        `SELECT hidden_at IS NOT NULL AS hidden FROM posts WHERE id = $1 AND author_id = $2`,
+        `SELECT p.hidden_at IS NOT NULL AS hidden FROM posts p
+           JOIN users u ON u.id = p.author_id AND u.anonymised_at IS NULL
+          WHERE p.id = $1 AND p.author_id = $2`,
         [params.postId, session.userId],
       );
       if (own.length === 0) return errorResponse("NOT_FOUND", 404);
@@ -117,10 +141,12 @@ export async function handleAppealForPost(request: Request, env: Env, ctx: Execu
       // ANY kind, restore included. A keep_hidden/remove that a later restore
       // reversed is not appealable, and neither is anything on a visible post.
       // A post hidden only by auto-hide has no decision yet: nothing to appeal.
+      // `id DESC` is a deterministic tie-break for two decisions landing in
+      // the same instant (minor 7) — `created_at` alone cannot order them.
       const { rows } = await c.query<{ id: string; action: string }>(
         `SELECT id, action FROM moderation_actions
           WHERE post_id = $1 AND action LIKE 'content\\_%'
-          ORDER BY created_at DESC LIMIT 1`,
+          ORDER BY created_at DESC, id DESC LIMIT 1`,
         [params.postId],
       );
       const latest = rows[0];

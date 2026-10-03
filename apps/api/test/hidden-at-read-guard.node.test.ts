@@ -171,7 +171,8 @@ const ALLOWLIST: readonly AllowEntry[] = [
   },
   {
     file: "appeals.ts",
-    match: "SELECT hidden_at IS NOT NULL AS hidden FROM posts WHERE id = $1 AND author_id = $2",
+    match:
+      "SELECT p.hidden_at IS NOT NULL AS hidden FROM posts p JOIN users u ON u.id = p.author_id AND u.anonymised_at IS NULL WHERE p.id = $1 AND p.author_id = $2",
     why:
       "author-scoped ownership + visibility probe for the appeal link; returns no content",
   },

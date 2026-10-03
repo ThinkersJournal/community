@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import worker from "../src";
 import { withClient } from "../src/db/client";
 import { mintActionToken } from "../src/moderation/action-tokens";
+import { fileAppeal } from "../src/moderation/appeals";
 import { createPublished, createVerifiedActor, deleteCreatedUsers } from "./actor";
 
 import type { Actor } from "./actor";
@@ -123,7 +124,7 @@ describe("POST /appeals/by-token", () => {
     expect(res.status).toBe(201);
   });
 
-  it("⚠️ Review Focus 1: a delete_request token is 400 INVALID_TOKEN here, and still works for its own purpose", async () => {
+  it("⚠️ Review Focus 1: a delete_request token is 400 INVALID_TOKEN here, and stays unconsumed (its own route is a later task)", async () => {
     const actor = await createVerifiedActor();
     const actionId = await seedAction(actor.userId, "user_ban");
     const token = await mintDeleteRequestToken(actor.userId, actionId);
@@ -133,8 +134,10 @@ describe("POST /appeals/by-token", () => {
     expect(await res.json()).toMatchObject({ code: "INVALID_TOKEN" });
     expect(await appealsCount(actionId)).toBe(0);
 
-    // The token is still unspent for its own purpose (peek, since there is no
-    // delete-request route in this task).
+    // This task has no delete-request ROUTE to prove the token still works
+    // for its own purpose through HTTP — only that this route didn't consume
+    // it. Peeking it as an "appeal" token also answers 400 (wrong purpose for
+    // THIS route too); the assertion that matters is `used_at IS NULL` below.
     const peek = await fetchWorker(tokenGet(`/appeals/token?token=${token}`));
     expect(peek.status).toBe(400); // wrong purpose for THIS route too — the point is it's not consumed.
     const { rows } = await ctxRun((c) =>
@@ -215,6 +218,24 @@ describe("POST /appeals/by-token", () => {
   });
 });
 
+describe("fileAppeal (direct, no HTTP layer)", () => {
+  // Controller fix round 1, I2: `fileAppeal`'s own `AND u.anonymised_at IS
+  // NULL` (moderation/appeals.ts) has no test that can fail it on its own —
+  // every HTTP-level B3 case goes through `consumeActionToken`'s guard
+  // FIRST, so a regression in `fileAppeal`'s predicate would never be
+  // observed there. This calls `fileAppeal` directly, bypassing the token
+  // layer entirely, to pin fileAppeal's OWN guard.
+  it("⚠️ B3: fileAppeal refuses an anonymised appellant even when called directly", async () => {
+    const actor = await createVerifiedActor();
+    const actionId = await seedAction(actor.userId, "user_warn");
+    await sql(`UPDATE users SET anonymised_at = now() WHERE id = $1`, [actor.userId]);
+
+    const outcome = await ctxRun((c) => fileAppeal(c, { actionId, appellantId: actor.userId, body: "x" }));
+    expect(outcome).toEqual({ kind: "not_found" });
+    expect(await appealsCount(actionId)).toBe(0);
+  });
+});
+
 describe("POST /appeals (signed in)", () => {
   it("the content's author can appeal its keep_hidden/remove action", async () => {
     const actor = await createVerifiedActor();
@@ -238,7 +259,9 @@ describe("POST /appeals (signed in)", () => {
   it("a barred session is refused by the pipeline (403 ACCOUNT_BARRED) — the token path is theirs", async () => {
     const actor = await createVerifiedActor();
     const actionId = await seedAction(actor.userId, "user_ban");
-    await sql(`UPDATE users SET suspended_until = now() + interval '100 years' WHERE id = $1`, [actor.userId]);
+    // A BAN is `disabled_at`, permanent — not `suspended_until`, which is a
+    // temporary bar and the wrong column for this action (account-status.ts).
+    await sql(`UPDATE users SET disabled_at = now(), disabled_reason = 'ban' WHERE id = $1`, [actor.userId]);
 
     const res = await fetchWorker(mutating(actor, "POST", "/appeals", { actionId, body: "let me back in" }));
     expect(res.status).toBe(403);
@@ -247,16 +270,19 @@ describe("POST /appeals (signed in)", () => {
 });
 
 describe("GET /appeals/for-post/:postId", () => {
-  it("returns the latest keep_hidden/remove action on the caller's own post", async () => {
+  it("returns the LATEST of two decisions (keep_hidden, then remove) — not merely A decision", async () => {
     const actor = await createVerifiedActor();
     const postId = await createPublished(actor);
     await sql(`UPDATE posts SET hidden_at = now() WHERE id = $1`, [postId]);
-    const actionId = await seedAction(actor.userId, "content_remove", { postId });
+    // keep_hidden an hour ago, remove just now — the query must prefer the
+    // chronologically later row, not whichever one a plain scan meets first.
+    await seedAction(actor.userId, "content_keep_hidden", { postId, createdAt: new Date(Date.now() - HOUR) });
+    const removeId = await seedAction(actor.userId, "content_remove", { postId });
 
     const res = await fetchWorker(mutating(actor, "GET", `/appeals/for-post/${postId}`));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { target: { actionId: string } | null };
-    expect(body.target?.actionId).toBe(actionId);
+    expect(body.target?.actionId).toBe(removeId);
   });
 
   it("a post hidden only by auto-hide (no decision yet) → 200 { target: null } — nothing to appeal yet", async () => {
@@ -281,12 +307,47 @@ describe("GET /appeals/for-post/:postId", () => {
     expect(await res.json()).toEqual({ target: null });
   });
 
+  // Controller fix round 1, I1 — the brief's missing case: a restore's
+  // GOVERNING effect must survive a LATER, independent re-hide with no new
+  // decision (e.g. auto-hide firing again). The latest DECISION is still the
+  // restore, so there is nothing to appeal, even though the post reads
+  // hidden right now.
+  it("a keep_hidden → restore → later re-hidden with NO new decision → { target: null }", async () => {
+    const actor = await createVerifiedActor();
+    const postId = await createPublished(actor);
+    await seedAction(actor.userId, "content_keep_hidden", { postId });
+    await sql(`UPDATE posts SET hidden_at = NULL WHERE id = $1`, [postId]);
+    await seedAction(actor.userId, "content_restore", { postId });
+    // Re-hidden (e.g. auto-hide again) with no accompanying moderation_actions row.
+    await sql(`UPDATE posts SET hidden_at = now() WHERE id = $1`, [postId]);
+
+    const res = await fetchWorker(mutating(actor, "GET", `/appeals/for-post/${postId}`));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ target: null });
+  });
+
   it("someone else's post → 404", async () => {
     const owner = await createVerifiedActor();
     const other = await createVerifiedActor();
     const postId = await createPublished(owner);
 
     const res = await fetchWorker(mutating(other, "GET", `/appeals/for-post/${postId}`));
+    expect(res.status).toBe(404);
+  });
+
+  // Minor (2) — the JOIN's `u.anonymised_at IS NULL` guard: a surviving
+  // session (epoch not yet bumped) for an account the scrub has already
+  // anonymised must read NOTHING, same as every other B3 defense-in-depth
+  // layer in this plan.
+  it("⚠️ B3/minor(2): an anonymised account's surviving session reads nothing here: 404", async () => {
+    const actor = await createVerifiedActor();
+    const postId = await createPublished(actor);
+    await sql(`UPDATE posts SET hidden_at = now() WHERE id = $1`, [postId]);
+    await seedAction(actor.userId, "content_keep_hidden", { postId });
+
+    await sql(`UPDATE users SET anonymised_at = now() WHERE id = $1`, [actor.userId]);
+
+    const res = await fetchWorker(mutating(actor, "GET", `/appeals/for-post/${postId}`));
     expect(res.status).toBe(404);
   });
 });
