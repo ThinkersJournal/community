@@ -14,7 +14,11 @@
  * left unspent; the signed-in deletion route is that user's path now.
  * ⚠️ NO PATH REACHES A DELETED ACCOUNT (B3): consume refuses an anonymised
  * account and holds its users row until COMMIT; the UPDATE re-checks too.
- * ⚠️ The re-request route never says whether the address exists or is barred.
+ * ⚠️ MUST NOT LEAK WHETHER AN ADDRESS IS REGISTERED OR BARRED, same two
+ * defenses as forgot-password.ts: the status and body never differ, and the
+ * found path's one extra `INSERT` (the minted token) before responding is a
+ * timing residual, not a claim of perfect closure — same honesty as that
+ * route's own header.
  */
 import { DeleteRequestResendInput, DELETE_REQUEST_RESEND_TTL_HOURS } from "@thinkersjournal/shared";
 import type { Client } from "pg";
@@ -128,9 +132,15 @@ export async function handleDeleteRequestResend(request: Request, env: Env, ctx:
 
   const accepted = new Response(null, { status: 202 });
 
-  const token = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    const { rows } = await c.query<{ id: string; suspended_until: Date | null; disabled_at: Date | null; action_id: string | null }>(
-      `SELECT u.id, u.suspended_until, u.disabled_at,
+  const minted = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{
+      id: string;
+      email: string;
+      suspended_until: Date | null;
+      disabled_at: Date | null;
+      action_id: string | null;
+    }>(
+      `SELECT u.id, u.email, u.suspended_until, u.disabled_at,
               (SELECT ma.id FROM moderation_actions ma
                 WHERE ma.subject_user_id = u.id AND ma.action IN ('user_suspend','user_ban','user_terminate')
                 ORDER BY ma.created_at DESC LIMIT 1) AS action_id
@@ -142,23 +152,26 @@ export async function handleDeleteRequestResend(request: Request, env: Env, ctx:
     // ⚠️ B3: the guarded mint re-checks anonymised_at in the INSERT itself,
     // under FOR KEY SHARE. A scrub that committed after the SELECT above
     // yields null here, and no link is sent.
-    return mintActionToken(c, {
+    const token = await mintActionToken(c, {
       actionId: u.action_id,
       userId: u.id,
       purpose: "delete_request",
       ttlMs: DELETE_REQUEST_RESEND_TTL_HOURS * 3600_000,
     });
+    return token === null ? null : { token, email: u.email };
   });
 
-  if (token !== null) {
-    const url = `${verificationLinkOrigin(request)}/account/delete-request?token=${encodeURIComponent(token)}`;
+  if (minted !== null) {
+    const url = `${verificationLinkOrigin(request)}/account/delete-request?token=${encodeURIComponent(minted.token)}`;
     const tail = `It expires in ${DELETE_REQUEST_RESEND_TTL_HOURS} hours and works once. ${DELETE_REQUEST_SENTENCE_AFTER}`;
     // DISPATCHED, not awaited — same reason as forgot-password.ts: awaiting
     // would put the mail latency into the response and leak "found".
     ctx.waitUntil(
+      // Mail the STORED address (u.email), not the input: same as
+      // forgot-password.ts, and the one that would actually be registered.
       postmarkSend(env, {
         from: "noreply@thinkersjournal.com",
-        to: email,
+        to: minted.email,
         subject: "Your account deletion link",
         textBody: `To ask for your Thinkers Journal account to be deleted, open this link:\n\n${url}\n\n${tail}`,
         htmlBody: `<p>To ask for your Thinkers Journal account to be deleted, open this link:</p><p><a href="${escapeHtml(url)}">${escapeHtml(url)}</a></p><p>${escapeHtml(tail)}</p>`,

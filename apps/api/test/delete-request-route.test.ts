@@ -154,9 +154,13 @@ describe("POST /account/delete-request", () => {
     const stillToken = await mintDeleteRequestToken(stillSuspended.userId, stillActionId);
     await suspend(stillSuspended.userId, HOUR);
 
-    // Control: still-suspended account's token works.
+    // Control: still-suspended account's token works — both the peek AND a
+    // POST (the positive control that proves the 400s below are about the
+    // LAPSE, not some other reason a delete-request could fail).
     const controlPeek = await fetchWorker(tokenGet(`/account/delete-request/token?token=${stillToken}`));
     expect(controlPeek.status, "CONTROL: still-suspended token peeks 200").toBe(200);
+    const controlPost = await fetchWorker(tokenPost("/account/delete-request", { token: stillToken, confirm: true }));
+    expect(controlPost.status, "CONTROL: still-suspended token POSTs 200").toBe(200);
 
     // Expired-token comparator, minted with ttlMs: -1.
     const expiredActionId = await seedAction(stillSuspended.userId, "user_suspend");
@@ -166,13 +170,19 @@ describe("POST /account/delete-request", () => {
     const expiredPeek = await fetchWorker(tokenGet(`/account/delete-request/token?token=${expiredToken}`));
     expect(lapsedPeek.status).toBe(400);
     expect(lapsedPeek.status).toBe(expiredPeek.status);
-    expect(await lapsedPeek.json()).toEqual(await expiredPeek.json());
+    const lapsedPeekText = await lapsedPeek.text();
+    const expiredPeekText = await expiredPeek.text();
+    expect(lapsedPeekText, "byte-identical bodies, not merely equal JSON").toBe(expiredPeekText);
+    expect(JSON.parse(lapsedPeekText)).toEqual(JSON.parse(expiredPeekText));
 
     const lapsedPost = await fetchWorker(tokenPost("/account/delete-request", { token: lapsedToken, confirm: true }));
     const expiredPost = await fetchWorker(tokenPost("/account/delete-request", { token: expiredToken, confirm: true }));
     expect(lapsedPost.status).toBe(400);
     expect(lapsedPost.status).toBe(expiredPost.status);
-    expect(await lapsedPost.json()).toEqual(await expiredPost.json());
+    const lapsedPostText = await lapsedPost.text();
+    const expiredPostText = await expiredPost.text();
+    expect(lapsedPostText, "byte-identical bodies, not merely equal JSON").toBe(expiredPostText);
+    expect(JSON.parse(lapsedPostText)).toEqual(JSON.parse(expiredPostText));
 
     expect(await deletionRequestedAt(lapsed.userId)).toBeNull();
     expect(await tokenUsedAt(lapsedActionId)).toBeNull();
@@ -281,7 +291,7 @@ function uniqueEmail(): string {
 }
 
 describe("POST /account/delete-request/resend", () => {
-  it("a barred account: 202, one email containing /account/delete-request?token=, a new delete_request token expiring in about 24h", async () => {
+  it("a barred account: 202, one email to the account's address containing /account/delete-request?token=, a new delete_request token expiring in about 24h, redeemable end to end", async () => {
     const actor = await createVerifiedActor();
     await seedAction(actor.userId, "user_ban");
     await ban(actor.userId);
@@ -292,16 +302,26 @@ describe("POST /account/delete-request/resend", () => {
     expect(res.status).toBe(202);
     expect(calls).toHaveLength(1);
     const body = postmarkBody(calls);
+    expect(body.To, "mailed to the account's stored address").toBe(email);
     const match = /\/account\/delete-request\?token=([^"\\<\s]+)/.exec(String(body.TextBody));
     expect(match, "no delete-request link found in the mailed body").not.toBeNull();
+    const mailedToken = decodeURIComponent(match![1]!);
 
     const rows = await sql<{ expires_at: Date }>(
       `SELECT expires_at FROM moderation_action_tokens WHERE user_id = $1 AND purpose = 'delete_request' ORDER BY created_at DESC LIMIT 1`,
       [actor.userId],
     );
     const ttlHours = (rows[0]!.expires_at.getTime() - Date.now()) / HOUR;
+    // A small slack (6 min) absorbs clock skew between this process and the
+    // DB server's `now()` — the point is "about 24h", not an exact bound.
+    const SLACK_HOURS = 0.1;
     expect(ttlHours).toBeGreaterThan(DELETE_REQUEST_RESEND_TTL_HOURS - 1);
-    expect(ttlHours).toBeLessThanOrEqual(DELETE_REQUEST_RESEND_TTL_HOURS);
+    expect(ttlHours).toBeLessThanOrEqual(DELETE_REQUEST_RESEND_TTL_HOURS + SLACK_HOURS);
+
+    // End to end: the mailed token actually redeems.
+    const confirm = await fetchWorker(tokenPost("/account/delete-request", { token: mailedToken, confirm: true }));
+    expect(confirm.status).toBe(200);
+    expect(await confirm.json()).toEqual({ recorded: true });
   });
 
   it("an unbarred account, an unknown address, and an anonymised account all get the SAME 202 empty body with no email (byte-identical to the barred case)", async () => {
@@ -347,5 +367,18 @@ describe("POST /account/delete-request/resend", () => {
       expect(await res.text()).toBe("");
       expect(calls).toHaveLength(0);
     }
+
+    // No delete_request token was minted for either account that didn't
+    // qualify — not merely "no mail", but nothing written at all.
+    expect(
+      await sql(`SELECT 1 FROM moderation_action_tokens WHERE user_id = $1 AND purpose = 'delete_request'`, [
+        unbarred.userId,
+      ]),
+    ).toEqual([]);
+    expect(
+      await sql(`SELECT 1 FROM moderation_action_tokens WHERE user_id = $1 AND purpose = 'delete_request'`, [
+        anonymised.userId,
+      ]),
+    ).toEqual([]);
   });
 });
