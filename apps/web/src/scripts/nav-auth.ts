@@ -49,13 +49,16 @@ export function initNavAuth(): void {
       profile.href = me.username ? `/@${me.username}` : "/feed";
       profile.textContent = me.username ? `@${me.username}` : "Account";
 
-      // Endpoint/UI audit (2026-09-24): /settings/notifications had a
-      // working page and no CSS/hidden defect, but its ONLY inbound link in
-      // the whole app was the unsubscribe-email landing page's "changed
-      // your mind?" line — a signed-in member browsing the site had no
-      // click-path to their own notification preferences at all.
+      // Endpoint/UI audit (2026-09-24) pointed this straight at
+      // /settings/notifications as a stop-gap: that page's ONLY inbound link
+      // in the whole app was the unsubscribe-email landing page's "changed
+      // your mind?" line, so a signed-in member browsing the site had no
+      // click-path to their own notification preferences at all. Now that
+      // /settings/index.astro exists (a landing page listing all three
+      // sections), this points there instead; the old direct URLs still work
+      // unchanged (linked from emails, unsub.astro, etc).
       const settings = document.createElement("a");
-      settings.href = "/settings/notifications";
+      settings.href = "/settings";
       settings.textContent = "Settings";
 
       const out = document.createElement("button");

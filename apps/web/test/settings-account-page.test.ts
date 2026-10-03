@@ -45,4 +45,10 @@ describe("settings/account.astro", () => {
   it("redirects after a successful POST (PRG) rather than re-rendering the submission", () => {
     expect(c).toMatch(/Astro\.redirect\(\s*["']\/settings\/account["']\s*\)/);
   });
+
+  it("uses the shared SettingsNav instead of an ad-hoc bottom cross-link", () => {
+    expect(c).toContain('import SettingsNav from "../../components/SettingsNav.astro"');
+    expect(c).toContain('<SettingsNav current="account" />');
+    expect(c).not.toMatch(/class="settings-nav"/);
+  });
 });

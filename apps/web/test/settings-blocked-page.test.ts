@@ -28,8 +28,11 @@ describe("settings/blocked.astro", () => {
     expect(page).toContain("initBlockedList();");
   });
 
-  it("links to and from settings/notifications so both are reachable from one nav entry", () => {
-    expect(page).toContain("/settings/notifications");
+  it("uses the shared SettingsNav instead of an ad-hoc bottom cross-link", () => {
+    expect(page).toContain('import SettingsNav from "../../components/SettingsNav.astro"');
+    expect(page).toContain('<SettingsNav current="blocked" />');
+    // The old hand-rolled cross-link is gone, not just duplicated.
+    expect(page).not.toMatch(/class="settings-nav"/);
   });
 });
 

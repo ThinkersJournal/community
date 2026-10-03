@@ -35,12 +35,17 @@ describe("nav-auth island", () => {
     expect(s).toMatch(/\.catch\(/);
   });
 
-  it("⚠️ links to /settings/notifications for signed-in viewers (endpoint/UI audit, 2026-09-24)", () => {
-    // Before this: the page worked, no CSS/hidden defect — but its ONLY
-    // inbound link anywhere in the app was the unsubscribe-email landing
-    // page. A signed-in member had NO click-path to their own preferences.
+  it("⚠️ links to /settings (the settings landing page), not the old /settings/notifications stop-gap", () => {
+    // Endpoint/UI audit, 2026-09-24: before that audit, /settings/notifications
+    // worked fine but had NO inbound link anywhere in the app except the
+    // unsubscribe-email landing page — a signed-in member had no click-path to
+    // their own preferences at all. That audit pointed this nav link straight at
+    // /settings/notifications as a stop-gap. Now a real /settings landing page
+    // exists (apps/web/src/pages/settings/index.astro), listing all three
+    // sections, so the nav link goes there instead.
     const s = island();
-    expect(s).toContain('settings.href = "/settings/notifications"');
+    expect(s).toContain('settings.href = "/settings"');
+    expect(s).not.toContain('settings.href = "/settings/notifications"');
     expect(s).toMatch(/slot\.appendChild\(settings\)/);
   });
 });

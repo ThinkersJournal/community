@@ -18,6 +18,7 @@
  * form; the initial view has no way to submit the delete request in one click.
  */
 import BaseLayout from "../../components/BaseLayout.astro";
+import SettingsNav from "../../components/SettingsNav.astro";
 import { apiErrorCode, apiFetch, applyCookies } from "../../lib/api";
 import { markPrivate } from "../../lib/cache";
 import { setPublicPageCsp } from "../../lib/csp";
@@ -70,10 +71,7 @@ const confirming = Astro.url.searchParams.get("step") === "confirm";
 <BaseLayout title="Account">
   <div class="wrap form-page">
     <h1>Account</h1>
-    <p class="settings-nav">
-      <a class="link" href="/settings/notifications">Notification emails</a> ·
-      <a class="link" href="/settings/blocked">Blocked users</a>
-    </p>
+    <SettingsNav current="account" />
     {error && <p class="err">Could not save. Try again.</p>}
 
     {deletionRequestedAt !== null ? (
@@ -128,7 +126,6 @@ const confirming = Astro.url.searchParams.get("step") === "confirm";
 </BaseLayout>
 <style>
   .form-page{padding:clamp(40px,7vw,80px) 0;max-width:560px}
-  .settings-nav{margin:4px 0 20px}
   .hint{color:var(--muted);font-size:14px;margin:12px 0 24px}
   .err{color:var(--muted)}
   .form{display:flex;align-items:center;gap:12px;flex-wrap:wrap}

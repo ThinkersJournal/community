@@ -20,4 +20,9 @@ describe("settings/notifications.astro", () => {
     expect(c).toContain('name="reactions"');
     expect(c).toContain('name="follows"');
   });
+  it("uses the shared SettingsNav instead of an ad-hoc bottom cross-link", () => {
+    expect(c).toContain('import SettingsNav from "../../components/SettingsNav.astro"');
+    expect(c).toContain('<SettingsNav current="notifications" />');
+    expect(c).not.toMatch(/class="settings-nav"/);
+  });
 });
