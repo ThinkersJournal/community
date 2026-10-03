@@ -16,7 +16,20 @@
 | `privacy-policy.md` | What data is collected, why, who processes it, retention, user rights. |
 | `dmca-policy.md` | §512 takedown / counter-notice process + repeat-infringer policy. |
 
-## Placeholders the attorney / founder must fill
+## 2026-10-02: there is no attorney
+
+CireSnave, verbatim (relayed by the PM): *"There is no attorney nor can I afford one
+so proceed with best safe guesses."* So the `[[Attorney…]]` markers (five in
+`privacy-policy.md`, plus `[[DISPUTE_RESOLUTION]]` in `terms-of-service.md`) were
+replaced with the most conservative plain-language text that says what the code
+does: DSA-notice retention, legal holds and the banned-account email fingerprint,
+the moderation log's retained email, children, international transfers, and
+disputes (courts of `[[JURISDICTION]]`, no arbitration, no class-action waiver).
+**None of these documents has been reviewed by an attorney; never describe them as
+attorney-reviewed.** The text above this section still says "for attorney review"
+because it predates the ruling.
+
+## Placeholders the founder must fill
 
 Every `[[BRACKETED]]` token is a deliberate blank that needs a real value and/or a
 legal decision:
