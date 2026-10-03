@@ -1,4 +1,4 @@
-# Terms of Service — DRAFT for attorney review
+# Terms of Service — DRAFT (not in force; not reviewed by an attorney)
 
 > ⚠️ DRAFT. Not in force. See `README.md`. `[[BRACKETED]]` = to be filled.
 

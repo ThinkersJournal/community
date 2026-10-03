@@ -1,8 +1,8 @@
-# Privacy Policy — DRAFT for attorney review
+# Privacy Policy — DRAFT (not in force; not reviewed by an attorney)
 
 > ⚠️ DRAFT. Not in force. See `README.md`. `[[BRACKETED]]` = to be filled. Data
-> practices below are grounded in the current implementation; the attorney should
-> verify each against the final build.
+> practices below are grounded in the current code and are the operator's
+> best-effort description of it.
 
 **Effective:** [[EFFECTIVE_DATE]] · Controller: [[LEGAL_ENTITY]]
 
@@ -162,10 +162,11 @@ your data. No system is perfectly secure, and we cannot guarantee absolute secur
 
 The Service is operated from the United States. If you use it from outside the
 United States, including from the EEA or the UK, your personal data is
-transferred to the United States and processed there, and it is processed by the
-providers listed in §3 under those providers' standard data-processing terms.
-Cloudflare runs the Service on its network of data centres in many countries,
-so a request you make may be handled in a data centre outside the United States.
+transferred to and processed in the United States and in other countries where
+the providers listed in §3 operate, under those providers' standard
+data-processing terms. For example, Cloudflare runs the Service on its network
+of data centres in many countries, so a request you make may be handled in a
+data centre outside the United States.
 We have not put in place any other transfer mechanism: we have not signed
 standard contractual clauses of our own, and we do not rely on an adequacy
 decision.

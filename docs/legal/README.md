@@ -1,11 +1,9 @@
-# Legal policy DRAFTS — for attorney review
+# Legal policy DRAFTS (not in force; not reviewed by an attorney)
 
 > ⚠️ **THESE ARE DRAFTS, NOT LEGAL ADVICE, AND NOT IN FORCE.** They were prepared
-> by the Community controller agent as a **starting point for a qualified attorney
-> to review, correct, and finalize** (design decision #21 requires an attorney pass
-> on ToS / Guidelines / Privacy / DMCA before launch). Nothing here should be
-> published, linked, or relied upon until a licensed attorney has reviewed it and
-> CireSnave has approved the final text.
+> by the Community controller agent. Design decision #21 planned a legal review
+> before launch; CireSnave's 2026-10-02 ruling (quoted below) replaced it with
+> best safe guesses. Whether and when they are published is CireSnave's decision.
 
 ## What's here
 
@@ -26,8 +24,7 @@ does: DSA-notice retention, legal holds and the banned-account email fingerprint
 the moderation log's retained email, children, international transfers, and
 disputes (courts of `[[JURISDICTION]]`, no arbitration, no class-action waiver).
 **None of these documents has been reviewed by an attorney; never describe them as
-attorney-reviewed.** The text above this section still says "for attorney review"
-because it predates the ruling.
+attorney-reviewed.**
 
 ## Placeholders the founder must fill
 
@@ -35,8 +32,8 @@ Every `[[BRACKETED]]` token is a deliberate blank that needs a real value and/or
 legal decision:
 
 - `[[LEGAL_ENTITY]]` — the operating entity's legal name. **Unsettled** — the
-  design flags a 501(c)(3) + taxable-subsidiary structure that a nonprofit
-  attorney must bless first. The policies cannot be finalized before this is.
+  design flags a 501(c)(3) + taxable-subsidiary structure; CireSnave decides it,
+  with best safe guesses. The policies cannot be finalized before this is.
 - `[[JURISDICTION]]` — governing law / venue (US state).
 - `[[CONTACT_ADDRESS]]`, `[[CONTACT_EMAIL]]` — service + general contact.
 - ✅ `[[DMCA_AGENT_*]]` — **FILLED, and corrected 2026-09-08 against the actual
@@ -78,5 +75,5 @@ The substantive content is grounded in the platform's **actual** behavior and th
 approved design (`docs/superpowers/specs/2026-07-13-community-platform-design.md`,
 decisions #14 moderation, #17 private-ref retention, #18 media, #21 legal). Where a
 draft asserts a data practice or an enforcement rule, it reflects what the code
-does or what the design commits to — not a generic template. The attorney should
-still verify each against the final implementation.
+does or what the design commits to — not a generic template. CireSnave decides,
+with best safe guesses, whether each is right for the final implementation.
