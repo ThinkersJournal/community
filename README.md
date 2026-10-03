@@ -30,6 +30,10 @@ The flagship of [Thinker's Journal](https://thinkersjournal.com): a public **soc
 
 ---
 
+## Versioning
+
+All five workspace packages (the root, `apps/api`, `apps/web`, `packages/shared` and `packages/markdown`) carry **one** version number. It was introduced at `0.1.0` on 2026-10-03. CireSnave's rule: every pushed change bumps it, and a breaking change bumps the major, which pre-1.0 is the *second* number (0.1.x → 0.2.0). The portfolio PM allocates the number at merge time, so don't bump it yourself in a PR.
+
 ## Local development
 
 ### Prerequisites
