@@ -105,7 +105,8 @@ export type ResolveOutcome =
   | { readonly kind: "not_found" }
   | { readonly kind: "already_resolved" }
   | { readonly kind: "terminated" }
-  | { readonly kind: "content_gone" };
+  | { readonly kind: "content_gone" }
+  | { readonly kind: "superseded" };
 
 interface AppealRow {
   appellant_id: string;
@@ -146,6 +147,26 @@ export async function resolveAppeal(
         case "content_keep_hidden":
         case "content_remove": {
           subject = ap.post_id !== null ? "post" : "comment";
+          const targetId = (ap.post_id ?? ap.comment_id)!;
+          // ⚠️ D1 — A STALE APPEAL NEVER OVERRIDES A NEWER DECISION. If a
+          // later content_* decision on the same post/comment replaced the
+          // appealed one (e.g. remove A → restore → keep_hidden B), granting
+          // A must not restore over B: refuse, and roll back. A deny is still
+          // allowed (it changes no state). LOCK, THEN CHECK (the F1 shape):
+          // the target row is locked FOR UPDATE first, which is the lock
+          // decide.ts's UPDATE takes, so a moderator decision committing
+          // concurrently is seen by the check below, a NEW statement.
+          await c.query(`SELECT 1 FROM ${subject === "post" ? "posts" : "comments"} WHERE id = $1 FOR UPDATE`, [targetId]);
+          const { rowCount: newer } = await c.query(
+            `SELECT 1 FROM moderation_actions n
+               JOIN moderation_actions ma ON ma.id = $2
+              WHERE n.${subject === "post" ? "post_id" : "comment_id"} = $1
+                AND n.action LIKE 'content\\_%'
+                AND (n.created_at, n.id) > (ma.created_at, ma.id)
+              LIMIT 1`,
+            [targetId, ap.action_id],
+          );
+          if ((newer ?? 0) > 0) return await rollback(c, { kind: "superseded" });
           // ⚠️ Task 4 carry: the restore writes a `content_restore` row
           // (decide.ts's ACTION_FOR), and that row is what closes the appealed
           // decision for GET /appeals/for-post: its "latest content_* row" is
@@ -153,7 +174,7 @@ export async function resolveAppeal(
           // nothing to appeal.
           content = await applyDecisionInTx(c, {
             subject,
-            subjectId: (ap.post_id ?? ap.comment_id)!,
+            subjectId: targetId,
             decision: "restore",
             reason: input.reason,
             actorAdmin: input.actorAdmin,
@@ -264,7 +285,13 @@ async function rollback<T>(c: Client, value: T): Promise<T> {
   return value;
 }
 
-/** For the admin list: every open appeal, oldest first, in its wire shape. */
+/**
+ * At most this many open appeals per read, oldest first — the same bounded
+ * read as queue.ts's QUEUE_PAGE_SIZE. Resolving one makes room for the next.
+ */
+export const APPEALS_PAGE_SIZE = 200;
+
+/** For the admin list: every open appeal (up to APPEALS_PAGE_SIZE), oldest first, in its wire shape. */
 export async function listOpenAppeals(c: Client): Promise<AdminAppeal[]> {
   const { rows } = await c.query<{
     id: string;
@@ -275,13 +302,21 @@ export async function listOpenAppeals(c: Client): Promise<AdminAppeal[]> {
     action_reason: string;
     action_actor: string;
     appellant_handle: string | null;
+    subject: "post" | "comment" | "account";
+    target_id: string | null;
   }>(
     `SELECT a.id, a.body, a.created_at, ma.id AS action_id, ma.action, ma.reason AS action_reason,
-            ma.actor_admin AS action_actor, p.username AS appellant_handle
+            ma.actor_admin AS action_actor, p.username AS appellant_handle,
+            CASE WHEN ma.post_id IS NOT NULL THEN 'post'
+                 WHEN ma.comment_id IS NOT NULL THEN 'comment'
+                 ELSE 'account' END AS subject,
+            COALESCE(ma.post_id, ma.comment_id, ma.subject_user_id) AS target_id
        FROM appeals a
        JOIN moderation_actions ma ON ma.id = a.action_id
        LEFT JOIN profiles p ON p.user_id = a.appellant_id
-      WHERE a.resolved_at IS NULL ORDER BY a.created_at`,
+      WHERE a.resolved_at IS NULL ORDER BY a.created_at, a.id
+      LIMIT $1`,
+    [APPEALS_PAGE_SIZE],
   );
   return rows.map((r) => ({
     id: r.id,
@@ -292,5 +327,7 @@ export async function listOpenAppeals(c: Client): Promise<AdminAppeal[]> {
     actionReason: r.action_reason,
     actionActor: r.action_actor,
     appellantHandle: r.appellant_handle,
+    subject: r.subject,
+    targetId: r.target_id,
   }));
 }

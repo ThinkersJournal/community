@@ -112,11 +112,14 @@ export type ApiErrorCode =
   // APPEAL_WINDOW_DAYS. NOT_APPEALABLE: the action is not in
   // APPEALABLE_ACTIONS (user_terminate, #114), or a ban's grant would lift a
   // later termination. APPEAL_RESOLVED: a moderator resolving an appeal that
-  // is already resolved.
+  // is already resolved. APPEAL_SUPERSEDED: granting a content appeal whose
+  // action a NEWER content decision on the same post/comment has replaced (a
+  // stale grant must not override it; denying it stays allowed).
   | "APPEAL_EXISTS"
   | "APPEAL_WINDOW_CLOSED"
   | "NOT_APPEALABLE"
-  | "APPEAL_RESOLVED";
+  | "APPEAL_RESOLVED"
+  | "APPEAL_SUPERSEDED";
 
 export interface ApiErrorBody {
   code: ApiErrorCode;

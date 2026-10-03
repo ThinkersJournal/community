@@ -283,7 +283,7 @@ async function seedPost(authorId: string): Promise<string> {
 }
 
 /** A moderator's real content decision (decide.ts), so the action row is exactly what production writes. */
-async function decideOn(postId: string, decision: "keep_hidden" | "remove", actorAdmin = "mod1@example.test"): Promise<string> {
+async function decideOn(postId: string, decision: "keep_hidden" | "remove" | "restore", actorAdmin = "mod1@example.test"): Promise<string> {
   const result = await ctxRun((c) =>
     applyDecision(c, { subject: "post", subjectId: postId, decision, reason: `${decision} reason`, actorAdmin }),
   );
@@ -829,5 +829,122 @@ describe("GET /admin/appeals", () => {
 
   it("no Access JWT → 401", async () => {
     expect((await call("/admin/appeals")).status).toBe(401);
+  });
+});
+
+// ---- fix round 1 ---------------------------------------------------------------
+
+async function seedComment(authorId: string, postId: string): Promise<string> {
+  return ctxRun(async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `WITH ids AS (SELECT uuidv7() AS id)
+       INSERT INTO comments (id, post_id, author_id, parent_id, path, depth, body_markdown)
+       SELECT ids.id, $1, $2, NULL, ids.id::text, 0, 'a comment'
+         FROM ids
+       RETURNING id`,
+      [postId, authorId],
+    );
+    return rows[0]!.id;
+  });
+}
+
+describe("⚠️ D1 — a stale content appeal never overrides a NEWER decision", () => {
+  it("content_remove A → restore → keep_hidden B: granting A's appeal is 409 APPEAL_SUPERSEDED; still hidden, no new restore row, appeal open", async () => {
+    const author = await mkUser();
+    const postId = await seedPost(author);
+    const removeA = await decideOn(postId, "remove");
+    const appealId = await appealOf(author, removeA);
+    await decideOn(postId, "restore");
+    await decideOn(postId, "keep_hidden");
+    const hiddenBefore = await hiddenAt(postId);
+    expect(hiddenBefore).not.toBeNull();
+    const restoresBefore = await restoreRows(postId);
+    expect(restoresBefore).toHaveLength(1); // the moderator's own restore
+
+    const { response, purges } = await resolveRoute(appealId, { decision: "grant", reason: "upheld" });
+
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { code: string }).code).toBe("APPEAL_SUPERSEDED");
+    expect((await hiddenAt(postId))?.getTime()).toBe(hiddenBefore!.getTime());
+    expect(await restoreRows(postId)).toEqual(restoresBefore);
+    expect(await appealState(appealId)).toEqual({ resolved_at: null, outcome: null, resolution_action_id: null });
+    expect(await appealLogRows(appealId)).toEqual([]);
+    expect(purges).toEqual([]);
+    expect(sentEmails).toEqual([]);
+  });
+
+  it("resolveAppeal itself answers { kind: 'superseded' }; a DENY of the same superseded appeal is still allowed", async () => {
+    const author = await mkUser();
+    const postId = await seedPost(author);
+    const appealId = await appealOf(author, await decideOn(postId, "remove"));
+    await decideOn(postId, "keep_hidden");
+
+    const out = await ctxRun((c) => resolveAppeal(c, { appealId, grant: true, reason: "upheld", actorAdmin: "mod2@example.test" }));
+    expect(out).toEqual({ kind: "superseded" });
+
+    const denied = await ctxRun((c) => resolveAppeal(c, { appealId, grant: false, reason: "superseded", actorAdmin: "mod2@example.test" }));
+    expect(denied.kind).toBe("resolved");
+    expect((await appealState(appealId)).outcome).toBe("denied");
+    expect(await hiddenAt(postId)).not.toBeNull();
+  });
+
+  it("CONTROL: an OLDER decision on the same post does not supersede (keep_hidden, then remove; appeal the remove → the grant restores)", async () => {
+    const author = await mkUser();
+    const postId = await seedPost(author);
+    await decideOn(postId, "keep_hidden");
+    const appealId = await appealOf(author, await decideOn(postId, "remove"));
+
+    await grant(appealId);
+
+    expect(await hiddenAt(postId)).toBeNull();
+    expect(await restoreRows(postId)).toHaveLength(1);
+  });
+});
+
+describe("minor 3 — a grant on a COMMENT's content_remove", () => {
+  it("restores the comment, logs against comment_id, and purges the parent post", async () => {
+    const author = await mkUser();
+    const postId = await seedPost(author);
+    const commentId = await seedComment(author, postId);
+    const removed = await ctxRun((c) =>
+      applyDecision(c, { subject: "comment", subjectId: commentId, decision: "remove", reason: "remove reason", actorAdmin: "mod1@example.test" }),
+    );
+    const appealId = await appealOf(author, removed!.actionId);
+
+    const { response, purges } = await resolveRoute(appealId, { decision: "grant", reason: "fine after all" });
+
+    expect(response.status).toBe(200);
+    const after = await ctxRun(async (c) => {
+      const { rows } = await c.query<{ hidden_at: Date | null }>(`SELECT hidden_at FROM comments WHERE id = $1`, [commentId]);
+      return rows[0]!.hidden_at;
+    });
+    expect(after).toBeNull();
+    const restores = await ctxRun(async (c) => {
+      const { rows } = await c.query(`SELECT post_id, comment_id FROM moderation_actions WHERE comment_id = $1 AND action = 'content_restore'`, [
+        commentId,
+      ]);
+      return rows;
+    });
+    expect(restores).toEqual([{ post_id: null, comment_id: commentId }]);
+    const [logRow] = await appealLogRows(appealId);
+    expect(logRow!["comment_id"]).toBe(commentId);
+    expect(purges).toEqual([[`post:${postId}`]]);
+  });
+});
+
+describe("⚠️ D2 — GET /admin/appeals says WHAT is appealed", () => {
+  it("a post appeal carries subject 'post' + the post id; an account appeal carries subject 'account' + the user id", async () => {
+    const author = await mkUser();
+    const postId = await seedPost(author);
+    const postAppeal = await appealOf(author, await decideOn(postId, "remove"));
+    const u = await mkUser();
+    const accountAppeal = await appealOf(u, await accountAction(u, "warn"));
+
+    const res = await call("/admin/appeals", { headers: { "Cf-Access-Jwt-Assertion": await makeJwt() } });
+    expect(res.status).toBe(200);
+    const { appeals } = (await res.json()) as AdminAppealsResponse;
+
+    expect(appeals.find((a) => a.id === postAppeal)).toMatchObject({ subject: "post", targetId: postId });
+    expect(appeals.find((a) => a.id === accountAppeal)).toMatchObject({ subject: "account", targetId: u });
   });
 });

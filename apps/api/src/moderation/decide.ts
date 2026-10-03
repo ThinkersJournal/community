@@ -120,7 +120,8 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
 
   // No such subject: append NO action row. An audit entry for content that
   // does not exist is a lie in the log. ⚠️ No ROLLBACK here: this function
-  // does not own the transaction, and a ROLLBACK would abort the caller's.
+  // does not own the transaction, and a ROLLBACK would END the caller's
+  // transaction, so its later writes would autocommit outside it.
   if (row === undefined) return null;
 
   const actionId = await recordModerationAction(c, {

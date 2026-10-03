@@ -73,6 +73,8 @@ export async function handleAdminResolveAppeal(
       return errorResponse("APPEAL_RESOLVED", 409);
     case "terminated":
       return errorResponse("NOT_APPEALABLE", 409);
+    case "superseded":
+      return errorResponse("APPEAL_SUPERSEDED", 409);
     case "resolved":
       break;
   }

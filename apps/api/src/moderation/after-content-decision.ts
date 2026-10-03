@@ -31,8 +31,8 @@ export async function afterContentDecision(env: Env, ctx: ExecutionContext, args
 
   // ⚠️ PURGE AFTER THE COMMIT. Without this a Remove leaves the content served
   // from the edge cache for up to 25 hours (PUBLIC_MAX_AGE + PUBLIC_SWR).
-  // Canonical ids come from RETURNING. Awaited; purgeTags never throws. The
-  // 404 and the cross-origin 403 above return before this, so they purge nothing.
+  // Canonical ids come from RETURNING. Awaited; purgeTags never throws.
+  // Callers return their 404/403 before calling this, so those purge nothing.
   await purgeTags(env, purgeTagsFor(result.purge));
 
   // ⚠️ #61 — MEDIA MOVE, AFTER THE COMMIT AND THE PAGE PURGE, AWAITED (not

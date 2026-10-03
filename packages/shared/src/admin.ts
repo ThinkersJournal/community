@@ -262,6 +262,10 @@ export interface AdminAppeal {
   readonly actionActor: string;
   /** The appellant's CURRENT handle, or null if they have no profile. Never an email. */
   readonly appellantHandle: string | null;
+  /** What the appealed action was taken against. */
+  readonly subject: "post" | "comment" | "account";
+  /** The post id, comment id or user id (by `subject`), for the moderator's link. */
+  readonly targetId: string | null;
 }
 
 /** `GET /admin/appeals`. */
