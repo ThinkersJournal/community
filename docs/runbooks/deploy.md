@@ -135,6 +135,32 @@ and only then for both Workers.
 4. **`prod-smoke.yml` runs after the push**, as it already does for every
    push to `main` (unchanged by this work — see that workflow).
 
+## One-time secret: `RESERVED_EMAIL_KEY` (0023, BEFORE that deploy ships)
+
+`0023_reserved_email_hmac` makes a banned account's email reservation an
+HMAC-SHA-256 keyed by the `api` Worker secret `RESERVED_EMAIL_KEY`
+(`apps/api/src/auth/reserved-email.ts`). **Set the secret before the code that
+needs it deploys**, i.e. before step 3's build retry for the 0023 PR:
+
+```
+openssl rand -base64 32 | npx wrangler secret put RESERVED_EMAIL_KEY --name thinkersjournal-api
+```
+
+(or the dashboard equivalent: Workers & Pages → `thinkersjournal-api` →
+Settings → Variables and Secrets → add a **Secret** named `RESERVED_EMAIL_KEY`
+holding 32 random bytes, base64-encoded). Never commit it, and never paste it
+into a chat, an issue or a log.
+
+Without it the code fails closed, by design: **every signup answers
+`503 SERVICE_UNAVAILABLE`**, and the anonymisation reaper leaves each
+**banned** account that is due for deletion unscrubbed (logged as a failed
+row, retried nightly) while it scrubs the others normally.
+
+⚠️ **Never rotate this key casually.** Every reservation stored under the old
+key stops matching, which silently frees those banned users' addresses for a
+new signup. A rotation needs a plan for the existing rows; there is none
+today.
+
 ## Destructive migrations
 
 Mark a destructive migration (drop column, drop table, rename, `NOT NULL`
@@ -205,6 +231,7 @@ any rollback automation.
 
 ## Current order constraint
 
-Production migrations apply in this order: **0020 → 0021 → 0022** (plan C →
-#126 → the account-legal-hold work). Do not apply a later one before an
+Production migrations apply in this order: **0020 → 0021 → 0022 → 0023**
+(plan C → #126 → the account-legal-hold work → the keyed email reservation,
+whose secret must be set first; see above). Do not apply a later one before an
 earlier one in this list has landed.

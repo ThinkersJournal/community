@@ -211,23 +211,32 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   `account_legal_holds` row** survive (AH-1), including one that is held but neither banned nor suspended, which proves
   the hold alone gates it.
 
-## 4a. A banned account's email stays reserved, by hash (board item 93; PM ruling B)
+## 4a. A banned account's email stays reserved, by a keyed fingerprint (board item 93; PM ruling B; amended 2026-10-02)
+
+> **Amended 2026-10-02 (migration `0023_reserved_email_hmac`, PM-approved design).** 0022's unsalted SHA-256 could be
+> reversed by hashing candidate addresses. The reservation is now `users.reserved_email_hmac`, the lowercase-hex
+> HMAC-SHA-256 of the normalised email keyed by the `api` Worker secret `RESERVED_EMAIL_KEY`. The reaper writes only that
+> column. 0022's `reserved_email_sha256` stays, read-only: signup still checks it and `releaseReservedEmail` still clears
+> it, until a later migration drops it once production holds 0 such rows. Without the key the code fails closed: signup
+> answers `503 SERVICE_UNAVAILABLE`, and the reaper does not scrub a banned row (a counted, logged, retried per-row
+> failure) while it scrubs the others. §2's SQL and AH-7 below describe 0022 as built; this section describes HEAD.
 
 - **At deletion, every account loses its real email, banned or not.** `anonymise-accounts.ts` replaces `users.email`
   with the undeliverable sentinel `deleted-<id>@invalid.thinkersjournal.local` and `password_hash` with the unusable
   sentinel `!anonymised!`, exactly as today, along with the rest of its scrub. If the account is banned at that moment
   (`disabled_at IS NOT NULL`; in steady state, once #114 lands, that means a ban, because a termination is always
-  held by T2/7a or the backfill and never reaches the reaper), the same `UPDATE` also stores `users.reserved_email_sha256`, the
-  lowercase-hex SHA-256 of the normalised email (§2). A suspended account reserves nothing.
+  held by T2/7a or the backfill and never reaches the reaper), the same `UPDATE` also stores `users.reserved_email_hmac`, the
+  lowercase-hex HMAC-SHA-256 of the normalised email under `RESERVED_EMAIL_KEY` (0023). A suspended account reserves nothing.
 - **The normalisation is signup's own.** `packages/shared/src/schemas.ts:33` is
   `const NormalizedEmail = z.email().toLowerCase();`, and signup, login and forgot-password all parse `email` with it.
   zod 4.6.5's `toLowerCase()` (the version `packages/shared` resolves) is `_overwrite((input) => input.toLowerCase())`. The plan exports that transform as
   `normalizeEmail` and has `NormalizedEmail` apply it with `.overwrite(normalizeEmail)`, so the hash and signup run the
-  same function and can't disagree. The hash is `sha256Hex` (`apps/api/src/auth/encoding.ts:40`).
+  same function and can't disagree. The fingerprint is `reservedEmailHmac` (`apps/api/src/auth/reserved-email.ts`,
+  WebCrypto HMAC); 0022 used `sha256Hex` (`apps/api/src/auth/encoding.ts`), which survives only to find legacy rows.
 - **Signup refuses a reserved address with the response it already gives a barred one.** Today a barred row's address is
   refused by the upsert's `WHERE` (`signup.ts` ~L264): it updates 0 rows, so the answer is `409 EMAIL_TAKEN`. That
   clause is unchanged. A deleted account's row no longer holds the address, so the upsert succeeds. Signup then checks,
-  in the same transaction, whether the address's hash matches any `reserved_email_sha256`. If it does, signup rolls
+  in the same transaction, whether the address's HMAC matches any `reserved_email_hmac`, or its legacy SHA-256 any `reserved_email_sha256`. If either does, signup rolls
   back and answers the same `409 EMAIL_TAKEN`. The check runs **after** the upsert, not before. Until the reaper's
   scrub commits, its row still holds the address, so the upsert conflicts with that row and the barred clause refuses
   it. Once the upsert gets through without that conflict, the scrub has committed, and the next statement's snapshot
@@ -253,7 +262,7 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 
   The decision notice is not guarded here; it can only address the sentinel, and a guard is a filed follow-up.
 - **"While the ban stands":** lifting the ban ends the reservation. `releaseReservedEmail(c, userId)`
-  (`apps/api/src/auth/reserved-email.ts`) sets `reserved_email_sha256 = NULL` once `disabled_at` is NULL, and does
+  (`apps/api/src/auth/reserved-email.ts`) sets both `reserved_email_hmac` and `reserved_email_sha256` to NULL once `disabled_at` is NULL, and does
   nothing otherwise. There's nothing to scrub, because the address is already gone from the account row, so after the
   release it's simply free for a new signup. The app has no unban path until plan B lands. This PR builds and tests the helper, and amends
   plan B's plan (`2026-10-01-m4-2c-appeals.md`, Task 6, `resolveAppeal`'s `user_ban` branch) to call it right after the
@@ -276,9 +285,12 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   therefore that **no mail or authentication path can reach a deleted account's address**, not that the address
   exists nowhere. A manual hold (T3) labels its log row with the handle, not the email, so it adds no new copy. The
   privacy policy says this (plan Task 6, for attorney review).
-- **Privacy.** A SHA-256 of an email isn't anonymous: anyone holding the table can test a guessed address. It's kept
-  only for a banned account, only while the ban stands, and in place of the address itself. That's the data-minimising
-  choice the PM ruled. The privacy policy discloses it (plan Task 6).
+- **Privacy.** A plain SHA-256 of an email isn't anonymous: anyone holding the table can test a guessed address. That
+  is why 0023 keys it: without `RESERVED_EMAIL_KEY`, which lives only as a Workers secret, a guessed address can't be
+  tested against `reserved_email_hmac`. Someone holding both the table and the key still can. It's kept only for a banned
+  account, only while the ban stands, and in place of the address itself. Rotating the key releases every reservation
+  (an old fingerprint never matches a new key's), so it is not rotated casually (docs/runbooks/deploy.md). The privacy
+  policy discloses it (§5).
 - **A hold on an already-anonymised account is invisible to the admin UI.** The account admin routes resolve
   `:handle` with `findByHandle` (`admin-accounts.ts`), which filters `anonymised_at IS NULL`, so such a hold can't be
   viewed or released there. That is harmless, because the scrub has already happened and the hold blocks nothing; an
