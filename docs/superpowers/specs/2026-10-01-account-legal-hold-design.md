@@ -216,8 +216,8 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 > **Amended 2026-10-02 (migration `0023_reserved_email_hmac`, PM-approved design).** 0022's unsalted SHA-256 could be
 > reversed by hashing candidate addresses. The reservation is now `users.reserved_email_hmac`, the lowercase-hex
 > HMAC-SHA-256 of the normalised email keyed by the `api` Worker secret `RESERVED_EMAIL_KEY`. The reaper writes only that
-> column. 0022's `reserved_email_sha256` stays, read-only: signup still checks it and `releaseReservedEmail` still clears
-> it, until a later migration drops it once production holds 0 such rows. Without the key the code fails closed: signup
+> column. 0022's `reserved_email_sha256` was dropped in 0025 (2026-10-03), once production confirmed 0 such rows; signup
+> and `releaseReservedEmail` now touch only `reserved_email_hmac`. Without the key the code fails closed: signup
 > answers `503 SERVICE_UNAVAILABLE`, and the reaper does not scrub a banned row (a counted, logged, retried per-row
 > failure) while it scrubs the others. §2's SQL and AH-7 below describe 0022 as built; this section describes HEAD.
 
@@ -236,7 +236,8 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 - **Signup refuses a reserved address with the response it already gives a barred one.** Today a barred row's address is
   refused by the upsert's `WHERE` (`signup.ts` ~L264): it updates 0 rows, so the answer is `409 EMAIL_TAKEN`. That
   clause is unchanged. A deleted account's row no longer holds the address, so the upsert succeeds. Signup then checks,
-  in the same transaction, whether the address's HMAC matches any `reserved_email_hmac`, or its legacy SHA-256 any `reserved_email_sha256`. If either does, signup rolls
+  in the same transaction, whether the address's HMAC matches any `reserved_email_hmac` (the legacy `reserved_email_sha256`
+  check was removed with the column, 0025). If it does, signup rolls
   back and answers the same `409 EMAIL_TAKEN`. The check runs **after** the upsert, not before. Until the reaper's
   scrub commits, its row still holds the address, so the upsert conflicts with that row and the barred clause refuses
   it. Once the upsert gets through without that conflict, the scrub has committed, and the next statement's snapshot
@@ -262,7 +263,7 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
 
   The decision notice is not guarded here; it can only address the sentinel, and a guard is a filed follow-up.
 - **"While the ban stands":** lifting the ban ends the reservation. `releaseReservedEmail(c, userId)`
-  (`apps/api/src/auth/reserved-email.ts`) sets both `reserved_email_hmac` and `reserved_email_sha256` to NULL once `disabled_at` is NULL, and does
+  (`apps/api/src/auth/reserved-email.ts`) sets `reserved_email_hmac` to NULL once `disabled_at` is NULL, and does
   nothing otherwise. There's nothing to scrub, because the address is already gone from the account row, so after the
   release it's simply free for a new signup. The app has no unban path until plan B lands. This PR builds and tests the helper, and amends
   plan B's plan (`2026-10-01-m4-2c-appeals.md`, Task 6, `resolveAppeal`'s `user_ban` branch) to call it right after the
