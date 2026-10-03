@@ -236,6 +236,10 @@ async function scrubOne(c: Client, env: Env, id: string, email: string): Promise
         [id, scrubbedUsername(id)],
       );
       await c.query("DELETE FROM password_reset_tokens WHERE user_id = $1", [id]);
+      // #113 plan B (B3): no moderation link may reach a deleted account.
+      // action-tokens.ts also refuses an anonymised account; this removes the
+      // bearer tokens themselves.
+      await c.query("DELETE FROM moderation_action_tokens WHERE user_id = $1", [id]);
     }
     await c.query("COMMIT");
     return changed;

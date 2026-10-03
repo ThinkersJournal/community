@@ -214,3 +214,26 @@ export interface AdminAccountHold {
   readonly releasedBy: string | null;
   readonly releaseReason: string | null;
 }
+
+/** Spec §6/§11.2, adopted by the PM 2026-10-01: an action may be appealed for 30 days. */
+export const APPEAL_WINDOW_DAYS = 30;
+
+/**
+ * #50 Q4 — a re-requested delete link (the "email me a new link" route) lives
+ * this long. Short on purpose: the PM ruled against long-lived bearer tokens
+ * sitting in old inboxes, and asking again is cheap.
+ */
+export const DELETE_REQUEST_RESEND_TTL_HOURS = 24;
+
+/**
+ * What can be appealed. ⚠️ NOT `user_terminate` — the CSAM path (#114), an
+ * open legal question. Restores/appeal outcomes are not adverse, so not here.
+ */
+export const APPEALABLE_ACTIONS = [
+  "content_keep_hidden",
+  "content_remove",
+  "user_warn",
+  "user_suspend",
+  "user_ban",
+] as const;
+export type AppealableAction = (typeof APPEALABLE_ACTIONS)[number];
