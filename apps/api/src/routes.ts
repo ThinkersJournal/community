@@ -49,6 +49,11 @@ import { handleBlock, handleBlockStatus, handleListBlocks, handleUnblock } from 
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
 import { handleCsrf } from "./routes/csrf";
+import {
+  handleDeleteRequest,
+  handleDeleteRequestResend,
+  handlePeekDeleteRequestToken,
+} from "./routes/delete-request";
 import { handleConfirmDsaNotice, handleDsaNotice, handlePeekDsaToken } from "./routes/dsa-notice";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
@@ -292,6 +297,13 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/account", handler: handleAccountStatus },
   { method: "POST", pattern: "/account/delete", handler: handleRequestDeletion },
   { method: "POST", pattern: "/account/delete/cancel", handler: handleCancelDeletion },
+
+  // #50 Q4 — a barred user's deletion request by emailed token, and the
+  // "email me a new link" route. No session exists for a barred user; both
+  // POSTs run inline checkOrigin (see src/routes/delete-request.ts).
+  { method: "GET", pattern: "/account/delete-request/token", handler: handlePeekDeleteRequestToken },
+  { method: "POST", pattern: "/account/delete-request", handler: handleDeleteRequest },
+  { method: "POST", pattern: "/account/delete-request/resend", handler: handleDeleteRequestResend },
 
   // Per-viewer home feed (M2.1) — no-store, never edge-cached.
   { method: "GET", pattern: "/feed", handler: handleFeed },

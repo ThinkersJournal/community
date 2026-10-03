@@ -500,6 +500,12 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /appeals/for-post/:postId",
     build: () => new Request("https://api.test/appeals/for-post/00000000-0000-7000-8000-000000000000"),
   },
+  // #50 Q4 (Task 5) — same shape as the appeal token peek above.
+  {
+    name: "400 delete-request token peek with an unknown token",
+    route: "GET /account/delete-request/token",
+    build: () => new Request("https://api.test/account/delete-request/token?token=not-a-token"),
+  },
 ];
 
 /**

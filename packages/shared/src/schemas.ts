@@ -72,6 +72,9 @@ export const ForgotPasswordInput = z.object({
   turnstileToken: z.string().min(1),
 });
 
+/** #50 Q4 — `POST /account/delete-request/resend`. Same shape as ForgotPasswordInput; a separate name so the two can diverge. */
+export const DeleteRequestResendInput = ForgotPasswordInput;
+
 /**
  * `POST /auth/reset-password` (#70) — redeems a reset token for a new
  * password. Same `min(12)` floor as `SignupInput.password` — a reset must
