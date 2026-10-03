@@ -50,7 +50,7 @@ import {
 import { base64urlEncode } from "../auth/encoding";
 import { hashPassword } from "../auth/password";
 import { enforceRateLimit } from "../auth/ratelimit";
-import { isEmailReserved } from "../auth/reserved-email";
+import { hasReservedEmailKey, isEmailReserved } from "../auth/reserved-email";
 import { isReservedUsername } from "../auth/reserved-usernames";
 import { createSession } from "../auth/session";
 import { verifyTurnstile } from "../auth/turnstile";
@@ -182,6 +182,17 @@ export async function handleSignup(
     return forbidden();
   }
 
+  // ⚠️ FAIL CLOSED WITHOUT THE RESERVATION KEY (migration 0023). Step 5 must
+  // check whether a deleted, banned account reserves this address, and that
+  // check needs RESERVED_EMAIL_KEY. Without it, skipping the check would let a
+  // banned user re-register; so refuse every signup with a 503 instead, before
+  // any row is written. isEmailReserved also throws without the key, so this
+  // early answer is the clean form of a guard that can't be bypassed.
+  if (!hasReservedEmailKey(env)) {
+    console.error("signup: RESERVED_EMAIL_KEY is missing or empty; refusing signup (503) rather than skip the reserved-email check");
+    return errorResponse("SERVICE_UNAVAILABLE", 503);
+  }
+
   // Hashed OUTSIDE the transaction below: Argon2id is deliberately slow (~19MiB,
   // 2 passes), and holding a Hyperdrive connection open across it would burn a
   // pooled connection for the duration of every signup.
@@ -283,8 +294,9 @@ export async function handleSignup(
           return null;
         }
 
-        // ⚠️ A DELETED, BANNED ACCOUNT RESERVES ITS ADDRESS BY HASH (account-legal-hold
-        // spec §4a, PM ruling B). Its `users.email` is the undeliverable sentinel,
+        // ⚠️ A DELETED, BANNED ACCOUNT RESERVES ITS ADDRESS BY A KEYED FINGERPRINT
+        // (account-legal-hold spec §4a, PM ruling B; HMAC since 0023, and the
+        // legacy SHA-256 column is still checked). Its `users.email` is the undeliverable sentinel,
         // so the upsert above found no conflict; this refuses it the same way the
         // barred-row WHERE does: ROLLBACK, null, the same 409 EMAIL_TAKEN.
         // ⚠️ AFTER the upsert, not before: until the reaper's scrub commits, its
@@ -292,7 +304,7 @@ export async function handleSignup(
         // 0 rows). Once the upsert succeeds without that conflict, the scrub has
         // committed, and this later statement's snapshot sees its hash. A check
         // run BEFORE the upsert could miss a scrub that commits between the two.
-        if (await isEmailReserved(c, email)) {
+        if (await isEmailReserved(c, env, email)) {
           await c.query("ROLLBACK");
           return null;
         }

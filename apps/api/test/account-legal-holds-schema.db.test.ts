@@ -227,6 +227,33 @@ describe("users.reserved_email_sha256 (spec §4a)", () => {
   });
 });
 
+describe("users.reserved_email_hmac (migration 0023)", () => {
+  it("refuses a non-hex value (users_reserved_email_hmac_hex)", async () => {
+    const userId = await makeUser();
+    await client.query(`UPDATE users SET anonymised_at = now() WHERE id = $1`, [userId]);
+    await expect(
+      client.query(`UPDATE users SET reserved_email_hmac = 'not-hex' WHERE id = $1`, [userId]),
+    ).rejects.toMatchObject({ code: "23514", constraint: "users_reserved_email_hmac_hex" });
+  });
+
+  it("refuses a 64-hex value on a row with anonymised_at IS NULL; CONTROL: accepted on an anonymised row", async () => {
+    const mac = "c".repeat(64);
+    const liveUser = await makeUser();
+    await expect(
+      client.query(`UPDATE users SET reserved_email_hmac = $2 WHERE id = $1`, [liveUser, mac]),
+    ).rejects.toMatchObject({ code: "23514", constraint: "users_reserved_email_hmac_only_anonymised" });
+
+    const anonymisedUser = await makeUser();
+    await client.query(`UPDATE users SET anonymised_at = now() WHERE id = $1`, [anonymisedUser]);
+    await client.query(`UPDATE users SET reserved_email_hmac = $2 WHERE id = $1`, [anonymisedUser, mac]);
+    const { rows } = await client.query<{ reserved_email_hmac: string | null }>(
+      `SELECT reserved_email_hmac FROM users WHERE id = $1`,
+      [anonymisedUser],
+    );
+    expect(rows[0]!.reserved_email_hmac).toBe(mac);
+  });
+});
+
 describe("backfill (AH-5): BACKFILL_TERMINATED_HOLDS_SQL holds every terminated account and no plain-banned one", () => {
   it("imposes exactly one csam hold, system-imposed, for the terminated user; none for the banned user; idempotent on a second run", async () => {
     const terminatedUser = await makeUser({ disabledReason: "terminate" });

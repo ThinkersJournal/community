@@ -75,6 +75,11 @@ export type ApiErrorCode =
   | "UNSUPPORTED_MEDIA_TYPE" // 415 — failed the magic-byte allowlist (T7/T8)
   // --- limits --------------------------------------------------------------
   | "RATE_LIMITED"           // 429
+  // --- availability --------------------------------------------------------
+  // 503 — a required server-side secret is missing, so the request is refused
+  // rather than served without a check it depends on (signup without
+  // RESERVED_EMAIL_KEY, migration 0023). An operator problem, not the client's.
+  | "SERVICE_UNAVAILABLE"
   // --- author self-hide (#61 follow-up) -------------------------------------
   // 403 — the post's visibility is controlled by moderation (an auto-hide
   // still pending review, or a moderator's keep_hidden/remove decision), not

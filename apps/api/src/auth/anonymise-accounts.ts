@@ -17,15 +17,23 @@
  * recorded, and the first run after the hold is released proceeds), and a
  * banned or suspended account with NO hold is scrubbed like any other. Both
  * SQL statements below carry the same NOT EXISTS clause; the only
- * `disabled_at` read left in this file is the `CASE` that decides the hash.
+ * `disabled_at` reads left in this file decide the reservation.
  *
- * ⚠️ A BANNED ACCOUNT'S ADDRESS IS RESERVED BY HASH (spec §4a). PM ruling B,
+ * ⚠️ A BANNED ACCOUNT'S ADDRESS IS RESERVED BY A KEYED FINGERPRINT (spec §4a). PM ruling B,
  * verbatim: "Approve B … B structurally can't mail a deleted user because the
  * real address no longer exists anywhere to send to. It's also a real
  * data-minimization win … Go with the SHA256-of-normalized-email approach for
  * barred-re-entry matching." Every account's email is replaced by the
  * sentinel; one that is banned at the moment of its scrub also gets
- * `reserved_email_sha256`, which signup refuses (src/auth/reserved-email.ts).
+ * `reserved_email_hmac`, which signup refuses (src/auth/reserved-email.ts).
+ * Migration 0023 replaced the unsalted SHA-256 with an HMAC keyed by the
+ * `RESERVED_EMAIL_KEY` secret; this file writes ONLY the HMAC column.
+ *
+ * ⚠️ NO KEY, NO SCRUB OF A BANNED ROW (fail closed). Without the key a banned
+ * account's address can't be reserved, and scrubbing it anyway would free the
+ * address for the banned user. So such a row throws inside its own
+ * transaction: rolled back, counted as failed, logged, retried next run. A
+ * non-banned row needs no reservation and scrubs normally.
  *
  * ⚠️ EACH SCRUB LOCKS ITS ROW AND RE-CHECKS (spec §4). The batch SELECT may be
  * stale by the time a row is written: a hold imposed, a ban imposed or lifted,
@@ -45,7 +53,7 @@ import type { Client } from "pg";
 
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
 
-import { reservedEmailSha256 } from "./reserved-email";
+import { hasReservedEmailKey, ReservedEmailKeyMissingError, reservedEmailHmac } from "./reserved-email";
 
 const REAP_BATCH = 500;
 
@@ -136,7 +144,7 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
       // exactly that shape (it bumped only after the loop).
       let changed: boolean;
       try {
-        changed = await scrubOne(c, id, email);
+        changed = await scrubOne(c, env, id, email);
       } catch (err) {
         console.error(`anonymise-accounts: skipped ${id} (retried next run)`, err);
         failed += 1;
@@ -179,9 +187,10 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
  * a re-check failed — a hold, a cancelled request, or an already-anonymised
  * or changed row). Throws on a DB error, after rolling back.
  */
-async function scrubOne(c: Client, id: string, email: string): Promise<boolean> {
-  // Computed for every candidate; the UPDATE's CASE decides whether to store it.
-  const emailSha256 = await reservedEmailSha256(email);
+async function scrubOne(c: Client, env: Env, id: string, email: string): Promise<boolean> {
+  // Computed for every candidate when the key is present; the UPDATE's CASE
+  // decides whether to store it. NULL without a key: see the guard below.
+  const emailHmac = hasReservedEmailKey(env) ? await reservedEmailHmac(env, email) : null;
   await c.query(BEGIN_BOUNDED_TX);
   try {
     // ⚠️ LOCK, THEN RE-CHECK (spec §4). The batch SELECT may be minutes old
@@ -191,21 +200,32 @@ async function scrubOne(c: Client, id: string, email: string): Promise<boolean> 
     // NEW statement, hence a NEW snapshot — sees any hold that committed while
     // we waited. A NOT EXISTS evaluated inside a blocked UPDATE alone would
     // not: READ COMMITTED's re-check re-reads the target row, not the subquery.
-    await c.query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE", [id]);
+    const { rows: locked } = await c.query<{ banned: boolean }>(
+      "SELECT disabled_at IS NOT NULL AS banned FROM users WHERE id = $1 FOR UPDATE",
+      [id],
+    );
+    // ⚠️ FAIL CLOSED: a banned row can't be reserved without the key, so it is
+    // not scrubbed. Throwing rolls back and counts it as failed (retried next
+    // run). Read under the lock, so it agrees with the UPDATE's CASE below.
+    if (emailHmac === null && locked[0]?.banned === true) throw new ReservedEmailKeyMissingError();
     const { rowCount } = await c.query(
       `UPDATE users
           SET email = $2, password_hash = $3, anonymised_at = now(),
               -- PM ruling B (spec §4a): a BANNED account's address is
-              -- reserved by hash; the address itself is replaced, as for
-              -- every account.
-              reserved_email_sha256 = CASE WHEN disabled_at IS NOT NULL THEN $4 ELSE NULL END
+              -- reserved by its keyed fingerprint (0023); the address itself
+              -- is replaced, as for every account. The legacy
+              -- reserved_email_sha256 column is never written.
+              reserved_email_hmac = CASE WHEN disabled_at IS NOT NULL THEN $4 ELSE NULL END
         WHERE id = $1
           AND email = $5
+          -- Belt and braces for the guard above: never scrub a banned row
+          -- without a fingerprint to reserve it.
+          AND (disabled_at IS NULL OR $4::text IS NOT NULL)
           AND anonymised_at IS NULL
           AND deletion_requested_at < now() - interval '30 days'
           AND NOT EXISTS (SELECT 1 FROM account_legal_holds h
                            WHERE h.user_id = users.id AND h.released_at IS NULL)`,
-      [id, scrubbedEmail(id), SCRUBBED_PASSWORD_HASH, emailSha256, email],
+      [id, scrubbedEmail(id), SCRUBBED_PASSWORD_HASH, emailHmac, email],
     );
     const changed = (rowCount ?? 0) === 1;
     if (changed) {

@@ -181,6 +181,9 @@ describe("0001 users + profiles migration", () => {
       // 0022_account_legal_holds.sql — account legal holds + reserved-email hash.
       expect(await tableExists(client, "account_legal_holds")).toBe(true);
       expect(await columnExists(client, "users", "reserved_email_sha256")).toBe(true);
+      // 0023_reserved_email_hmac.sql — the keyed reservation fingerprint.
+      expect(await columnExists(client, "users", "reserved_email_hmac")).toBe(true);
+      expect(await indexExists(client, "users_reserved_email_hmac_idx")).toBe(true);
     });
 
     await migrate("down");
@@ -200,6 +203,8 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "moderation_snapshots")).toBe(false);
       expect(await tableExists(client, "account_legal_holds")).toBe(false);
       expect(await columnExists(client, "users", "reserved_email_sha256")).toBe(false);
+      expect(await columnExists(client, "users", "reserved_email_hmac")).toBe(false);
+      expect(await indexExists(client, "users_reserved_email_hmac_idx")).toBe(false);
     });
 
     // THE ISOLATION PROPERTY, pinned. The stack is torn down above — in OUR
@@ -233,6 +238,8 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "moderation_snapshots")).toBe(true);
       expect(await tableExists(client, "account_legal_holds")).toBe(true);
       expect(await columnExists(client, "users", "reserved_email_sha256")).toBe(true);
+      expect(await columnExists(client, "users", "reserved_email_hmac")).toBe(true);
+      expect(await indexExists(client, "users_reserved_email_hmac_idx")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });

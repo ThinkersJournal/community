@@ -5,7 +5,7 @@ import worker from "../src";
 import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { verifyPassword } from "../src/auth/password";
 import { createResetToken } from "../src/auth/password-reset";
-import { releaseReservedEmail } from "../src/auth/reserved-email";
+import { releaseReservedEmail, reservedEmailHmac, reservedEmailSha256 } from "../src/auth/reserved-email";
 import { withClient } from "../src/db/client";
 import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
 
@@ -40,6 +40,7 @@ const createdUserIds: string[] = [];
 
 afterEach(async () => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   if (createdUserIds.length === 0) return;
   await query("DELETE FROM users WHERE id = ANY($1::uuid[])", [createdUserIds]);
   createdUserIds.length = 0;
@@ -321,5 +322,81 @@ describe("AH-7 — a deleted, banned account's address is reserved against re-si
     expect(res.status).toBe(201);
     expect(res.headers.get("Set-Cookie")).toMatch(/^tj_session=/);
     await trackSignup(user.email);
+  });
+});
+
+// ---- 0023: the keyed fingerprint, the legacy column, and a missing key ---------
+
+/**
+ * A deleted, banned account's row as each migration's reaper left it: the
+ * sentinel address, anonymised, banned, and ONE reservation column set
+ * ("hmac" = what the reaper writes since 0023; "legacy" = what 0022's reaper
+ * wrote, which signup must still honour until that column is dropped).
+ */
+async function seedReservedRow(which: "hmac" | "legacy"): Promise<string> {
+  const email = `r0023_${crypto.randomUUID().replace(/-/g, "")}@example.com`;
+  const id = crypto.randomUUID();
+  await query(
+    `INSERT INTO users (id, email, password_hash, email_verified_at, anonymised_at, disabled_at, disabled_reason,
+                        reserved_email_hmac, reserved_email_sha256)
+     VALUES ($1, $2, '!anonymised!', now(), now(), now(), 'ban', $3, $4)`,
+    [
+      id,
+      `deleted-${id}@invalid.thinkersjournal.local`,
+      which === "hmac" ? await reservedEmailHmac(env, email) : null,
+      which === "legacy" ? await reservedEmailSha256(email) : null,
+    ],
+  );
+  createdUserIds.push(id);
+  return email;
+}
+
+describe("0023 — signup checks BOTH reservation columns", () => {
+  it.each(["hmac", "legacy"] as const)(
+    "an address reserved only in the %s column: 409 EMAIL_TAKEN, no session, no row",
+    async (which) => {
+      const email = await seedReservedRow(which);
+      await expectEmailTaken(await resignup(email), email);
+      await expectEmailTaken(await resignup(email.toUpperCase()), email);
+    },
+  );
+
+  it("CONTROL: an address nobody reserved signs up (201)", async () => {
+    const email = `r0023_free_${crypto.randomUUID().replace(/-/g, "")}@example.com`;
+    const res = await resignup(email);
+    expect(res.status).toBe(201);
+    await trackSignup(email);
+  });
+});
+
+describe("0023 — signup fails closed without RESERVED_EMAIL_KEY", () => {
+  it.each([
+    ["empty", ""],
+    ["missing", undefined],
+  ])("key %s: 503 SERVICE_UNAVAILABLE, logged, no session and no row", async (_label, key) => {
+    const email = `r0023_nokey_${crypto.randomUUID().replace(/-/g, "")}@example.com`;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    stubFetch();
+    const handle = `n${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://api.test/auth/signup", {
+        method: "POST",
+        headers: { "content-type": "application/json", Origin: ALLOWED_ORIGIN },
+        body: JSON.stringify({ email, password: NEW_PASSWORD, username: handle, turnstileToken: "dummy" }),
+      }),
+      { ...env, RESERVED_EMAIL_KEY: key as unknown as string },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+
+    const created = await query<{ id: string }>("SELECT id FROM users WHERE email = $1", [email]);
+    for (const r of created) createdUserIds.push(r.id);
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as { code: string }).code).toBe("SERVICE_UNAVAILABLE");
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+    expect(created).toEqual([]);
+    expect(errorSpy.mock.calls.some((args) => args.map(String).join(" ").includes("RESERVED_EMAIL_KEY"))).toBe(true);
+    errorSpy.mockRestore();
   });
 });
