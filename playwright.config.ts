@@ -118,6 +118,11 @@ const hyperdriveEnv = {
  *   • PURGE_SECRET is a dev placeholder, and it is passed to BOTH Workers below
  *     (`apiVars` and `webVars`) because it must MATCH on both ends. Production
  *     sets a real high-entropy value with `wrangler secret put` on each.
+ *   • RESERVED_EMAIL_KEY is a dev placeholder for the HMAC key behind a banned
+ *     account's email reservation (apps/api/src/auth/reserved-email.ts,
+ *     migration 0023). Without it the api FAILS CLOSED: every signup answers
+ *     503 SERVICE_UNAVAILABLE. Production sets a real random value with
+ *     `wrangler secret put` (docs/runbooks/deploy.md, Step 0).
  */
 
 /**
@@ -142,6 +147,8 @@ const apiVars = [
   "POSTMARK_SERVER_TOKEN:dummy-postmark-token-not-a-real-secret",
   "--var",
   `PURGE_SECRET:${PURGE_SECRET}`,
+  "--var",
+  "RESERVED_EMAIL_KEY:e2e-reserved-email-key-not-for-production",
 ].join(" ");
 
 /** The `web` Worker's vars — same reasoning as `apiVars`, same dummy secret. */

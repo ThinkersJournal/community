@@ -341,7 +341,9 @@ async function checkSignup(baseUrl, turnstileToken) {
       `signup did not succeed — the page did not render its "check email" success state.\n` +
         `      Shown to the user: ${shown}\n` +
         `      Common causes: an expired/already-used Turnstile token (get a fresh one, they are\n` +
-        `      single-use and expire in ~300s), a rejected Origin, or a real infra failure — check\n` +
+        `      single-use and expire in ~300s), a rejected Origin, a missing RESERVED_EMAIL_KEY\n` +
+        `      secret ("Signup is temporarily unavailable": docs/runbooks/deploy.md Step 0), or a\n` +
+        `      real infra failure — check\n` +
         `      \`wrangler tail\` for thinkersjournal-api for the underlying error.`,
     );
   }

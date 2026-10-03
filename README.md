@@ -94,10 +94,14 @@ TEST_ROUTES=1
 # ⚠️ MUST be byte-identical to apps/web/.dev.vars' PURGE_SECRET, or every purge 403s
 # silently (content stale up to 25h). See the web .dev.vars note and the deploy gate.
 PURGE_SECRET=dev-purge-secret-not-for-production
+# HMAC key for a banned account's email reservation (migration 0023). Any
+# non-blank placeholder locally; without it every signup answers 503 (fail closed).
+RESERVED_EMAIL_KEY=dev-reserved-email-key-not-for-production
 ```
 
 Neither the test suite nor the E2E depends on this file: `apps/api/vitest.config.ts`
-supplies the same values via `miniflare.bindings` (including `PURGE_SECRET`), and
+supplies the same values via `miniflare.bindings` (including `PURGE_SECRET` and
+`RESERVED_EMAIL_KEY`), and
 `playwright.config.ts` passes them as `--var` flags, so both are CI-safe on a fresh
 checkout. `.dev.vars` is only for running `wrangler dev` by hand.
 
@@ -224,7 +228,7 @@ and watch paths so a change to one Worker does not redeploy the other. Both need
 | Root directory | `apps/api` |
 | Deploy command | `npx wrangler deploy` |
 | Watch paths | `apps/api/**`, `packages/shared/**` |
-| Secrets | `TURNSTILE_SECRET_KEY`, `POSTMARK_SERVER_TOKEN`, **`PURGE_SECRET`** (new in M1) |
+| Secrets | `TURNSTILE_SECRET_KEY`, `POSTMARK_SERVER_TOKEN`, **`PURGE_SECRET`** (new in M1), **`RESERVED_EMAIL_KEY`** (0023; set BEFORE that deploy — `docs/runbooks/deploy.md` Step 0, or every signup 503s) |
 | Vars | **`TEST_ROUTES` MUST BE UNSET** (see the gate below) |
 | Bindings (M1) | `IMAGES` (Cloudflare Images, no subscription/zone) · `MEDIA` (R2 bucket `tj-media`) · `WEB` (Service Binding → `thinkersjournal-web`, the purge hop) — all declared in `apps/api/wrangler.jsonc` |
 
