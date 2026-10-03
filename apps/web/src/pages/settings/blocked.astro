@@ -10,6 +10,7 @@
  * this page to protect.
  */
 import BaseLayout from "../../components/BaseLayout.astro";
+import SettingsNav from "../../components/SettingsNav.astro";
 import { apiFetch } from "../../lib/api";
 import { markPrivate } from "../../lib/cache";
 import { setPublicPageCsp } from "../../lib/csp";
@@ -29,10 +30,7 @@ const users = listResp.status === 200 && listResp.data ? listResp.data.users : [
 <BaseLayout title="Blocked users">
   <div class="wrap form-page">
     <h1>Blocked users</h1>
-    <p class="settings-nav">
-      <a class="link" href="/settings/notifications">← Notification emails</a> ·
-      <a class="link" href="/settings/account">Account →</a>
-    </p>
+    <SettingsNav current="blocked" />
     <p class="hint">Blocking stops someone from following, commenting on, or reacting to you — it does not hide your public posts from them. See a user's own profile to block someone new.</p>
     {
       users.length === 0 ? (
@@ -57,7 +55,6 @@ const users = listResp.status === 200 && listResp.data ? listResp.data.users : [
 </BaseLayout>
 <style>
   .form-page{padding:clamp(40px,7vw,80px) 0;max-width:560px}
-  .settings-nav{margin:4px 0 20px}
   .hint{color:var(--muted);font-size:14px;margin:12px 0 24px}
   .blocked-list{list-style:none;display:flex;flex-direction:column;gap:12px}
   .blocked-list li{display:flex;align-items:center;justify-content:space-between;gap:16px;
