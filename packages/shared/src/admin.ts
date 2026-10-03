@@ -247,3 +247,38 @@ export interface AppealTarget {
   readonly alreadyAppealed: boolean;
   readonly windowClosesAt: string;
 }
+
+/** One open appeal in `GET /admin/appeals`, oldest first. ISO strings. */
+export interface AdminAppeal {
+  readonly id: string;
+  /** The appellant's own text. */
+  readonly body: string;
+  readonly createdAt: string;
+  readonly actionId: string;
+  readonly action: AppealableAction;
+  /** The original statement of reasons. */
+  readonly actionReason: string;
+  /** Who took the original action (spec decision #8: shown, so a second moderator can take it). */
+  readonly actionActor: string;
+  /** The appellant's CURRENT handle, or null if they have no profile. Never an email. */
+  readonly appellantHandle: string | null;
+}
+
+/** `GET /admin/appeals`. */
+export interface AdminAppealsResponse {
+  readonly appeals: readonly AdminAppeal[];
+}
+
+/** `POST /admin/appeals/:id/resolve`. */
+export interface AdminAppealResolveRequest {
+  readonly decision: "grant" | "deny";
+  /** Non-blank. Sent to the appellant as the reason. */
+  readonly reason: string;
+}
+
+/** `POST /admin/appeals/:id/resolve`'s 200 body. */
+export interface AdminAppealResolveResponse {
+  readonly resolutionActionId: string;
+  /** Spec decision #8's hedge made checkable: the resolver took the original action. Not refused. */
+  readonly sameReviewer: boolean;
+}

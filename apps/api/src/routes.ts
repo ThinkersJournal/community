@@ -39,6 +39,7 @@ import {
   handleAdminImposeAccountHold,
   handleAdminReleaseAccountHold,
 } from "./routes/admin-accounts";
+import { handleAdminListAppeals, handleAdminResolveAppeal } from "./routes/admin-appeals";
 import {
   handleAppealByToken,
   handleAppealForPost,
@@ -453,6 +454,11 @@ export const ROUTES: readonly RouteDef[] = [
   // domain and inline-checkOrigin shape as the routes above.
   { method: "POST", pattern: "/admin/accounts/:handle/holds", handler: handleAdminImposeAccountHold },
   { method: "POST", pattern: "/admin/accounts/:handle/holds/:id/release", handler: handleAdminReleaseAccountHold },
+
+  // #113 plan B — the appeal list and its resolution. Same Access trust domain
+  // and inline-checkOrigin shape as /admin/decision.
+  { method: "GET", pattern: "/admin/appeals", handler: handleAdminListAppeals },
+  { method: "POST", pattern: "/admin/appeals/:id/resolve", handler: handleAdminResolveAppeal },
 
   // #113 plan B — appeals. by-token is session-less (the emailed token is the
   // authority) and defends itself with inline checkOrigin; the signed-in POST

@@ -506,6 +506,12 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /account/delete-request/token",
     build: () => new Request("https://api.test/account/delete-request/token?token=not-a-token"),
   },
+  // #113 plan B (Task 6) — same Access-gate shape as GET /admin/dsa-notices.
+  {
+    name: "401 admin appeals list with no Access header",
+    route: "GET /admin/appeals",
+    build: () => new Request("https://api.test/admin/appeals"),
+  },
 ];
 
 /**

@@ -94,4 +94,6 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // #50 Q4 — barred users have no session; inline checkOrigin; token / Turnstile+rate limit.
   "POST /account/delete-request",
   "POST /account/delete-request/resend",
+  // #113 plan B — same Access + inline checkOrigin defense as /admin/decision.
+  "POST /admin/appeals/:id/resolve",
 ]);
