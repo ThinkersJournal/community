@@ -1,0 +1,171 @@
+---
+/**
+ * `/admin/appeals` — #113 plan B's moderator-facing list + resolve action.
+ * Same shape and same trust-boundary properties as ../queue.astro and
+ * ../media-access.astro — see queue.astro's header for the full reasoning;
+ * repeated in brief here, not re-derived.
+ *
+ * ⚠️⚠️ THE SAME PROPERTY AS THE OTHER ADMIN PAGES: no appeal content (the
+ * appellant's text, the original statement of reasons, a handle) reaches the
+ * HTML on any request that does not carry a verified Access JWT. The guard
+ * is the FIRST statement, before markPrivate, before the CSP, before any api
+ * call.
+ *
+ * ⚠️ LINKING EACH APPEAL TO WHAT IS BEING APPEALED (controller ruling, Task
+ * 7): a post or comment appeal links to the post page (`/${handle}/${slug}`
+ * — a comment has no standalone permalink in this app, so it links to ITS
+ * POST); an account appeal links to `/admin/accounts/<handle>` when the
+ * appellant has one (the account acted against is always the appellant's
+ * own — see fileAppeal's appellantId check). `targetPostHandle`/
+ * `targetPostSlug` were ADDED to `AdminAppeal`/`listOpenAppeals` for this
+ * (packages/shared/src/admin.ts, apps/api/src/moderation/appeals.ts) — the
+ * shared type did not carry enough to build the post link without a second
+ * lookup, and there was no existing comment-permalink helper to reuse.
+ *
+ * ⚠️ 409 OUTCOMES SHOWN DISTINCTLY (controller ruling): APPEAL_SUPERSEDED
+ * ("a newer decision replaced this one; deny it or make a new decision") and
+ * APPEAL_RESOLVED ("someone already resolved this appeal") are told apart —
+ * both leave the list showing the SAME appeal, which the admin would
+ * otherwise read as the first resolve having silently failed.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { adminApiErrorCode, adminApiFetch } from "../../lib/admin-api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+import {
+  ACCESS_JWT_HEADER,
+  type AdminAppealResolveRequest,
+  type AdminAppealResolveResponse,
+  type AdminAppealsResponse,
+} from "@thinkersjournal/shared";
+
+// ⚠️⚠️ THE GUARD — see this file's header. Nothing above this line does
+// anything; nothing below it may run when this returns.
+const accessJwt = Astro.request.headers.get(ACCESS_JWT_HEADER);
+if (accessJwt === null || accessJwt === "") {
+  return new Response(null, { status: 401 });
+}
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+let resolveError: string | null = null;
+let resolveOk: { sameReviewer: boolean } | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const appealId = form.get("appealId");
+  const decision = form.get("decision");
+  const reason = form.get("reason");
+
+  const body: AdminAppealResolveRequest = {
+    decision: decision === "grant" ? "grant" : "deny",
+    reason: String(reason ?? ""),
+  };
+  const res = await adminApiFetch<AdminAppealResolveResponse>(`/admin/appeals/${appealId}/resolve`, {
+    method: "POST",
+    accessJwt,
+    origin: Astro.request.headers.get("Origin") ?? "",
+    body,
+  });
+  if (res.status === 200 && res.data !== null) {
+    resolveOk = { sameReviewer: res.data.sameReviewer };
+  } else {
+    const code = adminApiErrorCode(res);
+    resolveError =
+      code === "APPEAL_SUPERSEDED"
+        ? "APPEAL_SUPERSEDED: a newer decision replaced this one; deny it or make a new decision."
+        : code === "APPEAL_RESOLVED"
+          ? "APPEAL_RESOLVED: someone already resolved this appeal."
+          : (code ?? "RESOLVE_FAILED");
+  }
+}
+
+const listResp = await adminApiFetch<AdminAppealsResponse>("/admin/appeals", { accessJwt });
+const appeals = listResp.status === 200 && listResp.data ? listResp.data.appeals : [];
+const listError = listResp.status !== 200 ? (adminApiErrorCode(listResp) ?? "LIST_LOAD_FAILED") : null;
+
+/** The moderator's link target for one appeal, or null when there is none to link. */
+function targetHref(a: AdminAppealsResponse["appeals"][number]): string | null {
+  if (a.subject === "account") {
+    return a.appellantHandle !== null ? `/admin/accounts/${encodeURIComponent(a.appellantHandle)}` : null;
+  }
+  // "post" or "comment": both link to the POST (no standalone comment permalink).
+  return a.targetPostHandle !== null && a.targetPostSlug !== null
+    ? `/${encodeURIComponent(a.targetPostHandle)}/${encodeURIComponent(a.targetPostSlug)}`
+    : null;
+}
+---
+<BaseLayout title="Appeals">
+  <div class="wrap admin-page">
+    <h1>Appeals</h1>
+    <p class="admin-nav"><a class="link" href="/admin/queue">← Moderation queue</a></p>
+    {resolveError && <p class="err">Resolve failed: {resolveError}</p>}
+    {
+      resolveOk && (
+        <p class="ok">
+          Resolved.
+          {resolveOk.sameReviewer && " Resolved by the same moderator who took the action."}
+        </p>
+      )
+    }
+    {listError && <p class="err">Could not load appeals: {listError}</p>}
+
+    {
+      appeals.length === 0 ? (
+        <p id="no-appeals">Nothing open.</p>
+      ) : (
+        <ul class="appeals">
+          {appeals.map((a) => {
+            const href = targetHref(a);
+            return (
+              <li class="appeal-item">
+                <p class="meta">
+                  {a.action.replace("_", " ")} · by {a.actionActor} ·
+                  {" "}appellant {a.appellantHandle !== null ? `@${a.appellantHandle}` : "(no profile)"}
+                  {href !== null && (
+                    <>
+                      {" · "}
+                      <a class="link" href={href}>
+                        {a.subject === "account" ? "View account" : "View post"} →
+                      </a>
+                    </>
+                  )}
+                </p>
+                <p class="original-reason"><strong>Original reason:</strong> {a.actionReason}</p>
+                <p class="appellant-body"><strong>Appellant says:</strong> {a.body}</p>
+                <form method="POST" class="resolve-form">
+                  <input type="hidden" name="appealId" value={a.id} />
+                  <label>
+                    Reason (sent to the appellant)
+                    <textarea name="reason" required maxlength="2000" />
+                  </label>
+                  <div class="resolve-buttons">
+                    <button type="submit" name="decision" value="grant" class="btn btn-primary">Grant</button>
+                    <button type="submit" name="decision" value="deny" class="btn btn-ghost">Deny</button>
+                  </div>
+                </form>
+              </li>
+            );
+          })}
+        </ul>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .admin-page{padding:clamp(40px,7vw,80px) 0}
+  .admin-nav{margin:4px 0 20px}
+  .err{color:var(--red, #e5484d)}
+  .ok{color:var(--green)}
+  .appeals{list-style:none;display:flex;flex-direction:column;gap:24px;margin-top:24px}
+  .appeal-item{border:1px solid var(--line);border-radius:8px;padding:16px}
+  .appeal-item .meta{color:var(--muted);font-size:13px;margin:0 0 10px}
+  .appeal-item .original-reason,.appeal-item .appellant-body{margin:6px 0}
+  .resolve-form{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+  .resolve-form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .resolve-form textarea{width:100%;background:var(--ink2);border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;color:var(--text);font:inherit}
+  .resolve-buttons{display:flex;gap:10px;flex-wrap:wrap}
+</style>

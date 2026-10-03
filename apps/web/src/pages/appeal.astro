@@ -1,0 +1,204 @@
+---
+/**
+ * `/appeal` — #113 plan B's appellant-facing page. Two ways in, one form:
+ *
+ *   `?token=…`  — the single-use token from the action's notice email. No
+ *                 session needed; the token IS the authority (barred users
+ *                 have no session to reach this with otherwise).
+ *   `?post=<id>` — the signed-in editor-banner path (new-post.astro), for an
+ *                 author whose own post is hidden by moderator decision.
+ *
+ * Same server-side form-post-to-self shape as reset-password.astro: the
+ * GET only PEEKS (`GET /appeals/token` / `GET /appeals/for-post/:id`), never
+ * consuming anything — a mail scanner prefetching the emailed link must not
+ * burn the token (Review Focus 2). Only a POST (`/appeals/by-token` or the
+ * signed-in `/appeals`) files the appeal.
+ *
+ * ⚠️ ONE `method: "POST"` CALL, GATED, like reset-password.astro/new-post.astro:
+ * the request body differs by path (`{token, body}` vs `{actionId, body}`),
+ * but the endpoint AND request options are chosen by a single ternary inside
+ * ONE `apiFetch` call under `if (Astro.request.method === "POST")` — not two
+ * separate calls — so there is exactly one place in this file that can ever
+ * fire a mutating request, and it is unreachable on a GET.
+ */
+import BaseLayout from "../components/BaseLayout.astro";
+import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
+import { markPrivate } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+
+import type { AppealTarget } from "@thinkersjournal/shared";
+
+// Per-viewer: a token's target, a signed-in session's CSRF token, and an
+// unsaved textarea all belong to exactly one reader. See src/lib/cache.ts.
+markPrivate(Astro);
+
+setPublicPageCsp(Astro);
+
+const tokenFromLink = Astro.url.searchParams.get("token") ?? "";
+const postIdFromLink = Astro.url.searchParams.get("post") ?? "";
+
+/**
+ * Fetched on EVERY render (GET and the POST re-render alike) — same reason as
+ * new-post.astro/verify-email.astro: the signed-in path needs a CSRF token
+ * matching the CURRENT session, and a 401 here just means "not signed in",
+ * which the token path does not require anyway.
+ */
+const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
+const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
+
+let error: string | null = null;
+let needsLogin = false;
+let filed = false;
+let target: AppealTarget | null = null;
+/** Which path this render is on. Carried across the POST re-render as hidden fields. */
+let signedIn = postIdFromLink !== "" && tokenFromLink === "";
+let awaitingReview = false;
+
+let token = tokenFromLink;
+let postId = postIdFromLink;
+let actionIdFromForm = "";
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  signedIn = form.get("mode") === "signedIn";
+  token = String(form.get("token") ?? "");
+  postId = String(form.get("post") ?? "");
+  actionIdFromForm = String(form.get("actionId") ?? "");
+  const bodyText = String(form.get("body") ?? "");
+  const origin = Astro.request.headers.get("Origin") ?? "";
+
+  const response = await apiFetch(signedIn ? "/appeals" : "/appeals/by-token", {
+    method: "POST",
+    body: signedIn ? { actionId: actionIdFromForm, body: bodyText } : { token, body: bodyText },
+    // ⚠️ The BROWSER's Origin, forwarded verbatim — same reasoning as
+    // login.astro's comment on this exact option (src/lib/api.ts's own doc
+    // comment has the full incident this guards against): never synthesize
+    // this app's own origin, which would launder a cross-site POST into an
+    // allowlisted one. Both appeal routes rely on this as part of their CSRF
+    // defense (the token path entirely; the signed-in path also checks the
+    // session's double-submit token).
+    origin,
+    ...(signedIn ? { request: Astro.request, csrfToken: csrfToken ?? undefined } : {}),
+  });
+  applyCookies(Astro.response.headers, response.setCookies);
+
+  if (response.status === 201) {
+    filed = true;
+  } else if (apiErrorCode(response) === "APPEAL_EXISTS") {
+    error = "You have already appealed this decision.";
+  } else if (apiErrorCode(response) === "INVALID_TOKEN") {
+    error = "This link is invalid, has expired, or has already been used.";
+  } else if (apiErrorCode(response) === "APPEAL_WINDOW_CLOSED") {
+    error = "The window to appeal this decision has closed.";
+  } else if (apiErrorCode(response) === "NOT_APPEALABLE") {
+    error = "This decision can't be appealed.";
+  } else if (response.status === 404) {
+    error = "That decision couldn't be found.";
+  } else if (response.status === 401) {
+    needsLogin = true;
+    error = "Please log in to appeal.";
+  } else {
+    error = "Something went wrong. Please try again.";
+  }
+}
+
+// GET: peek only. Never reached on a POST re-render (the branch above already
+// decided this request's outcome), so the token/for-post state shown below is
+// read fresh on a GET and simply carried forward (via hidden fields) on a POST.
+if (Astro.request.method === "GET") {
+  if (token !== "") {
+    signedIn = false;
+    const peek = await apiFetch<{ target: AppealTarget }>(`/appeals/token?token=${encodeURIComponent(token)}`);
+    if (peek.status === 200 && peek.data !== null) {
+      target = peek.data.target;
+      actionIdFromForm = target.actionId;
+    } else {
+      error = "This link is invalid, has expired, or has already been used.";
+    }
+  } else if (postId !== "") {
+    signedIn = true;
+    const forPost = await apiFetch<{ target: AppealTarget | null }>(
+      `/appeals/for-post/${encodeURIComponent(postId)}`,
+      { request: Astro.request },
+    );
+    if (forPost.status === 200 && forPost.data !== null) {
+      target = forPost.data.target;
+      awaitingReview = target === null;
+      if (target !== null) actionIdFromForm = target.actionId;
+    } else if (forPost.status === 401) {
+      needsLogin = true;
+      error = "Please log in to appeal.";
+    } else {
+      error = "That post isn't available to appeal.";
+    }
+  }
+}
+
+const alreadyAppealed = target !== null && target.alreadyAppealed;
+const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
+---
+
+<BaseLayout title="Appeal a decision" description="Contest a moderation decision on Thinker's Journal.">
+  <div class="wrap form-page">
+    <h1>Appeal a decision</h1>
+
+    {filed && <p id="filed">Your appeal was filed. A moderator will review it.</p>}
+
+    {!filed && error !== null && <p id="error" role="alert">{error}</p>}
+
+    {
+      !filed && error === null && awaitingReview && (
+        <p id="awaiting-review">
+          This post is awaiting a moderator's review. Once they decide, you can appeal from here.
+        </p>
+      )
+    }
+
+    {
+      !filed && error === null && !awaitingReview && alreadyAppealed && (
+        <p id="already-appealed">You have already appealed this decision.</p>
+      )
+    }
+
+    {
+      !filed && error === null && !awaitingReview && !alreadyAppealed && target !== null && (
+        <>
+          <p class="target-summary">
+            <strong>Action:</strong> {target.action.replace("_", " ")}
+          </p>
+          <p class="target-summary">
+            <strong>Reason given:</strong> {target.reason}
+          </p>
+          <p class="target-summary">You can appeal until {target.windowClosesAt}.</p>
+
+          <form method="POST" class="form">
+            <input type="hidden" name="mode" value={signedIn ? "signedIn" : "token"} />
+            <input type="hidden" name="token" value={token} />
+            <input type="hidden" name="post" value={postId} />
+            <input type="hidden" name="actionId" value={target.actionId} />
+            <label>
+              Why do you think this decision was wrong?
+              <textarea name="body" required maxlength="5000" rows="8" />
+            </label>
+            <button type="submit" class="btn btn-primary">Submit appeal</button>
+          </form>
+        </>
+      )
+    }
+
+    {
+      !filed && needsLogin && (
+        <p><a class="link" href={loginHref}>Log in</a></p>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:560px}
+  .target-summary{color:var(--muted);margin:4px 0}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .form textarea{width:100%;background:var(--ink2);border:1px solid var(--line);
+    border-radius:8px;padding:11px 13px;color:var(--text);font:inherit}
+  .form textarea:focus-visible{border-color:var(--green)}
+</style>

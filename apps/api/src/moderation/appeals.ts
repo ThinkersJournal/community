@@ -291,7 +291,20 @@ async function rollback<T>(c: Client, value: T): Promise<T> {
  */
 export const APPEALS_PAGE_SIZE = 200;
 
-/** For the admin list: every open appeal (up to APPEALS_PAGE_SIZE), oldest first, in its wire shape. */
+/**
+ * For the admin list: every open appeal (up to APPEALS_PAGE_SIZE), oldest
+ * first, in its wire shape.
+ *
+ * ⚠️ Task 7 addition: `targetPostHandle`/`targetPostSlug` — the shared
+ * `AdminAppeal` type (packages/shared/src/admin.ts) lacked what the admin
+ * page's link needs: a comment appeal must link to ITS POST (there is no
+ * standalone comment permalink in this app), and a post appeal needs its
+ * author's CURRENT handle + slug to build `/${handle}/${slug}` without a
+ * second lookup. `tc` resolves a comment's `post_id`; `tp`/`tpp` then give
+ * the one post row (direct for a post action, via `tc` for a comment
+ * action) and ITS author's profile. Both LEFT JOINs: null for an `account`
+ * action, and null if the post's author has no profile.
+ */
 export async function listOpenAppeals(c: Client): Promise<AdminAppeal[]> {
   const { rows } = await c.query<{
     id: string;
@@ -304,16 +317,23 @@ export async function listOpenAppeals(c: Client): Promise<AdminAppeal[]> {
     appellant_handle: string | null;
     subject: "post" | "comment" | "account";
     target_id: string | null;
+    target_post_handle: string | null;
+    target_post_slug: string | null;
   }>(
     `SELECT a.id, a.body, a.created_at, ma.id AS action_id, ma.action, ma.reason AS action_reason,
             ma.actor_admin AS action_actor, p.username AS appellant_handle,
             CASE WHEN ma.post_id IS NOT NULL THEN 'post'
                  WHEN ma.comment_id IS NOT NULL THEN 'comment'
                  ELSE 'account' END AS subject,
-            COALESCE(ma.post_id, ma.comment_id, ma.subject_user_id) AS target_id
+            COALESCE(ma.post_id, ma.comment_id, ma.subject_user_id) AS target_id,
+            tpp.username AS target_post_handle,
+            tp.slug AS target_post_slug
        FROM appeals a
        JOIN moderation_actions ma ON ma.id = a.action_id
        LEFT JOIN profiles p ON p.user_id = a.appellant_id
+       LEFT JOIN comments tc ON tc.id = ma.comment_id
+       LEFT JOIN posts tp ON tp.id = COALESCE(ma.post_id, tc.post_id)
+       LEFT JOIN profiles tpp ON tpp.user_id = tp.author_id
       WHERE a.resolved_at IS NULL ORDER BY a.created_at, a.id
       LIMIT $1`,
     [APPEALS_PAGE_SIZE],
@@ -329,5 +349,7 @@ export async function listOpenAppeals(c: Client): Promise<AdminAppeal[]> {
     appellantHandle: r.appellant_handle,
     subject: r.subject,
     targetId: r.target_id,
+    targetPostHandle: r.target_post_handle,
+    targetPostSlug: r.target_post_slug,
   }));
 }

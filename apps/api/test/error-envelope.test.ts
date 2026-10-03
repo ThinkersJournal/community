@@ -512,6 +512,19 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /admin/appeals",
     build: () => new Request("https://api.test/admin/appeals"),
   },
+  // #113 plan B (Task 7) — a POST, so LAYER 1 already probes its origin-less
+  // 403; this pins the body-validation branch past the origin check too.
+  // TEST_ROUTES is "1" in this suite, so the gate is open.
+  {
+    name: "400 mint-action-token test route with a non-JSON body",
+    route: "POST /__test/mint-action-token",
+    build: () =>
+      new Request("https://api.test/__test/mint-action-token", {
+        method: "POST",
+        headers: { Origin: ALLOWED_ORIGIN, "content-type": "application/json" },
+        body: "{",
+      }),
+  },
 ];
 
 /**

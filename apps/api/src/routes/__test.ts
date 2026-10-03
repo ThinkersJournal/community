@@ -66,8 +66,11 @@ import { checkOrigin } from "../auth/csrf";
 import { TEST_LAST_TOKEN_KEY } from "../auth/email-verify";
 import { TEST_LAST_RESET_TOKEN_KEY } from "../auth/password-reset";
 import { reapUnverifiedAccounts } from "../auth/reap-unverified";
+import { withClient } from "../db/client";
 import { errorResponse, notFoundResponse } from "../http/errors";
 import { reapOrphanMedia } from "../media/reap-orphan-media";
+import { applyAccountAction } from "../moderation/account-actions";
+import { mintActionToken } from "../moderation/action-tokens";
 import { TEST_LAST_DSA_TOKEN_KEY } from "../moderation/dsa-notices";
 
 /**
@@ -170,6 +173,49 @@ export async function handleTestRoute(
     }
     const anonymised = await anonymiseExpiredAccounts(env, ctx);
     return new Response(JSON.stringify({ anonymised }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  // #113 plan B (Task 7, e2e/appeal.spec.ts) — seeds a BAN on the account
+  // with this email through the real primitive, then mints a token for it.
+  // E2E has no database access and no Access JWT, and the real link only
+  // exists inside an email the dummy Postmark token never sends. Same gate
+  // and inline checkOrigin as reap-unverified above.
+  if (request.method === "POST" && pathname === "/__test/mint-action-token") {
+    if (!checkOrigin(env, request)) {
+      return errorResponse("FORBIDDEN", 403);
+    }
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return errorResponse("INVALID_JSON", 400);
+    }
+    const b = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+    const email = b["email"];
+    const purpose = b["purpose"] ?? "appeal";
+    if (typeof email !== "string" || (purpose !== "appeal" && purpose !== "delete_request")) {
+      return errorResponse("INVALID_INPUT", 400);
+    }
+    const minted = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [email]);
+      const userId = rows[0]?.id;
+      if (userId === undefined) return null;
+      const outcome = await applyAccountAction(c, {
+        userId,
+        kind: "ban",
+        reason: "e2e: seeded by /__test/mint-action-token",
+        actorAdmin: "e2e@example.test",
+        subjectLabel: "e2e",
+      });
+      if (outcome.kind !== "applied") return null;
+      const token = await mintActionToken(c, { actionId: outcome.actionId, userId, purpose, ttlMs: 3600_000 });
+      return token === null ? null : { actionId: outcome.actionId, token };
+    });
+    if (minted === null) return notFoundResponse();
+    return new Response(JSON.stringify(minted), {
       status: 200,
       headers: { "content-type": "application/json" },
     });

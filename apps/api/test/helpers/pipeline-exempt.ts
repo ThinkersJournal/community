@@ -96,4 +96,7 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   "POST /account/delete-request/resend",
   // #113 plan B — same Access + inline checkOrigin defense as /admin/decision.
   "POST /admin/appeals/:id/resolve",
+  // TEST-ONLY (#113 plan B): the same TEST_ROUTES-gated seam shape, and the
+  // same inline `checkOrigin`, as /__test/reap-unverified above.
+  "POST /__test/mint-action-token",
 ]);

@@ -266,6 +266,20 @@ export interface AdminAppeal {
   readonly subject: "post" | "comment" | "account";
   /** The post id, comment id or user id (by `subject`), for the moderator's link. */
   readonly targetId: string | null;
+  /**
+   * Task 7 addition: the shared type lacked what the admin page's link
+   * needs for a comment appeal ("a comment to its post" — there is no
+   * standalone comment permalink in this app) and didn't want a second
+   * lookup for a post appeal either. Present only when `subject` is
+   * `"post"` or `"comment"` — the post's (current) author handle and slug,
+   * for `/${handle}/${slug}`. `null` when the post's author has no profile,
+   * or when `subject` is `"account"` (use `appellantHandle` there instead:
+   * the account acted against is always the appellant's own account — see
+   * `fileAppeal`'s `appellantId` check in apps/api/src/moderation/appeals.ts).
+   */
+  readonly targetPostHandle: string | null;
+  /** The post's slug, same presence rule as `targetPostHandle`. */
+  readonly targetPostSlug: string | null;
 }
 
 /** `GET /admin/appeals`. */

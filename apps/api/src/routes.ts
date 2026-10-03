@@ -525,4 +525,13 @@ export const ROUTES: readonly RouteDef[] = [
     handler: async (request, env, ctx) =>
       (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },
+
+  // TEST-ONLY (#113 plan B, e2e/appeal.spec.ts). Same null-means-404 contract
+  // and same handler as the POST seams above — see src/routes/__test.ts.
+  {
+    method: "POST",
+    pattern: "/__test/mint-action-token",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
 ];
