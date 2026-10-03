@@ -34,9 +34,10 @@ describe("SettingsNav.astro", () => {
     expect(code).toMatch(/aria-current=\{current === s\.key \? "page" : undefined\}/);
   });
 
-  it("has a back-link to /settings", () => {
-    expect(code).toContain('href="/settings"');
-    expect(code).toMatch(/Settings/);
+  it("has a back-link to /settings, but ONLY when `current` is set — the landing page " +
+    "(which renders <SettingsNav/> with no `current`, pinned in settings-index-page.test.ts) " +
+    "must not link to itself, while the three subpages (which always pass `current`) still get it", () => {
+    expect(code).toMatch(/\{current !== undefined && <a class="link back" href="\/settings">/);
   });
 
   it("links to all three subpages", () => {

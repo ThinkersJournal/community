@@ -1,9 +1,12 @@
 ---
 /**
  * Shared header for the three settings subpages (notifications/blocked/account)
- * plus the /settings landing page. Gives all four a "← Settings" back-link and a
- * tab-style list of the three sections, replacing the ad-hoc bottom cross-links
- * each page used to hand-roll (one per page, inconsistent order/wording).
+ * and the /settings landing page. Gives the three subpages a "← Settings"
+ * back-link plus a tab-style list of the three sections, replacing the ad-hoc
+ * cross-links each page used to hand-roll (one per page, inconsistent
+ * order/wording). The landing page itself must not link to /settings from
+ * /settings, so the back-link renders ONLY when `current` is set (the
+ * subpages always pass it; the landing page omits it).
  *
  * Accessibility: a <nav aria-label="Settings"> landmark around a real <ul> of
  * links, `aria-current="page"` on the active tab, DOM order == visual order,
@@ -19,7 +22,7 @@ const SECTIONS = [
 ] as const;
 ---
 <div class="settings-nav">
-  <a class="link back" href="/settings">← Settings</a>
+  {current !== undefined && <a class="link back" href="/settings">← Settings</a>}
   <nav aria-label="Settings">
     <ul class="tabs">
       {SECTIONS.map((s) => (

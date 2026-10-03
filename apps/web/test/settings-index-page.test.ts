@@ -24,6 +24,19 @@ describe("settings/index.astro", () => {
     expect(code).toMatch(/<SettingsNav\s*\/>/);
   });
 
+  it("each section label is a real heading with the link inside it", () => {
+    expect(code).toMatch(/<h2><a class="link" href="\/settings\/notifications">[^<]+<\/a><\/h2>/);
+    expect(code).toMatch(/<h2><a class="link" href="\/settings\/blocked">[^<]+<\/a><\/h2>/);
+    expect(code).toMatch(/<h2><a class="link" href="\/settings\/account">[^<]+<\/a><\/h2>/);
+  });
+
+  it("does not link to itself: <SettingsNav/> is called with no `current` prop, so its " +
+    "back-link (which SettingsNav only renders when `current` is set — pinned in " +
+    "settings-nav.test.ts) never appears on the landing page", () => {
+    expect(code).not.toMatch(/<SettingsNav\s+current=/);
+    expect(code).not.toMatch(/href="\/settings"/);
+  });
+
   it("handles a signed-out visitor the SAME mechanism as settings/account.astro and " +
     "settings/blocked.astro — both read a real session — rather than settings/notifications.astro, " +
     "which this file agrees with anyway (all three use the identical csrfToken-null check)", () => {
