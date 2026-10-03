@@ -30,6 +30,15 @@ afterAll(async () => {
   await client.end();
 });
 
+async function columnExists(client: Client, table: string, column: string): Promise<boolean> {
+  const { rows } = await client.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`,
+    [table, column],
+  );
+  return rows.length === 1;
+}
+
 async function insertHold(
   userId: string,
   category: "csam" | "dmca" | "other",
@@ -183,47 +192,9 @@ describe("moderation_actions — account hold kinds (migration 0022)", () => {
   });
 });
 
-describe("users.reserved_email_sha256 (spec §4a)", () => {
-  it("refuses a non-hex value (users_reserved_email_sha256_hex)", async () => {
-    // Anonymised first, so `users_reserved_email_only_anonymised` doesn't also
-    // fire and mask which CHECK is under test.
-    const userId = await makeUser();
-    await client.query(`UPDATE users SET anonymised_at = now() WHERE id = $1`, [userId]);
-    await expect(
-      client.query(`UPDATE users SET reserved_email_sha256 = 'not-hex' WHERE id = $1`, [userId]),
-    ).rejects.toMatchObject({ code: "23514", constraint: "users_reserved_email_sha256_hex" });
-  });
-
-  it("refuses a 64-hex value on a row with anonymised_at IS NULL; CONTROL: accepted on an anonymised row", async () => {
-    const hash = "a".repeat(64);
-    const liveUser = await makeUser();
-    await expect(
-      client.query(`UPDATE users SET reserved_email_sha256 = $2 WHERE id = $1`, [liveUser, hash]),
-    ).rejects.toMatchObject({ code: "23514", constraint: "users_reserved_email_only_anonymised" });
-
-    // CONTROL: the same value on an anonymised row is accepted.
-    const anonymisedUser = await makeUser();
-    await client.query(`UPDATE users SET anonymised_at = now() WHERE id = $1`, [anonymisedUser]);
-    await client.query(`UPDATE users SET reserved_email_sha256 = $2 WHERE id = $1`, [anonymisedUser, hash]);
-    const { rows } = await client.query<{ reserved_email_sha256: string | null }>(
-      `SELECT reserved_email_sha256 FROM users WHERE id = $1`,
-      [anonymisedUser],
-    );
-    expect(rows[0]!.reserved_email_sha256).toBe(hash);
-  });
-
-  it("two anonymised rows may hold the same hash (the index is deliberately not unique)", async () => {
-    const hash = "b".repeat(64);
-    const userA = await makeUser();
-    const userB = await makeUser();
-    await client.query(`UPDATE users SET anonymised_at = now() WHERE id = ANY($1)`, [[userA, userB]]);
-    await client.query(`UPDATE users SET reserved_email_sha256 = $2 WHERE id = $1`, [userA, hash]);
-    await client.query(`UPDATE users SET reserved_email_sha256 = $2 WHERE id = $1`, [userB, hash]);
-    const { rows } = await client.query<{ n: string }>(
-      `SELECT count(*) AS n FROM users WHERE reserved_email_sha256 = $1 AND id = ANY($2)`,
-      [hash, [userA, userB]],
-    );
-    expect(rows[0]!.n).toBe("2");
+describe("users.reserved_email_sha256 — dropped by migration 0025 (2026-10-03)", () => {
+  it("the column no longer exists (columnExists → false)", async () => {
+    expect(await columnExists(client, "users", "reserved_email_sha256")).toBe(false);
   });
 });
 

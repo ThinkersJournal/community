@@ -5,7 +5,7 @@ import worker from "../src";
 import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { verifyPassword } from "../src/auth/password";
 import { createResetToken } from "../src/auth/password-reset";
-import { releaseReservedEmail, reservedEmailHmac, reservedEmailSha256 } from "../src/auth/reserved-email";
+import { releaseReservedEmail, reservedEmailHmac } from "../src/auth/reserved-email";
 import { withClient } from "../src/db/client";
 import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
 
@@ -325,41 +325,37 @@ describe("AH-7 — a deleted, banned account's address is reserved against re-si
   });
 });
 
-// ---- 0023: the keyed fingerprint, the legacy column, and a missing key ---------
+// ---- 0023: the keyed fingerprint and a missing key ---------
 
 /**
- * A deleted, banned account's row as each migration's reaper left it: the
- * sentinel address, anonymised, banned, and ONE reservation column set
- * ("hmac" = what the reaper writes since 0023; "legacy" = what 0022's reaper
- * wrote, which signup must still honour until that column is dropped).
+ * A deleted, banned account's row as the reaper left it: the sentinel
+ * address, anonymised, banned, and its HMAC reservation column set (what the
+ * reaper writes since 0023; the legacy unsalted column 0022's reaper wrote
+ * was dropped by migration 0025).
  */
-async function seedReservedRow(which: "hmac" | "legacy"): Promise<string> {
+async function seedReservedRow(): Promise<string> {
   const email = `r0023_${crypto.randomUUID().replace(/-/g, "")}@example.com`;
   const id = crypto.randomUUID();
   await query(
     `INSERT INTO users (id, email, password_hash, email_verified_at, anonymised_at, disabled_at, disabled_reason,
-                        reserved_email_hmac, reserved_email_sha256)
-     VALUES ($1, $2, '!anonymised!', now(), now(), now(), 'ban', $3, $4)`,
+                        reserved_email_hmac)
+     VALUES ($1, $2, '!anonymised!', now(), now(), now(), 'ban', $3)`,
     [
       id,
       `deleted-${id}@invalid.thinkersjournal.local`,
-      which === "hmac" ? await reservedEmailHmac(env, email) : null,
-      which === "legacy" ? await reservedEmailSha256(email) : null,
+      await reservedEmailHmac(env, email),
     ],
   );
   createdUserIds.push(id);
   return email;
 }
 
-describe("0023 — signup checks BOTH reservation columns", () => {
-  it.each(["hmac", "legacy"] as const)(
-    "an address reserved only in the %s column: 409 EMAIL_TAKEN, no session, no row",
-    async (which) => {
-      const email = await seedReservedRow(which);
-      await expectEmailTaken(await resignup(email), email);
-      await expectEmailTaken(await resignup(email.toUpperCase()), email);
-    },
-  );
+describe("0023 — signup checks the reservation column", () => {
+  it("an address reserved in the hmac column: 409 EMAIL_TAKEN, no session, no row", async () => {
+    const email = await seedReservedRow();
+    await expectEmailTaken(await resignup(email), email);
+    await expectEmailTaken(await resignup(email.toUpperCase()), email);
+  });
 
   it("CONTROL: an address nobody reserved signs up (201)", async () => {
     const email = `r0023_free_${crypto.randomUUID().replace(/-/g, "")}@example.com`;

@@ -245,16 +245,15 @@ async function anonymisedAt(id: string): Promise<Date | null> {
 }
 
 /**
- * The row's reservation fingerprint (migration 0023's HMAC column). Also
- * asserts the LEGACY unsalted column stayed NULL: the reaper must never write it.
+ * The row's reservation fingerprint (migration 0023's HMAC column). The legacy
+ * unsalted reservation column (0022) was dropped in 0025.
  */
 async function reservedHash(id: string): Promise<string | null> {
   return ctxRun(async (c) => {
-    const { rows } = await c.query<{ reserved_email_hmac: string | null; reserved_email_sha256: string | null }>(
-      "SELECT reserved_email_hmac, reserved_email_sha256 FROM users WHERE id = $1",
+    const { rows } = await c.query<{ reserved_email_hmac: string | null }>(
+      "SELECT reserved_email_hmac FROM users WHERE id = $1",
       [id],
     );
-    expect(rows[0]!.reserved_email_sha256, "the reaper wrote the legacy unsalted column").toBeNull();
     return rows[0]!.reserved_email_hmac;
   });
 }
