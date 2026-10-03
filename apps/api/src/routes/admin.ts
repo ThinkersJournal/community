@@ -9,6 +9,7 @@ import { checkOrigin } from "../auth/csrf";
 import { errorResponse } from "../http/errors";
 import { applyDecision, type DecisionKind } from "../moderation/decide";
 import { sendModerationNotice } from "../moderation/notify-author";
+import { noticeLinks, type NoticeLinks } from "../moderation/notice-links";
 import { sendDsaOutcome, sendDsaOrphanedOutcome } from "../moderation/notify-reporter";
 import { closeOrphanedDsaNotice, listOpenDsaNotices, orphanedDsaNoticeCandidate } from "../moderation/dsa-notices";
 import { purgeTags } from "../cache/purge";
@@ -179,6 +180,22 @@ export async function handleAdminDecision(
         : undefined,
   });
 
+  // #113 plan B — tokens are minted AFTER the action has committed, on a
+  // fresh connection, never inside decide.ts's transaction. A restore has
+  // nothing left to appeal, so no mint runs for it. A mint failure must not
+  // fail an action that already happened: the notice goes out without the
+  // link.
+  let links: NoticeLinks = {};
+  if (decision !== "restore") {
+    try {
+      links = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+        noticeLinks(c, request, { actionId: result.actionId, userId: result.authorId, bars: false }),
+      );
+    } catch (err) {
+      console.error("appeal link not minted", { actionId: result.actionId, err });
+    }
+  }
+
   // ⚠️ AFTER the commit and OUTSIDE the response path. The decision is already
   // durable; a Postmark outage must not turn a successful moderation action
   // into a 500. See R5. A dismissal (Restore of never-hidden content) sends
@@ -190,6 +207,7 @@ export async function handleAdminDecision(
       subject,
       postTitle: result.postTitle,
       reason: reason.trim(),
+      appealUrl: links.appealUrl,
     }).then((sent) => {
       if (!sent) {
         // A lost notice must be findable and re-sendable (R5).

@@ -45,6 +45,8 @@ export interface DecisionResult {
   readonly subjectId: string;
   /** Whose content it was — Task 2 emails them. */
   readonly authorEmail: string;
+  /** Same author, as an id — #113 plan B mints the appeal token against this, from the SAME row the decision just wrote. */
+  readonly authorId: string;
   /** Visibility BEFORE the decision (RETURNING old.hidden_at). Picks the notice text. */
   readonly wasHidden: boolean;
   /** Visibility AFTER the decision. */
@@ -171,6 +173,7 @@ export async function applyDecision(
       actionId,
       subjectId: row.id,
       authorEmail: row.email,
+      authorId: row.author_id,
       wasHidden: row.was_hidden,
       hidden: row.hidden,
       postTitle: row.title,

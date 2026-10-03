@@ -388,6 +388,50 @@ describe("POST /admin/decision", () => {
     expect(sentEmails).toHaveLength(0);
   });
 
+  describe("#113 plan B — the appeal link", () => {
+    async function appealTokenRowsFor(userId: string): Promise<Array<{ purpose: string; user_id: string; action_id: string }>> {
+      return ctxRun(async (c) => {
+        const { rows } = await c.query<{ purpose: string; user_id: string; action_id: string }>(
+          `SELECT purpose, user_id, action_id FROM moderation_action_tokens WHERE user_id = $1`,
+          [userId],
+        );
+        return rows;
+      });
+    }
+
+    it("a remove decision emails the appeal link, and exactly one appeal token row exists, tied to the author and the action", async () => {
+      const { postId, authorEmail } = await seedHiddenPost();
+      const res = await decide({ subject: "post", subjectId: postId, decision: "remove", reason: "x" });
+      const { actionId } = (await res.json()) as { actionId: string };
+
+      expect(sentEmails).toHaveLength(1);
+      expect(String(sentEmails[0]!["TextBody"])).toContain("/appeal?token=");
+
+      // The author's id is not returned to the test directly, so look it up
+      // the same way the decision did: from the post's own row.
+      const authorId = await ctxRun(async (c) => {
+        const { rows } = await c.query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [authorEmail]);
+        return rows[0]!.id;
+      });
+
+      const rows = await appealTokenRowsFor(authorId);
+      // ⚠️ Without this, a token minted for the WRONG account would pass a
+      // bare row-count assertion.
+      expect(rows).toEqual([{ purpose: "appeal", user_id: authorId, action_id: actionId }]);
+    });
+
+    it("a restore of hidden content mints NO token", async () => {
+      const { postId, authorEmail } = await seedHiddenPost();
+      await decide({ subject: "post", subjectId: postId, decision: "restore", reason: "Mistaken." });
+
+      const authorId = await ctxRun(async (c) => {
+        const { rows } = await c.query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [authorEmail]);
+        return rows[0]!.id;
+      });
+      expect(await appealTokenRowsFor(authorId)).toEqual([]);
+    });
+  });
+
   it("a cross-origin decision sends NO email", async () => {
     const { postId } = await seedHiddenPost();
     await decideRaw({

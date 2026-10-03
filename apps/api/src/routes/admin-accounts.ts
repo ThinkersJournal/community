@@ -13,6 +13,7 @@ import { errorResponse } from "../http/errors";
 import { applyAccountAction, loadAccountHistory } from "../moderation/account-actions";
 import { imposeManualAccountHold, listAccountHolds, releaseAccountHold } from "../moderation/account-holds";
 import { sendAccountActionNotice } from "../moderation/notify-account";
+import { noticeLinks, type NoticeLinks } from "../moderation/notice-links";
 
 import {
   ADMIN_ACCOUNT_ACTIONS,
@@ -168,11 +169,25 @@ export async function handleAdminAccountAction(
 
   // ⚠️ Review Focus 5 — never mail a scrubbed address.
   if (!outcome.anonymised) {
+    // #113 plan B — minted AFTER the action has committed, on a fresh
+    // connection. A mint failure must not fail an action that already
+    // happened: the notice goes out without the link.
+    let links: NoticeLinks = {};
+    try {
+      links = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+        // ⚠️ userId is the ACTIONED account (account.id), never the admin.
+        noticeLinks(c, request, { actionId: outcome.actionId, userId: account.id, bars }),
+      );
+    } catch (err) {
+      console.error("appeal links not minted", { actionId: outcome.actionId, err });
+    }
     ctx.waitUntil(
       sendAccountActionNotice(env, outcome.email, {
         kind,
         reason: reason.trim(),
         suspendedUntil: outcome.suspendedUntil ?? undefined,
+        appealUrl: links.appealUrl,
+        deleteRequestUrl: links.deleteRequestUrl,
       }).then((sent) => {
         if (!sent) console.error("account notice not sent", { actionId: outcome.actionId });
       }),

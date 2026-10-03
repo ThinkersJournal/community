@@ -18,12 +18,16 @@ import { postmarkSend } from "../auth/postmark";
 import { escapeHtml } from "../auth/email-verify";
 import type { DecisionKind } from "./decide";
 
+import { APPEAL_WINDOW_DAYS } from "@thinkersjournal/shared";
+
 export interface ModerationNotice {
   readonly decision: DecisionKind;
   readonly wasHidden: boolean;
   readonly subject: "post" | "comment";
   readonly postTitle: string;
   readonly reason: string;
+  /** #113 plan B. Omitted when the mint failed or the decision is `restore` — never rendered for a restore. */
+  readonly appealUrl?: string;
 }
 
 interface Copy {
@@ -61,12 +65,6 @@ const COPY: Readonly<Record<NoticeKey, Copy>> = {
   },
 };
 
-// ⚠️ NO APPEAL LINK YET. A DSA statement of reasons must tell the user how to
-// challenge the decision, but the in-app appeal form (spec §6) is not built and
-// /appeal does not exist — a dead link is worse than none. Tracked as issue #53,
-// which must close before any web route forwards `Cf-Access-Jwt-Assertion` to
-// the api (the 2b-iii admin UI), or before launch, whichever comes first.
-
 export async function sendModerationNotice(
   env: Env,
   to: string,
@@ -85,12 +83,18 @@ export async function sendModerationNotice(
       ? `This is about your post "${notice.postTitle}".`
       : `This is about your comment on "${notice.postTitle}".`;
 
+  // ⚠️ A `restore` NEVER renders the appeal link, even when a caller passes
+  // one — there is nothing left to appeal once the content is back.
+  const url = notice.decision === "restore" ? undefined : notice.appealUrl;
+  const appealTextLine = url === undefined ? "" : `\n\nYou can appeal this decision within ${APPEAL_WINDOW_DAYS} days: ${url}`;
+  const appealHtmlLine = url === undefined ? "" : `<p>You can appeal this decision within ${APPEAL_WINDOW_DAYS} days: <a href="${escapeHtml(url)}">${escapeHtml(url)}</a></p>`;
+
   return await postmarkSend(env, {
     from: "noreply@thinkersjournal.com",
     to,
     subject,
-    textBody: `${lead}\n\n${contentLine}\n\nReason given by the reviewer:\n\n${notice.reason}\n`,
-    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>`,
+    textBody: `${lead}\n\n${contentLine}\n\nReason given by the reviewer:\n\n${notice.reason}\n${appealTextLine}`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>${appealHtmlLine}`,
     stream: "outbound",
   });
 }

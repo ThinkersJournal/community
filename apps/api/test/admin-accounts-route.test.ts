@@ -273,6 +273,64 @@ describe("POST /admin/accounts/:handle/actions — notice emails (Review Focus 2
   });
 });
 
+describe("#113 plan B — the appeal and delete-request links", () => {
+  async function tokenRowsFor(userId: string): Promise<Array<{ purpose: string; user_id: string; action_id: string }>> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ purpose: string; user_id: string; action_id: string }>(
+        `SELECT purpose, user_id, action_id FROM moderation_action_tokens WHERE user_id = $1 ORDER BY purpose`,
+        [userId],
+      );
+      return rows;
+    });
+  }
+
+  it("a ban mints two token rows (appeal, delete_request), both tied to the banned account and the returned actionId, and both urls in the email", async () => {
+    const { handle, userId } = await seedHandle();
+    const res = await act(handle, { action: "ban", reason: "r", confirmBan: true });
+    expect(res.status).toBe(200);
+    const { actionId } = (await res.json()) as { actionId: string };
+
+    // ⚠️ Without the user_id/action_id match, a token minted for the WRONG
+    // account would still pass a bare row-count assertion.
+    expect(await tokenRowsFor(userId)).toEqual([
+      { purpose: "appeal", user_id: userId, action_id: actionId },
+      { purpose: "delete_request", user_id: userId, action_id: actionId },
+    ]);
+
+    expect(sentEmails).toHaveLength(1);
+    const text = String(sentEmails[0]!.TextBody);
+    expect(text).toContain("/appeal?token=");
+    expect(text).toContain("/account/delete-request?token=");
+  });
+
+  it("a warn mints one token row (appeal only), tied to the account and the returned actionId", async () => {
+    const { handle, userId } = await seedHandle();
+    const res = await act(handle, { action: "warn", reason: "r" });
+    expect(res.status).toBe(200);
+    const { actionId } = (await res.json()) as { actionId: string };
+
+    expect(await tokenRowsFor(userId)).toEqual([{ purpose: "appeal", user_id: userId, action_id: actionId }]);
+
+    expect(sentEmails).toHaveLength(1);
+    const text = String(sentEmails[0]!.TextBody);
+    expect(text).toContain("/appeal?token=");
+    expect(text).not.toContain("/account/delete-request");
+  });
+
+  // B2: the email names the EFFECTIVE end (users.suspended_until), not the
+  // action's own end — unchanged by this task, re-asserted so a future edit
+  // to notice-links.ts cannot silently swap which end the email shows.
+  it("a suspend notice still names the effective end (B2), unaffected by the new links", async () => {
+    const { handle, userId } = await seedHandle();
+    expect((await act(handle, { action: "suspend", reason: "r" })).status).toBe(200);
+    expect(sentEmails).toHaveLength(1);
+    const until = await ctxRun(
+      async (c) => (await c.query<{ s: Date }>(`SELECT suspended_until AS s FROM users WHERE id = $1`, [userId])).rows[0]!.s,
+    );
+    expect(String(sentEmails[0]!.TextBody)).toContain(until.toUTCString());
+  });
+});
+
 describe("⚠️ a member session grants no admin authority (Review Focus 3 scope)", () => {
   afterEach(async () => {
     await deleteCreatedUsers();

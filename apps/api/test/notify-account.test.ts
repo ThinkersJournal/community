@@ -50,3 +50,34 @@ describe("sendAccountActionNotice", () => {
     await expect(sendAccountActionNotice(env, "u@example.test", { kind: "warn", reason: "r" })).resolves.toBe(false);
   });
 });
+
+describe("#113 plan B — the appeal and delete-request links", () => {
+  const appealUrl = "https://community.thinkersjournal.com/appeal?token=a";
+  const deleteRequestUrl = "https://community.thinkersjournal.com/account/delete-request?token=d";
+
+  it("warn carries the appeal link only", async () => {
+    await sendAccountActionNotice(env, "u@example.test", { kind: "warn", reason: "r", appealUrl });
+    expect(String(sent[0]!.TextBody)).toContain(appealUrl);
+    expect(String(sent[0]!.TextBody)).toContain("within 30 days");
+    expect(String(sent[0]!.TextBody)).not.toContain("/account/delete-request");
+  });
+
+  it("suspend and ban carry both links and say what a deletion request does", async () => {
+    for (const kind of ["suspend", "ban"] as const) {
+      sent = [];
+      await sendAccountActionNotice(env, "u@example.test", {
+        kind,
+        reason: "r",
+        suspendedUntil: kind === "suspend" ? new Date("2026-10-08T04:00:00.000Z") : undefined,
+        appealUrl,
+        deleteRequestUrl,
+      });
+      const text = String(sent[0]!.TextBody);
+      expect(text).toContain(appealUrl);
+      expect(text).toContain(deleteRequestUrl);
+      expect(text).toContain("You can also ask for your account to be deleted");
+      expect(text).toContain("unless it is under a legal hold");
+      expect(String(sent[0]!.HtmlBody)).toContain(`href="${deleteRequestUrl}"`);
+    }
+  });
+});
