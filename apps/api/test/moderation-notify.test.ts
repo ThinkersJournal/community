@@ -231,3 +231,42 @@ describe("sendModerationNotice", () => {
     ).resolves.not.toThrow();
   });
 });
+
+describe("#53 — the appeal link", () => {
+  const appealUrl = "https://community.thinkersjournal.com/appeal?token=abc";
+
+  it("keep_hidden and remove carry the appeal link and the 30-day window, in text and html", async () => {
+    for (const decision of ["keep_hidden", "remove"] as const) {
+      const sent = await captureSendFull(() =>
+        sendModerationNotice(env, "a@b.test", {
+          decision,
+          wasHidden: true,
+          subject: "post",
+          postTitle: "T",
+          reason: "r",
+          appealUrl,
+        }),
+      );
+      expect(String(sent.TextBody)).toContain(appealUrl);
+      expect(String(sent.TextBody)).toContain("within 30 days");
+      expect(String(sent.HtmlBody)).toContain(`href="${appealUrl}"`);
+    }
+  });
+
+  it("a restore never carries it, even when a caller passes one", async () => {
+    const sent = await captureSendFull(() =>
+      sendModerationNotice(env, "a@b.test", {
+        decision: "restore",
+        wasHidden: true,
+        subject: "post",
+        postTitle: "T",
+        reason: "r",
+        appealUrl,
+      }),
+    );
+    // Control: this IS the restore notice, so the absence below is about the link.
+    expect(sent.Subject).toBe("Your content has been restored");
+    expect(String(sent.TextBody)).not.toContain("/appeal?token=");
+    expect(String(sent.HtmlBody)).not.toContain("/appeal?token=");
+  });
+});

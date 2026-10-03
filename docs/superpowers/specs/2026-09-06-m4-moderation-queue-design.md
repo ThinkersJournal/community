@@ -152,6 +152,10 @@ counts**, and a free-text `reason` alone would force text-mining to produce them
 `action_expires_at` records a suspension's intended duration **on the action**, so the log stays
 truthful after `users.suspended_until` has moved on — an audit log must record what was *done*,
 never depend on current state to explain itself.
+*Ruling 2026-10-02 (#113 plan B pre-flight, B2):* that is the action's **own** end
+(`now() + hours`), never the effective end. `users.suspended_until` alone holds the effective
+bar (the GREATEST of the suspensions in force), so granting an appeal against one of two
+overlapping suspensions can recompute the bar from the others' own ends (§6).
 
 ### 3.2 Account status on `users`
 
@@ -369,6 +373,8 @@ permanently — expiry affects escalation, never the record).
   appeal (decision #4), so once more moderators exist, "a different reviewer where practical"
   becomes checkable — and until then it is honestly hedged, not falsely promised.
 - *Proposed appeal window: 30 days from the action.*
+
+**Status (2026-10-02):** BUILT — #113 plan B (docs/superpowers/plans/2026-10-01-m4-2c-appeals.md).
 
 ---
 

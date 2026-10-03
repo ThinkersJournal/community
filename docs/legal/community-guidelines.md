@@ -72,9 +72,11 @@ signals only *prioritize* review, they do not decide it.
   and history. Severe violations (e.g. CSAM, credible threats) skip the ladder and
   result in immediate termination. [[STATUS — warning, suspension and ban exist (#113 plan A). "Immediate
   termination" for CSAM exists as a primitive but is not yet wired to detection
-  or NCMEC reporting (#114). Appeals: #113 plan B.]]
+  or NCMEC reporting (#114). Appeals exist (#113 plan B).]]
 - **Appeals.** If your content or account is actioned, you may appeal through
-  [[APPEAL_CHANNEL]]. A different reviewer, where practical, reviews the appeal.
+  the appeal link in the notice we send you (or, for a hidden post, in the
+  post's editor), within 30 days of the decision (except a termination, which
+  can't be appealed). A different reviewer, where practical, reviews the appeal.
 - **Audit.** Moderation actions are recorded in an append-only internal log for
   accountability and to support appeals.
 - **Reporting illegal content without an account.** We accept reports of legal

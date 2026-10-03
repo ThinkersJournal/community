@@ -89,4 +89,14 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // directly above.
   "POST /admin/accounts/:handle/holds",
   "POST /admin/accounts/:handle/holds/:id/release",
+  // #113 — no session exists for a barred appellant; inline checkOrigin, single-use token.
+  "POST /appeals/by-token",
+  // #50 Q4 — barred users have no session; inline checkOrigin; token / Turnstile+rate limit.
+  "POST /account/delete-request",
+  "POST /account/delete-request/resend",
+  // #113 plan B — same Access + inline checkOrigin defense as /admin/decision.
+  "POST /admin/appeals/:id/resolve",
+  // TEST-ONLY (#113 plan B): the same TEST_ROUTES-gated seam shape, and the
+  // same inline `checkOrigin`, as /__test/reap-unverified above.
+  "POST /__test/mint-action-token",
 ]);

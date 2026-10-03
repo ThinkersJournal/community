@@ -39,10 +39,22 @@ import {
   handleAdminImposeAccountHold,
   handleAdminReleaseAccountHold,
 } from "./routes/admin-accounts";
+import { handleAdminListAppeals, handleAdminResolveAppeal } from "./routes/admin-appeals";
+import {
+  handleAppealByToken,
+  handleAppealForPost,
+  handleAppealSignedIn,
+  handlePeekAppealToken,
+} from "./routes/appeals";
 import { handleBlock, handleBlockStatus, handleListBlocks, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
 import { handleCsrf } from "./routes/csrf";
+import {
+  handleDeleteRequest,
+  handleDeleteRequestResend,
+  handlePeekDeleteRequestToken,
+} from "./routes/delete-request";
 import { handleConfirmDsaNotice, handleDsaNotice, handlePeekDsaToken } from "./routes/dsa-notice";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
@@ -287,6 +299,13 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "POST", pattern: "/account/delete", handler: handleRequestDeletion },
   { method: "POST", pattern: "/account/delete/cancel", handler: handleCancelDeletion },
 
+  // #50 Q4 — a barred user's deletion request by emailed token, and the
+  // "email me a new link" route. No session exists for a barred user; both
+  // POSTs run inline checkOrigin (see src/routes/delete-request.ts).
+  { method: "GET", pattern: "/account/delete-request/token", handler: handlePeekDeleteRequestToken },
+  { method: "POST", pattern: "/account/delete-request", handler: handleDeleteRequest },
+  { method: "POST", pattern: "/account/delete-request/resend", handler: handleDeleteRequestResend },
+
   // Per-viewer home feed (M2.1) — no-store, never edge-cached.
   { method: "GET", pattern: "/feed", handler: handleFeed },
 
@@ -436,6 +455,19 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "POST", pattern: "/admin/accounts/:handle/holds", handler: handleAdminImposeAccountHold },
   { method: "POST", pattern: "/admin/accounts/:handle/holds/:id/release", handler: handleAdminReleaseAccountHold },
 
+  // #113 plan B — the appeal list and its resolution. Same Access trust domain
+  // and inline-checkOrigin shape as /admin/decision.
+  { method: "GET", pattern: "/admin/appeals", handler: handleAdminListAppeals },
+  { method: "POST", pattern: "/admin/appeals/:id/resolve", handler: handleAdminResolveAppeal },
+
+  // #113 plan B — appeals. by-token is session-less (the emailed token is the
+  // authority) and defends itself with inline checkOrigin; the signed-in POST
+  // runs the pipeline, so a barred session is refused and uses its token.
+  { method: "GET", pattern: "/appeals/token", handler: handlePeekAppealToken },
+  { method: "POST", pattern: "/appeals/by-token", handler: handleAppealByToken },
+  { method: "POST", pattern: "/appeals", handler: handleAppealSignedIn },
+  { method: "GET", pattern: "/appeals/for-post/:postId", handler: handleAppealForPost },
+
   // TEST-ONLY. `handleTestRoute` returns null when `TEST_ROUTES` is unset (i.e.
   // in production), and we fall through to the SAME notFoundResponse() every
   // unmatched path gets — so the route is indistinguishable from one that does
@@ -490,6 +522,15 @@ export const ROUTES: readonly RouteDef[] = [
   {
     method: "GET",
     pattern: "/__test/last-dsa-token",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
+
+  // TEST-ONLY (#113 plan B, e2e/appeal.spec.ts). Same null-means-404 contract
+  // and same handler as the POST seams above — see src/routes/__test.ts.
+  {
+    method: "POST",
+    pattern: "/__test/mint-action-token",
     handler: async (request, env, ctx) =>
       (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },

@@ -400,10 +400,51 @@ describe("⚠️ hidden-pending-review banner — M4 author-facing hidden state 
     expect(code).toContain("hiddenAt = existing.data.hiddenAt");
   });
 
-  it("(c) shows the hidden-pending-review banner when hiddenAt is set — guarded by hiddenAt && condition", () => {
-    // Lexical check: the markup sits inside a {hiddenAt && (...)} guard.
-    // Using the s flag to match across newlines.
-    expect(code).toMatch(/\{hiddenAt\s*&&\s*\([^{]*id=["']hidden-pending-review["'][^}]*\)/s);
+  /**
+   * ⚠️ #113 plan B, Task 7's appeal link (apps/web/src/pages/appeal.astro's
+   * banner addition) broke the old regex-based version of this pin: that
+   * regex forbade any `{`/`}` between the guard and the closing `)`, which a
+   * nested `{postId !== null && hiddenReason === "moderation" && (...)}`
+   * conditional — legitimately INSIDE the banner — necessarily contains. A
+   * PAREN-BALANCED scan is the correct tool here (JSX can nest braces
+   * arbitrarily; it cannot have unbalanced parens), so this extracts the
+   * banner's full `{hiddenAt && ( ... )}` block regardless of what's nested
+   * inside it, then asserts facts ABOUT that extracted block — still unable
+   * to be satisfied by prose, and now able to tell "inside the banner" apart
+   * from "merely present somewhere in the file".
+   */
+  function extractHiddenBanner(source: string): string {
+    const guardAt = source.indexOf("{hiddenAt && (");
+    expect(guardAt, "the {hiddenAt && ( guard was not found at all").toBeGreaterThan(-1);
+    const openParenAt = source.indexOf("(", guardAt);
+    let depth = 0;
+    let i = openParenAt;
+    for (; i < source.length; i++) {
+      if (source[i] === "(") depth++;
+      else if (source[i] === ")") {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    expect(i, "the guard's opening ( was never balanced by a closing )").toBeLessThan(source.length);
+    return source.slice(guardAt, i + 1);
+  }
+
+  it("(c) shows the hidden-pending-review banner when hiddenAt is set — guarded by hiddenAt && condition, AND the id is reachable before any later closing of that same guard", () => {
+    const banner = extractHiddenBanner(code);
+    expect(banner).toMatch(/id=["']hidden-pending-review["']/);
+  });
+
+  it("(c2) ⚠️ the appeal link sits INSIDE the hiddenAt banner, not merely somewhere in the file (#113 plan B, Task 7)", () => {
+    const banner = extractHiddenBanner(code);
+    expect(banner).toContain("/appeal?post=");
+    expect(banner).toMatch(/hiddenReason === "moderation"/);
+    // And the link must not ALSO exist outside the banner block (e.g. a
+    // second, unguarded copy) — the whole file's only occurrence is the one
+    // just found inside `banner`.
+    const occurrencesInFile = (code.match(/\/appeal\?post=/g) ?? []).length;
+    const occurrencesInBanner = (banner.match(/\/appeal\?post=/g) ?? []).length;
+    expect(occurrencesInFile).toBe(occurrencesInBanner);
   });
 
   it("(d) includes the banner text with updated wording", () => {

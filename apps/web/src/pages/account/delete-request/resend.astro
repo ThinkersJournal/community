@@ -1,0 +1,132 @@
+---
+/**
+ * `/account/delete-request/resend` — "email me a new link" for a barred
+ * user whose delete-request link expired or was lost (#50 Q4). Same
+ * Turnstile-gated anonymous-form shape as ../../forgot-password.astro: no
+ * client `fetch`, same bot defense, and — just like that page — the SAME
+ * response message regardless of whether the address is registered, barred,
+ * or neither (apps/api/src/routes/delete-request.ts's handleDeleteRequestResend
+ * header: this must not become an enumeration oracle for "is this account
+ * barred").
+ */
+import BaseLayout from "../../../components/BaseLayout.astro";
+import { apiFetch, applyCookies } from "../../../lib/api";
+import { markPrivate } from "../../../lib/cache";
+import { setPublicPageCsp } from "../../../lib/csp";
+
+// Per-viewer, like forgot-password.astro: an anonymous form that must never
+// be cached. See src/lib/cache.ts.
+markPrivate(Astro);
+
+// `{ turnstile: true }`, same reason as forgot-password.astro: an anonymous
+// form that can trigger mail to an attacker-chosen address.
+setPublicPageCsp(Astro, { turnstile: true });
+
+const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY as string | undefined;
+
+/** `null` = first visit. `"sent"` is the ONLY other state — see the header. */
+let result: "sent" | null = null;
+let error: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+
+  const response = await apiFetch("/account/delete-request/resend", {
+    method: "POST",
+    body: {
+      email: form.get("email"),
+      turnstileToken: form.get("turnstileToken"),
+    },
+    // ⚠️ The BROWSER's Origin, forwarded verbatim — same reasoning as
+    // forgot-password.astro/login.astro: this route has no session, so
+    // `checkOrigin` is its entire CSRF defense.
+    origin: Astro.request.headers.get("Origin") ?? "",
+  });
+  applyCookies(Astro.response.headers, response.setCookies);
+
+  if (response.status === 429) {
+    error = "Too many attempts. Please wait and try again.";
+  } else {
+    // ⚠️ EVERY OTHER OUTCOME — 202 (found+barred), 404/400 equivalents the
+    // api folds into the same 202, a rejected Turnstile check, anything —
+    // gets the SAME copy. Branching this page's text on `response.status`
+    // beyond the 429 rate-limit case would reopen, at the UI layer, exactly
+    // the enumeration leak the api's single-response-shape design avoids at
+    // the wire layer. See forgot-password.astro's identical warning.
+    result = "sent";
+  }
+}
+---
+
+<BaseLayout title="Request a new deletion link" description="Request a new account-deletion link for Thinker's Journal.">
+  <div class="wrap form-page">
+    <h1>Request a new deletion link</h1>
+
+    {
+      result === "sent" ? (
+        <p id="sent">If that address belongs to a restricted account, we've sent it a link.</p>
+      ) : (
+        <>
+          <p class="intro">
+            Enter the email address on the account. If it is restricted, we'll send a link to
+            request its deletion.
+          </p>
+          {error !== null && <p id="error" role="alert">{error}</p>}
+          <form method="POST" class="form">
+            <label>
+              Email
+              <input type="email" name="email" required />
+            </label>
+            {/* Same Turnstile widget as forgot-password.astro — see its own
+                comment for the production-vs-dev/e2e split. */}
+            {
+              turnstileSiteKey ? (
+                <>
+                  <div
+                    class="cf-turnstile"
+                    data-sitekey={turnstileSiteKey}
+                    data-response-field-name="turnstileToken"
+                    data-error-callback="turnstileOnError"
+                    data-timeout-callback="turnstileOnTimeout"
+                  ></div>
+                  <p class="turnstile-error" data-turnstile-error hidden>
+                    Verification failed.{" "}
+                    <button type="button" data-turnstile-retry class="link">Tap to retry</button>
+                  </p>
+                </>
+              ) : (
+                <input type="text" name="turnstileToken" value="dummy-token" />
+              )
+            }
+            <button type="submit" class="btn btn-primary">Send link</button>
+          </form>
+          {
+            turnstileSiteKey && (
+              <>
+                {/* NO Subresource Integrity, deliberately — same reasoning as
+                    forgot-password.astro's identical script tag. */}
+                <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+                <script>
+                  import { initTurnstileErrorHandling } from "../../../scripts/turnstile-error";
+                  initTurnstileErrorHandling();
+                </script>
+              </>
+            )
+          }
+        </>
+      )
+    }
+
+    <p><a class="link" href="/login">Back to log in</a></p>
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .turnstile-error{color:var(--red, #e5484d);font-size:14px;margin-top:-4px}
+  .intro{color:var(--muted);margin:0 0 20px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .form input{background:var(--ink2);border:1px solid var(--line);border-radius:8px;
+    padding:11px 13px;color:var(--text);font:inherit}
+  .form input:focus-visible{border-color:var(--green)}
+</style>

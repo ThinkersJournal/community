@@ -486,6 +486,45 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /posts",
     build: () => new Request("https://api.test/posts"),
   },
+  // #113 plan B (Task 4) — both GETs, so LAYER 1 never reaches them. An
+  // unknown token is the token peek's simplest failure (400 INVALID_TOKEN,
+  // the same answer as an expired or wrong-purpose one); the for-post probe
+  // has no session (401 LOGIN_REQUIRED). test/appeals-route.test.ts owns the rest.
+  {
+    name: "400 appeal token peek with an unknown token",
+    route: "GET /appeals/token",
+    build: () => new Request("https://api.test/appeals/token?token=not-a-token"),
+  },
+  {
+    name: "401 appeal-for-post with no session",
+    route: "GET /appeals/for-post/:postId",
+    build: () => new Request("https://api.test/appeals/for-post/00000000-0000-7000-8000-000000000000"),
+  },
+  // #50 Q4 (Task 5) — same shape as the appeal token peek above.
+  {
+    name: "400 delete-request token peek with an unknown token",
+    route: "GET /account/delete-request/token",
+    build: () => new Request("https://api.test/account/delete-request/token?token=not-a-token"),
+  },
+  // #113 plan B (Task 6) — same Access-gate shape as GET /admin/dsa-notices.
+  {
+    name: "401 admin appeals list with no Access header",
+    route: "GET /admin/appeals",
+    build: () => new Request("https://api.test/admin/appeals"),
+  },
+  // #113 plan B (Task 7) — a POST, so LAYER 1 already probes its origin-less
+  // 403; this pins the body-validation branch past the origin check too.
+  // TEST_ROUTES is "1" in this suite, so the gate is open.
+  {
+    name: "400 mint-action-token test route with a non-JSON body",
+    route: "POST /__test/mint-action-token",
+    build: () =>
+      new Request("https://api.test/__test/mint-action-token", {
+        method: "POST",
+        headers: { Origin: ALLOWED_ORIGIN, "content-type": "application/json" },
+        body: "{",
+      }),
+  },
 ];
 
 /**

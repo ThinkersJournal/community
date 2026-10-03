@@ -214,3 +214,89 @@ export interface AdminAccountHold {
   readonly releasedBy: string | null;
   readonly releaseReason: string | null;
 }
+
+/** Spec §6/§11.2, adopted by the PM 2026-10-01: an action may be appealed for 30 days. */
+export const APPEAL_WINDOW_DAYS = 30;
+
+/**
+ * #50 Q4 — a re-requested delete link (the "email me a new link" route) lives
+ * this long. Short on purpose: the PM ruled against long-lived bearer tokens
+ * sitting in old inboxes, and asking again is cheap.
+ */
+export const DELETE_REQUEST_RESEND_TTL_HOURS = 24;
+
+/**
+ * What can be appealed. ⚠️ NOT `user_terminate` — the CSAM path (#114), an
+ * open legal question. Restores/appeal outcomes are not adverse, so not here.
+ */
+export const APPEALABLE_ACTIONS = [
+  "content_keep_hidden",
+  "content_remove",
+  "user_warn",
+  "user_suspend",
+  "user_ban",
+] as const;
+export type AppealableAction = (typeof APPEALABLE_ACTIONS)[number];
+
+/** What the appellant sees about the action they are appealing. */
+export interface AppealTarget {
+  readonly actionId: string;
+  readonly action: AppealableAction;
+  readonly reason: string;
+  readonly createdAt: string;
+  readonly alreadyAppealed: boolean;
+  readonly windowClosesAt: string;
+}
+
+/** One open appeal in `GET /admin/appeals`, oldest first. ISO strings. */
+export interface AdminAppeal {
+  readonly id: string;
+  /** The appellant's own text. */
+  readonly body: string;
+  readonly createdAt: string;
+  readonly actionId: string;
+  readonly action: AppealableAction;
+  /** The original statement of reasons. */
+  readonly actionReason: string;
+  /** Who took the original action (spec decision #8: shown, so a second moderator can take it). */
+  readonly actionActor: string;
+  /** The appellant's CURRENT handle, or null if they have no profile. Never an email. */
+  readonly appellantHandle: string | null;
+  /** What the appealed action was taken against. */
+  readonly subject: "post" | "comment" | "account";
+  /** The post id, comment id or user id (by `subject`), for the moderator's link. */
+  readonly targetId: string | null;
+  /**
+   * Task 7 addition: the shared type lacked what the admin page's link
+   * needs for a comment appeal ("a comment to its post" — there is no
+   * standalone comment permalink in this app) and didn't want a second
+   * lookup for a post appeal either. Present only when `subject` is
+   * `"post"` or `"comment"` — the post's (current) author handle and slug,
+   * for `/${handle}/${slug}`. `null` when the post's author has no profile,
+   * or when `subject` is `"account"` (use `appellantHandle` there instead:
+   * the account acted against is always the appellant's own account — see
+   * `fileAppeal`'s `appellantId` check in apps/api/src/moderation/appeals.ts).
+   */
+  readonly targetPostHandle: string | null;
+  /** The post's slug, same presence rule as `targetPostHandle`. */
+  readonly targetPostSlug: string | null;
+}
+
+/** `GET /admin/appeals`. */
+export interface AdminAppealsResponse {
+  readonly appeals: readonly AdminAppeal[];
+}
+
+/** `POST /admin/appeals/:id/resolve`. */
+export interface AdminAppealResolveRequest {
+  readonly decision: "grant" | "deny";
+  /** Non-blank. Sent to the appellant as the reason. */
+  readonly reason: string;
+}
+
+/** `POST /admin/appeals/:id/resolve`'s 200 body. */
+export interface AdminAppealResolveResponse {
+  readonly resolutionActionId: string;
+  /** Spec decision #8's hedge made checkable: the resolver took the original action. Not refused. */
+  readonly sameReviewer: boolean;
+}

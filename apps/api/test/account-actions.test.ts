@@ -87,10 +87,32 @@ describe("applyAccountAction", () => {
     const long = (await status(u)).suspended_until!.getTime();
     await apply({ ...base, userId: u, kind: "suspend", reason: "short", suspensionHours: 24 });
     expect((await status(u)).suspended_until!.getTime()).toBe(long);
-    // The log still records what the moderator asked for, and the effective end it produced.
+    // ⚠️ Ruling B2 (#113 plan B): the log records each action's OWN end, not
+    // the effective one. The short suspension's row ends ~24h out, though the
+    // account stays suspended until the long one's end.
     const rows = await actionsFor(u);
     expect(rows.map((r) => r.action)).toEqual(["user_suspend", "user_suspend"]);
-    expect(rows[1]!.action_expires_at!.getTime()).toBe(long);
+    expect(rows[0]!.action_expires_at!.getTime()).toBe(long);
+    const shortEnd = rows[1]!.action_expires_at!.getTime();
+    expect(shortEnd).toBeLessThan(long);
+    expect(shortEnd).toBeGreaterThanOrEqual(Date.now() + 24 * 3600_000 - 60_000);
+    expect(shortEnd).toBeLessThanOrEqual(Date.now() + 24 * 3600_000 + 5_000);
+  });
+
+  it("ruling B2: users.suspended_until stays the GREATEST end, and the notice's suspendedUntil is that effective end", async () => {
+    const u = await mkUser();
+    await apply({ ...base, userId: u, kind: "suspend", reason: "short", suspensionHours: 24 });
+    const longer = await apply({ ...base, userId: u, kind: "suspend", reason: "long", suspensionHours: 720 });
+    const effective = (await status(u)).suspended_until!.getTime();
+    // A LONGER suspension on top of a shorter one extends the bar to its own end…
+    const rows = await actionsFor(u);
+    expect(rows[1]!.action_expires_at!.getTime()).toBe(effective);
+    // …and a SHORTER one on top changes neither the bar nor what the notice says.
+    const shorter = await apply({ ...base, userId: u, kind: "suspend", reason: "short again", suspensionHours: 24 });
+    expect((await status(u)).suspended_until!.getTime()).toBe(effective);
+    expect(longer.kind === "applied" && longer.suspendedUntil?.getTime()).toBe(effective);
+    expect(shorter.kind === "applied" && shorter.suspendedUntil?.getTime()).toBe(effective);
+    expect((await actionsFor(u))[2]!.action_expires_at!.getTime()).toBeLessThan(effective);
   });
 
   it("ban: sets disabled_at and disabled_reason = 'ban'", async () => {

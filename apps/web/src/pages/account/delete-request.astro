@@ -1,0 +1,130 @@
+---
+/**
+ * `/account/delete-request?token=…` — #50 Q4's barred-user deletion path
+ * (plan B). Same token-page shape as ../reset-password.astro: the GET only
+ * PEEKS (`GET /account/delete-request/token`, never consuming — a mail
+ * scanner prefetching the link must not burn it), and only a POST
+ * (`POST /account/delete-request`) records the request, with explicit
+ * confirmation.
+ *
+ * *(Revised 2026-10-01 per PM ruling B and the legal-hold design (legal-hold
+ * spec §4, §4a).)* This records a REQUEST, not an immediate deletion: the
+ * account is anonymised after 30 days unless it is under a legal hold, and a
+ * banned account's email address stays reserved (blocked from new sign-ups)
+ * while the ban stands — see apps/api/src/routes/delete-request.ts's header
+ * for the full "how a barred user reaches deletion, not what deletion does"
+ * split.
+ *
+ * ⚠️ ONE `method: "POST"` CALL, GATED — same property as ../reset-password.astro
+ * and ../appeal.astro: it is the only mutating call in this file and it is
+ * unreachable on a GET.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { apiErrorCode, apiFetch, applyCookies } from "../../lib/api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+// Per-viewer, like reset-password.astro: this page's own render carries a
+// token-derived state belonging to one visitor. See src/lib/cache.ts.
+markPrivate(Astro);
+
+setPublicPageCsp(Astro);
+
+const tokenFromLink = Astro.url.searchParams.get("token") ?? "";
+
+let error: string | null = null;
+let recorded = false;
+let token = tokenFromLink;
+/** Set only when the TOKEN itself is bad (unknown/expired/used) — never for
+ * a merely-unchecked box, so that case still re-renders the form below. */
+let tokenKnownBad = false;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  token = String(form.get("token") ?? "");
+  // ⚠️ THE GATE (Review Focus 2 / the brief's pin): `confirm: true` is sent
+  // to the api ONLY when the checkbox was actually checked — never
+  // unconditionally. A form submitted with the box unchecked reports a
+  // local validation error and re-shows the form; it never reaches the api
+  // with `confirm: true` on the user's behalf.
+  const confirmed = form.get("confirm") === "on";
+
+  if (!confirmed) {
+    error = "Check the box to confirm before submitting.";
+  } else {
+    const response = await apiFetch("/account/delete-request", {
+      method: "POST",
+      body: { token, confirm: true },
+      // ⚠️ The BROWSER's Origin, forwarded verbatim — same reasoning as
+      // reset-password.astro/login.astro: no session exists for a barred
+      // user, so `checkOrigin` is this route's entire CSRF defense.
+      origin: Astro.request.headers.get("Origin") ?? "",
+    });
+    applyCookies(Astro.response.headers, response.setCookies);
+
+    if (response.status === 200) {
+      recorded = true;
+    } else if (apiErrorCode(response) === "INVALID_TOKEN") {
+      tokenKnownBad = true;
+      error = "This link is invalid, has expired, or has already been used.";
+    } else {
+      error = "Something went wrong. Please try again.";
+    }
+  }
+}
+
+// GET: peek only. A POST re-render does not re-peek — the branch above
+// already decided this request's outcome from the submitted token.
+if (Astro.request.method === "GET") {
+  if (token === "") {
+    tokenKnownBad = true;
+    error = "No link supplied.";
+  } else {
+    const peek = await apiFetch<{ ok: boolean }>(`/account/delete-request/token?token=${encodeURIComponent(token)}`);
+    if (peek.status !== 200) {
+      tokenKnownBad = true;
+      error = "This link is invalid, has expired, or has already been used.";
+    }
+  }
+}
+---
+
+<BaseLayout title="Request account deletion" description="Ask for your Thinker's Journal account to be deleted.">
+  <div class="wrap form-page">
+    <h1>Request account deletion</h1>
+
+    {recorded && <p id="recorded">Your deletion request has been recorded.</p>}
+
+    {!recorded && error !== null && <p id="error" role="alert">{error}</p>}
+
+    {
+      !recorded && !tokenKnownBad && (
+        <>
+          <p class="explainer">
+            This records your request. Your account is anonymised (your posts stay, credited to
+            a deleted user) after 30 days unless it is under a legal hold. If it is banned, your
+            email address stays blocked from new sign-ups while the ban stands, as our privacy
+            policy describes.
+          </p>
+          <form method="POST" class="form">
+            <input type="hidden" name="token" value={token} />
+            <label class="checkbox-row">
+              <input type="checkbox" name="confirm" required />
+              I understand, and I want my account deleted.
+            </label>
+            <button type="submit" class="btn btn-primary">Request deletion</button>
+          </form>
+        </>
+      )
+    }
+
+    <p><a class="link" href="/account/delete-request/resend">Request a new link</a></p>
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:520px}
+  .explainer{color:var(--muted);margin:0 0 20px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .checkbox-row{display:flex;flex-direction:row;align-items:center;gap:8px;color:var(--muted);font-size:14px}
+  .checkbox-row input{flex:0 0 auto}
+</style>

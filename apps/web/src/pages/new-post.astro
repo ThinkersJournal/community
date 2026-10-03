@@ -367,13 +367,18 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     {outcome === "unauthenticated" && <p id="session-expired">Your session has expired. Please log in again.</p>}
     {outcome === "error" && <p id="error">{message}</p>}
 
-    {/* ⚠️ NO APPEAL LINK YET — /appeal does not exist (spec §6). Tracked as issue #53,
-        which must close before any web route forwards Cf-Access-Jwt-Assertion to
-        the api (the 2b-iii admin UI), or before launch, whichever comes first. */}
     {hiddenAt && (
       <p id="hidden-pending-review" role="status">
         <strong>This post is hidden.</strong> It is not visible to others following a moderation
         review or a report about it.
+        {/* #113 plan B — only a MODERATOR decision is appealable; an
+            author-hidden post (hiddenReason === "author") gets no link at
+            all, matching the api: there is no moderation_actions row for it
+            for /appeals/for-post to find (see routes/appeals.ts's
+            handleAppealForPost). */}
+        {postId !== null && hiddenReason === "moderation" && (
+          <> <a class="link" href={`/appeal?post=${encodeURIComponent(postId)}`}>Appeal this decision</a></>
+        )}
       </p>
     )}
 

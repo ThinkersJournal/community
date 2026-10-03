@@ -169,6 +169,13 @@ const ALLOWLIST: readonly AllowEntry[] = [
     match: "SELECT 1 FROM comments WHERE id = $1 AND author_id = $2",
     why: "authorOwns — the comment-subject half of the same #61 author-ownership check above.",
   },
+  {
+    file: "appeals.ts",
+    match:
+      "SELECT p.hidden_at IS NOT NULL AS hidden FROM posts p JOIN users u ON u.id = p.author_id AND u.anonymised_at IS NULL WHERE p.id = $1 AND p.author_id = $2",
+    why:
+      "author-scoped ownership + visibility probe for the appeal link; returns no content",
+  },
 ];
 
 /**

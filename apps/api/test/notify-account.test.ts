@@ -50,3 +50,39 @@ describe("sendAccountActionNotice", () => {
     await expect(sendAccountActionNotice(env, "u@example.test", { kind: "warn", reason: "r" })).resolves.toBe(false);
   });
 });
+
+describe("#113 plan B — the appeal and delete-request links", () => {
+  const appealUrl = "https://community.thinkersjournal.com/appeal?token=a";
+  const deleteRequestUrl = "https://community.thinkersjournal.com/account/delete-request?token=d";
+
+  it("warn carries the appeal link only, even when a caller passes a deleteRequestUrl too", async () => {
+    // ⚠️ A deleteRequestUrl IS passed here, deliberately — the point of this
+    // test is that `kind !== "warn"` actually gates the rendering, not that
+    // the caller never supplies one. Without the url present, a bug that
+    // dropped the whole kind check would pass this test vacuously.
+    await sendAccountActionNotice(env, "u@example.test", { kind: "warn", reason: "r", appealUrl, deleteRequestUrl });
+    expect(String(sent[0]!.TextBody)).toContain(appealUrl);
+    expect(String(sent[0]!.TextBody)).toContain("within 30 days");
+    expect(String(sent[0]!.TextBody)).not.toContain("/account/delete-request");
+    expect(String(sent[0]!.TextBody)).not.toContain("You can also ask for your account to be deleted");
+  });
+
+  it("suspend and ban carry both links and say what a deletion request does", async () => {
+    for (const kind of ["suspend", "ban"] as const) {
+      sent = [];
+      await sendAccountActionNotice(env, "u@example.test", {
+        kind,
+        reason: "r",
+        suspendedUntil: kind === "suspend" ? new Date("2026-10-08T04:00:00.000Z") : undefined,
+        appealUrl,
+        deleteRequestUrl,
+      });
+      const text = String(sent[0]!.TextBody);
+      expect(text).toContain(appealUrl);
+      expect(text).toContain(deleteRequestUrl);
+      expect(text).toContain("You can also ask for your account to be deleted");
+      expect(text).toContain("unless it is under a legal hold");
+      expect(String(sent[0]!.HtmlBody)).toContain(`href="${deleteRequestUrl}"`);
+    }
+  });
+});

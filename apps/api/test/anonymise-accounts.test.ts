@@ -5,6 +5,7 @@ import worker from "../src";
 import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
+import { mintActionToken } from "../src/moderation/action-tokens";
 import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
 
 /**
@@ -804,5 +805,42 @@ describe("POST /__test/anonymise-accounts", () => {
     await waitOnExecutionContext(ctx);
 
     expect(response.status).toBe(404);
+  });
+});
+
+describe("anonymiseExpiredAccounts — B3: the scrub deletes the account's moderation action tokens", () => {
+  it("an anonymised account has no action tokens left; an unscrubbed account keeps its own", async () => {
+    // Both seeded INELIGIBLE, so no parallel file's reaper scrubs either before
+    // its tokens exist (mint refuses an anonymised account).
+    const doomed = await seedAccount({ eligible: false });
+    const control = await seedAccount({ eligible: false });
+    await ctxRun(async (c) => {
+      for (const userId of [doomed.id, control.id]) {
+        const { rows } = await c.query<{ id: string }>(
+          `INSERT INTO moderation_actions (actor_admin, action, subject_user_id, reason)
+           VALUES ('mod@example.test', 'user_ban', $1, 'anonymise-accounts.test') RETURNING id`,
+          [userId],
+        );
+        for (const purpose of ["appeal", "delete_request"] as const) {
+          expect(await mintActionToken(c, { actionId: rows[0]!.id, userId, purpose, ttlMs: 3600_000 })).not.toBeNull();
+        }
+      }
+    });
+    await makeEligible(doomed.id);
+
+    await runReaper();
+
+    const tokenCount = (userId: string) =>
+      ctxRun(async (c) => {
+        const { rows } = await c.query<{ n: string }>(
+          `SELECT count(*) AS n FROM moderation_action_tokens WHERE user_id = $1`,
+          [userId],
+        );
+        return Number(rows[0]!.n);
+      });
+    expect(await anonymisedAt(doomed.id)).not.toBeNull();
+    expect(await tokenCount(doomed.id)).toBe(0);
+    // CONTROL: the query counts tokens that exist.
+    expect(await tokenCount(control.id)).toBe(2);
   });
 });
