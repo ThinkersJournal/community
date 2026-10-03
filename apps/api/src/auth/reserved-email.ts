@@ -23,7 +23,7 @@
  * ⚠️ ROTATING THE KEY RELEASES EVERY HMAC RESERVATION: an old fingerprint never
  * matches a new key's. See docs/runbooks/deploy.md.
  *
- * ⚠️ FAIL CLOSED. A missing or empty key throws `ReservedEmailKeyMissingError`
+ * ⚠️ FAIL CLOSED. A missing, empty or whitespace-only key throws `ReservedEmailKeyMissingError`
  * from every function that needs it, never "not reserved": signup answers 503
  * and the reaper leaves a banned row unscrubbed (and retries it).
  */
@@ -32,20 +32,20 @@ import type { Client } from "pg";
 
 import { sha256Hex } from "./encoding";
 
-/** Thrown when `RESERVED_EMAIL_KEY` is missing or empty. Never caught as "not reserved". */
+/** Thrown when `RESERVED_EMAIL_KEY` is missing, empty or whitespace-only. Never caught as "not reserved". */
 export class ReservedEmailKeyMissingError extends Error {
   constructor() {
-    super("RESERVED_EMAIL_KEY is missing or empty: refusing to reserve or check a banned account's address without it");
+    super("RESERVED_EMAIL_KEY is missing, empty or whitespace-only: refusing to reserve or check a banned account's address without it");
     this.name = "ReservedEmailKeyMissingError";
   }
 }
 
 type KeyEnv = Pick<Env, "RESERVED_EMAIL_KEY">;
 
-/** True when the key is a non-empty string. */
+/** True when the key is a string with at least one non-whitespace character. */
 export function hasReservedEmailKey(env: KeyEnv): boolean {
   const key: unknown = env.RESERVED_EMAIL_KEY;
-  return typeof key === "string" && key.length > 0;
+  return typeof key === "string" && key.trim().length > 0;
 }
 
 /**

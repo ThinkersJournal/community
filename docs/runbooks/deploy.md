@@ -91,6 +91,10 @@ and only then for both Workers.
 
 ## Shipping a PR with an additive migration
 
+0. **Step 0 (one-time, before the first deploy containing `reserved_email_hmac`):**
+   set the `RESERVED_EMAIL_KEY` secret — see
+   [One-time secret: `RESERVED_EMAIL_KEY`](#one-time-secret-reserved_email_key-0023-before-that-deploy-ships) below.
+
 1. **Merge.** **Both Workers** carry the gate (per the dashboard change
    above), so the next build for **each** of `thinkersjournal-web` and
    `thinkersjournal-api` **fails at the gate** — this is expected, not a
@@ -128,6 +132,7 @@ and only then for both Workers.
    leave it in the shell's environment to begin with).
 
 3. **Retry the build** in the Cloudflare dashboard, **for both Workers**
+   (for the 0023 deploy: only after Step 0's `RESERVED_EMAIL_KEY` is set)
    (whichever of them failed at step 1 — ordinarily both, since both carry
    the gate). The gate now sees `{"applied":true}` and each build proceeds —
    the deploy ships.

@@ -284,7 +284,7 @@ AND NOT EXISTS (SELECT 1 FROM account_legal_holds h WHERE h.user_id = users.id A
   doesn't touch either column. No mail or authentication path reads it. The guarantee this design makes is
   therefore that **no mail or authentication path can reach a deleted account's address**, not that the address
   exists nowhere. A manual hold (T3) labels its log row with the handle, not the email, so it adds no new copy. The
-  privacy policy says this (plan Task 6, for attorney review).
+  privacy policy says this (best safe guesses, 2026-10-02).
 - **Privacy.** A plain SHA-256 of an email isn't anonymous: anyone holding the table can test a guessed address. That
   is why 0023 keys it: without `RESERVED_EMAIL_KEY`, which lives only as a Workers secret, a guessed address can't be
   tested against `reserved_email_hmac`. Someone holding both the table and the key still can. It's kept only for a banned

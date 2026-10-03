@@ -97,6 +97,7 @@ describe("reservedEmailHmac", () => {
 
   it.each([
     ["empty", ""],
+    ["whitespace-only", " \u0009\u000a "],
     ["missing", undefined],
   ])("fails closed when the key is %s: throws ReservedEmailKeyMissingError", async (_label, key) => {
     await expect(

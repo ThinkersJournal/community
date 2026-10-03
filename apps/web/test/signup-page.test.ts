@@ -77,6 +77,11 @@ describe("signup.astro", () => {
   // `message`, e.g. "That handle is reserved.") vs. plain zod bad-format
   // (no `message`). Only the reserved case should surface api-supplied copy;
   // bad-format must keep the generic fallback, never show nothing meaningful.
+  it("answers a 503 (SERVICE_UNAVAILABLE: the api's reserved-email key is missing) with a try-later message, not the generic input-blaming copy", () => {
+    expect(code).toContain("response.status === 503");
+    expect(code).toContain("Signup is temporarily unavailable. Please try again later.");
+  });
+
   it("surfaces the api's message verbatim on a 400 that carries one (reserved handle), and keeps the generic fallback for a 400 that doesn't (bad format)", () => {
     expect(code).toContain("response.status === 400 && response.data?.message");
     expect(code).toContain("message = response.data.message;");

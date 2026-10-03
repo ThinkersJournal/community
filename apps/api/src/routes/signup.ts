@@ -189,7 +189,7 @@ export async function handleSignup(
   // any row is written. isEmailReserved also throws without the key, so this
   // early answer is the clean form of a guard that can't be bypassed.
   if (!hasReservedEmailKey(env)) {
-    console.error("signup: RESERVED_EMAIL_KEY is missing or empty; refusing signup (503) rather than skip the reserved-email check");
+    console.error("signup: RESERVED_EMAIL_KEY is missing, empty or whitespace-only; refusing signup (503) rather than skip the reserved-email check");
     return errorResponse("SERVICE_UNAVAILABLE", 503);
   }
 

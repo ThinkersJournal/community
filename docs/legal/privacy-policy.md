@@ -35,7 +35,7 @@ This policy explains what we collect, why, who processes it, and your choices.
 **We deliberately minimize:**
 - Uploaded images are converted to WebP and **EXIF metadata is stripped**, so
   location and camera data embedded in your photos are removed before storage.
-- We do not knowingly collect data from children under 13 (see §7).
+- We do not knowingly collect data from children below the minimum age in §7.
 
 ## 2. Why we use it
 
@@ -106,7 +106,8 @@ later deleted, the notice and that captured title or excerpt are kept.
   is kept in that notice's own record, as described above.
 - **An account you delete is not erased.** After a 30-day grace period (during
   which you can cancel the deletion), we anonymise it: your email, password,
-  and profile details are scrubbed and your handle is released. Your posts and
+  and profile details are scrubbed and your handle is released for reuse on
+  the Service (the moderation log may still record it; see below). Your posts and
   comments remain hosted and displayed, attributed to a generic "deleted user"
   rather than your identity, so that conversations other people are part of
   are not broken. Reasonable backup and legal-compliance copies of the
@@ -128,8 +129,10 @@ later deleted, the notice and that captured title or excerpt are kept.
   legal record of moderation actions. Deleting an account does not remove
   from it the email address recorded at the time of any moderation decision
   about that account's content, or the email address recorded each time the
-  account's owner hid or unhid one of their own posts. The log is not used to
-  contact you.
+  account's owner hid or unhid one of their own posts. Nor does it remove the
+  account's handle as recorded at any moderation action on the account itself
+  (a warning, suspension, ban or termination, or a legal hold being imposed or
+  released). The log is not used to contact you.
 - **Security logs** are retained only as long as needed for abuse prevention.
 
 ## 6. Your choices and rights
@@ -149,8 +152,8 @@ to online services where you live is higher, to use the Service (Terms of
 Service §1). The Service is not directed to anyone below that age, and we do not
 knowingly collect their personal information. We do not ask for your date of
 birth and do not verify ages: signing up asks only for an email address, a
-handle and a password. If we learn that we have collected personal information
-from someone below that age, we will delete it.
+handle and a password. If we learn that an account belongs to someone below that
+age, we will delete the account and the personal information it holds.
 
 ## 8. Security
 

@@ -99,7 +99,12 @@ if (Astro.request.method === "POST") {
             ? "Too many attempts. Please wait and try again."
             : response.status === 403
               ? "Rejected (failed bot check)."
-              : "Signup failed. Check your email and password and try again.";
+              : response.status === 503
+                ? // SERVICE_UNAVAILABLE: the api refuses signup while a required
+                  // secret (RESERVED_EMAIL_KEY) is missing — an operator problem,
+                  // not the user's input, so don't blame their email/password.
+                  "Signup is temporarily unavailable. Please try again later."
+                : "Signup failed. Check your email and password and try again.";
     }
   }
 }
