@@ -143,7 +143,12 @@ export async function resolveAppeal(
     let content: DecisionResult | null = null;
     let subject: "post" | "comment" | null = null;
     if (input.grant) {
-      switch (ap.action) {
+      // An appeal's action is always one fileAppeal's isAppealable gate let
+      // through, so this cast is safe; it buys the `default` branch below an
+      // exhaustiveness check that fails to COMPILE when a new appealable
+      // action is added without a grant branch here.
+      const action = ap.action as AppealableAction;
+      switch (action) {
         case "content_keep_hidden":
         case "content_remove": {
           subject = ap.post_id !== null ? "post" : "comment";
@@ -234,6 +239,10 @@ export async function resolveAppeal(
             [ap.subject_user_id, ap.action_id],
           );
           break;
+        }
+        default: {
+          const unreachable: never = action;
+          throw new Error(`resolveAppeal: no grant branch for appealable action ${String(unreachable)}`);
         }
       }
     }

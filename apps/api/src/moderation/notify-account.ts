@@ -60,7 +60,7 @@ export async function sendAccountActionNotice(env: Env, to: string, notice: Acco
     const deleteRequestTextLine =
       notice.deleteRequestUrl === undefined || notice.kind === "warn"
         ? ""
-        : `\n\nYou can also ask for your account to be deleted: ${notice.deleteRequestUrl}. ${DELETE_REQUEST_SENTENCE_AFTER}`;
+        : `\nYou can also ask for your account to be deleted: ${notice.deleteRequestUrl}\n${DELETE_REQUEST_SENTENCE_AFTER}`;
     const deleteRequestHtmlLine =
       notice.deleteRequestUrl === undefined || notice.kind === "warn"
         ? ""

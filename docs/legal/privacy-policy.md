@@ -148,7 +148,9 @@ later deleted, the notice and that captured title or excerpt are kept.
   you for an appeal or a deletion request is a random token; we store only a
   cryptographic hash of it, never the token itself. Using it, or letting it
   expire, does not remove that record — it only stops the link working. We
-  delete it when the account it belongs to is anonymised.
+  delete it when the account it belongs to is anonymised. **Exception:** an
+  account that never verified its email is hard-deleted, not anonymised,
+  after 7 days, and its appeals and tokens are deleted along with it.
 - **Security logs** are retained only as long as needed for abuse prevention.
 
 ## 6. Your choices and rights

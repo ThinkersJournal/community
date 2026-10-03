@@ -63,7 +63,7 @@ if (Astro.request.method === "POST") {
     decision: decision === "grant" ? "grant" : "deny",
     reason: String(reason ?? ""),
   };
-  const res = await adminApiFetch<AdminAppealResolveResponse>(`/admin/appeals/${appealId}/resolve`, {
+  const res = await adminApiFetch<AdminAppealResolveResponse>(`/admin/appeals/${encodeURIComponent(String(appealId ?? ""))}/resolve`, {
     method: "POST",
     accessJwt,
     origin: Astro.request.headers.get("Origin") ?? "",
@@ -122,7 +122,7 @@ function targetHref(a: AdminAppealsResponse["appeals"][number]): string | null {
             return (
               <li class="appeal-item">
                 <p class="meta">
-                  {a.action.replace("_", " ")} · by {a.actionActor} ·
+                  {a.action.replaceAll("_", " ")} · by {a.actionActor} ·
                   {" "}appellant {a.appellantHandle !== null ? `@${a.appellantHandle}` : "(no profile)"}
                   {href !== null && (
                     <>

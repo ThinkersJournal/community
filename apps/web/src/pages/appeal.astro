@@ -135,6 +135,14 @@ if (Astro.request.method === "GET") {
 }
 
 const alreadyAppealed = target !== null && target.alreadyAppealed;
+// GET-time check for the signed-in (per-post) path: describeAppealTarget does
+// not itself check the window, so an author's own hidden post can still
+// return a target whose window has already closed (the token path never
+// reaches this: its token shares the window's TTL and is already invalid by
+// then). Checked on every render so a stale POST re-render does not show the
+// form either.
+const windowClosed = target !== null && new Date(target.windowClosesAt).getTime() <= Date.now();
+const windowClosesAtText = target !== null ? new Date(target.windowClosesAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : "";
 const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
 ---
 
@@ -161,15 +169,21 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     }
 
     {
-      !filed && error === null && !awaitingReview && !alreadyAppealed && target !== null && (
+      !filed && error === null && !awaitingReview && !alreadyAppealed && windowClosed && (
+        <p id="window-closed">The 30-day window to appeal this decision has closed.</p>
+      )
+    }
+
+    {
+      !filed && error === null && !awaitingReview && !alreadyAppealed && !windowClosed && target !== null && (
         <>
           <p class="target-summary">
-            <strong>Action:</strong> {target.action.replace("_", " ")}
+            <strong>Action:</strong> {target.action.replaceAll("_", " ")}
           </p>
           <p class="target-summary">
             <strong>Reason given:</strong> {target.reason}
           </p>
-          <p class="target-summary">You can appeal until {target.windowClosesAt}.</p>
+          <p class="target-summary">You can appeal until {windowClosesAtText}.</p>
 
           <form method="POST" class="form">
             <input type="hidden" name="mode" value={signedIn ? "signedIn" : "token"} />
