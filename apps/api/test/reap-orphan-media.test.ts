@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
-import { reapOrphanMedia } from "../src/media/reap-orphan-media";
+import { imposeLegalHold } from "../src/media/legal-hold";
+import { isObjectStillNeeded, reapOrphanMedia } from "../src/media/reap-orphan-media";
 import { createVerifiedActor, deleteCreatedUsers } from "./actor";
 
 /**
@@ -80,15 +81,87 @@ async function mediaExists(id: string): Promise<boolean> {
   return ctxRun(async (c) => (await c.query(`SELECT 1 FROM media WHERE id = $1`, [id])).rowCount === 1);
 }
 
+/** Every key this suite put under a legal hold, for `afterEach` cleanup. */
+const heldKeys: string[] = [];
+
 /** Residue cleanup — the user cascade clears any surviving media/post rows
  * (both FK ON DELETE CASCADE to `users`); R2 objects do NOT cascade from a DB
  * delete, so they are cleared explicitly. */
 afterEach(async () => {
   await deleteCreatedUsers();
+  // media_legal_holds has no FK to users, so a hold row does not cascade.
+  if (heldKeys.length > 0) {
+    await ctxRun((c) => c.query(`DELETE FROM media_legal_holds WHERE r2_key = ANY($1::text[])`, [heldKeys]));
+  }
+  heldKeys.length = 0;
   for (const key of createdKeys) {
     await env.MEDIA.delete(key);
   }
   createdKeys.length = 0;
+});
+
+/** Impose a hold with the same writer moderation's hold path uses
+ * (src/media/visibility-hook.ts -> legal-hold.ts's `imposeLegalHold`). */
+async function holdKey(key: string): Promise<void> {
+  heldKeys.push(key);
+  await ctxRun((c) =>
+    imposeLegalHold(c, {
+      r2Key: key,
+      imposedBy: "mod-a@example.test",
+      category: "csam",
+      moderationActionId: crypto.randomUUID(),
+    }),
+  );
+}
+
+/**
+ * #61 gap — a legally held upload is evidence: its `media` row records who
+ * uploaded it and when, and its object may still sit in MEDIA while the
+ * hold's move is pending. The reaper must keep both.
+ */
+describe("reapOrphanMedia and LEGAL HOLDS (#61)", () => {
+  it("keeps a held orphan's row and object, and reaps an unheld orphan in the same run", async () => {
+    const actor = await createVerifiedActor();
+    const held = await seedMedia(actor.userId, { ageHours: 25 });
+    const unheld = await seedMedia(actor.userId, { ageHours: 25 }); // CONTROL
+    await holdKey(held.key);
+
+    const ctx = createExecutionContext();
+    await reapOrphanMedia(env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    // CONTROL — the run happened, and an unheld orphan of the same age went.
+    expect(await mediaExists(unheld.id)).toBe(false);
+    expect(await env.MEDIA.get(unheld.key)).toBeNull();
+    // RED before the fix: the held row is deleted by the orphan selection.
+    expect(await mediaExists(held.id)).toBe(true);
+    // RED before the fix: with its row gone nothing holds the key, so the
+    // object is deleted too.
+    expect(await env.MEDIA.get(held.key)).not.toBeNull();
+  });
+
+  /**
+   * The per-key re-check before the R2 delete. Through `reapOrphanMedia` its
+   * hold arm only fires for a hold imposed between the DELETE and the R2
+   * delete (the selection already skips held rows), which a test cannot
+   * interleave — so the predicate is pinned directly.
+   */
+  it("isObjectStillNeeded: a held key with NO media row is still needed", async () => {
+    const key = `media/post/${randomSha256Hex()}.webp`;
+    const unheldKey = `media/post/${randomSha256Hex()}.webp`; // CONTROL
+    await holdKey(key);
+
+    // RED with the hold arm removed: false.
+    expect(await ctxRun((c) => isObjectStillNeeded(c, key))).toBe(true);
+    // CONTROL — no row, no hold: free to delete.
+    expect(await ctxRun((c) => isObjectStillNeeded(c, unheldKey))).toBe(false);
+  });
+
+  it("isObjectStillNeeded: an unheld key that a media row holds is still needed (the existing arm)", async () => {
+    const actor = await createVerifiedActor();
+    const { key } = await seedMedia(actor.userId, { ageHours: 1 });
+    expect(await ctxRun((c) => isObjectStillNeeded(c, key))).toBe(true);
+  });
 });
 
 describe("reapOrphanMedia", () => {
