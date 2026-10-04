@@ -4,6 +4,9 @@
 design `2026-09-06-m4-moderation-queue-design.md` §1 points to as "`2026-09-06-csam-reporting-pipeline-design.md` when written".
 Revision 1 applies CireSnave's R1 ruling (quarantine and review, no bar on an unreviewed match) and his report-timing
 ruling ("Option B"), and brings every code reference up to `origin/main` at `9a76b6f` (0.1.4, last migration `0025`).
+Revision 2 (same day) answers an audit of revision 1: only matched keys are quarantined, a CLEAR restores and releases
+only what the case itself hid and held, classifier cases take the account hold at CONFIRM, and three alarm
+conditions and a re-upload question were added.
 **Author:** Community controller agent, 2026-10-01; revised 2026-10-04.
 **Research:** `2026-10-01-ncmec-research-notes.md`, with every claim sourced and marked VERIFIED or UNVERIFIED.
 §0 adds two facts read from NCMEC's documentation page on 2026-10-04.
@@ -78,6 +81,11 @@ later; every uploader of a matched image is reported, and on CONFIRM barred, but
   our own scanning the answer, so Cloudflare is no longer assumed to be the only detector.
 - The XML client must cap response bytes **before** parsing (`2026-09-08-xml-parser-decision.md` §5).
 
+⚠️ **Precondition for the PM:** both two-person rules here (clearing a known-hash case, §7.2, and fetching held
+media at all, `media-restricted.ts:116-122`) need **at least two Access admins**. With only one, a known-hash false
+positive stays quarantined forever, and no file can be viewed, so no case can be confirmed or cleared (§3.5 step 2).
+Two admins must exist before launch.
+
 ---
 
 ## 1. What success looks like
@@ -100,18 +108,18 @@ Self-scan classifier (separate doc, future) ────────┤   classi
 Moderator sees CSAM in the review queue ────────────┤   moderator sighting
                                                     ▼
                          INTAKE (one Postgres transaction)
-   quarantine: csam media hold on each key · hide every post embedding it · snapshots ·
-   csam account hold on each uploader (access untouched) · csam_cases row (priority, alarm_next_at=now) ·
+   quarantine: csam media hold on each MATCHED key · hide every post/comment embedding it · snapshots ·
+   known-hash: csam account hold on each uploader (access untouched) · csam_cases row (alarm_next_at=now) ·
    ncmec_reports rows 'pending' — known-hash only, CSAM_REPORT_AT_MATCH
    [moderator sighting only: the CONFIRM transaction runs here too]
                                                     │ commit
-          after commit: media move to MEDIA_RESTRICTED · cache purge · URGENT email (best effort)
+   after commit: matched keys → MEDIA_RESTRICTED · content purge (no legalHold) · URGENT email (best effort)
                                                     ▼
         */2 cron: NCMEC DRAIN (submit → upload → fileinfo → finish) · CASE ALARMS (URGENT every 4 h)
                                                     ▼
                          REVIEW (a human, target 24 h — a proposal)
              CONFIRM: terminate each uploader · queue any report not yet queued · keep holds
-             CLEAR:   lift the quarantine (evidence copy kept) · withdraw an unfiled report · audit
+             CLEAR:   lift the case's own holds (evidence copy kept) · withdraw an unfiled report · audit
 ```
 
 It's an outbox drained by the existing `*/2 * * * *` cron (`apps/api/src/index.ts:90`), the same shape as the
@@ -141,25 +149,34 @@ differ only in the report timing and the alarm cadence.
 - **(b) Self-scan.** The separate scanning design calls the same intake function, `runIntake`, with
   `source = 'self_scan'`, `kind = 'known_hash'` for a hash-list match or `kind = 'classifier'` for a classifier
   flag, and a system actor (`system:self-scan`). Nothing in this design depends on how the scanner works.
-- **(c) Human-spotted.** Admin route `POST /admin/csam/cases`, body `{ subject: "post", subjectId }`, reached from a
-  "Report as CSAM" control on the review queue and the admin account page. Its keys are the media the post embeds,
-  found with the shared helper (§3.2).
+- **(c) Human-spotted.** Admin route `POST /admin/csam/cases`, body `{ subject: "post" | "comment", subjectId }`,
+  reached from a "Report as CSAM" control on the review queue and the admin account page. Its keys are the media the
+  post or comment embeds (`mediaKeysReferencedBy`, `reachability.ts:47-60`).
 - **(v2, later, separate PR) Email Worker** for (a). It's built only after one real Cloudflare notification email
   has been captured, since the format is unverified.
 
-`viewed_by_esp` (NCMEC's `fileViewedByEsp`) is recorded **per report file, when the report is queued**: `false` for
-a report queued at match (nobody has viewed it), `true` for a report queued at a CONFIRM whose reviewer revealed the
-file (§7), and `true` for a moderator sighting.
+`viewed_by_esp` (NCMEC's `fileViewedByEsp`: "the reporting company viewed the entire contents of the file") is
+fixed **per report file, when the report is queued**, from evidence of a whole-file view, never from a button press:
+- `true` when the restricted route has **logged a full fetch** of that key under a two-person grant: a
+  `moderation_actions` row with `action = 'media_access'` and `subject_label = <r2_key>`, which
+  `media-restricted.ts:126-133` writes immediately before it streams the object; or when a moderator **attested**
+  seeing it in a sighting (§3.1 c, `csam_case_files.seen_by`);
+- `false` otherwise, which includes every report queued at match.
+
+`revealed_at` (§7) records only that a reviewer pressed Reveal; it never sets `viewed_by_esp`.
 
 ### 3.2 Who is affected, and the shared key helper
 
 For each matched key:
 - **uploaders**: every `media.owner_id` with that `r2_key`. Media is content-addressed, so several users can hold
   the same object (R3).
-- **embedding content**: every post whose `markdown_source` references the key. Comments carry no media
-  (`reachability.ts:55` scans posts' markdown; comments embed none).
+- **embedding content**: every **post** whose `markdown_source` and every **comment** whose `body_markdown`
+  references the key. Comments do carry media: `reachability.ts:36-39` and `:52-55` treat a comment's
+  `body_markdown` exactly like a post's source, and comments render images.
 
-Embedding content is quarantined. Only **uploaders** are reported and, on CONFIRM, barred (R3).
+**Policy for embedding content:** every embedding post **and comment** is quarantined the same way (snapshot,
+`keep_hidden`, a case target, restored by a CLEAR). Only **uploaders** are reported and, on CONFIRM, barred (R3); an
+author who only embeds someone else's upload is neither reported nor barred.
 
 **Prerequisite (the plan's first task): one media-key helper.** Copies of the `media/post/<sha256>.webp` SQL
 pattern at `9a76b6f`:
@@ -168,75 +185,92 @@ pattern at `9a76b6f`:
 - `reachability.ts:16`'s private `MEDIA_KEY_REGEX_SQL`;
 - `reap-orphan-media.ts:71` and `:77`'s two inline literals (posts, and `moderation_snapshots` since #126).
 
-All of them move onto the one export, and the CSAM code uses only that export, in both directions: key → posts,
-and post → keys. Input parsing for (a): each line is either a bare 64-hex sha256 or any URL/path whose path ends in
-`media/post/<sha256>.webp`. The domain is not checked.
+All of them move onto the one export, and the CSAM code uses only that export, in both directions: key → posts and
+comments, and post → keys. Input parsing for (a): each line is either a bare 64-hex sha256 or any URL/path whose path
+ends in `media/post/<sha256>.webp`. The domain is not checked.
 
 ### 3.3 The intake transaction (quarantine)
 
 **New shared primitive (the plan's second task):** split plan A's `applyAccountAction`
 (`apps/api/src/moderation/account-actions.ts:66`) into a transaction-neutral `applyAccountActionInTx(c, input)`
 plus a wrapper, **exactly as** plan B split `applyDecisionInTx` (`decide.ts:90`) out of `applyDecision`
-(`decide.ts:181`). Intake no longer calls it (R1), but CONFIRM (§3.5) and a moderator sighting do.
+(`decide.ts:181`). CONFIRM (§3.5) calls it, and so would intake's bar branch if `CSAM_BAR_UNREVIEWED_MATCH` were
+ever true (§3.4).
 
 **New `moderation_actions` kinds:** `csam_hold`, `csam_review` and `csam_clear_release` (a migration extends the
 action CHECK; the latest list is `0022_account_legal_holds.sql:70`). Each case writes exactly one `csam_hold`.
-Every legal hold and every `csam_cases` row references it.
+Every legal hold the case imposes and every `csam_cases` row references it.
 
 **Sequence:**
 
-0. **Resolve, read-only, before the transaction:** the keys minus any already **suppressed** (§3.6), then their
-   uploaders and embedding posts. (No epoch bump: nobody is barred at match.)
+0. **Resolve, read-only, before the transaction:** each key's disposition (§3.6), then the uploaders and the
+   embedding posts and comments of the keys that open a case.
 1. Open the transaction (`BEGIN_BOUNDED_TX`). Take `pg_advisory_xact_lock(<CSAM_INTAKE lock id>)`. Intake is
    low-volume, so serialising every intake is cheap and closes every intake-vs-intake race.
-2. **Idempotence / suppression:** inside the lock, drop every suppressed key (§3.6). If none remain, `ROLLBACK` and
-   return the existing case(s). Nothing is re-filed, and nothing re-alarms.
-3. Re-resolve uploaders and embedding posts for the remaining keys, inside the transaction. This is the
-   authoritative set.
+2. **Disposition, inside the lock (§3.6):** drop every `suppress`ed key; for a sighting, `attach` keys join their
+   open case (no new case row). If nothing remains to open, apply the attachments, COMMIT, and return the existing
+   case(s). Nothing is re-filed, and nothing re-alarms.
+3. Re-resolve uploaders and embedding content for the remaining keys, inside the transaction. This is the
+   authoritative set. A digest with **no `media` row** opens no case: it is recorded in `csam_unmatched_digests`,
+   which alarms (§6 condition 7), because its evidence may already be gone.
 4. Write the `csam_hold` action row (`actor_admin` = the moderator or the system actor; `subject_user_id` = the
    first uploader, or null; `reason` = fixed internal text naming the case), then the `csam_cases` row
-   (`source`, `kind`, `priority`, `alarm_next_at = now()`).
-5. **Quarantine the media.** For each remaining key: `imposeLegalHold(c, { r2Key, category: "csam", imposedBy,
-   moderationActionId: <the csam_hold id> })` (`legal-hold.ts:19`). This is the existing #61 restricted path, not
-   a new one: a held key is served **only** by `GET /media/restricted/:sha256` to an Access admin holding an
-   approved two-person grant (`media_access_requests`; `media-restricted.ts:81-135`), and every other caller gets a
-   404. The hold also makes `applyMediaVisibilityChange` skip any later public move of that key
-   (`visibility-hook.ts:56-57`).
-6. **Quarantine the content.** For each embedding post: write a `moderation_snapshots` row (#126's table;
-   `INSERT (post_id, author_id, title, body_markdown)`, the shape `posts.ts:515` uses), then call
-   `applyDecisionInTx(c, { subject: "post", subjectId, decision: "keep_hidden", reason: <fixed text>, actorAdmin })`.
+   (`source`, `kind`, `priority`, `alarm_next_at = now()`; a sighting's case is `priority = 'decided'` and gets no
+   alarm, because it is confirmed in this transaction).
+5. **Quarantine the matched media, and only that.** For each remaining key: `imposeLegalHold(c, { r2Key, category:
+   "csam", imposedBy, moderationActionId: <the csam_hold id> })` (`legal-hold.ts:19`). This is the existing #61
+   restricted path, not a new one: a held key is served **only** by `GET /media/restricted/:sha256` to an Access
+   admin holding an approved two-person grant (`media_access_requests`; `media-restricted.ts:81-135`), and every
+   other caller gets a 404. If the key already had a hold (a `dmca` or `other` one), the insert is a no-op
+   (`ON CONFLICT (r2_key) DO NOTHING`, `legal-hold.ts:31`): the key is already restricted, and that hold is not the
+   case's to release (§7.2).
+6. **Quarantine the content.** For each embedding post or comment, in id order: lock it (`SELECT … FOR UPDATE`;
+   gone → skip it), write a `moderation_snapshots` row (posts: `(post_id, author_id, title, body_markdown)`, the
+   shape `posts.ts:515` uses; comments: `(comment_id, author_id, body_markdown)`, `comments.ts:292`), then call
+   `applyDecisionInTx(c, { subject, subjectId, decision: "keep_hidden", reason: <fixed text>, actorAdmin })`. A
+   `null` result (deleted between the lock and the update) is skipped, with nothing recorded for it. Record a
+   `csam_case_targets` row **only when `result.wasHidden === false`**: content that was already hidden before the
+   match was hidden for another reason, and a CLEAR must not un-hide it.
    `keep_hidden`, not `remove`: R1 says not to act as if the determination had been made, and both set `hidden_at`
    (`decide.ts:76-80`). **No author notice** (nothing is minted or sent from intake).
-   ⚠️ `applyDecisionInTx` also resolves every confirmed open DSA notice on the post (`decide.ts:144`), and
+   ⚠️ `applyDecisionInTx` also resolves every confirmed open DSA notice on the content (`decide.ts:144`), and
    `afterContentDecision` emails those **reporters** the `reason` verbatim (`after-content-decision.ts:59-64`). The
    fixed `reason` is therefore reporter-safe text ("Hidden pending a child-safety review"), and never names a hash,
    a case or the uploader.
-7. *(Removed by R1: no uploader is barred at match.)*
-7a. For **every** uploader in step 3's set, in id order (lock order): `imposeAccountHoldInTx(c, { userId, category:
-    "csam", imposedBy, reason: <case text>, moderationActionId: holdActionId })` (`account-holds.ts:98`). **A hold
-    blocks deletion, not access** (`anonymise-accounts.ts:107,226` and `reap-unverified.ts:69` skip held users;
-    nothing on the login or session path reads `account_legal_holds`). **It is imposed at match, not at
-    confirmation**, because under "Option B" a known-hash match is reported at once, and §2258A(h) then asks us
-    to preserve the reported person's data for a year; a user who is quietly deleting their account between the
-    match and the review would otherwise take the report's subject data with them. It costs a false-positive
-    user nothing they can see. ⚠️ A `csam` account hold can never be released by app code
-    (`releaseAccountHold` refuses it, `account-holds.ts:162`); see §7.3 for what that means after a CLEAR.
-8. `INSERT csam_case_files` (case id, key, sha256, kind). **If `kind = 'known_hash'` and `CSAM_REPORT_AT_MATCH`**:
-   for each uploader, `INSERT ncmec_reports` (`pending`, or `awaiting_credentials` per §4.4) plus one
-   `ncmec_report_files` row (`viewed_by_esp = false`) for each of the case's files that uploader's own `media` row
-   holds (R3). For `classifier`, nothing is queued, under either constant value.
+7. **Bar branch:** for each uploader for whom `barsAtMatch(kind, CSAM_BAR_UNREVIEWED_MATCH)` is true,
+   `applyAccountActionInTx(c, { kind: "terminate", … })`. `barsAtMatch` is a pure helper: true only for
+   `known_hash` **and** a true constant. With R1's `false` it is never true, so no machine detection bars anyone;
+   the branch exists so the constant is read in exactly one place and both values are tested.
+7a. **Account hold, `known_hash` only:** for every uploader in step 3's set, in id order (lock order):
+    `imposeAccountHoldInTx(c, { userId, category: "csam", imposedBy, reason: <case text>, moderationActionId:
+    holdActionId })` (`account-holds.ts:49`). **A hold blocks deletion, not access** (`anonymise-accounts.ts:107,226`
+    and `reap-unverified.ts:69` skip held users; nothing on the login or session path reads `account_legal_holds`).
+    It is imposed **at match for a known-hash case**, because under "Option B" that case is reported at once; a
+    user quietly deleting their account between the match and the review would otherwise take the report's subject
+    data with them. ⚠️ **Legal uncertainty** (no attorney): this design reads §2258A(h)(2)'s "data … that may
+    provide context" as reaching the reported person's account record; that reading is a best safe guess.
+    A **classifier** case takes **no** account hold at match: it is not reported, it is the newborn-photo kind
+    CireSnave named, and a `csam` account hold can never be released by app code (`releaseAccountHold` refuses it,
+    `account-holds.ts:162`). It takes the hold at CONFIRM (§3.5). See §7.3 for what a hold means after a CLEAR.
+8. `INSERT csam_case_files` (case id, key, sha256, kind). **If `queuesReportAtMatch(kind, CSAM_REPORT_AT_MATCH)`**
+   (true only for `known_hash` with the constant true): for each uploader, `INSERT ncmec_reports` (`pending`, or
+   `awaiting_credentials` per §4.4) plus one `ncmec_report_files` row (`viewed_by_esp` per §3.1, so `false`) for
+   each of the case's files that uploader's own `media` row holds (R3). For `classifier`, nothing is queued, under
+   either constant value.
+8a. **A moderator sighting** calls `confirmCaseInTx` (§3.5) here, inside this transaction, with the files marked
+    `seen_by`/`seen_at` and `revealed_at` set, because the moderator saw it.
 9. COMMIT.
 
 **After commit**, outside the transaction:
-- for each hidden post, `afterContentDecision(env, ctx, { subject: "post", decision: "keep_hidden", reason, result,
-  legalHold: { category: "csam", imposedBy } })`. Its real signature takes `legalHold: { category, imposedBy }`
-  (`after-content-decision.ts:26`) and fills `moderationActionId` from the decision's own `result.actionId`
-  (`:50-53`). ⚠️ **The `legalHold` object MUST be passed.** `applyMediaVisibilityChange` enqueues the move
-  unconditionally only on that branch (`visibility-hook.ts:42-53`). Without it, it sees the key already held,
-  `continue`s, and the image **stays in the public bucket** (AC-C1). Its second `imposeLegalHold` is a no-op
-  (`ON CONFLICT (r2_key) DO NOTHING`, `legal-hold.ts:31`), so the hold keeps step 5's `csam_hold` id.
-- for each key **no post embeds** (an orphan upload): `enqueueAndAttemptMove(env, ctx, r2Key, "to_restricted")`
-  (`moves.ts:41`), the call `visibility-hook.ts:52` makes on its legal-hold branch.
+- for each matched key, `enqueueAndAttemptMove(env, ctx, r2Key, "to_restricted")` (`moves.ts:41`), the same call
+  `visibility-hook.ts:52` makes on its legal-hold branch. This is what moves the matched image, whether or not any
+  post embeds it.
+- for each content item step 6 hid, `afterContentDecision(env, ctx, { subject, decision: "keep_hidden", reason,
+  result })` **without `legalHold`**. ⚠️ Passing `legalHold` would make `applyMediaVisibilityChange` impose a
+  `csam` hold and a `to_restricted` move on **every** key the post or comment embeds (`visibility-hook.ts:34-53`),
+  innocent co-embedded images included, and a CLEAR releases only the case's keys, so those would stay restricted
+  for good. Without it, the hook skips each matched key because it is already held (`:56-57`), and every other key
+  takes the normal reachability path (`:59-63`): it moves only if no visible content still uses it.
 - send the case's first **URGENT** alarm email (§6.2), best effort. The case row's `alarm_next_at = now()` is the
   durable queue: if this send fails or the Worker dies, the next drain tick sends it.
 
@@ -261,70 +295,88 @@ export const CSAM_BAR_UNREVIEWED_MATCH = false;
 export const CSAM_REPORT_AT_MATCH = true;
 ```
 
-- `CSAM_BAR_UNREVIEWED_MATCH = false`: no machine detection bars anyone. Bars happen only in CONFIRM (§3.5). The
-  constant stays, at `false`, so the code that would read it is a single, reviewed place; with it `false`, intake
-  has no bar branch at all.
-- `CSAM_REPORT_AT_MATCH = true`: applies to `kind = 'known_hash'` only. With it `false` (the alternative CireSnave
-  did not choose), a known-hash report would be queued in CONFIRM instead, exactly like a classifier report. Both
-  branches are built and tested, so a future change is one reviewed line.
-- **The implementation PR does not merge until both constants equal CireSnave's quoted words** (AC-C6).
+Each constant is read through one pure helper, which intake calls:
+- `barsAtMatch(kind, CSAM_BAR_UNREVIEWED_MATCH)`: true only for `known_hash` with the constant true. With R1's
+  `false`, no machine detection bars anyone; bars happen in CONFIRM (§3.5).
+- `queuesReportAtMatch(kind, CSAM_REPORT_AT_MATCH)`: true only for `known_hash` with the constant true. With it
+  `false` (the alternative CireSnave did not choose), a known-hash report would be queued in CONFIRM, like a
+  classifier report. A classifier flag is false under both values.
+
+Both values of **both** constants are tested, through the helpers and through an intake run with the value
+overridden by a test-only hook, so a future change is one reviewed line. **The implementation PR does not merge
+until both constants equal CireSnave's quoted words** (AC-C6).
 
 ### 3.5 CONFIRM — "actual knowledge"
 
-A moderator's CONFIRM runs **one transaction**:
-1. lock the case row (`FOR UPDATE`); refuse if already decided;
-2. require every case file to have been **revealed** by the reviewer (`csam_case_files.revealed_at`, §7): a
-   decision on a file nobody looked at is not a review;
+`confirmCaseInTx(c, { caseId, statement, actorAdmin, sighting? })` is transaction-neutral, like
+`applyDecisionInTx`. The CONFIRM route wraps it in its own transaction; a moderator sighting calls it inside
+intake's (§3.3 step 8a). It:
+1. locks the case row (`FOR UPDATE`) and refuses one already decided;
+2. requires every case file to have a **logged full fetch** since the case opened (the `media_access` row of §3.1)
+   or an attested sighting (`seen_by`): a decision on a file nobody looked at is not a review;
 3. for each uploader: `applyAccountActionInTx(c, { kind: "terminate", … })` (plan A's terminate,
    `account-actions.ts:63`: `disabled_at = COALESCE(u.disabled_at, now())`, `disabled_reason = 'terminate'`, and
    `already_disabled` never applies to a terminate, `:82`). **A terminate is never appealable**
    (`routes/appeals.ts:54-60`: a `user_terminate` action has no appeal target; `moderation/appeals.ts:197-202`: a
    ban appeal never lifts a `terminate`);
-4. for each uploader **with no report already queued for this case**, queue one (`pending` or
-   `awaiting_credentials`; files with `viewed_by_esp = true`). Under "Option B" a known-hash case already has its
-   reports, so this queues only classifier reports;
-5. keep every hold (media and account); write the `csam_review` action and set `review_outcome = 'confirmed'`.
+4. for each uploader, `imposeAccountHoldInTx` (`csam`), which is a no-op for a known-hash case that took it at match;
+5. for each uploader **with no report already queued for this case**, queues one (`pending` or
+   `awaiting_credentials`, `queued_by = 'confirm'`, `viewed_by_esp` per §3.1). Under "Option B" a known-hash case
+   already has its reports, so this queues only classifier and sighting reports;
+6. keeps every media hold; writes the `csam_review` action and sets `review_outcome = 'confirmed'`,
+   `priority = 'decided'`, `alarm_next_at = NULL`.
 
 After commit: the epoch bump before **and** after the transaction for each terminated uploader (plan A's rule,
 `account-actions.ts:8-11`), and the alarm stops for this case.
-
-A **moderator sighting** (§3.1 c) runs intake and this CONFIRM in the **same** transaction, with the opening
-moderator as the reviewer and the files `viewed_by_esp = true`: the person reporting it saw it.
 
 **When we have "actual knowledge" — the reading this design takes.**
 - Under R1, a moderator's CONFIRMATION is treated as the point of "actual knowledge" for 18 U.S.C. §2258A(a)
   ("as soon as reasonably possible after obtaining actual knowledge"). Every report not already queued is queued
   **in the CONFIRM transaction**, so the duty is met within one drain tick of the decision.
 - For **known-hash** matches, CireSnave chose to report **at the match** anyway ("Option B"): reporting is not
-  banning, and NCMEC told him a report on a hash match is acceptable. That makes the question below moot for
-  known-hash matches, but not for classifier flags, which are reported only on CONFIRM.
-- ⚠️ **Legal uncertainty:** whether a known-hash match is itself "actual knowledge" is **unsettled**. Reporting
-  known-hash matches at match time is the safe side of that question. A classifier flag is plainly not actual
-  knowledge on its own; this design treats it as a reason to look.
+  banning, and NCMEC told him a report on a hash match is acceptable.
+- ⚠️ **Legal uncertainty** (no attorney): whether a known-hash match is itself "actual knowledge" is **unsettled**.
+  Reporting known-hash matches at match time is the safe side of that question.
+- ⚠️ **Legal uncertainty** (no attorney): this design reads a **classifier** flag as **not** actual knowledge on
+  its own, only a reason to look. That is a best safe guess, not a settled point; if it is wrong, the 24 h review
+  target (§6.2) is what bounds the delay.
 
-### 3.6 Suppression — re-detecting a decided file
+### 3.6 Disposition — re-detecting a file that already has a case
 
-`csam_case_files` is unique on `(r2_key, kind)`. At intake a key is **suppressed**, and files nothing new, when:
-- it has a case that is still **undecided** or was **confirmed**, of any kind (it is already quarantined); or
-- it was **cleared** in a case of the **same or a stronger** kind (`known_hash` > `classifier`).
+`csam_case_files` has a **partial** unique index: at most one **live** (not cleared) case file per `r2_key`. A
+CLEAR sets `cleared_at` on its files, which frees the key for a later case. At intake each key gets one disposition
+(the pure helper `intakeDisposition`):
+
+| Existing case for the key | Machine detection (`known_hash`, `classifier`) | Moderator sighting |
+|---|---|---|
+| none | open a case | open a case (confirmed in the same transaction) |
+| undecided | suppress | **attach**: record the sighting on the open case's file (`seen_by`, `seen_at`, `revealed_at`), raise its `priority` to `urgent`, and leave the decision to the CONFIRM route |
+| confirmed | suppress | suppress (already confirmed) |
+| cleared, same or stronger kind (`known_hash` > `classifier`) | suppress | open a **new** case |
+| cleared, weaker kind | open a **new** case | open a **new** case |
 
 So a file a moderator cleared does not re-alarm when Cloudflare's next daily email, or the next scan, names it
-again; the intake answers `already_cased` naming the cleared case, and the moderator sees that outcome. A file
-cleared as a **classifier** flag that later turns up on a **known-hash list** opens a new case, because the new
-signal is stronger. A moderator who wants to re-open a cleared file uses the "Report as CSAM" control (§3.1 c),
-which is never suppressed.
+again; the intake answers `already_cased` naming the cleared case. A file cleared as a **classifier** flag that
+later turns up on a **known-hash list** opens a new case, because the new signal is stronger. A moderator's own
+sighting of a cleared file always opens a new case: it is a human overriding an earlier clear.
 
 ### 3.7 Re-upload of a quarantined file
 
 ⚠️ **Existing gap, found while revising (`apps/api/src/routes/media.ts:192-200`):** `POST /media` re-`put`s the
 content-addressed object into the **public** `MEDIA` bucket unconditionally ("Unconditional put: the key IS the
-content hash"). Re-uploading the identical file would therefore put a held object back at its public URL. The
-earlier design barred the uploader at match, which hid this; under R1 the uploader stays active, so it must close.
+content hash"). **Any** user who uploads the same bytes therefore puts a held object back at its public URL. That
+was true before this design and is true of every hold (`dmca` and `other` too); it is not an artifact of R1, and
+barring the original uploader would never have closed it.
 
 The upload route checks `isKeyLegallyHeld` (`legal-hold.ts:36`) for the output key **before** the `put`. A held
 key is refused with the route's one existing `415 UNSUPPORTED_MEDIA_TYPE` body (`media.ts:73-77`), deliberately
-identical to every other refusal so it tells a prober nothing, with no `media` row and no R2 write, and the attempt is appended to `csam_upload_attempts` (case, user, time) when the hold is a `csam` one,
-so the reviewer sees it. Whether a re-upload changes the case is the reviewer's call; it does not bar anyone.
+identical to every other refusal so it tells a prober nothing, with no `media` row and no R2 write. When the hold is
+a `csam` one, the attempt is appended to `csam_upload_attempts` (case, user, time) and raises the case's alarm.
+
+⚠️ **Question for CireSnave:** under "Option B" and R3 ("every uploader of a matched image is reported"), is a
+**second** user's refused upload of a known-hash file reported to NCMEC at that moment? **Draft default, until he
+rules:** record the attempt on the open case and alarm, without filing a new report; the reviewer sees it. No bar either
+way.
 
 ## 4. Filing (the drain)
 
@@ -346,11 +398,15 @@ until a human acts), `retract_pending` and `withdrawn` (§7.2).
 Inside a single cron invocation:
 1. `pending`: build the report XML, store **the exact bytes** (`ncmec_submissions`, preserved, §5), `POST /submit`,
    and record `ncmec_report_id` → `submitted`.
-2. For each of **this report's** files (`ncmec_report_files`): stream the object from `MEDIA_RESTRICTED` and
-   `POST /upload` with the report id, recording `ncmec_file_id`. Then `POST /fileinfo` with `fileViewedByEsp` (the
+2. For each of **this report's** files (`ncmec_report_files`): read the object from `MEDIA_RESTRICTED` into an
+   `ArrayBuffer` and `POST /upload` it as a `Blob` in multipart `FormData` with the report id, recording
+   `ncmec_file_id`. (A `ReadableStream` cannot be a `FormData` part; the objects are re-encoded WebP bounded by
+   the upload route's caps, so buffering one at a time is safe.) Then `POST /fileinfo` with `fileViewedByEsp` (the
    file's `viewed_by_esp`), `originalFileHash` (sha256) and `publiclyAvailable` (true: it was served publicly before
    the hold).
-3. `POST /finish` → `finished`, with `finished_at`.
+3. `POST /finish` → `finished`, with `finished_at`. A `5102` ("report already finished") answer to `/finish` means
+   an earlier attempt finished it but its response was lost: treat it as success, `finished`, with
+   `last_response_code = 5102` kept for the record.
 4. `retract_pending`: `POST /retract` → `withdrawn` (§7.2). A `5102` (already finished) → `finished`, flagged on
    the case for the runbook.
 
@@ -379,11 +435,15 @@ exttest run has reached `finished` and the production credentials exist.
 Worker secrets, all **supplied by the operator as secrets** (`wrangler secret put`), never committed and never
 written into any doc, commit or PR text:
 - `NCMEC_USERNAME`, `NCMEC_PASSWORD` (NCMEC's Basic-auth pair);
-- `NCMEC_REPORTER_NAME`, `NCMEC_REPORTER_EMAIL`, `NCMEC_REPORTER_PHONE`, `NCMEC_REPORTER_ADDRESS` (the
-  `reportingPerson`, §4.5);
+- `NCMEC_REPORTER_NAME`, `NCMEC_REPORTER_EMAIL`, `NCMEC_REPORTER_PHONE` (the `reportingPerson`, §4.5; required);
+- `NCMEC_REPORTER_STREET`, `NCMEC_REPORTER_CITY`, `NCMEC_REPORTER_STATE`, `NCMEC_REPORTER_ZIP`,
+  `NCMEC_REPORTER_COUNTRY` (the reporter's structured `<address>`; **optional as a group**: if any one of the five
+  is unset or blank, the `<address>` element is **omitted entirely**, never sent half-filled, and the report still
+  files);
 
 and the var `NCMEC_BASE_URL` (exttest vs prod; there's no default, so a missing value is "not configured"). If
-**any** of the seven is missing or blank, intake and CONFIRM write `awaiting_credentials`, and the drain re-checks
+**any** of the six required values (the Basic-auth pair, the base URL, the reporter's name, email and phone) is
+missing or blank, intake and CONFIRM write `awaiting_credentials`, and the drain re-checks
 every tick and promotes those rows to `pending` once all exist. That state **alarms** (§6). There is no placeholder
 value in code; the merge condition is the deploy check (AC-C13).
 
@@ -393,13 +453,14 @@ Built from what we hold. Every field below is checked against the live XSD (`GET
 and that check is a plan task.
 - `incidentType` (child pornography / CSAM) and `incidentDateTime` (the upload time of that uploader's earliest
   matched media row).
-- The reporting person: name, email, phone and address from the four `NCMEC_REPORTER_*` secrets (§4.4).
+- The reporting person: name, email and phone from their `NCMEC_REPORTER_*` secrets, and the structured address
+  from the five address secrets when all five are set (§4.4).
 - The reported person (this report's uploader): `espIdentifier` (user id), `screenName` (handle), `profileUrl`,
   and email. **No IP data:** `clientIp()` (`apps/api/src/http/client-ip.ts:23`) exists, but only to key rate
   limiters (`search.ts:71`, `login.ts:236`, `signup.ts:158` and others); no migration stores an IP.
-- The web page: the URL of every post that embeds one of this report's files.
-- Files: this report's `ncmec_report_files` only, each with `fileViewedByEsp`: **`false` for a match-time report**,
-  `true` when queued by a CONFIRM after a reveal, or by a moderator sighting.
+- The web page: the URL of every post, and of every comment's post, that embeds one of this report's files.
+- Files: this report's `ncmec_report_files` only, each with `fileViewedByEsp` per §3.1: **`false` for a match-time
+  report**; `true` only after a logged two-person fetch of that file, or an attested sighting.
 
 **What a false positive means for the user.** A family photo that happens to match a hash is reported to NCMEC at
 match ("Option B"), with `fileViewedByEsp = false`, which tells NCMEC no human here has looked. The user is
@@ -412,8 +473,8 @@ is quarantined, and they get no notice. If the moderator then clears it, the con
 |---|---|---|
 | The images | R2 `MEDIA_RESTRICTED` under a `csam` media hold from the match; after a CLEAR, an evidence copy (§7.2) | ≥ 1 year after the last report finished; no reaper, so in practice indefinitely |
 | The report as sent | `ncmec_submissions.request_xml`, one row per send; UPDATE refused by trigger | ≥ 1 year (trigger floor), no reaper |
-| The content (title, source) | `moderation_snapshots` (#126), written in intake step 6 | ≥ 1 year (`0021`'s trigger floor) |
-| The account | a `csam` account hold from the match, so neither reaper deletes or anonymises it | indefinitely (§7.3) |
+| The content (title, source; posts and comments) | `moderation_snapshots` (#126), written in intake step 6 | ≥ 1 year (`0021`'s trigger floor) |
+| The account | a `csam` account hold, from the match for a known-hash case and from CONFIRM for a classifier case, so neither reaper deletes or anonymises it | indefinitely (§7.3) |
 | The uploader's `media` rows | kept: the orphan reaper skips keys under a legal hold (new, below) | while the hold exists |
 | Who did what | `moderation_actions` (incl. `csam_hold`, `csam_review`) + `csam_cases` | append-only |
 
@@ -422,7 +483,14 @@ whose sha256 no post or snapshot references, with **no legal-hold check**. For a
 post), the uploader's `media` row, which is how intake and the drain know who uploaded it, would be deleted 24 h
 after upload. (Its R2 delete targets only the public `MEDIA` bucket, `:118`, so the restricted object survives.)
 The plan adds `AND NOT EXISTS (SELECT 1 FROM media_legal_holds h WHERE h.r2_key = m.r2_key)` to the orphan
-selection.
+selection. (A separate legal-hold fix branch makes the same change; whichever lands first, the other rebases. This
+design does not depend on it.)
+
+⚠️ **What the hold cannot save: a match that arrives late.** Cloudflare's email is daily, and the orphan reaper
+deletes an **unheld** orphan's `media` row and public object 24 h after upload (`reap-orphan-media.ts:81-87`,
+`:118`). A match can therefore name a file whose row and bytes are already gone, before any hold existed. Intake
+cannot recover it; it records the digest in `csam_unmatched_digests` and alarms (§6 condition 7), so a human sees
+the loss instead of a silent `nothing_to_do`.
 
 Access is limited (§2258B(c)): held media is fetchable only through #61's two-person grant. Permanent destruction
 on a law-enforcement request is **a manual runbook step** (§8), not app code.
@@ -441,7 +509,12 @@ The condition holds when **any** of these is true:
    cannot heal themselves;
 6. **new: an undecided case** (`review_outcome IS NULL`) older than **N hours**, where N = 0 for a `known_hash` or
    `classifier` case (it alarms from the match) and the case is **OVERDUE** once older than
-   `CSAM_REVIEW_TARGET_HOURS`.
+   `CSAM_REVIEW_TARGET_HOURS`. A refused re-upload of a case's file (§3.7) re-arms it at once;
+7. **new: a recognised digest with no `media` row** (`csam_unmatched_digests`, not yet acknowledged by an admin):
+   the evidence may already have been reaped (§5);
+8. **new: held but still public:** a `media_moves` row with `direction = 'to_restricted'` and status `pending` (older
+   than one drain tick) or `failed` whose `r2_key` has a `csam` media hold. The daily retry cron (`20 4 * * *`,
+   `index.ts:74-75`) is too slow for this, so the `*/2` CSAM tick also re-attempts those moves itself.
 
 ### 6.2 Review target and escalation — ⚠️ PROPOSALS for CireSnave (board item 125)
 
@@ -470,19 +543,21 @@ reviewed line:
   `GET /admin/csam/alarm`.
 - **Email:** to `CSAM_ALARM_EMAIL`, a Worker secret **supplied by the operator as a secret**. Conditions 1–5: the
   daily `0 14 * * *` tick emails while the condition holds, with no dedup suppression, and conditions 2 and 5 also
-  email on the tick that first raises them. Condition 6: §6.2's cadence.
+  email on the tick that first raises them. Condition 6: §6.2's cadence. Conditions 7 and 8 email on the tick
+  that first raises them, then daily.
 - **Log:** an `ncmec ALARM` line every drain tick while anything holds.
 
 ## 7. Review
 
 `/admin/csam` lists cases, **undecided first** (`urgent`, then `high`, oldest first), then the rest newest first,
 with kind, source, age against the target, NCMEC status and report id, and any re-upload attempts. Previews are
-**blurred**, and **Reveal** is an explicit control. Revealing sets `revealed_at`, logs `media_access`, and the image
-itself is fetched only through the two-person grant (§3.3 step 5). It does not change an already-sent report.
+**blurred**, and **Reveal** is an explicit control. Revealing sets `revealed_at`; the image itself is fetched only
+through the two-person grant (§3.3 step 5), and **that** fetch is what the restricted route logs as `media_access`
+and what counts as viewing (§3.1). It does not change an already-sent report.
 
 ### 7.1 CONFIRM
 
-§3.5. Any Access admin can confirm, after revealing every file.
+§3.5. Any Access admin can confirm, once every file has a logged full fetch or an attested sighting.
 
 ### 7.2 CLEAR (false positive)
 
@@ -495,19 +570,25 @@ The clear transaction:
    `evidence/csam/<caseId>/<sha256>.webp`, verify it with a `head`, and record it in `csam_case_files.evidence_key`.
    Under "Option B" the file was reported, and §2258A(h)(1) asks us to preserve it for a year whatever our review
    found; the serving copy is about to go public again.
-2. In one transaction: set `review_outcome = 'false_positive'` with the statement and both hands; write
-   `csam_review`; **release the media hold** on each serving key by moving its `media_legal_holds` row into a new
-   `media_legal_hold_releases` archive table (with the case, both hands and the time) and deleting it, logged as
-   `csam_clear_release`. Deleting rather than adding a `released_at` column keeps every existing reader
+2. In one transaction: set `review_outcome = 'false_positive'` with the statement and both hands; set
+   `cleared_at` on the case's files (freeing the key, §3.6); write `csam_review`; **release the case's own media
+   holds**: for each serving key, only a `media_legal_holds` row whose `moderation_action_id` equals the case's
+   `hold_action_id` is moved into a new `media_legal_hold_releases` archive table (with the case, both hands, and
+   `imposed_at` taken from the hold's `created_at`, `0016_media_visibility.sql:25`) and deleted, logged as
+   `csam_clear_release`. A hold that predates the case (`dmca`, `other`, or an earlier case) is **not** this case's
+   and stays; that key stays restricted. Deleting rather than adding a `released_at` column keeps every existing reader
    (`isKeyLegallyHeld`, `legallyHeldKeys`, the `ON CONFLICT (r2_key)` insert) correct without a change, and lets a
    later case re-impose a hold. A held evidence key is never released.
-3. **Restore the content:** `applyDecisionInTx(c, { decision: "restore", … })` for each post the case hid
-   (`csam_case_targets`).
+3. **Restore the content:** `applyDecisionInTx(c, { decision: "restore", … })` for each post or comment in
+   `csam_case_targets`, which holds only content that was **visible** when the case hid it (§3.3 step 6). Content
+   hidden before the match stays hidden. A `null` result (deleted since) is skipped.
 4. **Reports:** a report that has **not** been submitted (`awaiting_credentials`, `pending`, `failed`) becomes
    `withdrawn` and is never sent. A `submitted`, unfinished one becomes `retract_pending`, and the drain calls
    `/retract` (allowed before finish). A `finished` report is left as it is, and its record is kept.
-5. COMMIT. After commit: `afterContentDecision` with `decision: "restore"` and **no** `legalHold`, which moves each
-   key back to the public bucket (`visibility-hook.ts:64-65`) now that it is no longer held. Account untouched:
+5. COMMIT. After commit: `afterContentDecision` with `decision: "restore"` and **no** `legalHold` for each restored
+   item, which moves each of its keys that is no longer held back to the public bucket (`visibility-hook.ts:64-65`);
+   and `enqueueAndAttemptMove(…, "to_public")` for a released key that no restored item embeds but some visible
+   content does. A released key nothing visible embeds stays in `MEDIA_RESTRICTED`, unheld. Account untouched:
    nothing was barred. The alarm stops.
 
 **Audit:** the case row, both hands, the statement, the `csam_review` and `csam_clear_release` actions, the
@@ -554,20 +635,22 @@ Who can review: any Access admin. Access to the **images** keeps #61's two-perso
 | AC-C1 | After a match intake, the content is not publicly reachable: the public routes 404, and the media is out of the public bucket. Tested through the real public endpoints. |
 | AC-C2 | For a **known-hash** match, no human action stands between intake and `submit`: the drain alone takes the match-time report to `finished` against the NCMEC test double. |
 | AC-C3 | A report whose NCMEC deletion window has passed (or a `5001`) is resubmitted, with the old id kept in `abandoned_report_ids`. Shown to fail with the resubmit removed. |
-| AC-C4 | Each of §6's six alarm conditions produces the banner and the log line. Conditions 2 and 5 also send the immediate email. Each is shown to fail when its condition is removed. |
+| AC-C4 | Each of §6's eight alarm conditions produces the banner and the log line. Conditions 2 and 5 also send the immediate email. Each is shown to fail when its condition is removed. |
 | AC-C5 | The response byte cap fires before the parser, and a test of an oversized body fails without the cap. |
 | AC-C6 | `CSAM_BAR_UNREVIEWED_MATCH = false` and `CSAM_REPORT_AT_MATCH = true`, **both** equal to CireSnave's quoted words (R1, and "Option B."), quoted in the code and the PR. Both branches of each constant are tested. |
 | AC-C7 | No email is sent to the uploader or author by any CSAM path (A3). |
 | AC-C8 | An end-to-end run against **exttest** (`exttest.cybertip.org`) reaches `finished`, once credentials exist. **Nothing is filed to production, and APP.live does not flip, until this is shown.** |
-| AC-C9 | After a match intake, every held image has left the public bucket, **including an orphan upload with no embedding post**. Shown to fail when the post-commit `legalHold` argument is dropped (§3.3). |
-| AC-C10 | A second intake of a suppressed key (§3.6) files nothing new (no new case, report, hold or alarm). Shown to fail without the uniqueness/lock check. A classifier-cleared key matched by a known hash **does** open a case. |
+| AC-C9 | After a match intake, every **matched** image has left the public bucket, **including an orphan upload with no embedding post**, and an innocent image co-embedded in a hidden post is **not** held (it moves only if nothing visible still uses it). Shown to fail when intake's explicit per-key `to_restricted` move is dropped (§3.3). |
+| AC-C10 | A second intake of a suppressed key (§3.6) files nothing new (no new case, report, hold or alarm). Shown to fail without the disposition check. A classifier-cleared key matched by a known hash **does** open a case; a sighting of a key with an open case attaches to it (no new row, priority `urgent`, no 500); a sighting of a cleared key opens a new case. |
 | AC-C11 | In a multi-uploader case, each NCMEC report carries only the files that uploader's own media rows hold (R3). |
 | AC-C12 | The `fast-xml-parser` characterisation test (§4.3) passes against the exact version pinned in `apps/api/package.json`. |
-| AC-C13 | Deployment: the seven NCMEC secrets/vars and `CSAM_ALARM_EMAIL` are set as Worker secrets by the operator before the first deploy that drains. No real contact value appears anywhere in the repo, its history or the PR text. |
+| AC-C13 | Deployment: the six required NCMEC secrets/vars, the five optional address secrets and `CSAM_ALARM_EMAIL` are set as Worker secrets by the operator before the first deploy that drains. No real contact value appears anywhere in the repo, its history or the PR text. |
 | AC-C14 | **Quarantine:** an unreviewed match (`known_hash` or `classifier`) **never bars the account**: after intake the uploader's `disabled_at`, `disabled_reason` and `suspended_until` are unchanged and the uploader can log in and post. The matched content is unfetchable except through `GET /media/restricted/:sha256` with an approved two-person grant. A **classifier** case queues **no** report under either value of `CSAM_REPORT_AT_MATCH`. |
 | AC-C15 | **Clear:** a CLEAR restores the posts, moves the media back to the public bucket, keeps an evidence copy and the archived hold, withdraws an unsubmitted report (no NCMEC call), retracts a submitted unfinished one, leaves a finished one and its record intact, and writes the audit rows. Re-detecting the cleared file files nothing (AC-C10). |
 | AC-C16 | **Escalation:** an undecided case alarms at the match, re-emails every `CSAM_ALARM_REPEAT_HOURS`, gains the `OVERDUE` subject after `CSAM_REVIEW_TARGET_HOURS`, and is never barred or cleared by any timer. Shown with a clock passed to the tick. |
 | AC-C17 | **Re-upload:** uploading the bytes of a held file is refused before any R2 write, and a `csam` hold logs the attempt (§3.7). |
+| AC-C18 | **Clear scope:** a CLEAR restores only content that was visible at the match, and releases only holds whose `moderation_action_id` is the case's `hold_action_id`; a pre-existing `dmca` hold on the same key survives. |
+| AC-C19 | **Viewed:** `fileViewedByEsp` is `true` only for a file with a logged two-person fetch or an attested sighting; pressing Reveal alone leaves it `false`. |
 
 ## 10. Dependencies and order
 
@@ -579,5 +662,13 @@ reaper's legal-hold exclusion, the upload route's held-key refusal, and the `fas
 (DSA) is independent.
 
 Building and shipping this needs: the NCMEC exttest and production credentials, and the reporter and alarm secrets
-(operator-supplied); CireSnave's OK, or changes, on §6.2's proposals, §7.2's two-person clear, and §7.3's
-account-hold question. The implementation PRs wait for the NCMEC credentials.
+(operator-supplied); at least two Access admins (§0 precondition); CireSnave's OK, or changes, on §6.2's
+proposals, §7.2's two-person clear, §7.3's account-hold question and §3.7's second-uploader question. The
+implementation PRs wait for the NCMEC credentials.
+
+**Gated on CireSnave (board item 126): original-upload hashes.** *Record the original upload's MD5, SHA-1 and SHA-256
+at upload time, from now on*, because exact-hash lists can never match our re-encoded WebP files: `POST /media`
+re-encodes every upload (`media.ts` step 7) and discards the original. A plan task (Task 12) adds nullable columns
+to `media` and records them before the re-encode; it is written to proceed the moment he agrees, and nothing changes
+until then. The self-scanning options doc on main (`2026-10-04-csam-self-scanning-options.md`, #146) is where those
+hashes would be matched.
