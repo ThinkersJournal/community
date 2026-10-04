@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript on Cloudflare Workers (`apps/api`), Astro SSR (`apps/web`), Postgres via Hyperdrive, R2 (`MEDIA`, `MEDIA_RESTRICTED`), `fast-xml-parser` (exact pin), vitest (pool + Node projects), Postmark "outbound".
 
-**Spec:** `docs/superpowers/specs/2026-10-01-csam-reporting-pipeline-design.md` (PR #130, approved by the PM; **revision 1**, 2026-10-04, applies R1 and "Option B" and needs the PM's approval again) and its research notes, `docs/superpowers/specs/2026-10-01-ncmec-research-notes.md`. **Read both.** Every "§n" below refers to the spec.
+**Spec:** `docs/superpowers/specs/2026-10-01-csam-reporting-pipeline-design.md` (PR #130, approved by the PM; **revision 2**, 2026-10-04, applies R1 and "Option B" and needs the PM's approval again) and its research notes, `docs/superpowers/specs/2026-10-01-ncmec-research-notes.md`. **Read both.** Every "§n" below refers to the spec.
 
 ## Preconditions (do not start Task 1 until all hold)
 
@@ -288,8 +288,9 @@ Both gaps exist on main today; R1 (the uploader stays active) makes them live.
   - `csam_unmatched_digests.sha256` must be 64 lowercase hex.
   - `ncmec_reports.status` accepts exactly `awaiting_credentials|pending|submitted|finished|failed|retract_pending|withdrawn`.
   - `ncmec_submissions`: UPDATE refused, DELETE of a row younger than 1 year refused, a control DELETE at 366 days allowed, TRUNCATE refused. Same guard shape as `0021`'s `moderation_snapshots`.
-  - `media_legal_hold_releases` and `csam_upload_attempts`: UPDATE and TRUNCATE refused (append-only).
-  - `csam_cases.priority` accepts only `urgent|high|decided`.
+  - `media_legal_hold_releases` and `csam_upload_attempts`: UPDATE and TRUNCATE refused (append-only); a control INSERT succeeds.
+  - `media_access_requests.case_file_id` exists, is nullable, and an existing-shape insert without it still succeeds.
+  - `csam_alarm_marks` is unique on `(condition, ref)`.
   - none of these tables has an FK to `users`, `posts` or `media` (evidence outlives its subject; the same reasoning as 0013). Control: `reports` does.
 - [ ] **Step 2:** run → FAIL.
 - [ ] **Step 3: Migration.**
@@ -297,7 +298,7 @@ Both gaps exist on main today; R1 (the uploader stays active) makes them live.
 ```sql
 -- Up Migration
 --
--- #114 — the CSAM → NCMEC pipeline (spec 2026-10-01-csam-reporting-pipeline-design.md, revision 1).
+-- #114 — the CSAM → NCMEC pipeline (spec 2026-10-01-csam-reporting-pipeline-design.md, revision 2).
 -- ⚠️ BARE uuids for users/posts/media everywhere: this is evidence and must
 -- outlive its subjects, the same reasoning as moderation_actions (0013).
 --
@@ -374,7 +375,23 @@ CREATE TABLE csam_case_targets (
   case_id    uuid NOT NULL REFERENCES csam_cases(id),
   subject    text NOT NULL CHECK (subject IN ('post', 'comment')),
   subject_id uuid NOT NULL,                -- bare
+  -- Set by a CLEAR that left this target hidden because it still embeds a key
+  -- another live or confirmed case holds (spec §7.2 step 3).
+  restore_skipped_case_id uuid,
   PRIMARY KEY (case_id, subject, subject_id)
+);
+
+-- A grant opened by Reveal names its case file, so "viewed" is keyed on the
+-- grant, never on a clock window (spec §3.1). Nullable: #61's own grants have none.
+ALTER TABLE media_access_requests ADD COLUMN case_file_id uuid;  -- bare
+
+-- "First raised" for alarm conditions 7 and 8 (spec §6.3): one row per
+-- (condition, item) the tick has already emailed about.
+CREATE TABLE csam_alarm_marks (
+  condition        smallint NOT NULL CHECK (condition IN (7, 8)),
+  ref              uuid NOT NULL,          -- csam_unmatched_digests.id or media_moves.id
+  first_raised_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (condition, ref)
 );
 
 -- A recognised digest that matched no media row (spec §5, §6 condition 7):
@@ -398,6 +415,17 @@ CREATE TABLE csam_upload_attempts (
   r2_key       text NOT NULL,
   attempted_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE FUNCTION csam_upload_attempts_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'csam_upload_attempts is append-only (#114): % refused', TG_OP;
+END;
+$$;
+CREATE TRIGGER csam_upload_attempts_no_update
+  BEFORE UPDATE ON csam_upload_attempts
+  FOR EACH ROW EXECUTE FUNCTION csam_upload_attempts_guard();
+CREATE TRIGGER csam_upload_attempts_no_truncate
+  BEFORE TRUNCATE ON csam_upload_attempts
+  FOR EACH STATEMENT EXECUTE FUNCTION csam_upload_attempts_guard();
 
 CREATE TABLE ncmec_reports (
   id                   uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -462,7 +490,9 @@ CREATE TABLE media_legal_hold_releases (
   requested_by         text NOT NULL,     -- the requesting hand
   released_at          timestamptz NOT NULL DEFAULT now()
 );
--- Append-only: no UPDATE, no TRUNCATE (a guard trigger pair like the one above, without the age clause).
+-- Append-only: no UPDATE, no TRUNCATE. The same three statements as
+-- csam_upload_attempts_guard above, named media_legal_hold_releases_guard /
+-- _no_update / _no_truncate.
 
 -- Down Migration
 DROP TABLE IF EXISTS media_legal_hold_releases;
@@ -473,6 +503,8 @@ DROP TABLE IF EXISTS ncmec_report_files;
 DROP TABLE IF EXISTS ncmec_reports;
 DROP TABLE IF EXISTS csam_upload_attempts;
 DROP TABLE IF EXISTS csam_unmatched_digests;
+DROP TABLE IF EXISTS csam_alarm_marks;
+ALTER TABLE media_access_requests DROP COLUMN IF EXISTS case_file_id;
 DROP FUNCTION IF EXISTS csam_upload_attempts_guard();
 DROP TABLE IF EXISTS csam_case_targets;
 DROP TABLE IF EXISTS csam_case_files;
@@ -490,7 +522,7 @@ ALTER TABLE moderation_actions ADD CONSTRAINT moderation_actions_action_check
 
 ⚠️ The Down's CHECK list must equal 0022's Up list exactly. Diff the two before committing.
 
-Add `| "csam_hold" | "csam_review" | "csam_clear_release"` to `ModerationActionKind` (`actions.ts`) with a one-line comment each. Add up/down `tableExists` assertions for the nine tables to `migrations.db.test.ts`.
+Add `| "csam_hold" | "csam_review" | "csam_clear_release"` to `ModerationActionKind` (`actions.ts`) with a one-line comment each. Add up/down `tableExists` assertions for the ten tables to `migrations.db.test.ts`, and an up/down assertion for `media_access_requests.case_file_id`.
 - [ ] **Step 4:** run → PASS; commit `feat(db): CSAM cases, NCMEC reports and preserved submissions (Part of #114)`.
 
 ---
@@ -733,7 +765,7 @@ export type Disposition = "open" | "suppress" | "attach";
 export type IntakeInput =
   | { readonly source: "cloudflare_match"; readonly kind: "known_hash"; readonly sha256s: readonly string[]; readonly actorAdmin: string }
   | { readonly source: "self_scan"; readonly kind: "known_hash" | "classifier"; readonly sha256s: readonly string[]; readonly actorAdmin: string }
-  | { readonly source: "moderator"; readonly kind: "moderator_sighting"; readonly subject: "post" | "comment"; readonly subjectId: string; readonly actorAdmin: string };
+  | { readonly source: "moderator"; readonly kind: "moderator_sighting"; readonly subject: "post" | "comment"; readonly subjectId: string; readonly statement: string; readonly actorAdmin: string };
 export type IntakeResult =
   | { readonly kind: "opened"; readonly caseId: string; readonly reports: number; readonly hiddenItems: number; readonly heldAccounts: number; readonly unmatched: number }
   | { readonly kind: "already_cased"; readonly cases: readonly { readonly caseId: string; readonly outcome: CaseOutcome; readonly attached: boolean }[]; readonly unmatched: number }
@@ -780,8 +812,9 @@ export function runIntake(env: Env, ctx: ExecutionContext, input: IntakeInput, h
     - `CSAM_BAR_UNREVIEWED_MATCH === false` and `CSAM_REPORT_AT_MATCH === true` as set.
   - ⚠️ **RF2 / AC-C9, an orphan upload** (no post or comment embeds the key): the object still leaves `MEDIA` for `MEDIA_RESTRICTED`, and the hold exists. **Mutation:** drop intake's explicit per-key `enqueueAndAttemptMove(…, "to_restricted")` → both this case and case (a)'s M assertion FAIL (nothing else moves a held key: the hook skips it at `visibility-hook.ts:56-57`).
   - ⚠️ **RF3 / AC-C11, a multi-uploader key plus a second key only one of them uploaded:** two reports. Uploader A's report carries both files; B's report carries only the shared one. Both A and B have `csam` account holds; neither is barred.
-  - ⚠️ **RF1 / AC-C10, disposition:** run the same intake twice. The second returns `already_cased` naming the first case as `undecided`, `attached: false`; the counts of `csam_cases`, `ncmec_reports`, holds, `moderation_actions` and alarm emails are unchanged. **Mutation:** skip the disposition check → the partial unique index raises → FAIL. Then the pure `intakeDisposition` table, one row per cell of spec §3.6: machine vs none → open; machine vs undecided → suppress; machine vs confirmed → suppress; `known_hash` vs cleared `classifier` → open; `classifier` vs cleared `known_hash` → suppress; `known_hash` vs cleared `known_hash` → suppress; sighting vs none → open; sighting vs undecided → **attach**; sighting vs confirmed → suppress; sighting vs cleared → open.
-  - ⚠️ **A sighting of a key with an open machine case** (AC-C10): no new `csam_cases` or `csam_case_files` row and **no 500**; the open case's file gets `seen_by`/`seen_at`/`revealed_at`, its `priority` becomes `urgent`, and the result is `already_cased` with `attached: true`. Its decision is left to the CONFIRM route.
+  - ⚠️ **RF1 / AC-C10, disposition:** run the same intake twice. The second returns `already_cased` naming the first case as `undecided`, `attached: false`; the counts of `csam_cases`, `ncmec_reports`, holds, `moderation_actions` and alarm emails are unchanged. **Mutation:** skip the disposition check → the partial unique index raises → FAIL. Then the pure `intakeDisposition` table, one row per cell of spec §3.6, applying its precedence (a live case first; otherwise the **strongest** cleared kind): machine vs none → open; machine vs undecided → suppress; machine vs confirmed → suppress; `known_hash` vs cleared `classifier` → open; `classifier` vs cleared `known_hash` → suppress; `known_hash` vs cleared `known_hash` → suppress; `classifier` vs cleared `classifier` **and** cleared `known_hash` → suppress (strongest wins); sighting vs none → open; sighting vs undecided → **attach**; sighting vs confirmed → suppress; sighting vs cleared → open; ⚠️ **cleared `classifier` + live undecided `known_hash`**: machine → suppress, sighting → **attach** (the live case decides, not the cleared one).
+  - ⚠️ **A sighting of a key with an open machine case** (AC-C10): no new `csam_cases` or `csam_case_files` row and **no 500**; the open case's file gets `seen_by`/`seen_at`/`revealed_at`, its `priority` becomes `urgent`, and the result is `already_cased` with `attached: true`. Its decision is left to the CONFIRM route. ⚠️ **The sighting's own subject is hidden** (AC-C20): a visible comment the moderator reported, which the machine case had not seen, now has a snapshot, a `keep_hidden` decision and a target row on the existing case.
+  - ⚠️ **A sighting of a key with a confirmed case** (suppress): no new case, and the sighting's subject is still hidden, snapshotted and targeted on the confirmed case (AC-C20).
   - **A sighting of a cleared key:** a **new** case opens (the old file has `cleared_at`, so the partial index allows it), confirmed in the same transaction.
   - A **mixed batch** (one suppressed key and one new key with a different uploader): only the new key is cased, and only the new uploader gets a hold.
   - **(c) moderator sighting of a fresh key:** intake calls `confirmCaseInTx` (Task 9) in its own transaction: the uploader is terminated, the report is queued with `queued_by = 'confirm'` and `viewed_by_esp = true`, the file has `seen_by` and `revealed_at`, `review_outcome = 'confirmed'`, `priority = 'decided'`, and no alarm email is sent. (Write it now as `it.todo`; Task 9 makes it real.)
@@ -800,6 +833,7 @@ export function runIntake(env: Env, ctx: ExecutionContext, input: IntakeInput, h
   - step 7a runs only for `kind === "known_hash"`.
   - step 8: `ncmec_reports.status` is `ncmecConfig(env) === null ? 'awaiting_credentials' : 'pending'`, `queued_by = 'match'`, only when `queuesReportAtMatch(kind, reportAtMatch)`; `viewed_by_esp` from the §3.1 query (false at match).
   - step 4: `priority` = `urgent` for `known_hash`, `high` for `classifier`, `decided` for a sighting; `alarm_next_at = now()` except for a sighting (NULL).
+  - a sighting whose key is attached **or** suppressed still runs `quarantineItemInTx` on its own subject with the existing case's id (spec §3.3 step 2).
   - attach (a sighting on an open case): `UPDATE csam_case_files SET seen_by = $actor, seen_at = now(), revealed_at = COALESCE(revealed_at, now()), revealed_by = COALESCE(revealed_by, $actor) WHERE case_id = $1 AND r2_key = $2` and `UPDATE csam_cases SET priority = 'urgent', alarm_next_at = now() WHERE id = $1 AND review_outcome IS NULL`.
 
   Post-commit, exactly as spec §3.3 says: first `enqueueAndAttemptMove(env, ctx, key, "to_restricted")` for **every matched key**; then `afterContentDecision(env, ctx, { subject, decision: "keep_hidden", reason: CSAM_QUARANTINE_REASON, result })` for each hidden item, ⚠️ **with no `legalHold`** (passing it would hold every co-embedded key, `visibility-hook.ts:34-53`); then `sendCaseAlarm(env, ctx, caseId)` from Task 8 (best effort; until Task 8 lands, a stub that the tick will cover). An epoch bump only for an uploader the bar branch terminated (never, with R1 as set).
@@ -850,9 +884,9 @@ export function runIntake(env: Env, ctx: ExecutionContext, input: IntakeInput, h
 
 ### Task 8: Alarms and case escalation
 
-**Files:** create `apps/api/src/csam/alarms.ts`; modify `apps/api/src/media/moves.ts` (export `retryPendingMovesForKeys`), `apps/api/src/index.ts` (add an explicit `if (controller.cron === "0 14 * * *")` call to the daily alarm check. Today there is no such branch, only the `disposition` ternary at `:93` before the unconditional email drain; keep that drain unchanged), `drain.ts` (immediate emails, the case tick and the log line), `apps/api/src/routes/admin-csam.ts` (`GET /admin/csam/alarm`, created here if Task 9 hasn't run yet); test `apps/api/test/csam-alarms.test.ts`.
+**Files:** create `apps/api/src/csam/alarms.ts`; modify `apps/api/src/media/moves.ts` (export `retryHeldMoves`), `apps/api/src/index.ts` (add an explicit `if (controller.cron === "0 14 * * *")` call to the daily alarm check. Today there is no such branch, only the `disposition` ternary at `:93` before the unconditional email drain; keep that drain unchanged), `drain.ts` (immediate emails, the case tick and the log line), `apps/api/src/routes/admin-csam.ts` (`GET /admin/csam/alarm`, created here if Task 9 hasn't run yet); test `apps/api/test/csam-alarms.test.ts`.
 
-**Produces:** `csamAlarmState(c, now): Promise<{ raised: boolean; counts: { awaitingCredentials: number; failed: number; overdueReports: number; abandonedUnfinished: number; credentialRejected: number; undecidedCases: number; overdueCases: number; unmatchedDigests: number; heldButPublic: number } }>`; `retryPendingMovesForKeys(env, ctx, keys: readonly string[]): Promise<number>` in `moves.ts` (runs the private `runMove` for each `pending` row on those keys, like `processPendingMoves` at `moves.ts:116-140` but scoped); `sendCsamAlarmEmail(env, state): Promise<boolean>`; `sendCaseAlarm(env, ctx, caseId, now?): Promise<boolean>`; `runCaseEscalation(env, ctx, now?): Promise<{ sent: number }>`. In `config.ts`, each marked `// DRAFT DEFAULT — awaiting CireSnave's OK (board item 125), spec §6.2`:
+**Produces:** `csamAlarmState(c, now): Promise<{ raised: boolean; counts: { awaitingCredentials: number; failed: number; overdueReports: number; abandonedUnfinished: number; credentialRejected: number; undecidedCases: number; overdueCases: number; unmatchedDigests: number; heldButPublic: number } }>`; `retryHeldMoves(env, ctx, moveIds: readonly string[]): Promise<{ reset: number; attempted: number }>` in `moves.ts`: for each id, if the row is `failed`, reset it to `pending` with `attempts = 0` and log `csam: reset failed move <id> for held key`; then run the private `runMove` for it, as `processPendingMoves` (`moves.ts:116-140`) does for all pending rows. (`processPendingMoves` itself never retries a `failed` row.) `sendCsamAlarmEmail(env, state): Promise<boolean>`; `sendCaseAlarm(env, ctx, caseId, now?): Promise<boolean>`; `runCaseEscalation(env, ctx, now?): Promise<{ sent: number }>`. In `config.ts`, each marked `// DRAFT DEFAULT — awaiting CireSnave's OK (board item 125), spec §6.2`:
 
 ```ts
 export const CSAM_REVIEW_TARGET_HOURS = 24;
@@ -866,7 +900,8 @@ export const CSAM_REPORT_OVERDUE_HOURS = 6;           // §6 condition 3 (unchan
 
 - [ ] **Step 1: Failing test.** One case per §6 condition (1–8), each seeding exactly that condition and asserting its count is 1 and `raised` is true. **Mutation per condition:** remove that condition's term from the query → its case FAILS (AC-C4; report all eight). Plus:
   - condition 7: an unacknowledged `csam_unmatched_digests` row raises it; acknowledging it (Task 9's route) clears it;
-  - condition 8: a `media_moves` row `to_restricted`, `pending`, created 5 min ago, on a key with a `csam` media hold raises it; the same row on an **unheld** key does not; a `failed` row on a held key does; a `done` row does not. The `*/2` tick calls `retryPendingMovesForKeys` for those keys, and after a tick in which R2 succeeds the row is `done`, the object is in `MEDIA_RESTRICTED`, and the condition clears;
+  - condition 8, evaluated on the **newest** `media_moves` row per key (`0016_media_visibility.sql:44-46`): a newest row `to_restricted`, `pending`, created 5 min ago, on a key with a `csam` media hold raises it; the same on an **unheld** key does not; a newest `failed` row on a held key does; a newest `done` row does not, **even with an older `failed` row for the same key** (history alone never alarms). The `*/2` tick passes the raising rows to `retryHeldMoves`: a `failed` row is reset to `pending` with `attempts = 0` and the reset is logged; after a tick in which R2 succeeds the row is `done`, the object is in `MEDIA_RESTRICTED`, and the condition clears. **Mutation:** evaluate every row instead of the newest → the "older failed, newer done" case FAILS;
+  - **first raised, conditions 7 and 8:** the first tick that sees an unmatched digest (or a raising move row) emails once and writes `csam_alarm_marks (7|8, ref)`; the next tick, still raised, sends no immediate email; the daily tick does;
   - a clean state → `raised: false`, all zeros;
   - `GET /admin/csam/alarm` is Access-gated and returns the state;
   - the `0 14 * * *` tick sends exactly one report-alarm email when conditions 1–5 hold and none when clear;
@@ -876,7 +911,7 @@ export const CSAM_REPORT_OVERDUE_HOURS = 6;           // §6 condition 3 (unchan
   - the email body names the case link and the kind only: no image, sha256, handle, user id or email (assert none of the seeded values appear);
   - with `CSAM_ALARM_EMAIL` unset, no email is attempted and the log line names it.
 - [ ] **Step 2:** run → FAIL.
-- [ ] **Step 3: Implement.** One SQL statement computing all nine counts. Condition 7 is `acknowledged_at IS NULL` on `csam_unmatched_digests`. Condition 8 is `EXISTS media_legal_holds h WHERE h.r2_key = m.r2_key AND h.category = 'csam'` over `media_moves m WHERE m.direction = 'to_restricted' AND (m.status = 'failed' OR (m.status = 'pending' AND m.created_at < $now - interval '2 minutes'))`; the drain tick passes those keys to `retryPendingMovesForKeys` before computing the state. Conditions 7 and 8 email on the tick that first raises them (the same "first raised" test as RF5), then daily. Condition 3 is `status NOT IN ('finished','withdrawn') AND created_at < now - CSAM_REPORT_OVERDUE_HOURS` on `ncmec_reports.created_at` (the queueing time: the match for a match-time report, the CONFIRM otherwise). Condition 6 is `review_outcome IS NULL` on `csam_cases`; `overdueCases` additionally `created_at < now - CSAM_REVIEW_TARGET_HOURS`.
+- [ ] **Step 3: Implement.** One SQL statement computing all nine counts. Condition 7 is `acknowledged_at IS NULL` on `csam_unmatched_digests`. Condition 8 is computed over the newest row per key, `SELECT DISTINCT ON (r2_key) id, r2_key, direction, status, created_at FROM media_moves ORDER BY r2_key, created_at DESC` (served by `media_moves_key_idx`, `0016:47`), joined to `media_legal_holds h ON h.category = 'csam'`, keeping rows with `direction = 'to_restricted' AND (status = 'failed' OR (status = 'pending' AND created_at < $now - interval '2 minutes'))`; the drain tick passes those row ids to `retryHeldMoves` before computing the state. Conditions 7 and 8 email per item on first raise: `INSERT INTO csam_alarm_marks (condition, ref) … ON CONFLICT DO NOTHING RETURNING ref`, and only the returned refs are emailed; after that, the daily tick covers them. Condition 3 is `status NOT IN ('finished','withdrawn') AND created_at < now - CSAM_REPORT_OVERDUE_HOURS` on `ncmec_reports.created_at` (the queueing time: the match for a match-time report, the CONFIRM otherwise). Condition 6 is `review_outcome IS NULL` on `csam_cases`; `overdueCases` additionally `created_at < now - CSAM_REVIEW_TARGET_HOURS`.
   `runCaseEscalation` (called from the drain tick): `UPDATE csam_cases SET alarm_next_at = $now + <repeat for kind>, alarms_sent = alarms_sent + 1, last_alarm_at = $now WHERE review_outcome IS NULL AND alarm_next_at <= $now RETURNING …`, **then** send one email per returned case (claim first, then send, so two overlapping ticks cannot double-send; a failed send resets `alarm_next_at = $now` so the next tick retries). `sendCaseAlarm` (intake's post-commit) runs the same claim for one case. Subjects: `URGENT: CSAM match needs review` (known_hash) / `CSAM review needed` (classifier), each prefixed `OVERDUE — ` past the target. The report alarm keeps its subject `"⚠ NCMEC reporting needs attention"`. All go out on the `"outbound"` stream with a link to `/admin/csam`.
 - [ ] **Step 4:** run → PASS; mutations; commit `feat(csam): alarm conditions and case escalation — banner, URGENT and OVERDUE email, log line (Part of #114)`.
 
@@ -884,13 +919,13 @@ export const CSAM_REPORT_OVERDUE_HOURS = 6;           // §6 condition 3 (unchan
 
 ### Task 9: Admin routes — intake, list, reveal, CONFIRM, CLEAR, retry
 
-**Files:** create or extend `apps/api/src/routes/admin-csam.ts`, `apps/api/src/csam/review.ts`; modify `apps/api/src/routes.ts`, `pipeline-exempt.ts`, `packages/shared/src/admin.ts` (wire types); test `apps/api/test/admin-csam-route.test.ts` (the admin JWT harness, copied **by symbol** from `admin-decision-route.test.ts`: imports, `TEAM`/`AUD`/`KID`, `b64url`, `b64urlJson`, all five module-scope `let`s, `makeJwt`, `ctxRun`, `call`, and the module-level `beforeEach`/`afterEach`), and `apps/api/test/csam-review.test.ts` (pool).
+**Files:** create or extend `apps/api/src/routes/admin-csam.ts`, `apps/api/src/csam/review.ts`; modify `apps/api/src/routes/media-restricted.ts` (log a view only after a successful `get`), `apps/api/src/routes.ts`, `pipeline-exempt.ts`, `packages/shared/src/admin.ts` (wire types); test `apps/api/test/admin-csam-route.test.ts` (the admin JWT harness, copied **by symbol** from `admin-decision-route.test.ts`: imports, `TEAM`/`AUD`/`KID`, `b64url`, `b64urlJson`, all five module-scope `let`s, `makeJwt`, `ctxRun`, `call`, and the module-level `beforeEach`/`afterEach`), and `apps/api/test/csam-review.test.ts` (pool).
 
 **Routes:**
 - `POST /admin/csam/matches` `{ lines: string[] }` → each line goes through `sha256FromMatchInput`, then `runIntake({ source: "cloudflare_match", kind: "known_hash", … })`. Returns `200 { unrecognised: { line: number; text: string }[], result: IntakeResult }`. If every line is unrecognised: `400 INVALID_INPUT` with the list. **No silent drop.**
-- `POST /admin/csam/cases` `{ subject: "post" | "comment", subjectId }` → `runIntake({ source: "moderator", kind: "moderator_sighting", … })`.
+- `POST /admin/csam/cases` `{ subject: "post" | "comment", subjectId, statement }` (`statement` non-blank: the moderator's own text, passed to `confirmCaseInTx`) → `runIntake({ source: "moderator", kind: "moderator_sighting", … })`. A blank statement → `400 INVALID_INPUT`.
 - `GET /admin/csam` → undecided cases first (`urgent`, then `high`, oldest first), then the rest newest first; each with kind, source, age against `CSAM_REVIEW_TARGET_HOURS`, files (sha256, `revealed_at`, whether a logged full fetch exists, `seen_by`, `evidence_key`), reports (status, `queued_by`, `ncmec_report_id`, `last_error`, `abandoned_report_ids`), re-upload attempts, review state, and whether a runbook follow-up is due (cleared, a `finished` report, `ncmec_followup_at IS NULL`). Also the unacknowledged `csam_unmatched_digests`.
-- `POST /admin/csam/files/:id/reveal` → set `revealed_at`/`revealed_by` (once) and return `{ sha256 }`. It writes **no** `media_access` row: only the restricted route's fetch does, and only that fetch counts as viewing (spec §3.1, AC-C19). The image itself still goes only through `GET /media/restricted/:sha256` and #61's two-person grant (`media-restricted.ts:81-135`).
+- `POST /admin/csam/files/:id/reveal` → set `revealed_at`/`revealed_by` (once), open a grant with `requestMediaAccess` (`media-access-requests.ts:15`) plus `case_file_id = :id` (one extra column in the same insert; extend the function with an optional `caseFileId`), and return `{ sha256, grantId }`. It writes **no** `media_access` row. A second admin approves the grant on the existing media-access page; the image itself goes only through `GET /media/restricted/:sha256?grantId=…` (`media-restricted.ts:81-135`).
 - `POST /admin/csam/:caseId/confirm` `{ statement }` (non-blank) → `confirmCase(...)`.
 - `POST /admin/csam/:caseId/clear` `{ statement }` (non-blank) → `requestClear(...)` for a `known_hash` case, `clearCase(...)` directly for a `classifier` case.
 - `POST /admin/csam/:caseId/clear/approve` → `clearCase(...)`; refused `409 CSAM_SAME_HAND` when `sameAdminHand(approver, clear_requested_by)`.
@@ -900,15 +935,36 @@ export const CSAM_REPORT_OVERDUE_HOURS = 6;           // §6 condition 3 (unchan
 
 Add `CSAM_NOT_RETRYABLE`, `CSAM_SAME_HAND`, `CSAM_ALREADY_DECIDED` and `CSAM_NOT_VIEWED` to the `ApiErrorCode` union, each with a one-line comment, the way plan A added its codes.
 
-**"Viewed" (spec §3.1), one query used by CONFIRM and by report queueing:** a file is viewed when `seen_by IS NOT NULL` or `EXISTS (SELECT 1 FROM moderation_actions a WHERE a.action = 'media_access' AND a.subject_label = f.r2_key AND a.created_at >= <case created_at>)`. The restricted route writes exactly that row before it streams a legally held object (`media-restricted.ts:126-133`). Because the case's hold commits in the same transaction as the case, every such row for the key after `created_at` came through the two-person branch (`:83-135`), never the unheld branch's own `media_access` log (`:160-171`).
+**The restricted route change (spec §3.1).** Today the legal-hold branch writes `media_access` (`media-restricted.ts:126-133`) **before** `serveObject` looks the object up (`:55-57`), so a 404 is logged as a view. Change that branch to: `const object = await env.MEDIA_RESTRICTED.get(r2Key); if (object === null) return notFound();` with **no** log row; then `recordModerationAction(c, { …, action: "media_access", subjectLabel: r2Key, internalNote: grantId })`; then return the response built from that same `object` (split `serveObject` into a `get` and a `respond(object)` helper; the unheld branch keeps its behaviour). Test in `media-restricted-route.test.ts`: a grant fetch of a held key whose object is missing → 404 and **no** `media_access` row; the same fetch with the object present → 200 and exactly one row whose `internal_note` is the grant id. **Mutation:** move the log back above the `get` → the first case FAILS.
+
+**"Viewed" (spec §3.1), one query used by CONFIRM, CLEAR and report queueing**, keyed on the grant and never on a clock window: a case file `f` is viewed when `f.seen_by IS NOT NULL` or `EXISTS (SELECT 1 FROM media_access_requests r JOIN moderation_actions a ON a.action = 'media_access' AND a.subject_label = r.r2_key AND a.internal_note = r.id::text WHERE r.case_file_id = f.id)`. (The earlier "after the case's `created_at`" window was wrong: `created_at` is the intake transaction's start, not its commit.)
+
+**Decided** means `review_outcome IS NOT NULL`, everywhere; `priority = 'decided'` mirrors it for sorting and is never tested on its own.
 
 **`review.ts`:**
-- **`confirmCaseInTx(c, { caseId, statement, actorAdmin, sighting })`** (spec §3.5): transaction-neutral (no BEGIN/COMMIT/ROLLBACK/try, like `applyDecisionInTx`). Lock the case `FOR UPDATE`; return `{ kind: "already_decided" }` for a decided case and `{ kind: "not_viewed", files }` when a file fails the "viewed" query (a sighting's files have `seen_by`, so they pass); for each uploader, `applyAccountActionInTx(c, { kind: "terminate", reason: <fixed text>, subjectLabel: <handle>, … })` and `imposeAccountHoldInTx(c, { category: "csam", … })` (a no-op for a known-hash case that took it at match); for each uploader with no `ncmec_reports` row for this case (`ncmec_reports_one_per_uploader`), queue one (`queued_by = 'confirm'`, `viewed_by_esp` from the "viewed" query); keep every media hold; write `csam_review`; set `review_outcome = 'confirmed'`, `priority = 'decided'`, `alarm_next_at = NULL`. Returns `{ kind: "confirmed", terminated: string[] }`.
+- **`confirmCaseInTx`** (spec §3.5), with exactly this signature:
+  ```ts
+  export interface ConfirmCaseInput {
+    readonly caseId: string;
+    /** The CONFIRM form's text, or the sighting route's required `statement`. */
+    readonly statement: string;
+    readonly actorAdmin: string;
+    /** True only from intake's sighting path, whose files carry `seen_by`. */
+    readonly sighting: boolean;
+  }
+  export type ConfirmCaseOutcome =
+    | { readonly kind: "confirmed"; readonly terminated: readonly string[]; readonly reportsQueued: number }
+    | { readonly kind: "already_decided" }
+    | { readonly kind: "not_viewed"; readonly caseFileIds: readonly string[] }
+    | { readonly kind: "not_found" };
+  export function confirmCaseInTx(c: Client, input: ConfirmCaseInput): Promise<ConfirmCaseOutcome>;
+  ```
+  Transaction-neutral (no BEGIN/COMMIT/ROLLBACK/try, like `applyDecisionInTx`). Lock the case `FOR UPDATE` (no row → `not_found`); return `already_decided` when `review_outcome IS NOT NULL` and `not_viewed` (with the failing case-file ids) when a file fails the "viewed" query (a sighting's files have `seen_by`, so they pass); for each uploader, `applyAccountActionInTx(c, { kind: "terminate", reason: <fixed text>, subjectLabel: <handle>, … })` and `imposeAccountHoldInTx(c, { category: "csam", … })` (a no-op for a known-hash case that took it at match); for each uploader with no `ncmec_reports` row for this case (`ncmec_reports_one_per_uploader`), queue one (`queued_by = 'confirm'`, `viewed_by_esp` from the "viewed" query); keep every media hold; write `csam_review`; set `review_outcome = 'confirmed'`, `priority = 'decided'`, `alarm_next_at = NULL`. Returns `confirmed` with the terminated user ids and the number of reports queued.
 - **`confirmCase(env, ctx, …)`**: epoch bump for every uploader, `BEGIN_BOUNDED_TX`, `confirmCaseInTx`, COMMIT (ROLLBACK quietly on a refusal or error, as plan A's wrapper does), epoch bump again. No notice (A3). Intake's sighting path calls `confirmCaseInTx` inside its own transaction (Task 6) and bumps the epochs around it.
 - **`requestClear(...)`**: set `clear_requested_by`/`_at` and the statement on an undecided `known_hash` case after the same "viewed" check; nothing else changes and the alarm continues.
 - **`clearCase(env, ctx, { caseId, statement, actorAdmin })`** (spec §7.2):
   1. Before the transaction: for each case file, `MEDIA_RESTRICTED.get(r2_key)` → `put` to `evidence/csam/<caseId>/<sha256>.webp` → `head` it. Any failure aborts the clear with a 503 and changes nothing (re-running is idempotent).
-  2. One transaction: lock the case; refuse a decided case; require the "viewed" check; for a `known_hash` case require `clear_requested_by` and a different hand; set `evidence_key` and `cleared_at` on each file; `imposeLegalHold` on each evidence key (category `csam`, the case's `hold_action_id`); write the `csam_clear_release` action; for each serving key, release **only the case's own hold**:
+  2. One transaction: lock the case; refuse it when `review_outcome IS NOT NULL`; require the "viewed" check; for a `known_hash` case require `clear_requested_by` and a different hand; set `evidence_key` and `cleared_at` on each file; `imposeLegalHold` on each evidence key (category `csam`, the case's `hold_action_id`); write the `csam_clear_release` action; for each serving key, release **only the case's own hold**:
      ```sql
      WITH released AS (
        DELETE FROM media_legal_holds
@@ -918,7 +974,7 @@ Add `CSAM_NOT_RETRYABLE`, `CSAM_SAME_HAND`, `CSAM_ALREADY_DECIDED` and `CSAM_NOT
        (r2_key, category, imposed_by, imposed_at, moderation_action_id, case_id, release_action_id, released_by, requested_by)
      SELECT r2_key, category, imposed_by, created_at, moderation_action_id, $3, $4, $5, $6 FROM released
      ```
-     A hold with any other `moderation_action_id` (a `dmca`/`other` hold, or an earlier case's) is untouched, and its key stays restricted. Then `applyDecisionInTx(c, { subject, subjectId, decision: "restore", … })` for every row in `csam_case_targets` (only content that was visible at the match), skipping a `null`; reports: `awaiting_credentials|pending|failed` → `withdrawn`, `submitted` → `retract_pending`, `finished` untouched; write `csam_review`; set `review_outcome = 'false_positive'`, `priority = 'decided'`, `alarm_next_at = NULL`.
+     A hold with any other `moderation_action_id` (a `dmca`/`other` hold, or an earlier case's) is untouched, and its key stays restricted. Then, for every row in `csam_case_targets` (only content that was visible at the match): ⚠️ if the target still embeds a key (`mediaKeysReferencedBy`) that has a `csam_case_files` row of **another** case with `cleared_at IS NULL` (live or confirmed), do **not** restore it, and set `restore_skipped_case_id` to that case (spec §7.2 step 3); otherwise `applyDecisionInTx(c, { subject, subjectId, decision: "restore", … })`, skipping a `null`; reports: `awaiting_credentials|pending|failed` → `withdrawn`, `submitted` → `retract_pending`, `finished` untouched; write `csam_review`; set `review_outcome = 'false_positive'`, `priority = 'decided'`, `alarm_next_at = NULL`.
   3. After commit: `afterContentDecision(env, ctx, { subject, decision: "restore", reason, result })` **without** `legalHold` for each restored item; with the hold gone, `applyMediaVisibilityChange` moves its keys back to `MEDIA` (`visibility-hook.ts:64-65`). For a released key no restored item embeds, `enqueueAndAttemptMove(env, ctx, key, "to_public")` only if `isKeyPubliclyReachable` says visible content uses it.
   The account is not touched (nothing was barred), and any `csam` account hold stays (`account-holds.ts:162`; spec §7.3).
 
@@ -926,8 +982,8 @@ Add `CSAM_NOT_RETRYABLE`, `CSAM_SAME_HAND`, `CSAM_ALREADY_DECIDED` and `CSAM_NOT
   - the gate (cross-site 403, no JWT 401) on each POST;
   - matches: a mixed paste returns exactly the unrecognised lines with their line numbers, and an all-garbage paste → 400 with the list;
   - list shape and order (an undecided `urgent` case above an undecided `high` one above a decided one);
-  - reveal: sets `revealed_at` once, writes **no** `moderation_actions` row;
-  - ⚠️ **viewed (AC-C19):** CONFIRM after Reveal alone → 409 `CSAM_NOT_VIEWED`. After a real two-person fetch of the file through `GET /media/restricted/:sha256?grantId=…` (which logs `media_access`), CONFIRM proceeds, and a classifier report it queues has `viewed_by_esp = true`; a known-hash match-time report keeps `false`;
+  - reveal: sets `revealed_at` once, opens a grant whose `case_file_id` is the file, writes **no** `moderation_actions` row;
+  - ⚠️ **viewed (AC-C19):** CONFIRM after Reveal alone → 409 `CSAM_NOT_VIEWED`. A fetch under a grant whose object is missing (404) still leaves CONFIRM at 409. A fetch through **another** grant for the same key that has no `case_file_id` does not count either. After a successful two-person fetch through the case file's own grant (`GET /media/restricted/:sha256?grantId=…`), CONFIRM proceeds, and a classifier report it queues has `viewed_by_esp = true`; a known-hash match-time report keeps `false`;
   - **CONFIRM:** every uploader is terminated (`disabled_reason = 'terminate'`) and gets 403 on login; a known-hash case gains **no** second report (its match-time one stands); a classifier case gains one report per uploader with `queued_by = 'confirm'` and its uploaders **now** have `csam` account holds (none existed before); media holds unchanged; the alarm stops; no appeal token is minted (A3), and a terminate is not appealable anyway (`routes/appeals.ts:54-60`; `moderation/appeals.ts:197-202` never lifts one);
   - `confirmCaseInTx` leaves the caller's transaction open on `already_decided` and `not_viewed` (the `SAVEPOINT` probe from Task 2);
   - **Both values of `CSAM_REPORT_AT_MATCH` at CONFIRM:** a known-hash case opened with `hooks.reportAtMatch = false` (no match-time report) gains one at CONFIRM;
@@ -938,6 +994,8 @@ Add `CSAM_NOT_RETRYABLE`, `CSAM_SAME_HAND`, `CSAM_ALREADY_DECIDED` and `CSAM_NOT
   - **CLEAR then re-detect:** the same key pasted again → `already_cased` naming the cleared case, no new case, report, hold or alarm (AC-C10, AC-C15); a moderator sighting of it **does** open a new case;
   - **Evidence copy failure:** with `MEDIA_RESTRICTED.put` stubbed to throw, the clear returns 503 and the case, holds, content and reports are unchanged;
   - a second decision on a decided case → 409 `CSAM_ALREADY_DECIDED`;
+  - ⚠️ **cross-case CLEAR (AC-C20):** a post embedding key A (case 1) and key B (case 2, undecided). Clearing case 1 leaves the post hidden and sets its target's `restore_skipped_case_id` to case 2; the list shows why. Clearing case 2 afterwards restores it. **Mutation:** drop the cross-case check → the first assertion FAILS;
+  - sighting route without a `statement` → 400;
   - acknowledge: clears one unmatched digest and logs who;
   - retry: only from `failed`;
   - and make Task 6's `it.todo` (moderator sighting) real.
@@ -953,7 +1011,7 @@ Add `CSAM_NOT_RETRYABLE`, `CSAM_SAME_HAND`, `CSAM_ALREADY_DECIDED` and `CSAM_NOT
   - a textarea "Paste the matched paths from Cloudflare's email, one per line" → POST matches, showing the unrecognised lines;
   - the case list, undecided first, each with its kind (`known hash` / `classifier`), age against the 24 h target (red once OVERDUE), report status and NCMEC id once filed, and any re-upload attempts;
   - per file, a **blurred placeholder** (no `<img>` at all until revealed). A "Reveal" form POSTs reveal and then links to the two-person media-access page for that sha256. The page never embeds the image directly, and shows whether a logged full fetch exists ("viewed") separately from "revealed";
-  - per undecided case, a **Confirm** form and a **Clear** form, each with a required statement. Confirm and Clear are disabled until every file shows "viewed" (a logged two-person fetch or a sighting). A known-hash clear shows "awaiting a second admin" with an **Approve clear** button for anyone but the requester;
+  - per undecided case, a **Confirm** form and a **Clear** form, each with a required statement. Confirm and Clear are disabled until every file shows "viewed" (served under its own grant, or a sighting). A known-hash clear shows "awaiting a second admin" with an **Approve clear** button for anyone but the requester;
   - per cleared case with a finished report, "Runbook follow-up due" and a button recording it was done;
   - per failed report, "Retry after fix";
   - a list of unacknowledged unmatched digests ("a match arrived but the file is gone"), each with an Acknowledge form and a required note.

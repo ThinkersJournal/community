@@ -1,12 +1,14 @@
 # CSAM Detection → NCMEC Reporting Pipeline — Design
 
-**Status:** Revision 1 (2026-10-04), for PM review, then the implementation plan. Issue **#114**, part 2. This is the
+**Status:** Revision 2 (2026-10-04), for PM review, then the implementation plan. Issue **#114**, part 2. This is the
 design `2026-09-06-m4-moderation-queue-design.md` §1 points to as "`2026-09-06-csam-reporting-pipeline-design.md` when written".
 Revision 1 applies CireSnave's R1 ruling (quarantine and review, no bar on an unreviewed match) and his report-timing
 ruling ("Option B"), and brings every code reference up to `origin/main` at `9a76b6f` (0.1.4, last migration `0025`).
 Revision 2 (same day) answers an audit of revision 1: only matched keys are quarantined, a CLEAR restores and releases
 only what the case itself hid and held, classifier cases take the account hold at CONFIRM, and three alarm
-conditions and a re-upload question were added.
+conditions and a re-upload question were added. A re-audit's follow-ups are folded into revision 2: "viewed" counts
+only a served fetch under a grant the case asked for, condition 8 reads the newest move row, disposition precedence,
+a sighting always hides its own subject, "decided" is defined, and a CLEAR never restores content another case holds.
 **Author:** Community controller agent, 2026-10-01; revised 2026-10-04.
 **Research:** `2026-10-01-ncmec-research-notes.md`, with every claim sourced and marked VERIFIED or UNVERIFIED.
 §0 adds two facts read from NCMEC's documentation page on 2026-10-04.
@@ -157,11 +159,23 @@ differ only in the report timing and the alarm cadence.
 
 `viewed_by_esp` (NCMEC's `fileViewedByEsp`: "the reporting company viewed the entire contents of the file") is
 fixed **per report file, when the report is queued**, from evidence of a whole-file view, never from a button press:
-- `true` when the restricted route has **logged a full fetch** of that key under a two-person grant: a
-  `moderation_actions` row with `action = 'media_access'` and `subject_label = <r2_key>`, which
-  `media-restricted.ts:126-133` writes immediately before it streams the object; or when a moderator **attested**
-  seeing it in a sighting (§3.1 c, `csam_case_files.seen_by`);
+- `true` when the file was **served** under a two-person grant **that this case asked for**; or when a moderator
+  **attested** seeing it in a sighting (§3.1 c, `csam_case_files.seen_by`);
 - `false` otherwise, which includes every report queued at match.
+
+"Served under this case's grant" is defined without any clock window:
+- **The grant belongs to the case file.** Reveal (§7) creates the `media_access_requests` row itself, with a new
+  nullable `case_file_id` column (bare uuid, migration `0026`) naming the case file; a second admin approves it on
+  the existing media-access page.
+- **The log row means "served", not "asked".** Today `media-restricted.ts:126-133` writes the `media_access` row
+  **before** `serveObject` looks the object up (`:55-57`), so a fetch that 404s (a failed move, a missing object)
+  is logged exactly like a real view. The plan changes the legal-hold branch to `get` the object first, return the
+  404 with **no** log row when it is missing, and only then write `media_access` with `internal_note = <grant id>`
+  and stream the body it already holds.
+- **Viewed** = `seen_by IS NOT NULL` or `EXISTS (media_access_requests r JOIN moderation_actions a ON a.action =
+  'media_access' AND a.subject_label = r.r2_key AND a.internal_note = r.id::text WHERE r.case_file_id = f.id)`.
+  Keying on the grant replaces the earlier "after `created_at`" window, which was wrong: `created_at` is the intake
+  transaction's start time, not its commit.
 
 `revealed_at` (§7) records only that a reviewer pressed Reveal; it never sets `viewed_by_esp`.
 
@@ -208,8 +222,10 @@ Every legal hold the case imposes and every `csam_cases` row references it.
 1. Open the transaction (`BEGIN_BOUNDED_TX`). Take `pg_advisory_xact_lock(<CSAM_INTAKE lock id>)`. Intake is
    low-volume, so serialising every intake is cheap and closes every intake-vs-intake race.
 2. **Disposition, inside the lock (§3.6):** drop every `suppress`ed key; for a sighting, `attach` keys join their
-   open case (no new case row). If nothing remains to open, apply the attachments, COMMIT, and return the existing
-   case(s). Nothing is re-filed, and nothing re-alarms.
+   open case (no new case row). ⚠️ **A sighting always hides its own subject:** on `attach` **and** on `suppress`,
+   the moderator's post or comment gets step 6's treatment (snapshot, `keep_hidden`, and a target on the existing
+   case if `wasHidden === false`). If nothing remains to open, apply those, COMMIT, and return the existing case(s).
+   Nothing is re-filed, and nothing re-alarms.
 3. Re-resolve uploaders and embedding content for the remaining keys, inside the transaction. This is the
    authoritative set. A digest with **no `media` row** opens no case: it is recorded in `csam_unmatched_digests`,
    which alarms (§6 condition 7), because its evidence may already be gone.
@@ -228,7 +244,9 @@ Every legal hold the case imposes and every `csam_cases` row references it.
    gone → skip it), write a `moderation_snapshots` row (posts: `(post_id, author_id, title, body_markdown)`, the
    shape `posts.ts:515` uses; comments: `(comment_id, author_id, body_markdown)`, `comments.ts:292`), then call
    `applyDecisionInTx(c, { subject, subjectId, decision: "keep_hidden", reason: <fixed text>, actorAdmin })`. A
-   `null` result (deleted between the lock and the update) is skipped, with nothing recorded for it. Record a
+   `null` result is skipped, with nothing recorded for it: its `UPDATE … FROM users` (and, for a comment, `posts`)
+   join (`decide.ts:94-117`) found no row, which with the item already locked means its author's or parent post's
+   row is gone. Record a
    `csam_case_targets` row **only when `result.wasHidden === false`**: content that was already hidden before the
    match was hidden for another reason, and a CLEAR must not un-hide it.
    `keep_hidden`, not `remove`: R1 says not to act as if the determination had been made, and both set `hidden_at`
@@ -308,12 +326,30 @@ until both constants equal CireSnave's quoted words** (AC-C6).
 
 ### 3.5 CONFIRM — "actual knowledge"
 
-`confirmCaseInTx(c, { caseId, statement, actorAdmin, sighting? })` is transaction-neutral, like
-`applyDecisionInTx`. The CONFIRM route wraps it in its own transaction; a moderator sighting calls it inside
-intake's (§3.3 step 8a). It:
-1. locks the case row (`FOR UPDATE`) and refuses one already decided;
-2. requires every case file to have a **logged full fetch** since the case opened (the `media_access` row of §3.1)
-   or an attested sighting (`seen_by`): a decision on a file nobody looked at is not a review;
+```ts
+export interface ConfirmCaseInput {
+  readonly caseId: string;
+  /** The CONFIRM form's text, or the sighting route's required `statement`. */
+  readonly statement: string;
+  readonly actorAdmin: string;
+  /** True only from intake's sighting path, whose files carry `seen_by`. */
+  readonly sighting: boolean;
+}
+export type ConfirmCaseOutcome =
+  | { readonly kind: "confirmed"; readonly terminated: readonly string[]; readonly reportsQueued: number }
+  | { readonly kind: "already_decided" }
+  | { readonly kind: "not_viewed"; readonly caseFileIds: readonly string[] }
+  | { readonly kind: "not_found" };
+export function confirmCaseInTx(c: Client, input: ConfirmCaseInput): Promise<ConfirmCaseOutcome>;
+```
+
+A case is **decided** exactly when `review_outcome IS NOT NULL`; `priority = 'decided'` mirrors it for sorting
+and is never tested on its own. `confirmCaseInTx` is transaction-neutral, like `applyDecisionInTx`. The CONFIRM
+route wraps it in its own transaction; a moderator sighting calls it inside intake's (§3.3 step 8a), passing the
+sighting route's required `statement`. It:
+1. locks the case row (`FOR UPDATE`) and returns `already_decided` when `review_outcome IS NOT NULL`;
+2. requires every case file to be **viewed** (§3.1: served under this case's grant, or an attested sighting): a
+   decision on a file nobody looked at is not a review;
 3. for each uploader: `applyAccountActionInTx(c, { kind: "terminate", … })` (plan A's terminate,
    `account-actions.ts:63`: `disabled_at = COALESCE(u.disabled_at, now())`, `disabled_reason = 'terminate'`, and
    `already_disabled` never applies to a terminate, `:82`). **A terminate is never appealable**
@@ -345,15 +381,20 @@ After commit: the epoch bump before **and** after the transaction for each termi
 
 `csam_case_files` has a **partial** unique index: at most one **live** (not cleared) case file per `r2_key`. A
 CLEAR sets `cleared_at` on its files, which frees the key for a later case. At intake each key gets one disposition
-(the pure helper `intakeDisposition`):
+(the pure helper `intakeDisposition`). **Precedence:** a **live** case (undecided or confirmed; at most one exists)
+decides first. Only when there is no live case are the key's cleared cases consulted, and then only the
+**strongest** cleared kind (`known_hash` > `classifier`) counts.
 
 | Existing case for the key | Machine detection (`known_hash`, `classifier`) | Moderator sighting |
 |---|---|---|
 | none | open a case | open a case (confirmed in the same transaction) |
 | undecided | suppress | **attach**: record the sighting on the open case's file (`seen_by`, `seen_at`, `revealed_at`), raise its `priority` to `urgent`, and leave the decision to the CONFIRM route |
-| confirmed | suppress | suppress (already confirmed) |
-| cleared, same or stronger kind (`known_hash` > `classifier`) | suppress | open a **new** case |
-| cleared, weaker kind | open a **new** case | open a **new** case |
+| confirmed | suppress | suppress (already confirmed); its subject is still hidden (§3.3 step 2) |
+| no live case; strongest cleared kind is the same or stronger | suppress | open a **new** case |
+| no live case; strongest cleared kind is weaker | open a **new** case | open a **new** case |
+
+For example, a key with a cleared `classifier` case **and** a live (undecided) `known_hash` case is decided by the
+live case: a further machine match is suppressed, and a sighting attaches to the `known_hash` case.
 
 So a file a moderator cleared does not re-alarm when Cloudflare's next daily email, or the next scan, names it
 again; the intake answers `already_cased` naming the cleared case. A file cleared as a **classifier** flag that
@@ -369,8 +410,10 @@ was true before this design and is true of every hold (`dmca` and `other` too); 
 barring the original uploader would never have closed it.
 
 The upload route checks `isKeyLegallyHeld` (`legal-hold.ts:36`) for the output key **before** the `put`. A held
-key is refused with the route's one existing `415 UNSUPPORTED_MEDIA_TYPE` body (`media.ts:73-77`), deliberately
-identical to every other refusal so it tells a prober nothing, with no `media` row and no R2 write. When the hold is
+key is refused with the route's one existing `415 UNSUPPORTED_MEDIA_TYPE` body (`media.ts:73-77`), with no `media`
+row and no R2 write. The body is identical to every other refusal, but a 415 on an image that is otherwise
+known-good does reveal that its bytes are held. That is accepted: the only person who learns it is one who already
+holds those bytes. When the hold is
 a `csam` one, the attempt is appended to `csam_upload_attempts` (case, user, time) and raises the case's alarm.
 
 ⚠️ **Question for CireSnave:** under "Option B" and R3 ("every uploader of a matched image is reported"), is a
@@ -512,9 +555,13 @@ The condition holds when **any** of these is true:
    `CSAM_REVIEW_TARGET_HOURS`. A refused re-upload of a case's file (§3.7) re-arms it at once;
 7. **new: a recognised digest with no `media` row** (`csam_unmatched_digests`, not yet acknowledged by an admin):
    the evidence may already have been reaped (§5);
-8. **new: held but still public:** a `media_moves` row with `direction = 'to_restricted'` and status `pending` (older
-   than one drain tick) or `failed` whose `r2_key` has a `csam` media hold. The daily retry cron (`20 4 * * *`,
-   `index.ts:74-75`) is too slow for this, so the `*/2` CSAM tick also re-attempts those moves itself.
+8. **new: held but still public:** for a key with a `csam` media hold, its **newest** `media_moves` row (0016 keeps
+   history; "only the newest row per key describes its current intended bucket", `0016_media_visibility.sql:44-46`)
+   is `to_restricted` and either `failed` or `pending` for longer than one drain tick. The daily retry cron
+   (`20 4 * * *`, `index.ts:74-75`) is too slow, and it never retries a `failed` row, so the `*/2` CSAM tick does
+   it itself: it **resets** each such `failed` row to `pending` with `attempts = 0` (logging
+   `csam: reset failed move <id> for held key`), then re-attempts every such `pending` row. The condition clears
+   when the newest row is `done`.
 
 ### 6.2 Review target and escalation — ⚠️ PROPOSALS for CireSnave (board item 125)
 
@@ -544,20 +591,24 @@ reviewed line:
 - **Email:** to `CSAM_ALARM_EMAIL`, a Worker secret **supplied by the operator as a secret**. Conditions 1–5: the
   daily `0 14 * * *` tick emails while the condition holds, with no dedup suppression, and conditions 2 and 5 also
   email on the tick that first raises them. Condition 6: §6.2's cadence. Conditions 7 and 8 email on the tick
-  that first raises them, then daily.
+  that first raises them, then daily. **First raised** is per item: condition 7 for a `csam_unmatched_digests` row,
+  condition 8 for a `media_moves` row id. An item is first raised on the tick that finds it with no
+  `csam_alarm_marks (condition, ref)` row; that tick emails and writes the mark, and later ticks leave it to the
+  daily email.
 - **Log:** an `ncmec ALARM` line every drain tick while anything holds.
 
 ## 7. Review
 
 `/admin/csam` lists cases, **undecided first** (`urgent`, then `high`, oldest first), then the rest newest first,
 with kind, source, age against the target, NCMEC status and report id, and any re-upload attempts. Previews are
-**blurred**, and **Reveal** is an explicit control. Revealing sets `revealed_at`; the image itself is fetched only
-through the two-person grant (§3.3 step 5), and **that** fetch is what the restricted route logs as `media_access`
-and what counts as viewing (§3.1). It does not change an already-sent report.
+**blurred**, and **Reveal** is an explicit control. Revealing sets `revealed_at` and opens a two-person
+`media_access_requests` row for that case file (§3.1); a second admin approves it, and the image itself is fetched
+only through that grant (§3.3 step 5). **A successful serve** under that grant is what counts as viewing (§3.1). It
+does not change an already-sent report.
 
 ### 7.1 CONFIRM
 
-§3.5. Any Access admin can confirm, once every file has a logged full fetch or an attested sighting.
+§3.5. Any Access admin can confirm, once every file is viewed (§3.1).
 
 ### 7.2 CLEAR (false positive)
 
@@ -581,7 +632,11 @@ The clear transaction:
    later case re-impose a hold. A held evidence key is never released.
 3. **Restore the content:** `applyDecisionInTx(c, { decision: "restore", … })` for each post or comment in
    `csam_case_targets`, which holds only content that was **visible** when the case hid it (§3.3 step 6). Content
-   hidden before the match stays hidden. A `null` result (deleted since) is skipped.
+   hidden before the match stays hidden. A `null` result (deleted since) is skipped. ⚠️ **Cross-case:** a target
+   that still embeds a key with a csam hold belonging to **another** case that is live or confirmed (a
+   `csam_case_files` row of another case with `cleared_at IS NULL`) is **not** restored: it is still part of that other case's
+   quarantine, and un-hiding it would pre-empt that case's review. The target row records why
+   (`restore_skipped_case_id`), and the list shows it; it is restored, if ever, by that other case's CLEAR.
 4. **Reports:** a report that has **not** been submitted (`awaiting_credentials`, `pending`, `failed`) becomes
    `withdrawn` and is never sent. A `submitted`, unfinished one becomes `retract_pending`, and the drain calls
    `/retract` (allowed before finish). A `finished` report is left as it is, and its record is kept.
@@ -635,7 +690,7 @@ Who can review: any Access admin. Access to the **images** keeps #61's two-perso
 | AC-C1 | After a match intake, the content is not publicly reachable: the public routes 404, and the media is out of the public bucket. Tested through the real public endpoints. |
 | AC-C2 | For a **known-hash** match, no human action stands between intake and `submit`: the drain alone takes the match-time report to `finished` against the NCMEC test double. |
 | AC-C3 | A report whose NCMEC deletion window has passed (or a `5001`) is resubmitted, with the old id kept in `abandoned_report_ids`. Shown to fail with the resubmit removed. |
-| AC-C4 | Each of §6's eight alarm conditions produces the banner and the log line. Conditions 2 and 5 also send the immediate email. Each is shown to fail when its condition is removed. |
+| AC-C4 | Each of §6's eight alarm conditions produces the banner and the log line. Conditions 2, 5, 7 and 8 also send the immediate email on first raise. Each is shown to fail when its condition is removed. |
 | AC-C5 | The response byte cap fires before the parser, and a test of an oversized body fails without the cap. |
 | AC-C6 | `CSAM_BAR_UNREVIEWED_MATCH = false` and `CSAM_REPORT_AT_MATCH = true`, **both** equal to CireSnave's quoted words (R1, and "Option B."), quoted in the code and the PR. Both branches of each constant are tested. |
 | AC-C7 | No email is sent to the uploader or author by any CSAM path (A3). |
@@ -650,7 +705,8 @@ Who can review: any Access admin. Access to the **images** keeps #61's two-perso
 | AC-C16 | **Escalation:** an undecided case alarms at the match, re-emails every `CSAM_ALARM_REPEAT_HOURS`, gains the `OVERDUE` subject after `CSAM_REVIEW_TARGET_HOURS`, and is never barred or cleared by any timer. Shown with a clock passed to the tick. |
 | AC-C17 | **Re-upload:** uploading the bytes of a held file is refused before any R2 write, and a `csam` hold logs the attempt (§3.7). |
 | AC-C18 | **Clear scope:** a CLEAR restores only content that was visible at the match, and releases only holds whose `moderation_action_id` is the case's `hold_action_id`; a pre-existing `dmca` hold on the same key survives. |
-| AC-C19 | **Viewed:** `fileViewedByEsp` is `true` only for a file with a logged two-person fetch or an attested sighting; pressing Reveal alone leaves it `false`. |
+| AC-C19 | **Viewed:** `fileViewedByEsp` is `true` only for a file **served** under a grant its case file requested, or an attested sighting; pressing Reveal alone, or a grant fetch that 404s (object missing), leaves it `false` and writes no `media_access` row. |
+| AC-C20 | **Sightings and cross-case clears:** a sighting hides its own subject even when its key is attached or suppressed; a CLEAR does not restore a target that still embeds a key held by another live or confirmed case, and records that case. |
 
 ## 10. Dependencies and order
 
