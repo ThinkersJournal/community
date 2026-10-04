@@ -18,6 +18,7 @@
  *   6. quota (FRESH)               -> 403. BEFORE paying for a transform.
  *   7. transform -> WebP           THE POLYGLOT DEFENSE (EXIF auto-stripped).
  *   8. SHA-256 the OUTPUT
+ *      + legal hold on that key   -> 415 (generic). Re-checked by step 10.
  *   9. R2 put, content-addressed on that hash
  *  10. media row (FRESH)
  *  11. 201 + the CDN URL. THE ORIGINAL IS DISCARDED — never persisted.
@@ -40,6 +41,8 @@ import {
   scaleDownTo,
   toWebp,
 } from "../media/images";
+import { isKeyLegallyHeld } from "../media/legal-hold";
+import { enqueueAndAttemptMove } from "../media/moves";
 import { SNIFF_HEADER_BYTES, sniffImageFormat } from "../media/sniff";
 
 /**
@@ -188,6 +191,24 @@ export async function handleUploadMedia(
   const hash = await sha256HexOf(webp);
   const key = mediaKey(hash);
 
+  // ---- 8b. LEGAL HOLD — never re-publish held bytes -------------------------
+  // ⚠️ A held object was MOVED out of the public bucket (#61: legal-hold.ts,
+  // moves.ts). The key IS the content hash, so a re-upload of the identical
+  // bytes would otherwise put the object straight back at its public URL.
+  // Holds are keyed on `r2_key` (0016's `media_legal_holds` PK), and `key` is
+  // built exactly as `r2KeyForSha256` builds the key a hold names.
+  //
+  // ⚠️ THE REFUSAL IS THE GENERIC 415, BYTE-IDENTICAL TO EVERY OTHER 415 HERE —
+  // deliberately not a new code. The uploader already holds the bytes, so the
+  // only thing a distinct answer could leak is "this exact image is under a
+  // legal hold", and a client has no different next action to take on it.
+  // Moderators get the uploader and hash from the log line instead.
+  const heldBeforePut = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => isKeyLegallyHeld(c, key));
+  if (heldBeforePut) {
+    console.warn("media upload refused: object is under a legal hold", { uploaderId: userId, sha256: hash });
+    return unsupportedMediaType();
+  }
+
   // ---- 9. R2 ---------------------------------------------------------------
   // Unconditional put: the key IS the content hash, so re-putting identical
   // bytes is idempotent, and a conditional put would cost a HEAD to save
@@ -210,13 +231,34 @@ export async function handleUploadMedia(
     storedInfo !== null && hasDimensions(storedInfo)
       ? { width: storedInfo.width, height: storedInfo.height }
       : scaleDownTo(facts, MAX_EDGE);
+  //
+  // ⚠️ THE INSERT RE-CHECKS THE HOLD, IN THE SAME STATEMENT. Step 8b and the
+  // put are not atomic: a hold can commit, and its move (copy to restricted,
+  // delete from public, purge) can FINISH, between 8b and our put — which then
+  // re-creates the public copy. The hold commits BEFORE its move starts
+  // (visibility-hook.ts), so any hold whose move could have run before our put
+  // is visible to this statement, which starts after the put returned. Found
+  // held: no row, a durable move of our copy back out (moves.ts — idempotent
+  // when the restricted copy already exists; it deletes the public one and
+  // purges), and the same generic refusal.
   const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<{ id: string }>(
-      "INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
+      `INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height)
+       SELECT $1::uuid, $2::text, $3::text, $4::bigint, $5::integer, $6::integer
+        WHERE NOT EXISTS (SELECT 1 FROM media_legal_holds WHERE r2_key = $2::text)
+       RETURNING id`,
       [userId, key, hash, webp.byteLength, stored.width, stored.height],
     );
-    return rows[0]!.id;
+    return rows[0]?.id ?? null;
   });
+  if (id === null) {
+    console.warn("media upload refused: legal hold imposed during the upload; re-restricting", {
+      uploaderId: userId,
+      sha256: hash,
+    });
+    await enqueueAndAttemptMove(env, ctx, key, "to_restricted");
+    return unsupportedMediaType();
+  }
 
   // ---- 11. Done. THE ORIGINAL IS DISCARDED — it was never written anywhere. -
   return new Response(

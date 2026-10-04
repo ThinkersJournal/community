@@ -3,10 +3,11 @@ import {
   env,
   waitOnExecutionContext,
 } from "cloudflare:test";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
+import { applyMediaVisibilityChange } from "../src/media/visibility-hook";
 import { MAX_UPLOAD_BYTES, MEDIA_QUOTA_BYTES } from "../src/routes/media";
 import { createVerifiedActor, deleteCreatedUsers } from "./actor";
 import {
@@ -15,6 +16,7 @@ import {
   PNG_1X1,
   SVG_BYTES,
   TEXT_BYTES,
+  uniquePng,
 } from "./fixtures/images";
 
 import type { Actor } from "./actor";
@@ -287,5 +289,217 @@ describe("quota", () => {
     // pass every assertion above and lock every user out once anyone filled up.
     const fresh = await createVerifiedActor();
     expect((await fetchWorker(upload(PNG_1X1, fresh))).status).toBe(201);
+  });
+});
+
+/**
+ * #61 gap — a re-upload of LEGALLY HELD bytes must not put the object back in
+ * the public bucket. The key is the content hash, so before the fix the route's
+ * unconditional `MEDIA.put` re-published exactly what the hold had moved out.
+ *
+ * ⚠️ EVERY IMAGE HERE IS `uniquePng()`, NEVER `PNG_1X1` — a hold on the shared
+ * fixture's key would 415 every other upload test in the (shared) test DB.
+ * `uploadUnique` asserts the key really differs from PNG_1X1's before any hold
+ * is imposed, so a transform that ever stopped depending on its input fails
+ * loudly here instead of silently holding the shared key.
+ *
+ * The hold is imposed through `applyMediaVisibilityChange` with `legalHold` —
+ * the exact call `afterContentDecision` makes for a keep_hidden/remove
+ * decision with a legal hold (src/moderation/after-content-decision.ts).
+ */
+describe("a LEGALLY HELD object is never re-published (#61)", () => {
+  const touchedKeys: string[] = [];
+  let sharedFixtureKey: string;
+
+  async function ctxRun<T>(fn: (c: import("pg").Client) => Promise<T>): Promise<T> {
+    const ctx = createExecutionContext();
+    const v = await withClient(env.HYPERDRIVE_FRESH, ctx, fn);
+    await waitOnExecutionContext(ctx);
+    return v;
+  }
+
+  async function fetchWorkerWith(request: Request, e: Env): Promise<Response> {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(request, e, ctx);
+    await waitOnExecutionContext(ctx);
+    return response;
+  }
+
+  function keyOf(url: string): string {
+    return new URL(url).pathname.slice(1);
+  }
+
+  /** Uploads fresh random bytes; returns them and their (unique) key. */
+  async function uploadUnique(who: Actor): Promise<{ image: Uint8Array<ArrayBuffer>; key: string }> {
+    const image = uniquePng();
+    const response = await fetchWorker(upload(image, who));
+    expect(response.status).toBe(201);
+    const key = keyOf(((await response.json()) as { url: string }).url);
+    expect(key, "uniquePng() must not share PNG_1X1's key — see the describe's header").not.toBe(
+      sharedFixtureKey,
+    );
+    touchedKeys.push(key);
+    return { image, key };
+  }
+
+  async function seedHiddenPostReferencing(owner: Actor, key: string): Promise<string> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at, hidden_at)
+         VALUES ($1, 'held', $2, $3, 'published', now(), now()) RETURNING id`,
+        [owner.userId, `held-${crypto.randomUUID().slice(0, 8)}`, `![x](https://cdn.thinkersjournal.com/${key})`],
+      );
+      return rows[0]!.id;
+    });
+  }
+
+  /** Moderation's real legal-hold path. The move's CDN purge is stubbed. */
+  async function imposeHoldThroughModeration(postId: string): Promise<void> {
+    const ctx = createExecutionContext();
+    await applyMediaVisibilityChange(env, ctx, {
+      subject: "post",
+      subjectId: postId,
+      hidden: true,
+      legalHold: { category: "csam", moderationActionId: crypto.randomUUID(), imposedBy: "mod-a@example.test" },
+    });
+    await waitOnExecutionContext(ctx);
+  }
+
+  async function mediaRowCount(key: string): Promise<number> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM media WHERE r2_key = $1`, [key]);
+      return rows[0]!.n;
+    });
+  }
+
+  /**
+   * `env.MEDIA`, recording every `put` and optionally running `beforePut`
+   * ahead of the real write. Everything else delegates to the real bucket.
+   */
+  function recordingMedia(beforePut?: () => Promise<void>): { bucket: R2Bucket; puts: string[] } {
+    const puts: string[] = [];
+    const bucket = {
+      head: (k: string) => env.MEDIA.head(k),
+      get: (k: string) => env.MEDIA.get(k),
+      delete: (k: string | string[]) => env.MEDIA.delete(k),
+      put: async (k: string, v: Parameters<R2Bucket["put"]>[1], o?: R2PutOptions) => {
+        puts.push(k);
+        if (beforePut) await beforePut();
+        return env.MEDIA.put(k, v, o);
+      },
+    } as unknown as R2Bucket;
+    return { bucket, puts };
+  }
+
+  beforeAll(async () => {
+    const response = await fetchWorker(upload(PNG_1X1, actor));
+    sharedFixtureKey = keyOf(((await response.json()) as { url: string }).url);
+  });
+
+  afterAll(async () => {
+    // media_legal_holds/media_moves have no FK to users, so nothing cascades.
+    await ctxRun(async (c) => {
+      await c.query(`DELETE FROM media_legal_holds WHERE r2_key = ANY($1::text[])`, [touchedKeys]);
+      await c.query(`DELETE FROM media_moves WHERE r2_key = ANY($1::text[])`, [touchedKeys]);
+    });
+    for (const key of touchedKeys) {
+      await env.MEDIA.delete(key);
+      await env.MEDIA_RESTRICTED.delete(key);
+    }
+  });
+
+  it("refuses a re-upload of held bytes: no public put, no new row, a generic 415, a moderator log", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { image, key } = await uploadUnique(actor);
+      await imposeHoldThroughModeration(await seedHiddenPostReferencing(actor, key));
+      // Precondition — the #61 hold path did what it promises, so the
+      // assertions below are about the RE-UPLOAD, not a hold that never moved.
+      expect(await env.MEDIA.head(key)).toBeNull();
+      expect(await env.MEDIA_RESTRICTED.head(key)).not.toBeNull();
+
+      const rowsBefore = await mediaRowCount(key);
+      const genericBody = await (await fetchWorker(upload(SVG_BYTES, actor))).json();
+
+      const reuploader = await createVerifiedActor();
+      const media = recordingMedia();
+      const response = await fetchWorkerWith(upload(image, reuploader), { ...env, MEDIA: media.bucket } as Env);
+
+      // RED before the fix: 201.
+      expect(response.status).toBe(415);
+      // NOT AN ORACLE: byte-identical to the SVG rejection — names no hold.
+      expect(await response.json()).toEqual(genericBody);
+      // RED before the fix: the route puts the key straight back into MEDIA.
+      expect(media.puts).not.toContain(key);
+      expect(await env.MEDIA.head(key)).toBeNull();
+      // RED before the fix: a new row for the held key.
+      expect(await mediaRowCount(key)).toBe(rowsBefore);
+      // Still restricted — the refusal did not disturb the evidence.
+      expect(await env.MEDIA_RESTRICTED.head(key)).not.toBeNull();
+      // Moderators can see who tried, and what.
+      const sha256 = key.slice("media/post/".length, -".webp".length);
+      expect(
+        warn.mock.calls.some((call) => {
+          const text = JSON.stringify(call);
+          return text.includes(reuploader.userId) && text.includes(sha256);
+        }),
+      ).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  /**
+   * THE RACE: the hold commits, AND its move finishes, after the route's
+   * pre-put check and before its put — so the put re-creates the public copy.
+   * Forced deterministically: `beforePut` runs moderation's real hold path.
+   * The INSERT's `NOT EXISTS` re-check must catch it, write no row, and move
+   * the fresh public copy back out.
+   */
+  it("closes the race: a hold landing between the check and the put leaves no public copy and no row", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { image, key } = await uploadUnique(actor);
+      const postId = await seedHiddenPostReferencing(actor, key);
+      const rowsBefore = await mediaRowCount(key);
+
+      let imposed = false;
+      const media = recordingMedia(async () => {
+        if (imposed) return;
+        imposed = true;
+        await imposeHoldThroughModeration(postId);
+        // The hold's move is complete — the public copy is gone — BEFORE our put.
+        expect(await env.MEDIA.head(key)).toBeNull();
+      });
+      const response = await fetchWorkerWith(upload(image, actor), { ...env, MEDIA: media.bucket } as Env);
+
+      expect(imposed, "the race was not forced — the route never reached its put").toBe(true);
+      expect(media.puts).toContain(key); // the pre-put check passed: this IS the race
+      // RED before the fix (and with the INSERT's NOT EXISTS removed): 201.
+      expect(response.status).toBe(415);
+      // RED before the fix: the racing put left a public copy.
+      expect(await env.MEDIA.head(key)).toBeNull();
+      // RED before the fix: a row for the held key.
+      expect(await mediaRowCount(key)).toBe(rowsBefore);
+      expect(await env.MEDIA_RESTRICTED.head(key)).not.toBeNull();
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("CONTROL: an UNHELD duplicate upload still succeeds, idempotently", async () => {
+    const { image, key } = await uploadUnique(actor);
+    const media = recordingMedia();
+    const response = await fetchWorkerWith(upload(image, actor), { ...env, MEDIA: media.bucket } as Env);
+
+    expect(response.status).toBe(201);
+    expect(keyOf(((await response.json()) as { url: string }).url)).toBe(key);
+    expect(media.puts).toContain(key);
+    expect(await env.MEDIA.head(key)).not.toBeNull();
+    expect(await mediaRowCount(key)).toBe(2);
   });
 });
