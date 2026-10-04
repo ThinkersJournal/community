@@ -55,24 +55,31 @@ Read at 9a76b6f:
 
 ### 2.1 Shield by Project Arachnid (Canadian Centre for Child Protection, C3P)
 
-- **Detects:** known images only, by hash. There's no classifier. Its classifications are `csam`,
-  `harmful-abusive-material` and `no-known-match`, with a match type of `exact` or `near`, and near-match
-  details carrying SHA-1/SHA-256 (VERIFIED, the live OpenAPI document `shield.projectarachnid.com/openapi.json`,
-  v1.1.0).
-- **Access:** an HTTP API with username/password auth, which suits a Worker's `fetch`. Endpoints:
+- **Detects:** known images only, by hash. There's no classifier. VERIFIED from the live OpenAPI document
+  `shield.projectarachnid.com/openapi.json`, v1.1.0:
+  - the `Classification` enum has **four** values: `csam`, `harmful-abusive-material`, `test` and
+    `no-known-match`;
+  - a `/v1/pdq` answer (`ScannedHash`) is exactly `classification`, `match_type` (`exact`, `near` or null)
+    and `near_match_details[]`, each of which is `{ sha1_base32, sha256_hex, timestamp, classification }`.
+  - **There is no distance or score field.** C3P sets the near-match threshold, and we can't see or tune it.
+- **Access:** an HTTP API that suits a Worker's `fetch`. Auth is a username and password: the official
+  TypeScript SDK's README reads them from `ARACHNID_SHIELD_USERNAME` / `ARACHNID_SHIELD_PASSWORD` (VERIFIED,
+  SDK README). The OpenAPI document declares no `securitySchemes`, so the exact scheme (presumably Basic)
+  is UNVERIFIED. Endpoints:
   - `POST /v1/media` sends the image bytes;
   - `POST /v1/url` sends a URL on a domain authorised on our account;
   - **`POST /v1/pdq` takes "an array of one or more base64-encoded PDQ hashes"**, which is the hash-only
     option;
   - `GET /v1/version` returns the database's "last_updated_at", which supports the re-scan policy;
-  - `POST /v1/media/submit` uploads suspected media for C3P analysts. We would not use it.
+  - `POST /v1/media/submit` uploads suspected media for C3P analysts. Per the OpenAPI, that media is
+    "retained for future detection and removal efforts" (VERIFIED). We would not use it.
   Official SDKs exist in TypeScript and PHP.
 - **Eligibility:** "No cost to using this tool" for electronic service providers and content administrators.
   You sign up at `projectarachnid.ca/en/api/accounts/register/` (VERIFIED, projectarachnid.ca home page).
   - Access is granted after review to prevent abuse. This is UNVERIFIED: it comes from a SDK/forum summary.
   - The website terms of use say nothing about the API. **The API's own terms, its rate limits, and whether
-    `/v1/media` uploads are retained are all UNVERIFIED.** The schema implies only `/media/submit` retains
-    media, but that's inference.
+    plain `/v1/media` scan uploads are retained are all UNVERIFIED.** Retention is documented only for
+    `/v1/media/submit`; that `/v1/media` therefore doesn't retain is inference.
 - **Cost:** $0.
 - **Where it runs:** a cron Worker. We compute PDQ in the Worker (§3.2) and send only hashes.
 - **What leaves us:** **only PDQ hashes** on the primary path. On the fallback (§3.3), image bytes go to C3P,
@@ -80,9 +87,9 @@ Read at 9a76b6f:
 
 ### 2.2 NCMEC hash sharing
 
-- **Detects:** known images only. NCMEC runs four initiatives: NGO CSAM, Exploitative, Industry, and
-  Youth-Produced Imagery. NCMEC analysts review a file "at least three times" before its hash goes on a
-  list. "As of December 31, 2025, NCMEC shared more than 12.1 million hashes with 78 ESPs" (VERIFIED,
+- **Detects:** known images only. The Hash Sharing API's environments are **Industry** (CSAM,
+  Exploitative), **law enforcement** (CSAM) and **NPO** (CSAM, Exploitative, Generative AI) (VERIFIED, API
+  docs). NCMEC analysts review a file "at least three times" before its hash goes on a list. "As of December 31, 2025, NCMEC shared more than 12.1 million hashes with 78 ESPs" (VERIFIED,
   missingkids.org CyberTipline data).
 - **Access:** a hash list we download and sync, then match ourselves. Through the Hash Sharing API:
   - Basic auth; "a username and password must be requested from and supplied by NCMEC";
@@ -91,16 +98,24 @@ Read at 9a76b6f:
     (VERIFIED, `hashsharing.ncmec.org/npo/v2/documentation/`).
   - ⚠️ **What share of the CSAM list carries PDQ, as opposed to only MD5/PhotoDNA, is UNVERIFIED.** The API
     supports PDQ as a type, but I found no population figure. One secondary page lists only MD5/SHA1/PhotoDNA.
-- **Eligibility:** ESPs and industry partners, free. Credentials come from NCMEC. **The ESP CyberTipline
-  registration CireSnave already holds is not the same credential.** Hash-sharing access must be requested
-  separately (VERIFIED, API docs). Whether CyberTipline registration is a prerequisite is UNVERIFIED.
+- **Eligibility:** credentials "must be requested from and supplied by NCMEC" (VERIFIED, API docs). Three
+  things are **UNVERIFIED, so ask NCMEC** (§7):
+  - whether this is a credential separate from CyberTipline reporting. The API docs and endpoints are
+    separate, which suggests so;
+  - whether it is free. A secondary page says free to ESPs; NCMEC's own pages don't say;
+  - whether CyberTipline registration is a prerequisite.
+
+  We'd request **Industry CSAM** access. Whether TJ, as a non-profit in formation, could also get **NPO**
+  access is a question to ask.
 - **Legal basis:** §2258C(a) lets NCMEC share hashes with providers, and (b) leaves a provider that uses them
   "subject to reporting under section 2258A" (VERIFIED in `2026-10-01-ncmec-research-notes.md` §4).
-- **Cost:** $0, plus our storage (a few tens of MB in Postgres; UNVERIFIED estimate).
+- **Cost:** believed $0 (UNVERIFIED, above), plus our storage (a few tens of MB in Postgres; UNVERIFIED
+  estimate).
 - **Where it runs:** matching runs in our own Worker and Postgres:
   - exact MD5/SHA-1 lookups against original-bytes hashes we capture at upload;
   - a PDQ Hamming-distance search (`bit_count` over a 256-bit value) against our stored PDQ;
-  - the PhotoDNA entries are **unusable to us** without the licensed PhotoDNA library.
+  - the PhotoDNA entries are usable **only if** we can license the PhotoDNA library on-prem. That is
+    UNVERIFIED for an ESP (§2.3); without it we skip them.
 - **What leaves us:** nothing. We download hashes, and nothing about our users goes out.
 
 ### 2.3 Microsoft PhotoDNA Cloud Service
@@ -110,8 +125,11 @@ Read at 9a76b6f:
   secure hashes… Your content remains your content" (VERIFIED, PhotoDNA FAQ). The FAQ says Microsoft does
   not keep images.
   - Which hash lists it matches against is **not stated** (UNVERIFIED).
-  - The on-prem PhotoDNA library is licensed by Microsoft to law enforcement and tool vendors. It isn't
-    offered to small ESPs, as far as the FAQ says.
+  - **On-prem library:** the FAQ says one "can contact pdnasup@microsoft.com to start the PhotoDNA
+    on-premise licensing procedures" (VERIFIED). That sentence sits in the answer addressed to law
+    enforcement, so **whether an ESP like us can license it is UNVERIFIED. Ask pdnasup** (§7).
+    - If yes, we could hash on our side, though not in a Worker: the library is native code.
+    - That would make the PhotoDNA entries in the NCMEC and IWF lists usable.
 - **Eligibility:** "Intended users are trusted online service providers and businesses hosting
   user-generated content", via an application and "a third-party vetting service", at "Microsoft's sole
   discretion". Microsoft may re-verify or suspend access at any time (VERIFIED, cloud-service page, FAQ and
@@ -153,6 +171,8 @@ Read at 9a76b6f:
   - Implementations exist in C++, PHP, Python, Java and **WASM** "as of November 2025".
   - Meta's recommended match is **Hamming distance ≤ 31**, and it recommends discarding hashes with
     **quality ≤ 49** (VERIFIED, `facebook/ThreatExchange` `pdq/README.md`).
+  - The distance threshold applies only where **we** match, as with a local NCMEC list. Arachnid applies its
+    own, invisible threshold (§2.1).
   - Its WASM build targets browsers (emscripten). Running it in a Worker is **UNVERIFIED**; a spike is
     needed (§3.2).
 - **PDQ is only an algorithm.** It needs a list to match against. The lists I found that carry CSAM PDQ hashes:
@@ -193,7 +213,10 @@ Read at 9a76b6f:
 - **Usability for us:**
   - its PDQ coverage isn't listed;
   - MD5/SHA-1 need original-bytes hashes;
-  - PhotoDNA needs the library.
+  - matching its PhotoDNA entries ourselves needs the on-prem library, which is UNVERIFIED for us (§2.3).
+    The IWF page also says "we've teamed up with Microsoft so that companies can use PhotoDNA to access our
+    Hash List, with a cloud-based automated system" (VERIFIED). Whether that route needs IWF membership
+    too isn't stated (UNVERIFIED).
   - IWF hashes reportedly also feed NCMEC's NGO list. That's UNVERIFIED (a search summary), and if true it
     makes IWF largely redundant for us.
 - **Verdict:** not now. It's cost-prohibitive and overlaps with free sources.
@@ -217,9 +240,11 @@ Read at 9a76b6f:
 
 ### 2.9 Cloudflare Workers AI
 
-- **No suitable model.** The catalogue (69 models, read 2026-10-04) has nothing built for CSAM:
+- **No suitable model.** The catalogue (read 2026-10-04) has about a dozen vision-capable models and
+  nothing built for CSAM. Representative examples:
   - `resnet-50` is a general ImageNet classifier;
-  - `llava-1.5-7b-hf`, `llama-3.2-11b-vision-instruct` and `moondream` are general vision-language models;
+  - `llava-1.5-7b-hf`, `llama-3.2-11b-vision-instruct` and `moondream` are general vision-language models,
+    as are the rest of the vision models;
   - `llama-guard-3-8b` is **text-only** (VERIFIED, model page).
 - **Not appropriate as a CSAM detector:**
   - none of these models is trained, validated or measured for it;
@@ -274,14 +299,32 @@ statutory roles. **Excluded.**
 
 **Notes:**
 - The Images binding documents AVIF/WebP/JPEG outputs.
-- Unique transformations: the first 5,000 a month are free, then $0.50 per 1,000 (VERIFIED, Images pricing).
+- **Unique transformations are shared with uploads, and overage needs a paid plan.**
+  - The first 5,000 a month are free. **That allowance is shared:** every upload already spends one in
+    `toWebp` (`apps/api/src/media/images.ts` ~161–164), so a scan-time downscale would double our use.
+  - Beyond 5,000, the rate of $0.50 per 1,000 applies only on the **Images Paid plan**. On the Free plan,
+    new transformations past the allowance return an error (VERIFIED, Images pricing).
+  - So the WASM-decoder path, which uses no transformation, is preferred if the spike shows it fits.
 - **UNVERIFIED, so the spike must answer:**
   - (a) the decode path works in workerd;
   - (b) CPU per image fits comfortably in the tick;
   - (c) our hash of Meta's test images equals the reference hashes in Meta's repo. That's the positive
     control.
-- Animated GIF/WebP: PDQ hashes one frame. Whether our transform keeps animation is not something I
-  checked. If it does, hash the first frame and flag the gap.
+- ⚠️ **Known gap: animation.**
+  - `toWebp` (`images.ts` ~161–164) does not set `anim: false`. Cloudflare's default is "Outputs the animated
+    image with all frames" (VERIFIED, Images transform docs), so **animated uploads are stored with every
+    frame.**
+  - PDQ hashes one still image. A first-frame PDQ would **silently miss** CSAM in any other frame.
+  - Options:
+    - (a) hash several sampled frames. This needs a frame-aware decoder, so it's more spike risk;
+    - (b) send the bytes of animated objects to Arachnid `/v1/media`, which accepts video. Whether it scans
+      every frame of an animated WebP is UNVERIFIED;
+    - (c) **flatten at upload** by adding `anim: false` to `.output()`. The binding's `ImageOutputOptions`
+      type has `anim?: boolean` (verified in `worker-configuration.d.ts`), and Cloudflare documents
+      `anim: false` as "Converts the first frame of an animated input to a still image".
+  - **Recommendation: (c) for new uploads**, so that what we store is exactly what we hash, with no gap.
+    Use (b) once, for any animated objects already stored. The cost is that animated images stop
+    animating. That's a product change, so it's §8 Q4.
 
 ### 3.3 "Periodically scan all new images"
 
@@ -312,10 +355,16 @@ media_scans: r2_key (PK) · sha256 · pdq (bit(256)) · pdq_quality · scanner �
 
 **Results:**
 - `no-known-match` → `clean`.
-- `csam` → intake as a **known-hash match** (§3.5). This covers an exact match or a near match at PDQ
-  distance ≤ 31.
-- `harmful-abusive-material` → intake as **review-first**. C3P's category isn't necessarily illegal CSAM, so
-  it's quarantined but not auto-reported.
+- `csam` with `match_type: exact` → intake as a **known-hash match** (§3.5).
+- `csam` with `match_type: near` → **recommended: also a known-hash match** (§3.5, §8 Q3).
+  - We store a re-encoded WebP, so an `exact` match against the original file's hash will almost never
+    happen. Nearly every true hit will be `near`.
+  - Excluding `near` would therefore all but disable reporting at match time.
+  - The near threshold is C3P's, not ours, and we can't see a distance.
+- `harmful-abusive-material` → intake under its **own** source, review-first. C3P's category isn't
+  necessarily illegal CSAM, so it's quarantined but never auto-reported.
+- `test` → never an intake. In production it means a misconfiguration, which logs and alarms. It's used
+  only for the launch positive control.
 - PDQ quality ≤ 49 (Meta's discard threshold) → fall back to Arachnid `/v1/media` (bytes), recorded as such.
   If that also fails → `unscannable`, with an alarm.
 
@@ -356,7 +405,7 @@ S1 alone catches "the scanner is down", whatever the cause. S5 is the positive c
   | Arachnid `/v1/pdq` | yes |
   | NCMEC list | yes (local) |
   | Lantern | yes (local) |
-  | PhotoDNA Cloud | **no** (no library for us) |
+  | PhotoDNA Cloud | **no**; hash-only would need the on-prem library, which is UNVERIFIED for us (§2.3) |
   | Google CSA | bytes, or embeddings (UNVERIFIED) |
   | Safer API | UNVERIFIED |
   | Cloudflare | it scans in its own cache |
@@ -376,30 +425,38 @@ S1 alone catches "the scanner is down", whatever the cause. S5 is the positive c
     (C3P), or to Microsoft under terms written for this purpose.
   - §2258B(c): minimise employee access. Only the moderator at review sees anything, and only through the
     two-person path.
-  - ⚠️ **"Actual knowledge" timing:**
-    - a known-hash match plausibly gives us the knowledge that starts the "as soon as reasonably possible"
-      clock (§2258A(a));
-    - NCMEC told CireSnave that filing on a match without review is acceptable (pipeline spec §0).
-    - The parallel revision files only after a moderator CONFIRM. **So the urgent alarm and prompt review
-      are what keep us inside "as soon as reasonably possible".** This is a timing risk the revision should
-      state, not something self-scan changes.
+  - **"Actual knowledge" timing is closed by CireSnave's Option B ruling.**
+    - A known-hash match plausibly gives us the knowledge that starts the "as soon as reasonably possible"
+      clock (§2258A(a)). NCMEC told CireSnave that filing on a match without review is acceptable (pipeline
+      spec §0).
+    - CireSnave ruled (2026-10-04, relayed by the controller, verbatim): *"Option B."* For **known-hash**
+      matches, the CyberTipline report is queued **at the moment of the match**, and the account stays
+      **active** until a moderator reviews.
+    - So moderator delay can't push filing outside the window. Review decides **only the ban**: reporting
+      is not banning.
+    - Classifier flags and `harmful-abusive-material` never auto-report. R1 still stands: the content is
+      quarantined at the match.
 
 ### 3.5 Feeding the quarantine and review pipeline
 
-Self-scan adds new detection `source` values to the parallel revision's intake: `self_scan_hash` and
-`self_scan_classifier`. These are proposed names; the revision owns the enum. It uses the **same** intake
-function: quarantine, case, alarm. No parallel path.
+Self-scan adds three new detection `source` values to the parallel revision's intake. These are proposed
+names; the revision owns the enum. **Under Option B the source decides whether a report is filed at match
+time**, so each confidence level needs a source of its own. It uses the **same** intake function:
+quarantine, case, alarm. No parallel path.
 
-| Source | Confidence | Effect |
+| Source | Confidence | On match |
 |---|---|---|
-| `self_scan_hash` (Arachnid `csam`, an NCMEC list match, a PhotoDNA match) | high | quarantine; **priority case; urgent alarm**; CONFIRM → ban + CyberTipline report |
-| `self_scan_hash` with Arachnid `harmful-abusive-material` | medium | quarantine; normal-priority case; review-first; **never auto-reported** |
-| `self_scan_classifier` (Google CSA, later) | low | quarantine; normal-priority case; review-first; **never auto-reported** |
+| `self_scan_hash`: Arachnid `csam` (`exact`, and `near` if Q3 says so), an NCMEC list match, or a PhotoDNA match | high | quarantine + **CyberTipline report queued**; account **active**; **priority case, urgent alarm**; CONFIRM → ban |
+| `self_scan_harmful`: Arachnid `harmful-abusive-material` | medium | quarantine; normal-priority case; review-first; **never auto-reported** (CONFIRM → report + ban) |
+| `self_scan_classifier`: Google CSA, later | low | quarantine; normal-priority case; review-first; **never auto-reported** (CONFIRM → report + ban) |
 
 **Evidence carried on the case:**
 - vendor;
 - classification;
-- `exact` or `near`, and the PDQ distance;
+- `match_type` (`exact` or `near`);
+- for Arachnid, the `near_match_details` entries: the matched known file's `sha256_hex`, `sha1_base32`,
+  `classification` and `timestamp`. There is no distance;
+- for a local NCMEC PDQ match, our computed Hamming distance;
 - list version;
 - scan time.
 
@@ -423,7 +480,7 @@ never `clean`.
 | Option | Detection | Eligibility / registration | Cost | Data that leaves us | Where it runs | Effort | Verdict |
 |---|---|---|---|---|---|---|---|
 | **Arachnid Shield** (C3P) | known-hash (exact + near) | ESP sign-up; reviewed access (UNVERIFIED detail) | **$0** | **PDQ hashes only**; bytes on fallback | cron Worker | **M**: PDQ-in-WASM spike + client | **Primary** |
-| **NCMEC hash sharing** | known-hash (MD5, SHA1, PDQ; PhotoDNA unusable) | separate credentials from NCMEC | **$0** | nothing | cron Worker + Postgres | **M–L**: sync + matcher | **Phase 2** |
+| **NCMEC hash sharing** | known-hash (MD5, SHA1, PDQ; PhotoDNA only with an on-prem licence, UNVERIFIED) | credentials requested from NCMEC (whether separate from CyberTipline is UNVERIFIED) | believed $0 (UNVERIFIED) | nothing | cron Worker + Postgres | **M–L**: sync + matcher | **Phase 2** |
 | **PhotoDNA Cloud** | known-hash (PhotoDNA) | application + third-party vetting, Microsoft's discretion | **$0** (monthly transaction cap) | **image bytes** to Microsoft | cron Worker | **S**: one POST | **Fallback / second engine**; apply now (lead time) |
 | **Google Content Safety API** | **classifier** | application, approval; criteria unpublished | **$0** | bytes (or embeddings, UNVERIFIED) | cron Worker | **S–M** | **Later**: review-first only |
 | **Thorn Safer** | known-hash; classifier only in Enterprise | sales contract | **≥ $30,720/yr** | bytes (local hashing UNVERIFIED) | vendor API or self-host | M (L self-host) | **No**: budget |
@@ -467,9 +524,10 @@ lists.
 > We automatically check every image uploaded to the Service against lists of known child sexual abuse
 > material kept by child-protection organisations. To do this we usually send only a digital fingerprint of
 > the image, not the image itself, to Project Arachnid (run by the Canadian Centre for Child Protection). In
-> the rare case a fingerprint can't be made, we send the image itself. Any possible match is hidden at once,
-> reviewed by our moderators, and reported to the National Center for Missing & Exploited Children where the
-> law requires.
+> the rare case a fingerprint can't be made, we send the image itself. Any possible match is hidden at once.
+> A match against known material is reported to the National Center for Missing & Exploited Children, as
+> the law requires, and reviewed by our moderators. Other possible matches are reviewed by our moderators
+> first.
 
 **§3 processor table additions:**
 - **Canadian Centre for Child Protection (Project Arachnid / Shield)**: *Checking uploaded images against
@@ -499,8 +557,15 @@ The NCMEC ESP registration is already his.
    <https://www.projectarachnid.ca/en/api/accounts/register/>
 3. **Apply for PhotoDNA Cloud Service** (free, vetted). Ask what the monthly transaction cap is.
    <https://www.microsoft.com/en-us/photodna/cloudservice>
-4. **Ask NCMEC for Hash Sharing API credentials** for the industry/NGO CSAM list. This is separate from the
-   CyberTipline credentials. Ask which share of entries carry PDQ.
+   - **Also ask pdnasup@microsoft.com whether an ESP may license PhotoDNA on-prem** (FAQ). The answer
+     decides whether the PhotoDNA entries in the NCMEC and IWF lists are usable to us, and whether PhotoDNA
+     could be hash-only. <https://www.microsoft.com/en-us/photodna/faq>
+4. **Ask NCMEC for Hash Sharing API credentials, requesting Industry CSAM access.** Ask:
+   - whether these are separate from the CyberTipline credentials;
+   - whether it's free;
+   - whether CyberTipline registration is a prerequisite;
+   - which share of entries carry PDQ;
+   - optionally, whether TJ as a non-profit in formation qualifies for NPO access.
    <https://hashsharing.ncmec.org/npo/v2/documentation/>
 5. *Optional, later:* the Google child-safety toolkit interest form, for the Content Safety API.
    <https://protectingchildren.google/toolkit-interest-form/>
@@ -508,8 +573,9 @@ The NCMEC ESP registration is already his.
    <https://technologycoalition.org/programs/lantern/>
 
 **Pay for:** nothing in the recommended path. Possible small costs:
-- Images-binding transforms past 5,000 a month, at $0.50 per 1,000, only if the spike chooses that decode
-  path;
+- Images-binding transforms, only if the spike chooses that decode path:
+  - the 5,000 free a month are **shared with uploads**, which already spend one each;
+  - beyond that, $0.50 per 1,000 needs the **Images Paid plan**. On the Free plan, overage errors;
 - Postgres storage for the hashes.
 
 ## 8. Open questions for CireSnave
@@ -519,11 +585,14 @@ The NCMEC ESP registration is already his.
 2. **The bytes fallback:** is sending an image's bytes to C3P acceptable for the small share of images
    whose fingerprint can't be computed? If not, those images become `unscannable` and need manual
    disposition, and would never be published.
-3. **`harmful-abusive-material`:** C3P's category for material that may not meet the legal CSAM definition.
-   Should it be quarantined review-first, as proposed, or ignored?
-4. **The review-timing risk** (§3.4): given NCMEC's statement that filing on a match is fine, does he want a
-   **time limit**? For example, a known-hash match unreviewed after N hours files automatically, so moderator
-   delay can't breach "as soon as reasonably possible".
+3. **Does an Arachnid `near` match count as a known-hash match** for filing at match time (Option B)?
+   - **Recommended: yes.** We store re-encoded images, so true hits will almost all be `near`, and the
+     threshold is C3P's.
+   - If no, `near` would go to review-first, never auto-filed, and Option B would rarely file anything
+     (§3.3).
+   - Separately: should `harmful-abusive-material` be quarantined review-first, as proposed, or ignored?
+4. **Flatten animated images at upload** (`anim: false`)? Recommended, so the PDQ hash covers everything
+   stored (§3.2). Otherwise every animated image's other frames go unscanned unless its bytes are sent.
 5. **Fund IWF or Thorn later?** Both are paid. This document recommends neither.
 
 ## 9. Sources (all accessed 2026-10-04)
@@ -542,7 +611,7 @@ The NCMEC ESP registration is already his.
 - Thorn platform solutions: <https://www.thorn.org/solutions/for-platforms/>
 - Safer Match / Essential announcement: <https://safer.io/resources/introducing-safer-essential-api-based-csam-detection/>
 - Safer Essential on AWS Marketplace (pricing): <https://aws.amazon.com/marketplace/pp/prodview-dfwekn4bx4ake>
-- Safer Enterprise on AWS Marketplace (pricing, via search summary): <https://aws.amazon.com/marketplace/pp/prodview-unzbqt3w6pqbg>
+- Safer Enterprise on AWS Marketplace (pricing): <https://aws.amazon.com/marketplace/pp/prodview-unzbqt3w6pqbg>
 - Hive and Safer Match: <https://thehive.ai/blog/matching-against-csam-hives-innovative-integration-with-thorns-safer-match>
 - Meta PDQ README: <https://github.com/facebook/ThreatExchange/blob/main/pdq/README.md>
 - Meta PDQ WASM README: <https://github.com/facebook/ThreatExchange/tree/main/pdq/wasm>
@@ -562,6 +631,7 @@ The NCMEC ESP registration is already his.
 - Workers Web Crypto (MD5/SHA-1): <https://developers.cloudflare.com/workers/runtime-apis/web-crypto/>
 - Images binding: <https://developers.cloudflare.com/images/transform-images/bindings/>
 - Images pricing: <https://developers.cloudflare.com/images/pricing/>
+- Images transform options (`anim`): <https://developers.cloudflare.com/images/transform-images/transform-via-url/>
 - Workers AI model catalogue: <https://developers.cloudflare.com/workers-ai/models/>
 - Workers AI `llama-guard-3-8b`: <https://developers.cloudflare.com/workers-ai/models/llama-guard-3-8b/>
 - Llama 3.2 acceptable use policy (behind a login, so not read): <https://www.llama.com/llama3_2/use-policy/>
