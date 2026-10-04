@@ -18,6 +18,8 @@
  * branch, AFTER the unverified-account reaper's (src/auth/reap-unverified.ts,
  * `"30 3 * * *"`), BEFORE the email-drain dispatch.
  */
+import type { Client } from "pg";
+
 import { withClient } from "../db/client";
 
 /**
@@ -27,6 +29,29 @@ import { withClient } from "../db/client";
  * first; a backlog beyond this cap is simply finished on the NEXT run.
  */
 const REAP_BATCH = 500;
+
+/**
+ * The per-key re-check run immediately before an R2 delete: is the object
+ * still held by a `media` row, OR by a legal hold? Exported so the hold arm
+ * can be tested on its own — the orphan selection already skips held rows, so
+ * through `reapOrphanMedia` this arm only fires for a hold imposed between the
+ * DELETE and the R2 delete, which a test cannot interleave.
+ *
+ * ⚠️ The hold arm is evidence preservation (#61): a held object normally lives
+ * in MEDIA_RESTRICTED, which this reaper never touches, but while its move is
+ * still pending (moves.ts retries) it is in MEDIA, and deleting it there would
+ * destroy the only copy.
+ */
+export async function isObjectStillNeeded(c: Client, r2Key: string): Promise<boolean> {
+  const { rowCount } = await c.query(
+    `SELECT 1 FROM media WHERE r2_key = $1
+     UNION ALL
+     SELECT 1 FROM media_legal_holds WHERE r2_key = $1
+     LIMIT 1`,
+    [r2Key],
+  );
+  return (rowCount ?? 0) > 0;
+}
 
 /**
  * Free media referenced by no post: hard-deletes the `media` row and, when
@@ -81,6 +106,10 @@ export async function reapOrphanMedia(
          SELECT m.id FROM media m
           WHERE m.created_at < now() - interval '24 hours'
             AND NOT EXISTS (SELECT 1 FROM referenced r WHERE r.sha256 = m.sha256)
+            -- ⚠️ A LEGALLY HELD upload is evidence (#61): its row records who
+            -- uploaded it and when. Holds are keyed on r2_key (0016), never
+            -- on a post, so a held row is kept whatever references it.
+            AND NOT EXISTS (SELECT 1 FROM media_legal_holds h WHERE h.r2_key = m.r2_key)
           ORDER BY m.created_at
           LIMIT $1
        )
@@ -109,11 +138,8 @@ export async function reapOrphanMedia(
     // cron, and its worst case is one re-uploadable broken image, never loss of
     // any saved content. The connection is released before the (slow) R2 delete
     // rather than held across it.
-    const held = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-      const { rowCount } = await c.query(`SELECT 1 FROM media WHERE r2_key = $1 LIMIT 1`, [key]);
-      return (rowCount ?? 0) > 0;
-    });
-    if (held) continue; // a media row still holds this object — keep it
+    const held = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => isObjectStillNeeded(c, key));
+    if (held) continue; // a media row or a legal hold still holds this object — keep it
     try {
       await env.MEDIA.delete(key);
       objects++;

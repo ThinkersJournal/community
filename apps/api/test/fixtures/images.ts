@@ -96,6 +96,61 @@ export function pixelBombPng(width: number, height: number): Uint8Array<ArrayBuf
   return out;
 }
 
+/** zlib's Adler-32, big-endian on the wire. */
+function adler32(bytes: Uint8Array): number {
+  let a = 1;
+  let b = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    a = (a + bytes[i]!) % 65521;
+    b = (b + a) % 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
+/**
+ * A REAL, DECODABLE `size`x`size` RGB PNG of RANDOM pixels — so its re-encoded
+ * WebP, and therefore its content-addressed key, is unique to the caller.
+ *
+ * ⚠️ WHY NOT `PNG_1X1`. A test that puts a LEGAL HOLD on an upload's key would,
+ * with the shared fixture, hold the key every other media test uploads to (the
+ * test DB is shared across files), and they would all start getting 415s.
+ *
+ * The IDAT is one STORED (uncompressed) deflate block — valid zlib with no
+ * compressor needed: header 78 01, BFINAL=1/BTYPE=00, LEN, NLEN, raw, Adler-32.
+ */
+export function uniquePng(size = 8): Uint8Array<ArrayBuffer> {
+  const ihdr = new Uint8Array(13);
+  const view = new DataView(ihdr.buffer);
+  view.setUint32(0, size);
+  view.setUint32(4, size);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // colour type: truecolour (RGB)
+  const stride = 1 + size * 3; // filter byte + RGB
+  const raw = new Uint8Array(size * stride);
+  for (let row = 0; row < size; row++) {
+    raw[row * stride] = 0; // filter: None
+    crypto.getRandomValues(raw.subarray(row * stride + 1, (row + 1) * stride));
+  }
+  const len = raw.length; // < 65535 for any sane `size`: one stored block
+  const zlib = new Uint8Array(2 + 5 + len + 4);
+  zlib.set([0x78, 0x01, 0x01, len & 0xff, len >>> 8, ~len & 0xff, (~len >>> 8) & 0xff], 0);
+  zlib.set(raw, 7);
+  new DataView(zlib.buffer).setUint32(7 + len, adler32(raw));
+  const parts = [
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", zlib),
+    pngChunk("IEND", new Uint8Array(0)),
+  ];
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
 /** A PNG-signed buffer larger than the route's cap, for the streaming test. */
 export function oversizeBytes(limit: number): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(limit + 1024);
