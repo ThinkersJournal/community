@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
+import { attemptMove } from "../src/media/moves";
 import { applyMediaVisibilityChange } from "../src/media/visibility-hook";
 import { MAX_UPLOAD_BYTES, MEDIA_QUOTA_BYTES } from "../src/routes/media";
 import { createVerifiedActor, deleteCreatedUsers } from "./actor";
@@ -374,9 +375,13 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
 
   /**
    * `env.MEDIA`, recording every `put` and optionally running `beforePut`
-   * ahead of the real write. Everything else delegates to the real bucket.
+   * ahead of the real write and `afterPut` after it. Everything else
+   * delegates to the real bucket.
    */
-  function recordingMedia(beforePut?: () => Promise<void>): { bucket: R2Bucket; puts: string[] } {
+  function recordingMedia(
+    beforePut?: () => Promise<void>,
+    afterPut?: () => void,
+  ): { bucket: R2Bucket; puts: string[] } {
     const puts: string[] = [];
     const bucket = {
       head: (k: string) => env.MEDIA.head(k),
@@ -385,10 +390,22 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
       put: async (k: string, v: Parameters<R2Bucket["put"]>[1], o?: R2PutOptions) => {
         puts.push(k);
         if (beforePut) await beforePut();
-        return env.MEDIA.put(k, v, o);
+        const out = await env.MEDIA.put(k, v, o);
+        if (afterPut) afterPut();
+        return out;
       },
     } as unknown as R2Bucket;
     return { bucket, puts };
+  }
+
+  async function moveRows(key: string): Promise<{ id: string; direction: string; status: string }[]> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ id: string; direction: string; status: string }>(
+        `SELECT id, direction, status FROM media_moves WHERE r2_key = $1 ORDER BY created_at`,
+        [key],
+      );
+      return rows;
+    });
   }
 
   beforeAll(async () => {
@@ -457,7 +474,7 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
    * THE RACE: the hold commits, AND its move finishes, after the route's
    * pre-put check and before its put — so the put re-creates the public copy.
    * Forced deterministically: `beforePut` runs moderation's real hold path.
-   * The INSERT's `NOT EXISTS` re-check must catch it, write no row, and move
+   * The route's post-put re-check (step 10's `h` CTE) must catch it, write no row, and move
    * the fresh public copy back out.
    */
   it("closes the race: a hold landing between the check and the put leaves no public copy and no row", async () => {
@@ -481,7 +498,7 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
 
       expect(imposed, "the race was not forced — the route never reached its put").toBe(true);
       expect(media.puts).toContain(key); // the pre-put check passed: this IS the race
-      // RED before the fix (and with the INSERT's NOT EXISTS removed): 201.
+      // RED before the fix (and with `WHERE NOT held` removed from `ins`): 201.
       expect(response.status).toBe(415);
       // RED before the fix: the racing put left a public copy.
       expect(await env.MEDIA.head(key)).toBeNull();
@@ -490,6 +507,97 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
       expect(await env.MEDIA_RESTRICTED.head(key)).not.toBeNull();
     } finally {
       warn.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  /**
+   * The race branch must DECIDE "held" and DURABLY ENQUEUE the move out of
+   * MEDIA in ONE statement. Forced: after the racing put, the route's FIRST
+   * new database connection (the one that decides) works and every later one
+   * fails — the shape of the move's own INSERT failing, or the Worker dying,
+   * right after the decision. MEDIA_RESTRICTED throws as well, so the
+   * immediate move attempt fails too. A pending `to_restricted` row must
+   * remain for the retry cron, and the client still gets the generic 415.
+   */
+  it("the race branch leaves a durable move row even when everything after the decision fails", async () => {
+    const owner = await createVerifiedActor(); // its own MEDIA_LIMITER bucket (20/min per user)
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { image, key } = await uploadUnique(owner);
+      const postId = await seedHiddenPostReferencing(owner, key);
+
+      let imposed = false;
+      let afterPut = false;
+      let before = -1;
+      const media = recordingMedia(
+        async () => {
+          if (imposed) return;
+          imposed = true;
+          await imposeHoldThroughModeration(postId);
+          // The hold's own move (done) is now on the books; only rows the
+          // re-upload adds after this point count below.
+          before = (await moveRows(key)).length;
+        },
+        () => {
+          afterPut = true;
+        },
+      );
+      const realHd = env.HYPERDRIVE_FRESH;
+      const brokenUrl = new URL(realHd.connectionString);
+      brokenUrl.pathname = "/holdgaps_no_such_database";
+      let connectionsAfterPut = 0;
+      const hd = {
+        get connectionString(): string {
+          if (!afterPut) return realHd.connectionString;
+          connectionsAfterPut++;
+          return connectionsAfterPut === 1 ? realHd.connectionString : brokenUrl.toString();
+        },
+      } as unknown as Hyperdrive;
+      const restricted = {
+        head: async () => {
+          throw new Error("simulated R2 failure");
+        },
+        get: async () => {
+          throw new Error("simulated R2 failure");
+        },
+        put: async () => {
+          throw new Error("simulated R2 failure");
+        },
+        delete: async () => {
+          throw new Error("simulated R2 failure");
+        },
+      } as unknown as R2Bucket;
+
+      const response = await fetchWorkerWith(upload(image, owner), {
+        ...env,
+        MEDIA: media.bucket,
+        MEDIA_RESTRICTED: restricted,
+        HYPERDRIVE_FRESH: hd,
+      } as Env).catch((err: unknown) => err);
+
+      expect(imposed, "the race was not forced — the route never reached its put").toBe(true);
+      expect(before).toBeGreaterThanOrEqual(1);
+      expect(connectionsAfterPut, "the post-put decision never reached the database").toBeGreaterThanOrEqual(1);
+      // RED with the two-statement code: the separate enqueue's connection
+      // fails, so no move row is written (and the request throws or 500s).
+      const added = (await moveRows(key)).slice(before);
+      expect(added).toEqual([expect.objectContaining({ direction: "to_restricted", status: "pending" })]);
+      expect(response instanceof Response ? response.status : String(response)).toBe(415);
+      expect(await mediaRowCount(key)).toBe(1); // only the original upload's row
+
+      // The durable row is enough: attempting it with healthy bindings (what
+      // the retry cron does) takes the public copy back out.
+      const ctx = createExecutionContext();
+      await attemptMove(env, ctx, added[0]!.id, key, "to_restricted");
+      await waitOnExecutionContext(ctx);
+      expect(await env.MEDIA.head(key)).toBeNull();
+      expect(await env.MEDIA_RESTRICTED.head(key)).not.toBeNull();
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
       vi.unstubAllGlobals();
     }
   });

@@ -42,7 +42,7 @@ import {
   toWebp,
 } from "../media/images";
 import { isKeyLegallyHeld } from "../media/legal-hold";
-import { enqueueAndAttemptMove } from "../media/moves";
+import { attemptMove } from "../media/moves";
 import { SNIFF_HEADER_BYTES, sniffImageFormat } from "../media/sniff";
 
 /**
@@ -198,11 +198,14 @@ export async function handleUploadMedia(
   // Holds are keyed on `r2_key` (0016's `media_legal_holds` PK), and `key` is
   // built exactly as `r2KeyForSha256` builds the key a hold names.
   //
-  // ⚠️ THE REFUSAL IS THE GENERIC 415, BYTE-IDENTICAL TO EVERY OTHER 415 HERE —
-  // deliberately not a new code. The uploader already holds the bytes, so the
-  // only thing a distinct answer could leak is "this exact image is under a
-  // legal hold", and a client has no different next action to take on it.
-  // Moderators get the uploader and hash from the log line instead.
+  // ⚠️ THE REFUSAL IS THE GENERIC 415 — same code, body and headers as every
+  // other 415 here, deliberately not a new code. It is NOT oracle-free: a 415
+  // on bytes that would otherwise be accepted still tells the uploader "held,
+  // or the transform failed", and its timing differs from the other 415s
+  // (they return before the transform). Accepted: the uploader already holds
+  // the bytes, so the most they learn is that this exact image is restricted,
+  // and the response names no hold, category or reason. Moderators get the
+  // uploader and hash from the log line instead.
   const heldBeforePut = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => isKeyLegallyHeld(c, key));
   if (heldBeforePut) {
     console.warn("media upload refused: object is under a legal hold", { uploaderId: userId, sha256: hash });
@@ -232,33 +235,61 @@ export async function handleUploadMedia(
       ? { width: storedInfo.width, height: storedInfo.height }
       : scaleDownTo(facts, MAX_EDGE);
   //
-  // ⚠️ THE INSERT RE-CHECKS THE HOLD, IN THE SAME STATEMENT. Step 8b and the
-  // put are not atomic: a hold can commit, and its move (copy to restricted,
-  // delete from public, purge) can FINISH, between 8b and our put — which then
-  // re-creates the public copy. The hold commits BEFORE its move starts
-  // (visibility-hook.ts), so any hold whose move could have run before our put
-  // is visible to this statement, which starts after the put returned. Found
-  // held: no row, a durable move of our copy back out (moves.ts — idempotent
-  // when the restricted copy already exists; it deletes the public one and
-  // purges), and the same generic refusal.
-  const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    const { rows } = await c.query<{ id: string }>(
-      `INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height)
-       SELECT $1::uuid, $2::text, $3::text, $4::bigint, $5::integer, $6::integer
-        WHERE NOT EXISTS (SELECT 1 FROM media_legal_holds WHERE r2_key = $2::text)
-       RETURNING id`,
+  // ⚠️ THE HOLD IS RE-CHECKED HERE, AND THE ROW-OR-MOVE IS ONE STATEMENT. Step
+  // 8b and the put are not atomic: a hold can commit, and its move (copy to
+  // restricted, delete from public, purge) can FINISH, between 8b and our put
+  // — which then re-creates the public copy. The hold commits BEFORE its move
+  // starts (visibility-hook.ts), so any hold whose move could have run before
+  // our put is visible to this statement, which starts after the put returned.
+  //
+  // `h` is read once and both data-modifying CTEs share its snapshot: EXACTLY
+  // ONE of them writes. Unheld: the media row. Held: no media row, and a
+  // durable `to_restricted` move row for our fresh public copy. Deciding and
+  // enqueueing in one statement is the point — with a separate enqueue, a
+  // failed INSERT or a Worker dying between the two would leave held bytes
+  // PUBLIC with no row anywhere for the retry cron to find.
+  const written = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ id: string | null; move_id: string | null }>(
+      `WITH h AS (
+         SELECT EXISTS (SELECT 1 FROM media_legal_holds WHERE r2_key = $2::text) AS held
+       ),
+       ins AS (
+         INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height)
+         SELECT $1::uuid, $2::text, $3::text, $4::bigint, $5::integer, $6::integer
+           FROM h WHERE NOT held
+         RETURNING id
+       ),
+       mv AS (
+         INSERT INTO media_moves (r2_key, direction)
+         SELECT $2::text, 'to_restricted' FROM h WHERE held
+         RETURNING id
+       )
+       SELECT (SELECT id FROM ins) AS id, (SELECT id FROM mv) AS move_id`,
       [userId, key, hash, webp.byteLength, stored.width, stored.height],
     );
-    return rows[0]?.id ?? null;
+    return rows[0]!;
   });
-  if (id === null) {
+  if (written.id === null) {
     console.warn("media upload refused: legal hold imposed during the upload; re-restricting", {
       uploaderId: userId,
       sha256: hash,
     });
-    await enqueueAndAttemptMove(env, ctx, key, "to_restricted");
+    // The move row is already durable. Attempt it now; if that fails, the row
+    // stays `pending` and the retry cron finishes it — so the client's answer
+    // does not depend on it.
+    if (written.move_id !== null) {
+      try {
+        await attemptMove(env, ctx, written.move_id, key, "to_restricted");
+      } catch (err) {
+        console.error("media upload: immediate re-restrict failed; left pending for the retry cron", {
+          moveId: written.move_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     return unsupportedMediaType();
   }
+  const id = written.id;
 
   // ---- 11. Done. THE ORIGINAL IS DISCARDED — it was never written anywhere. -
   return new Response(

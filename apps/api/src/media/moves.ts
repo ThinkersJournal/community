@@ -37,7 +37,14 @@ function bucketsFor(env: Env, direction: MoveDirection): { from: R2Bucket; to: R
     : { from: env.MEDIA_RESTRICTED, to: env.MEDIA };
 }
 
-/** Inserts the durable row, then attempts the move inline. Never throws. */
+/**
+ * Inserts the durable row, then attempts the move inline. An R2 or purge
+ * failure never throws (it leaves the row `pending` for the retry cron), but a
+ * DATABASE failure does: the row's own INSERT, or recording the outcome. When
+ * the INSERT itself fails no row exists and nothing will retry — a caller that
+ * cannot afford that writes the row in its own statement and calls
+ * `attemptMove` (see routes/media.ts's race branch).
+ */
 export async function enqueueAndAttemptMove(
   env: Env,
   ctx: ExecutionContext,
@@ -51,6 +58,22 @@ export async function enqueueAndAttemptMove(
     );
     return rows[0]!.id;
   });
+  await runMove(env, ctx, moveId, r2Key, direction);
+}
+
+/**
+ * Attempts an ALREADY-DURABLE move row now, rather than waiting for the cron.
+ * Same failure contract as `enqueueAndAttemptMove` after its INSERT: R2/purge
+ * failures leave the row `pending`; a database failure recording the outcome
+ * throws, and the row is still `pending` for `processPendingMoves`.
+ */
+export async function attemptMove(
+  env: Env,
+  ctx: ExecutionContext,
+  moveId: string,
+  r2Key: string,
+  direction: MoveDirection,
+): Promise<void> {
   await runMove(env, ctx, moveId, r2Key, direction);
 }
 
