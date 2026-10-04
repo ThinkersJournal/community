@@ -392,7 +392,8 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
   }
 
   beforeAll(async () => {
-    const response = await fetchWorker(upload(PNG_1X1, actor));
+    const owner = await createVerifiedActor(); // its own MEDIA_LIMITER bucket (20/min per user)
+    const response = await fetchWorker(upload(PNG_1X1, owner));
     sharedFixtureKey = keyOf(((await response.json()) as { url: string }).url);
   });
 
@@ -409,18 +410,19 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
   });
 
   it("refuses a re-upload of held bytes: no public put, no new row, a generic 415, a moderator log", async () => {
+    const owner = await createVerifiedActor(); // its own MEDIA_LIMITER bucket (20/min per user)
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const { image, key } = await uploadUnique(actor);
-      await imposeHoldThroughModeration(await seedHiddenPostReferencing(actor, key));
+      const { image, key } = await uploadUnique(owner);
+      await imposeHoldThroughModeration(await seedHiddenPostReferencing(owner, key));
       // Precondition — the #61 hold path did what it promises, so the
       // assertions below are about the RE-UPLOAD, not a hold that never moved.
       expect(await env.MEDIA.head(key)).toBeNull();
       expect(await env.MEDIA_RESTRICTED.head(key)).not.toBeNull();
 
       const rowsBefore = await mediaRowCount(key);
-      const genericBody = await (await fetchWorker(upload(SVG_BYTES, actor))).json();
+      const genericBody = await (await fetchWorker(upload(SVG_BYTES, owner))).json();
 
       const reuploader = await createVerifiedActor();
       const media = recordingMedia();
@@ -459,11 +461,12 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
    * the fresh public copy back out.
    */
   it("closes the race: a hold landing between the check and the put leaves no public copy and no row", async () => {
+    const owner = await createVerifiedActor(); // its own MEDIA_LIMITER bucket (20/min per user)
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const { image, key } = await uploadUnique(actor);
-      const postId = await seedHiddenPostReferencing(actor, key);
+      const { image, key } = await uploadUnique(owner);
+      const postId = await seedHiddenPostReferencing(owner, key);
       const rowsBefore = await mediaRowCount(key);
 
       let imposed = false;
@@ -474,7 +477,7 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
         // The hold's move is complete — the public copy is gone — BEFORE our put.
         expect(await env.MEDIA.head(key)).toBeNull();
       });
-      const response = await fetchWorkerWith(upload(image, actor), { ...env, MEDIA: media.bucket } as Env);
+      const response = await fetchWorkerWith(upload(image, owner), { ...env, MEDIA: media.bucket } as Env);
 
       expect(imposed, "the race was not forced — the route never reached its put").toBe(true);
       expect(media.puts).toContain(key); // the pre-put check passed: this IS the race
@@ -492,9 +495,10 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
   });
 
   it("CONTROL: an UNHELD duplicate upload still succeeds, idempotently", async () => {
-    const { image, key } = await uploadUnique(actor);
+    const owner = await createVerifiedActor(); // its own MEDIA_LIMITER bucket (20/min per user)
+    const { image, key } = await uploadUnique(owner);
     const media = recordingMedia();
-    const response = await fetchWorkerWith(upload(image, actor), { ...env, MEDIA: media.bucket } as Env);
+    const response = await fetchWorkerWith(upload(image, owner), { ...env, MEDIA: media.bucket } as Env);
 
     expect(response.status).toBe(201);
     expect(keyOf(((await response.json()) as { url: string }).url)).toBe(key);
