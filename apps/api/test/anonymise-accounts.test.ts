@@ -5,6 +5,7 @@ import worker from "../src";
 import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
+import type { SecurityLedgerDO } from "../src/durable-objects/SecurityLedgerDO";
 import { mintActionToken } from "../src/moderation/action-tokens";
 import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
 import { quiet } from "./helpers/security-do";
@@ -867,6 +868,23 @@ async function seedLedger(id: string): Promise<void> {
   await LEDGER().report({ reports: [crossing(id), crossing(id)], countedOverflow: {} });
 }
 
+/** The shared ledger's real `armAt`, while `quietSharedLedger` has replaced it. */
+let realArmAt: SecurityLedgerDO["armAt"] | null = null;
+
+async function quietSharedLedger(): Promise<void> {
+  await runInDurableObject(LEDGER(), async (l, s) => {
+    realArmAt = l.armAt;
+    quiet(l);
+    await s.storage.deleteAlarm();
+  });
+}
+
+async function restoreSharedLedger(): Promise<void> {
+  const original = realArmAt;
+  realArmAt = null;
+  if (original !== null) await runInDurableObject(LEDGER(), (l) => void (l.armAt = original));
+}
+
 async function ledgerRows(id: string): Promise<number> {
   return runInDurableObject(LEDGER(), (_l, s) =>
     s.storage.sql
@@ -890,12 +908,10 @@ describe("anonymiseExpiredAccounts — ledger clean-up", () => {
   // deletes the held row these counts include. Without this, the "keeps its
   // ledger rows" case passed only when an earlier case had already sent this
   // hour's held report (alone it read 2, not 3).
-  beforeEach(async () => {
-    await runInDurableObject(LEDGER(), async (l, s) => {
-      quiet(l);
-      await s.storage.deleteAlarm();
-    });
-  });
+  // The seam is put back after each case (final review M-7), so no test added
+  // after this describe silently runs against a ledger that never arms.
+  beforeEach(quietSharedLedger);
+  afterEach(restoreSharedLedger);
 
   it("forgets the account's ledger rows (positive control: all three present before)", async () => {
     const f = await seedAccount({ eligible: false });
