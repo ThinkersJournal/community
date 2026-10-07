@@ -79,9 +79,10 @@ async function hashRows(rows: readonly CounterRow[], salt: string): Promise<Hash
   );
 }
 
-function parseCounts(text: string): Record<string, number> {
+/** A bucket's JSON counts, as a Map (keys are signal names read back from storage). */
+function parseCounts(text: string): Map<string, number> {
   const parsed: unknown = JSON.parse(text);
-  return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, number>) : {};
+  return new Map(typeof parsed === "object" && parsed !== null ? Object.entries(parsed as Record<string, number>) : []);
 }
 
 export class SecurityCounterDO extends DurableObject<Env> {
@@ -92,8 +93,9 @@ export class SecurityCounterDO extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.ctx.blockConcurrencyWhile(async () => {
+    void this.ctx.blockConcurrencyWhile(() => {
       this.ensureSchema();
+      return Promise.resolve();
     });
   }
 
@@ -124,7 +126,7 @@ export class SecurityCounterDO extends DurableObject<Env> {
 
   /** The per-instance member salt: 32 random bytes, created on first use, gone with `deleteAll`. */
   private salt(): string {
-    const existing = this.sql.exec<MetaRow>("SELECT v FROM meta WHERE k = 'salt'").toArray()[0];
+    const existing = this.sql.exec<MetaRow>("SELECT v FROM meta WHERE k = 'salt'").toArray().at(0);
     if (existing !== undefined) return existing.v;
     const fresh = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("");
     this.sql.exec("INSERT INTO meta (k, v) VALUES ('salt', ?) ON CONFLICT(k) DO NOTHING", fresh);
@@ -161,16 +163,17 @@ export class SecurityCounterDO extends DurableObject<Env> {
   private addBucket(row: HashedRow): void {
     const found = this.sql
       .exec<CountsRow>("SELECT counts FROM buckets WHERE subject = ? AND minute = ? AND route = ?", row.subject, row.minute, row.route)
-      .toArray()[0];
-    const counts = found === undefined ? {} : parseCounts(found.counts);
-    counts[row.signal] = (counts[row.signal] ?? 0) + row.n;
+      .toArray()
+      .at(0);
+    const counts = found === undefined ? new Map<string, number>() : parseCounts(found.counts);
+    counts.set(row.signal, (counts.get(row.signal) ?? 0) + row.n);
     this.sql.exec(
       `INSERT INTO buckets (subject, minute, route, counts) VALUES (?, ?, ?, ?)
        ON CONFLICT(subject, minute, route) DO UPDATE SET counts = excluded.counts`,
       row.subject,
       row.minute,
       row.route,
-      JSON.stringify(counts),
+      JSON.stringify(Object.fromEntries(counts)),
     );
   }
 
@@ -206,7 +209,7 @@ export class SecurityCounterDO extends DurableObject<Env> {
       untilMinute,
     );
     for (const r of rows) {
-      const n = parseCounts(r.counts)[signal] ?? 0;
+      const n = parseCounts(r.counts).get(signal) ?? 0;
       if (n === 0) continue;
       events += n;
       byRoute[r.route] = (byRoute[r.route] ?? 0) + n;
@@ -238,7 +241,8 @@ export class SecurityCounterDO extends DurableObject<Env> {
     const windowMs = rule.windowMinutes * MINUTE_MS;
     const last = this.sql
       .exec<{ at_ms: number }>("SELECT at_ms FROM last_report WHERE signal = ? AND subject = ?", signal, subject)
-      .toArray()[0];
+      .toArray()
+      .at(0);
     if (last !== undefined && last.at_ms > nowMs - windowMs) return false;
     this.sql.exec(
       `INSERT INTO last_report (signal, subject, at_ms) VALUES (?, ?, ?)
@@ -268,7 +272,7 @@ export class SecurityCounterDO extends DurableObject<Env> {
   /** Merge into a pending report for the same (signal, subject), count past the cap, or insert. */
   private queueReport(report: CounterReport, nowMs: number): boolean {
     const rkey = `${report.signal}|${report.subject}`;
-    const pending = this.sql.exec<ReportRow>("SELECT id, report, attempts FROM reports WHERE rkey = ?", rkey).toArray()[0];
+    const pending = this.sql.exec<ReportRow>("SELECT id, report, attempts FROM reports WHERE rkey = ?", rkey).toArray().at(0);
     if (pending !== undefined) {
       const merged = mergeReports(JSON.parse(pending.report) as CounterReport, report);
       this.sql.exec("UPDATE reports SET report = ? WHERE id = ?", JSON.stringify(merged), pending.id);
@@ -318,12 +322,12 @@ export class SecurityCounterDO extends DurableObject<Env> {
   }
 
   private readReportsOverflow(): Partial<Record<SignalClass, number>> {
-    const out: Partial<Record<SignalClass, number>> = {};
+    const out = new Map<SignalClass, number>();
     for (const signalClass of Object.keys(CLASS_POLICY) as SignalClass[]) {
-      const row = this.sql.exec<MetaRow>("SELECT v FROM meta WHERE k = ?", `reports_overflow:${signalClass}`).toArray()[0];
-      if (row !== undefined) out[signalClass] = Number(row.v);
+      const row = this.sql.exec<MetaRow>("SELECT v FROM meta WHERE k = ?", `reports_overflow:${signalClass}`).toArray().at(0);
+      if (row !== undefined) out.set(signalClass, Number(row.v));
     }
-    return out;
+    return Object.fromEntries(out);
   }
 
   /**
@@ -331,7 +335,7 @@ export class SecurityCounterDO extends DurableObject<Env> {
    * digest, over the HALF-OPEN minutes `[fromMinute, toMinute)`, so consecutive
    * digests never count their shared boundary minute twice (audit M-5).
    */
-  async summarise(fromMinute: number, toMinute: number): Promise<SiteSummary> {
+  summarise(fromMinute: number, toMinute: number): Promise<SiteSummary> {
     const activity: Record<string, SignalActivity> = {};
     for (const rule of SIGNAL_RULES) {
       if (rule.subject !== "site" || CLASS_POLICY[rule.signalClass].mode !== "summary") continue;
@@ -340,7 +344,7 @@ export class SecurityCounterDO extends DurableObject<Env> {
     const overflow = this.sql
       .exec<CountRow>("SELECT COALESCE(SUM(n), 0) AS n FROM overflow WHERE minute >= ? AND minute < ?", fromMinute, toMinute)
       .one().n;
-    return { activity, overflowEvents: overflow };
+    return Promise.resolve({ activity, overflowEvents: overflow });
   }
 
   async alarm(): Promise<void> {
@@ -383,7 +387,9 @@ export class SecurityCounterDO extends DurableObject<Env> {
     try {
       await this.ledgerFor().report({ reports: due.map((r) => JSON.parse(r.report) as CounterReport), countedOverflow });
     } catch {
-      this.ctx.storage.transactionSync(() => this.reattach(due, nowMs));
+      this.ctx.storage.transactionSync(() => {
+        this.reattach(due, nowMs);
+      });
       logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason: "ledger_unreachable", ip: null });
       return;
     }
@@ -392,7 +398,7 @@ export class SecurityCounterDO extends DurableObject<Env> {
         this.sql.exec("DELETE FROM reports WHERE id = ?", r.id);
         this.addPending((JSON.parse(r.report) as CounterReport).signalClass, -1);
       }
-      for (const [signalClass, n] of Object.entries(countedOverflow)) this.subtractOverflow(signalClass, n ?? 0);
+      for (const [signalClass, n] of Object.entries(countedOverflow)) this.subtractOverflow(signalClass, n);
     });
   }
 
@@ -401,7 +407,7 @@ export class SecurityCounterDO extends DurableObject<Env> {
     for (const r of due) {
       const sent = JSON.parse(r.report) as CounterReport;
       const rkey = `${sent.signal}|${sent.subject}`;
-      const live = this.sql.exec<ReportRow>("SELECT id, report, attempts FROM reports WHERE rkey = ?", rkey).toArray()[0];
+      const live = this.sql.exec<ReportRow>("SELECT id, report, attempts FROM reports WHERE rkey = ?", rkey).toArray().at(0);
       const report = live === undefined ? sent : mergeReports(sent, JSON.parse(live.report) as CounterReport);
       if (live !== undefined) {
         this.sql.exec("DELETE FROM reports WHERE id = ?", live.id);
@@ -448,14 +454,14 @@ export class SecurityCounterDO extends DurableObject<Env> {
 
 /** Two reports for one (signal, subject) while the ledger is down: events added, window widened (§2.4 m4). */
 export function mergeReports(a: CounterReport, b: CounterReport): CounterReport {
-  const byRoute: Record<string, number> = { ...a.byRoute };
-  for (const [route, n] of Object.entries(b.byRoute)) byRoute[route] = (byRoute[route] ?? 0) + n;
+  const byRoute = new Map(Object.entries(a.byRoute));
+  for (const [route, n] of Object.entries(b.byRoute)) byRoute.set(route, (byRoute.get(route) ?? 0) + n);
   return {
     ...b,
     windowStartMs: Math.min(a.windowStartMs, b.windowStartMs),
     windowEndMs: Math.max(a.windowEndMs, b.windowEndMs),
     observed: Math.max(a.observed, b.observed),
     events: a.events + b.events,
-    byRoute,
+    byRoute: Object.fromEntries(byRoute),
   };
 }

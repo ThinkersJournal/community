@@ -37,7 +37,9 @@ export function purgeSecurityEventSink(
 ): (event: SecurityEvent, at: Date) => void {
   if (env.SECURITY_COUNTING === "off") return () => undefined;
   const scope = { waitUntil, stubFor: (shard: string) => guardedCounter(env, shard) };
-  return (event, at) => target.add(event, at, {}, scope);
+  return (event, at) => {
+    target.add(event, at, {}, scope);
+  };
 }
 
 /**

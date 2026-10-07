@@ -88,8 +88,9 @@ export class SecurityLedgerDO extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.ctx.blockConcurrencyWhile(async () => {
+    void this.ctx.blockConcurrencyWhile(() => {
       for (const ddl of LEDGER_SCHEMA) this.ctx.storage.sql.exec(ddl);
+      return Promise.resolve();
     });
   }
 
@@ -134,10 +135,24 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   /** A batch's crossings and counted overflows, each with its class and how to apply it. */
   private entriesOf(batch: LedgerReportBatch, nowMs: number): (readonly [string, () => void])[] {
     const entries: (readonly [string, () => void])[] = batch.reports.map(
-      (r) => [r.signalClass, () => this.processReport(r, nowMs)] as const,
+      (r) =>
+        [
+          r.signalClass,
+          () => {
+            this.processReport(r, nowMs);
+          },
+        ] as const,
     );
-    for (const [signalClass, n] of Object.entries(batch.countedOverflow)) {
-      if (n !== undefined && n > 0) entries.push([signalClass, () => this.countNotStored(signalClass as SignalClass, nowMs, n)]);
+    // An RPC batch is structured-cloned, so a Partial record can carry an explicit `undefined`.
+    for (const [signalClass, n] of Object.entries(batch.countedOverflow) as [string, number | undefined][]) {
+      if (n !== undefined && n > 0) {
+        entries.push([
+          signalClass,
+          () => {
+            this.countNotStored(signalClass as SignalClass, nowMs, n);
+          },
+        ]);
+      }
     }
     return entries;
   }
@@ -227,7 +242,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   private send(r: CounterReport, cooldownUntilMs: number | null, cd: ClassDay, nowMs: number): void {
     const store = this.store;
     const subject = renderSubject(store, r.subjectKind, r.subject, nowMs);
-    store.queue(alertFrom(r, subject, this.env.CF_VERSION_METADATA?.id ?? null), nowMs);
+    store.queue(alertFrom(r, subject, this.env.CF_VERSION_METADATA.id), nowMs);
     // The cooldown starts when the alert is QUEUED (§2.6).
     if (cooldownUntilMs !== null) store.setCooldown(r.signal, r.subject, cooldownUntilMs);
     const summary = CLASS_POLICY[r.signalClass].mode === "summary";
@@ -293,10 +308,14 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   async alarmAt(nowMs: number): Promise<void> {
     await this.step("liveness", () => this.env.HEALTH.put(LIVENESS_KEY, String(nowMs)));
     const delivered = await this.step("deliver", () => this.deliver(nowMs));
-    await this.step("heartbeat", () => this.heartbeat(nowMs));
-    await this.step("held_report", () => this.heldReport(nowMs));
+    await this.step("heartbeat", () => {
+      this.heartbeat(nowMs);
+    });
+    await this.step("held_report", () => {
+      this.heldReport(nowMs);
+    });
     await this.step("digest", () => this.digest(nowMs));
-    await this.step("config", () => this.configFault(nowMs));
+    // Step 6 (config_fault while the device key is absent) arrives with PR 2.
     let pruneRemaining = false;
     await this.step("prune", () => {
       pruneRemaining = this.ctx.storage.transactionSync(() => pruneLedger(this.store, nowMs));
@@ -375,7 +394,9 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   /** Post-send bookkeeping for a held report. A failure leaves its rows held; the next report names them. */
   private coverAfterSend(covers: string): void {
     try {
-      this.ctx.storage.transactionSync(() => applyCoverage(this.store, JSON.parse(covers) as HeldCovers));
+      this.ctx.storage.transactionSync(() => {
+        applyCoverage(this.store, JSON.parse(covers) as HeldCovers);
+      });
     } catch (err) {
       logLedgerError("deliver bookkeeping", err);
       logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason: "deliver_bookkeeping", ip: null });
@@ -385,7 +406,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   /** A row whose handling THREW (not a refusal): back off, then quarantine it with one fault. */
   private rowThrew(row: OutboxRow, nowMs: number): void {
     const attempts = row.attempts + 1;
-    const backoff = OUTBOX_BACKOFF_MINUTES[attempts - 1];
+    const backoff = OUTBOX_BACKOFF_MINUTES.at(attempts - 1);
     const sql = this.ctx.storage.sql;
     if (backoff !== undefined) {
       sql.exec("UPDATE outbox SET attempts = ?, next_ms = ? WHERE id = ?", attempts, nowMs + backoff * MINUTE_MS, row.id);
@@ -401,7 +422,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
 
   private async deliveryFailed(row: OutboxRow, message: SecurityAlertMessage, nowMs: number): Promise<void> {
     const attempts = row.attempts + 1;
-    const backoff = OUTBOX_BACKOFF_MINUTES[attempts - 1];
+    const backoff = OUTBOX_BACKOFF_MINUTES.at(attempts - 1);
     if (backoff !== undefined) {
       this.ctx.storage.sql.exec(
         "UPDATE outbox SET attempts = ?, next_ms = ? WHERE id = ?",
@@ -478,9 +499,6 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     });
   }
 
-  /** Step 6 (PR 2 fills this in): one `config_fault` per UTC day while the device key is absent. */
-  private configFault(_nowMs: number): void {}
-
   private isForgotten(userId: string, nowMs: number): boolean {
     return this.store.count("SELECT COUNT(*) AS n FROM forgotten WHERE user_id = ? AND until_ms > ?", userId, nowMs) > 0;
   }
@@ -490,8 +508,8 @@ export class SecurityLedgerDO extends DurableObject<Env> {
    * still holds by user id (held rows and refs), after a cursor kept in `meta`
    * that wraps to the start, so successive runs visit every id, bounded per run.
    */
-  async accountIdsPage(limit: number): Promise<string[]> {
-    return this.ctx.storage.transactionSync(() => {
+  accountIdsPage(limit: number): Promise<string[]> {
+    const page = this.ctx.storage.transactionSync(() => {
       const store = this.store;
       const after = store.meta("sweep_after") ?? "";
       const ids = store.sql
@@ -505,6 +523,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       store.setMeta("sweep_after", ids.length < limit ? "" : (ids.at(-1) ?? ""));
       return ids;
     });
+    return Promise.resolve(page);
   }
 
   /** RPC from both reapers (§2.6 m-e, §4.5): forget the account, and leave a 30-day tombstone. Idempotent. */
@@ -512,7 +531,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     await this.forgetAccountAt(userId, Date.now());
   }
 
-  async forgetAccountAt(userId: string, nowMs: number): Promise<void> {
+  forgetAccountAt(userId: string, nowMs: number): Promise<void> {
     this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       sql.exec("DELETE FROM account_refs WHERE user_id = ?", userId);
@@ -528,6 +547,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
         nowMs + TOMBSTONE_MS,
       );
     });
+    return Promise.resolve();
   }
 
   /**

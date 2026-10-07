@@ -89,7 +89,8 @@ export class LedgerStore {
         signalClass,
         day,
       )
-      .toArray()[0];
+      .toArray()
+      .at(0);
     if (row === undefined) return { sent: 0, onsetSignals: [], exhaustedQueued: false, suppressed: 0 };
     return {
       sent: row.sent,
@@ -142,7 +143,8 @@ export class LedgerStore {
   period(signalClass: SignalClass): Record<PeriodField, number> {
     const row = this.sql
       .exec<Record<PeriodField, number>>("SELECT sent, by_cooldown, by_budget FROM class_period WHERE class = ?", signalClass)
-      .toArray()[0];
+      .toArray()
+      .at(0);
     return row ?? { sent: 0, by_cooldown: 0, by_budget: 0 };
   }
 
@@ -152,7 +154,7 @@ export class LedgerStore {
 
   /** The account's ref: reused while it keeps appearing, refreshed on every use (§2.6). */
   refFor(userId: string, nowMs: number): string {
-    const found = this.sql.exec<RefRow>("SELECT ref FROM account_refs WHERE user_id = ?", userId).toArray()[0];
+    const found = this.sql.exec<RefRow>("SELECT ref FROM account_refs WHERE user_id = ?", userId).toArray().at(0);
     const ref = found?.ref ?? newRef();
     this.sql.exec(
       `INSERT INTO account_refs (user_id, ref, last_used_ms) VALUES (?, ?, ?)

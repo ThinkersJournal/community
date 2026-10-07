@@ -205,13 +205,13 @@ export interface SecurityAlertSink {
 export class LogSecurityAlertSink implements SecurityAlertSink {
   readonly name = "log";
 
-  async send(message: SecurityAlertMessage): Promise<SecurityAlertDelivery> {
+  send(message: SecurityAlertMessage): Promise<SecurityAlertDelivery> {
     try {
       console.warn(`security-alert: ${message.type}`, message);
     } catch {
       // A log failure is not a delivery failure worth retrying.
     }
-    return { delivered: true };
+    return Promise.resolve({ delivered: true });
   }
 }
 
@@ -257,7 +257,9 @@ export async function deliverSecurityAlert(
 ): Promise<SecurityAlertDelivery> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<SecurityAlertDelivery>((resolve) => {
-    timer = setTimeout(() => resolve({ delivered: false, reason: "timeout" }), timeoutMs);
+    timer = setTimeout(() => {
+      resolve({ delivered: false, reason: "timeout" });
+    }, timeoutMs);
   });
   try {
     return await Promise.race([sink.send(message), timeout]);

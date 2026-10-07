@@ -25,6 +25,19 @@ export const CLASS_POLICY: Readonly<Record<SignalClass, ClassPolicy>> = {
   storm: { mode: "summary", cooldownMinutes: 0, dailyBudget: 3, floor: false },
 };
 
+const POLICY_BY_CLASS: ReadonlyMap<string, ClassPolicy> = new Map(Object.entries(CLASS_POLICY));
+
+/**
+ * One class's policy, looked up through a Map rather than by indexing the
+ * object with a runtime key. An unknown class throws, as reading `.mode` of the
+ * missing entry did.
+ */
+export function classPolicy(signalClass: SignalClass): ClassPolicy {
+  const p = POLICY_BY_CLASS.get(signalClass);
+  if (p === undefined) throw new TypeError("unknown signal class");
+  return p;
+}
+
 /** What the ledger knows when a crossing arrives. */
 export interface LedgerState {
   readonly nowMs: number;
@@ -46,7 +59,7 @@ export type LedgerAction =
 
 /** The ledger's one decision, pure. Every non-send outcome is counted for the digest. */
 export function decide(signalClass: SignalClass, s: LedgerState): LedgerAction {
-  const p = CLASS_POLICY[signalClass];
+  const p = classPolicy(signalClass);
   if (p.mode === "summary" && s.onsetSentToday) return { action: "summarise" };
   if (p.mode === "subject" && s.cooldownUntilMs !== null && s.cooldownUntilMs > s.nowMs) {
     return { action: "suppress_cooldown" };

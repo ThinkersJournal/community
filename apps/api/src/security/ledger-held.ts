@@ -15,7 +15,6 @@ import {
   type SecurityAlertSubject,
   type SecurityHeldReport,
   type SignalClass,
-  type SubjectKind,
 } from "@thinkersjournal/shared";
 
 import { logLedgerError, utcDay, type LedgerStore } from "./ledger-store";
@@ -40,11 +39,13 @@ export interface HeldCovers {
 }
 
 const CLASS_OF: ReadonlyMap<string, SignalClass> = new Map(SIGNAL_RULES.map((r) => [r.signal, r.signalClass]));
+/** HELD_ROW_CAP as a Map, in the same order, so a class is looked up rather than used as an object key. */
+const ROW_CAP: ReadonlyMap<SignalClass, number> = new Map(Object.entries(HELD_ROW_CAP) as [SignalClass, number][]);
 
 /** How a raw subject appears in a message: a ref for an account, never a user id (§3.2 I7). */
 export function renderSubject(
   store: LedgerStore,
-  kind: SubjectKind | string,
+  kind: string,
   subject: string,
   nowMs: number,
 ): SecurityAlertSubject {
@@ -107,7 +108,7 @@ export function upsertHeld(store: LedgerStore, r: CounterReport, nowMs: number):
 
 /** Room for one more row, evicting the oldest covered row (lowest version ≤ W) if the class is full. */
 function hasRoom(store: LedgerStore, signalClass: SignalClass): boolean {
-  if (heldStored(store, signalClass) < HELD_ROW_CAP[signalClass]) return true;
+  if (heldStored(store, signalClass) < (ROW_CAP.get(signalClass) ?? 0)) return true;
   const evicted = deleteHeld(
     store,
     `(signal_class, subject_key) IN (
@@ -163,9 +164,7 @@ export function openCount(store: LedgerStore, signalClass: SignalClass): number 
 }
 
 /** Every class that can hold rows, in no particular order. */
-export const HELD_CLASSES: readonly SignalClass[] = (Object.keys(HELD_ROW_CAP) as SignalClass[]).filter(
-  (c) => HELD_ROW_CAP[c] > 0,
-);
+export const HELD_CLASSES: readonly SignalClass[] = [...ROW_CAP].filter(([, cap]) => cap > 0).map(([c]) => c);
 
 /** One page of a signal's open rows: uncapped events, most first; keyset on (events, key). */
 function openPage(store: LedgerStore, signal: SecurityAlertSignal, after: HeldRow | null): HeldRow[] {

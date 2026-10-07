@@ -5,6 +5,7 @@
  */
 import {
   CLASS_POLICY,
+  classPolicy,
   SIGNAL_RULES,
   type CounterReport,
   type DigestClassLine,
@@ -57,7 +58,7 @@ export function heartbeatFrom(store: LedgerStore, nowMs: number): SecurityHeartb
 }
 
 function activityFor(c: SignalClass, site: SiteSummary | null): DigestClassLine["activity"] {
-  if (site === null || CLASS_POLICY[c].mode !== "summary") return {};
+  if (site === null || classPolicy(c).mode !== "summary") return {};
   const out: Record<string, { events: number }> = {};
   for (const rule of SIGNAL_RULES) {
     const a = site.activity[rule.signal];

@@ -45,6 +45,9 @@ export const MAX_SUBJECTS_PER_FLUSH = { ip: 50, net: 50, acct: 200 } as const;
 
 type CapKind = keyof typeof MAX_SUBJECTS_PER_FLUSH;
 
+/** The same caps as a Map, so a kind is looked up rather than used as an object key. */
+const CAP_BY_KIND: ReadonlyMap<CapKind, number> = new Map(Object.entries(MAX_SUBJECTS_PER_FLUSH) as [CapKind, number][]);
+
 /** Signals whose subject is a network (§2.3 `SubjectKind` "net"). */
 const NET_SIGNALS: ReadonlySet<string> = new Set(SIGNAL_RULES.filter((r) => r.subject === "net").map((r) => r.signal));
 
@@ -70,7 +73,7 @@ interface MutableRow {
  */
 export class SecurityEventBuffer {
   private rows = new Map<string, MutableRow>();
-  private subjects = { ip: new Set<string>(), net: new Set<string>(), acct: new Set<string>() };
+  private subjects = new Map<CapKind, Set<string>>();
   private overflow = 0;
   private timerArmed = false;
 
@@ -93,9 +96,13 @@ export class SecurityEventBuffer {
   private addOne(inc: CounterIncrement): void {
     if (inc.shard !== "site") {
       const kind = capKindOf(inc);
-      const seen = this.subjects[kind];
+      let seen = this.subjects.get(kind);
+      if (seen === undefined) {
+        seen = new Set<string>();
+        this.subjects.set(kind, seen);
+      }
       if (!seen.has(inc.subject)) {
-        if (seen.size >= MAX_SUBJECTS_PER_FLUSH[kind]) {
+        if (seen.size >= (CAP_BY_KIND.get(kind) ?? 0)) {
           this.overflow += 1;
           return;
         }
@@ -122,7 +129,7 @@ export class SecurityEventBuffer {
     const rows = this.rows;
     const overflowEvents = this.overflow;
     this.rows = new Map();
-    this.subjects = { ip: new Set<string>(), net: new Set<string>(), acct: new Set<string>() };
+    this.subjects = new Map();
     this.overflow = 0;
     const byShard = new Map<string, CounterRow[]>();
     for (const r of rows.values()) {

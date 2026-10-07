@@ -47,7 +47,8 @@ export interface SignalActivity {
 
 /** `site.summarise(fromMinute, toMinute)`'s answer (§2.6, alarm step 5), over `[fromMinute, toMinute)`. */
 export interface SiteSummary {
-  readonly activity: Readonly<Record<string, SignalActivity>>;
+  /** Only the summary-class signals the site counter saw: a missing key means none. */
+  readonly activity: Readonly<Partial<Record<string, SignalActivity>>>;
   /** Increments a Worker folded into `overflowEvents` (§2.5), summed over the period. */
   readonly overflowEvents: number;
 }

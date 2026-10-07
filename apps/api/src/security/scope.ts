@@ -47,7 +47,9 @@ export function withSecurityScope<T>(
 ): Promise<T> {
   if (env.SECURITY_COUNTING === "off") return run();
   const scope: SecurityRequestScope = {
-    waitUntil: (p) => ctx.waitUntil(p),
+    waitUntil: (p) => {
+      ctx.waitUntil(p);
+    },
     stubFor: overrides.stubFor ?? ((shard) => env.SECURITY_COUNTER.getByName(shard)),
   };
   return scopeStore.run(scope, run);
