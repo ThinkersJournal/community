@@ -106,9 +106,9 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     // batch); only if that throws is it redone one transaction per entry.
     let invalid: number;
     try {
-      invalid = this.ctx.storage.transactionSync(() => this.applyEntries(batch, nowMs, false));
-    } catch {
-      invalid = this.applyEntries(batch, nowMs, true);
+      invalid = this.ctx.storage.transactionSync(() => this.applyEntries(batch, nowMs));
+    } catch (err) {
+      invalid = this.applyIsolated(batch, nowMs, err);
     }
     if (invalid > 0) logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason: "report_invalid", ip: null });
     if (this.lastOutboxId() > lastQueued) {
@@ -126,33 +126,57 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     if ((await this.ctx.storage.getAlarm()) === null) await this.armAt(Date.now());
   }
 
-  /**
-   * Apply each crossing and counted overflow of a batch; returns how many were
-   * dropped. An entry of a class this ledger does not know is always skipped.
-   * `isolate`: each entry in its own transaction, a throw dropping only that entry.
-   */
-  private applyEntries(batch: LedgerReportBatch, nowMs: number, isolate: boolean): number {
+  /** A batch's crossings and counted overflows, each with its class and how to apply it. */
+  private entriesOf(batch: LedgerReportBatch, nowMs: number): (readonly [string, () => void])[] {
     const entries: (readonly [string, () => void])[] = batch.reports.map(
       (r) => [r.signalClass, () => this.processReport(r, nowMs)] as const,
     );
     for (const [signalClass, n] of Object.entries(batch.countedOverflow)) {
       if (n !== undefined && n > 0) entries.push([signalClass, () => this.countNotStored(signalClass as SignalClass, nowMs, n)]);
     }
+    return entries;
+  }
+
+  /** The fast path, inside the caller's one transaction: returns how many entries of an unknown class were skipped. */
+  private applyEntries(batch: LedgerReportBatch, nowMs: number): number {
     let invalid = 0;
-    for (const [signalClass, apply] of entries) {
-      if (!Object.hasOwn(CLASS_POLICY, signalClass)) {
-        invalid += 1;
-      } else if (!isolate) {
-        apply();
-      } else {
-        try {
-          this.ctx.storage.transactionSync(apply);
-        } catch {
-          invalid += 1;
-        }
-      }
+    for (const [signalClass, apply] of this.entriesOf(batch, nowMs)) {
+      if (Object.hasOwn(CLASS_POLICY, signalClass)) apply();
+      else invalid += 1;
     }
     return invalid;
+  }
+
+  /**
+   * The batch threw: redo it one transaction per entry, so a bad entry is dropped alone.
+   *
+   * ⚠️ NEVER A SILENT DROP (batch-2 re-review N-1). If NO valid entry succeeds, the
+   * cause is not one entry (a storage fault, a bug every entry hits): `batchError`
+   * is rethrown, so `report()` rejects and the counter keeps the batch and retries
+   * it. A valid-class entry dropped by a throw is COUNTED (`countOverflow`), so the
+   * next digest and held report carry it.
+   */
+  private applyIsolated(batch: LedgerReportBatch, nowMs: number, batchError: unknown): number {
+    let invalid = 0;
+    let succeeded = 0;
+    const dropped: SignalClass[] = [];
+    for (const [signalClass, apply] of this.entriesOf(batch, nowMs)) {
+      if (!Object.hasOwn(CLASS_POLICY, signalClass)) {
+        invalid += 1;
+        continue;
+      }
+      try {
+        this.ctx.storage.transactionSync(apply);
+        succeeded += 1;
+      } catch {
+        dropped.push(signalClass as SignalClass);
+      }
+    }
+    if (succeeded === 0 && dropped.length > 0) throw batchError;
+    for (const signalClass of dropped) {
+      this.ctx.storage.transactionSync(() => countOverflow(this.store, signalClass, nowMs));
+    }
+    return invalid + dropped.length;
   }
 
   /** Move the alarm to `ms` unless one is already set at or before it. */

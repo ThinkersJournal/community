@@ -219,3 +219,26 @@ describe("m-10: a UTC day rollover between report and alarm", () => {
     });
   });
 });
+
+describe("N-1: the per-entry fallback never drops a batch silently", () => {
+  const broken = crossing({ signal: "targeted_account", signalClass: "account", subjectKind: "account", subject: undefined as never });
+
+  it("when every entry throws, reportAt rejects, so the counter keeps the batch and retries it", async () => {
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      wire(ledger);
+      await expect(ledger.reportAt({ reports: [broken, broken], countedOverflow: {} }, T0)).rejects.toThrow();
+    });
+  });
+
+  it("a valid-class entry dropped by a throw is counted, and the next digest reports it", async () => {
+    allowFaults("security-ledger report_invalid");
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sent } = wire(ledger);
+      await ledger.reportAt({ reports: [crossing(), broken], countedOverflow: {} }, T0);
+      await ledger.alarmAt(T0); // queues the digest …
+      await ledger.alarmAt(T0 + 1); // … delivered here
+      const line = ofType(sent, "digest").at(-1)?.classes.find((c) => c.signalClass === "account");
+      expect(line?.heldCountedNotStored).toBe(1);
+    });
+  });
+});
