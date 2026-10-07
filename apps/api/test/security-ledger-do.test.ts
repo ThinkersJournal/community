@@ -181,7 +181,7 @@ describe("row caps (F3, D6) and bounded reports (R1)", () => {
       expect(stored).toBe(HELD_ROW_CAP.stuffing);
       await ledger.alarmAt(T0 + 3);
       await ledger.alarmAt(T0 + 4);
-      expect(ofType(sent, "held_capped").filter((m) => m.signalClass === "stuffing")).toHaveLength(1);
+      expect(ofType(sent, "held_capped").filter((m) => m.signalClass === "stuffing").map((m) => m.cap)).toEqual([HELD_ROW_CAP.stuffing]);
       const report = ofType(sent, "held_report")[0];
       expect(report?.entries[0]?.signal).toBe("targeted_account");
       expect(JSON.stringify(report?.entries).length).toBeLessThanOrEqual(64 * 1024);

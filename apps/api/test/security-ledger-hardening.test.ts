@@ -1,6 +1,8 @@
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
+import { MAX_PENDING_REPORTS } from "../src/durable-objects/SecurityCounterDO";
+
 import { crossing, freshLedger, guardAlertingFaults, HOUR, MINUTE, ofType, T0, wire } from "./helpers/security-do";
 
 /**
@@ -136,6 +138,18 @@ describe("m-3 and m-10: the UTC day boundary", () => {
       await ledger.alarmAt(AFTER_MIDNIGHT + 1); // … delivered here
       const line = ofType(sent, "digest").at(-1)?.classes.find((c) => c.signalClass === "stuffing");
       expect(line?.heldCountedNotStored).toBe(7);
+    });
+  });
+});
+
+describe("m-4: held_capped names the cap that was hit", () => {
+  it("overflow counted by a COUNTER reports the counter's pending-report cap, not the ledger's row cap", async () => {
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sent } = wire(ledger);
+      await ledger.reportAt({ reports: [], countedOverflow: { stuffing: 3, purge: 2 } }, T0);
+      await ledger.alarmAt(T0);
+      const caps = Object.fromEntries(ofType(sent, "held_capped").map((m) => [m.signalClass, m.cap]));
+      expect(caps).toEqual({ stuffing: MAX_PENDING_REPORTS, purge: MAX_PENDING_REPORTS });
     });
   });
 });

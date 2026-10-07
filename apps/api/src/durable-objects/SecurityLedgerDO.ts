@@ -34,7 +34,7 @@ import {
   type SiteSummaryRpc,
 } from "@thinkersjournal/shared";
 
-import { COUNTER_RETENTION_MINUTES } from "./SecurityCounterDO";
+import { COUNTER_RETENTION_MINUTES, MAX_PENDING_REPORTS } from "./SecurityCounterDO";
 import { alertFrom, digestFrom, heartbeatFrom, HEARTBEAT_HOUR_UTC } from "../security/ledger-messages";
 import {
   applyCoverage,
@@ -211,21 +211,26 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   }
 
   private hold(r: CounterReport, nowMs: number): void {
-    if (upsertHeld(this.store, r, nowMs)) this.queueHeldCapped(r.signalClass, nowMs);
+    if (upsertHeld(this.store, r, nowMs)) this.queueHeldCapped(r.signalClass, HELD_ROW_CAP[r.signalClass], nowMs);
   }
 
   private countNotStored(signalClass: SignalClass, nowMs: number, n: number): void {
-    if (countOverflow(this.store, signalClass, nowMs, n)) this.queueHeldCapped(signalClass, nowMs);
+    if (countOverflow(this.store, signalClass, nowMs, n)) this.queueHeldCapped(signalClass, MAX_PENDING_REPORTS, nowMs);
   }
 
-  private queueHeldCapped(signalClass: SignalClass, nowMs: number): void {
+  /**
+   * `cap` is the cap that was HIT (batch-2 review m-4): the ledger's row cap when
+   * a held row did not fit, a counter's per-class pending-report cap when the
+   * counter could only count (`countedOverflow`).
+   */
+  private queueHeldCapped(signalClass: SignalClass, cap: number, nowMs: number): void {
     const day = utcDay(nowMs);
     this.store.queue(
       {
         type: "held_capped",
         signalClass,
         day,
-        cap: HELD_ROW_CAP[signalClass],
+        cap,
         countedNotStored: countedToday(this.store, signalClass, day),
       },
       nowMs,
