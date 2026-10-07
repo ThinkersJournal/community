@@ -339,7 +339,9 @@ describe("handlePurgeRequest — brute-force: authorized calls and 403 logging",
     expect(lines[0]).toContain("auth_failure");
     expect(lines[0]).toContain("/internal/purge");
     expect(lines[0]).toContain("198.51.100.9");
-    expect(lines[0]).toMatch(/"at":"\d{4}-\d{2}-\d{2}T/);
+    // A RegExp from a string, not a /…/ literal: Codacy's length metric misreads
+    // the odd number of double quotes in the literal as an unclosed string.
+    expect(lines[0]).toMatch(new RegExp('"at":"\\d{4}-\\d{2}-\\d{2}T'));
     expect(JSON.stringify(warn.mock.calls)).not.toContain(submitted);
     expect(JSON.stringify(warn.mock.calls)).not.toContain(SECRET);
   });
