@@ -84,6 +84,19 @@ describe("timingSafeEqual", () => {
     expect(digest).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * ⚠️ THE ANSWER DEPENDS ON THE DIGESTS AND NOTHING ELSE (review 1, M5). The two
+   * tests above pin that both inputs are hashed, but a length check added AFTER
+   * hashing would still pass them. Here the digest is stubbed to return the SAME
+   * bytes for every input: a correct implementation must then call two strings of
+   * different lengths equal. Any early return on length — before or after the
+   * hashing — answers false and fails this.
+   */
+  it("decides on the digests alone: identical digests of DIFFERENT-length inputs compare equal", async () => {
+    vi.spyOn(crypto.subtle, "digest").mockImplementation(async () => new Uint8Array(32).fill(7).buffer);
+    expect(await timingSafeEqual("short", "a-much-longer-secret-value")).toBe(true);
+  });
+
   it("digests BOTH inputs for an equal-length pair too (one code path for every length)", async () => {
     const digest = vi.spyOn(crypto.subtle, "digest");
     expect(await timingSafeEqual("abc123", "abc124")).toBe(false);
