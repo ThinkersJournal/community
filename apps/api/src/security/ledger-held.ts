@@ -8,6 +8,7 @@ import {
   HELD_PRIORITY,
   HELD_ROW_CAP,
   HeldReportBuilder,
+  logSecurityEvent,
   SIGNAL_RULES,
   type CounterReport,
   type SecurityAlertSignal,
@@ -17,7 +18,7 @@ import {
   type SubjectKind,
 } from "@thinkersjournal/shared";
 
-import { utcDay, type LedgerStore } from "./ledger-store";
+import { logLedgerError, utcDay, type LedgerStore } from "./ledger-store";
 
 type HeldRow = {
   signal_class: string;
@@ -288,24 +289,33 @@ export function applyCoverage(store: LedgerStore, covers: HeldCovers): void {
 /**
  * Forget (§2.6 N7; batch-2 review m-2): strip an account's rows from every
  * pending held report's `covers`, the one place a raw user id waits in the
- * outbox. Covers that do not parse are dropped (they could never be applied).
+ * outbox. Covers that do not parse are dropped (they could never be applied),
+ * but never silently (final review M-4): each is logged by error name and
+ * counted in meta `covers_unparsable`, with one `alerting_fault` per forget.
  * Bounded: only held reports carry covers, at most one queued per hour.
  */
 export function forgetCovers(store: LedgerStore, userId: string): void {
   const pending = store.sql
     .exec<{ id: number; covers: string }>("SELECT id, covers FROM outbox WHERE covers IS NOT NULL")
     .toArray();
+  let unparsable = 0;
   for (const row of pending) {
     let covers: HeldCovers;
     try {
       covers = JSON.parse(row.covers) as HeldCovers;
-    } catch {
+    } catch (err) {
+      logLedgerError("forget covers", err);
       store.sql.exec("UPDATE outbox SET covers = NULL WHERE id = ?", row.id);
+      unparsable += 1;
       continue;
     }
     const kept = covers.rows.filter(([, key]) => key.slice(key.indexOf("|") + 1) !== userId);
     if (kept.length === covers.rows.length) continue;
     store.sql.exec("UPDATE outbox SET covers = ? WHERE id = ?", JSON.stringify({ s: covers.s, rows: kept }), row.id);
+  }
+  if (unparsable > 0) {
+    store.addMeta("covers_unparsable", unparsable);
+    logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason: "covers_unparsable", ip: null });
   }
 }
 

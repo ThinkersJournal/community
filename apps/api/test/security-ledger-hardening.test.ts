@@ -384,3 +384,24 @@ describe("final review M-2: report()'s catches log the error's name", () => {
     expect(lines.every((c) => typeof c[1] === "string" && /^[A-Za-z]+$/.test(c[1]))).toBe(true);
   });
 });
+
+/** Final review M-4: covers a forget cannot parse are dropped, but never silently. */
+describe("final review M-4: forgetCovers reports unparsable covers", () => {
+  it("one fault line, the error's name logged, and a meta count per dropped covers; parsable covers untouched", async () => {
+    allowFaults("security-ledger covers_unparsable");
+    const logged = errorLog();
+    const warn = vi.spyOn(console, "warn");
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      wire(ledger);
+      const sql = state.storage.sql;
+      queueRaw(sql, GOOD, "{not json", T0 + HOUR);
+      queueRaw(sql, GOOD, JSON.stringify({ s: 1, rows: [] }), T0 + HOUR);
+      await ledger.forgetAccountAt("user-y", T0);
+      expect(sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox WHERE covers IS NULL").one().n).toBe(1);
+      expect(sql.exec<{ v: string }>("SELECT v FROM meta WHERE k = 'covers_unparsable'").one().v).toBe("1");
+    });
+    expect(logged.spy.mock.calls).toContainEqual(["security-ledger: forget covers threw", "SyntaxError"]);
+    const faults = warn.mock.calls.filter((c) => c[0] === "security: alerting_fault security-ledger covers_unparsable");
+    expect(faults).toHaveLength(1);
+  });
+});
