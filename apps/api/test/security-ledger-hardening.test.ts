@@ -104,6 +104,17 @@ describe("m-5: one bad report does not block its batch", () => {
       expect(ofType(sent, "alert").map((a) => a.signal)).toEqual(["credential_stuffing"]);
     });
   });
+
+  it("a report that THROWS while processed is dropped alone: the batch is redone one entry at a time", async () => {
+    allowFaults("security-ledger report_invalid");
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sent } = wire(ledger);
+      const broken = crossing({ signal: "targeted_account", signalClass: "account", subjectKind: "account", subject: undefined as never });
+      await ledger.reportAt({ reports: [crossing(), broken], countedOverflow: {} }, T0);
+      await ledger.alarmAt(T0);
+      expect(ofType(sent, "alert").map((a) => a.signal)).toEqual(["credential_stuffing"]);
+    });
+  });
 });
 
 describe("m-2: forget leaves no raw user id behind", () => {
