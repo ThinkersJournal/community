@@ -329,7 +329,7 @@ describe("handlePurgeRequest — brute-force: authorized calls and 403 logging",
     expect(exhausted.limit).not.toHaveBeenCalled();
   });
 
-  it("logs every 403 as a `security:` line with the client IP and a timestamp, never the submitted value", async () => {
+  it("logs every 403 as a security: line with the client IP and a timestamp, never the submitted value", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const submitted = "a-guess-that-must-never-be-logged";
     expect((await handlePurgeRequest(fromIp("198.51.100.9", submitted), SECRET, allowAll())).status).toBe(403);

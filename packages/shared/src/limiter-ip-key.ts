@@ -41,8 +41,11 @@ const HEXTET = /^[0-9a-f]{1,4}$/i;
 
 /** The 8 hextets of `s`, canonical (lowercase, no leading zeros), or null if `s` is not IPv6. */
 function expandIpv6(s: string): string[] | null {
-  const [first = "", second, ...extra] = s.split("::");
-  if (extra.length > 0) return null;
+  const halves = s.split("::");
+  if (halves.length > 2) return null;
+  const first = halves[0] ?? "";
+  // `.at` is typed `string | undefined`: undefined exactly when there is no "::".
+  const second = halves.at(1);
   const parse = (part: string): string[] | null => {
     if (part === "") return [];
     const groups = part.split(":");
