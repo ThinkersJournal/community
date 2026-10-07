@@ -87,12 +87,12 @@ jobs:
       - name: Install Playwright browser + OS deps
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         timeout-minutes: 10
-        run: sleep 1200 && pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: Install Playwright OS deps only (browser cached)
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         timeout-minutes: 10
-        run: sleep 1200 && pnpm exec playwright install-deps chromium
+        run: pnpm exec playwright install-deps chromium
 
       - name: Run tests
         run: pnpm -r run test
