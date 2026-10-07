@@ -380,6 +380,19 @@ describe("handlePurgeRequest — brute-force countermeasures", () => {
  * Enumerated from TRACKED files (`git grep`), not a disk walk, so another
  * checkout's files cannot leak in. The positive control is the population itself:
  * the two known callers (api's csrf.ts and web's purge.ts) must be found.
+ *
+ * ⚠️ KNOWN GAPS (review 1, M4) — this is a text scan, not a type check:
+ *   - an ALIASED import (`import { timingSafeEqual as tse }` … `if (tse(a, b))`)
+ *     matches nothing and passes;
+ *   - a string literal containing `/*` can make the comment stripper swallow
+ *     real code up to the next `*\/`;
+ *   - locally, a new caller in an UNTRACKED file is invisible to `git grep`
+ *     until it is staged (CI checks out a commit, so it is unaffected);
+ *   - it says nothing about OTHER async auth helpers, e.g. purge.ts's own
+ *     `authorized()` — the behavioural refusal tests above catch a dropped
+ *     await there.
+ * The complete fix is the `@typescript-eslint/no-misused-promises` lint
+ * repo-wide; until then, this guard plus the behavioural tests.
  */
 describe("⚠️ every timingSafeEqual call site awaits it", () => {
   it("finds the known callers, and each call is awaited", () => {
