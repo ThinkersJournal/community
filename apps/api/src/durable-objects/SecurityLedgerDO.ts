@@ -99,12 +99,17 @@ export class SecurityLedgerDO extends DurableObject<Env> {
 
   async reportAt(batch: LedgerReportBatch, nowMs: number): Promise<void> {
     const lastQueued = this.lastOutboxId();
-    this.ctx.storage.transactionSync(() => {
-      for (const r of batch.reports) this.processReport(r, nowMs);
-      for (const [signalClass, n] of Object.entries(batch.countedOverflow)) {
-        if (n !== undefined && n > 0) this.countNotStored(signalClass as SignalClass, nowMs, n);
-      }
-    });
+    // Batch-2 review m-5: one transaction PER REPORT. A single bad report used to
+    // roll back the whole batch, and the counter re-sends the same batch forever.
+    let invalid = 0;
+    for (const r of batch.reports) {
+      if (!this.isolated(r.signalClass, () => this.processReport(r, nowMs))) invalid += 1;
+    }
+    for (const [signalClass, n] of Object.entries(batch.countedOverflow)) {
+      if (n === undefined || n <= 0) continue;
+      if (!this.isolated(signalClass, () => this.countNotStored(signalClass as SignalClass, nowMs, n))) invalid += 1;
+    }
+    if (invalid > 0) logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason: "report_invalid", ip: null });
     if (this.lastOutboxId() > lastQueued) {
       // Batch-2 review I-1: a queued message goes out on the NEXT tick. An idle
       // alarm sits at the next hour, so "an alarm exists" is not enough here.
@@ -118,6 +123,17 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   /** RPC from the two-minute cron (m-d): set an alarm for now if none is set. Idempotent. */
   async ensureAlarm(): Promise<void> {
     if ((await this.ctx.storage.getAlarm()) === null) await this.armAt(Date.now());
+  }
+
+  /** Run `apply` in its own transaction if `signalClass` is one this ledger knows. False if skipped or it threw. */
+  private isolated(signalClass: string, apply: () => void): boolean {
+    if (!Object.hasOwn(CLASS_POLICY, signalClass)) return false;
+    try {
+      this.ctx.storage.transactionSync(apply);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Move the alarm to `ms` unless one is already set at or before it. */

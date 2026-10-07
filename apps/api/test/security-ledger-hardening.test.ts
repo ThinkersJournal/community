@@ -88,3 +88,16 @@ describe("I-2: one outbox row cannot block or re-send the others", () => {
     });
   });
 });
+
+describe("m-5: one bad report does not block its batch", () => {
+  it("a report of an unknown class is skipped with one fault; the good report beside it is processed", async () => {
+    allowFaults("security-ledger report_invalid");
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sent } = wire(ledger);
+      const bad = crossing({ signalClass: "renamed_class" as never, subject: "198.51.100.1" });
+      await ledger.reportAt({ reports: [bad, crossing()], countedOverflow: {} }, T0);
+      await ledger.alarmAt(T0);
+      expect(ofType(sent, "alert").map((a) => a.signal)).toEqual(["credential_stuffing"]);
+    });
+  });
+});
