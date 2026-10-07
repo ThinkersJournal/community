@@ -56,3 +56,37 @@ describe("logSecurityEvent (security-alerting spec §2.2)", () => {
     expect(warn.mock.calls[0]?.[0]).toBe("security: alerting_fault security-ledger ledger_unreachable");
   });
 });
+
+/**
+ * Final review M-3: a throwing observer must not stop counting SILENTLY. The
+ * first throw in an isolate logs one PII-free line (the error's name); later
+ * throws stay quiet so a broken observer cannot flood the log on every event.
+ */
+describe("logSecurityEvent — a throwing observer is reported once", () => {
+  class ClassifyBroke extends Error {
+    override name = "ClassifyBroke";
+  }
+
+  it("logs the first throw once, by name, and never again for the same observer", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    setSecurityEventObserver(() => {
+      throw new ClassifyBroke(`bad subject ${ADDRESS}`);
+    });
+    for (let i = 0; i < 3; i++) logSecurityEvent(EVENT, { email: ADDRESS });
+    expect(err.mock.calls).toEqual([["security-counter: observer threw; counting is not recording", "ClassifyBroke"]]);
+  });
+
+  it("a newly installed observer that throws is reported again (control: the flag is per observer)", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const broken = () => {
+      throw new ClassifyBroke("x");
+    };
+    setSecurityEventObserver(broken);
+    logSecurityEvent(EVENT);
+    setSecurityEventObserver(broken);
+    logSecurityEvent(EVENT);
+    expect(err).toHaveBeenCalledTimes(2);
+  });
+});

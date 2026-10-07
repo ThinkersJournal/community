@@ -55,10 +55,13 @@ export interface SecurityEventCounting {
 export type SecurityEventObserver = (event: SecurityEvent, at: Date, counting: SecurityEventCounting) => void;
 
 let observer: SecurityEventObserver | null = null;
+/** Whether the CURRENT observer's first throw was already logged (final review M-3). */
+let observerThrowLogged = false;
 
 /** Installed once at module scope by a Worker's entry module; null uninstalls (tests). */
 export function setSecurityEventObserver(next: SecurityEventObserver | null): void {
   observer = next;
+  observerThrowLogged = false;
 }
 
 /** Write one `security:` line, then tell the observer. Returns nothing and never throws. */
@@ -77,7 +80,17 @@ export function logSecurityEvent(event: SecurityEvent, counting: SecurityEventCo
   }
   try {
     observer?.(event, at, counting);
-  } catch {
-    // Nor may a counting failure.
+  } catch (err) {
+    // Nor may a counting failure. But it must not be SILENT either (final review
+    // M-3): an observer that throws on every event stops counting entirely, so
+    // its first throw is logged, by name only, once per observer per isolate.
+    if (!observerThrowLogged) {
+      observerThrowLogged = true;
+      try {
+        console.error("security-counter: observer threw; counting is not recording", err instanceof Error ? err.name : "threw");
+      } catch {
+        // A logging failure must never turn a refusal into a 500.
+      }
+    }
   }
 }
