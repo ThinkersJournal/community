@@ -101,3 +101,24 @@ describe("m-5: one bad report does not block its batch", () => {
     });
   });
 });
+
+describe("m-2: forget leaves no raw user id behind", () => {
+  it("the sweep cursor and a pending held report's covers no longer name the account", async () => {
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      wire(ledger);
+      const acct = crossing({ signal: "targeted_account", signalClass: "account", subjectKind: "account", subject: "user-x" });
+      await ledger.reportAt({ reports: [acct, acct], countedOverflow: {} }, T0); // sent + held
+      await ledger.alarmAt(T0 + 1); // queues the held report, its covers naming the held row
+      expect(await ledger.accountIdsPage(1)).toEqual(["user-x"]);
+      const sql = state.storage.sql;
+      const mentions = () =>
+        sql.exec<{ n: number }>(
+          `SELECT (SELECT COUNT(*) FROM meta WHERE v LIKE '%user-x%')
+                + (SELECT COUNT(*) FROM outbox WHERE covers LIKE '%user-x%') AS n`,
+        ).one().n;
+      expect(mentions()).toBe(2); // control: the cursor and the covers both name it
+      await ledger.forgetAccountAt("user-x", T0 + 2);
+      expect(mentions()).toBe(0);
+    });
+  });
+});

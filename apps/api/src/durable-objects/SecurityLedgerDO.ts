@@ -42,6 +42,7 @@ import {
   countedToday,
   countOverflow,
   deleteHeld,
+  forgetCovers,
   renderSubject,
   upsertHeld,
   type HeldCovers,
@@ -444,6 +445,9 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       sql.exec("DELETE FROM account_refs WHERE user_id = ?", userId);
       deleteHeld(this.store, "subject_kind = 'account' AND subject = ?", userId);
       sql.exec("DELETE FROM cooldowns WHERE subject = ?", userId);
+      // Batch-2 review m-2: the two other places a raw id can wait (N7).
+      if (this.store.meta("sweep_after") === userId) this.store.setMeta("sweep_after", "");
+      forgetCovers(this.store, userId);
       sql.exec(
         `INSERT INTO forgotten (user_id, until_ms) VALUES (?, ?)
          ON CONFLICT(user_id) DO UPDATE SET until_ms = excluded.until_ms`,
