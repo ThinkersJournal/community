@@ -123,9 +123,12 @@
   // field as `ratelimits` and rejects singular "ratelimit" with "Unexpected
   // fields found in top-level field: 'ratelimit'". `period` MUST be `10` or
   // `60`; no other value is accepted (enforced by the same validator).
-  // `namespace_id` just needs to be unique per binding within this Worker
-  // (arbitrary small strings are fine — Cloudflare doesn't provision anything
-  // from it for the `simple` algorithm).
+  // `namespace_id` is a positive integer (as a string) that must be unique
+  // across the whole Cloudflare ACCOUNT, not just this Worker — Cloudflare's
+  // rate-limit binding docs scope it to the account. apps/web/wrangler.jsonc's
+  // PURGE_LIMITER therefore continues this sequence (1016) instead of restarting
+  // at 1001. (This comment used to say "unique per binding within this Worker";
+  // corrected 2026-10-06, brute-force review 1, M3.)
   "ratelimits": [
     {
       "name": "SIGNUP_LIMITER",

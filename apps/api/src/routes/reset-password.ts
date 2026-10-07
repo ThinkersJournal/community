@@ -99,8 +99,11 @@ export type PasswordHasher = (password: string) => Promise<string>;
  * fourth argument is already `params`, so the hasher cannot ride along there.
  */
 export function makeResetPasswordHandler(hash: PasswordHasher) {
-  return (request: Request, env: Env, ctx: ExecutionContext): Promise<Response> =>
-    resetPassword(request, env, ctx, hash);
+  // A NAMED function, not an arrow: an anonymous closure has `.name === ""`,
+  // which reads badly in stack traces.
+  return function handleResetPassword(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    return resetPassword(request, env, ctx, hash);
+  };
 }
 
 export const handleResetPassword = makeResetPasswordHandler(hashPassword);
