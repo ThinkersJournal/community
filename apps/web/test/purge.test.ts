@@ -365,14 +365,19 @@ describe("handlePurgeRequest — brute-force countermeasures", () => {
  * until src/lib/purge.ts awaited it. TypeScript's `strict` does not flag `!promise`,
  * and this repo runs no no-misused-promises lint, so this is the guard.
  *
- * Enumerated from the git INDEX (`git ls-files`), not a disk walk, so another
+ * Enumerated from TRACKED files (`git grep`), not a disk walk, so another
  * checkout's files cannot leak in. The positive control is the population itself:
  * the two known callers (api's csrf.ts and web's purge.ts) must be found.
  */
 describe("⚠️ every timingSafeEqual call site awaits it", () => {
   it("finds the known callers, and each call is awaited", () => {
     const root = join(import.meta.dirname, "../../..");
-    const files = execFileSync("git", ["ls-files", "--", "*.ts", "*.astro"], { cwd: root, encoding: "utf8" })
+    // `git grep -l` searches only TRACKED files, so it is the index-bounded
+    // enumeration without reading every file in the repo (a full read timed out).
+    const files = execFileSync("git", ["grep", "-l", "-e", "timingSafeEqual", "--", "*.ts", "*.astro"], {
+      cwd: root,
+      encoding: "utf8",
+    })
       .split("\n")
       .filter((f) => f !== "" && !f.includes("/test/") && !f.endsWith(".d.ts"));
 
@@ -397,5 +402,5 @@ describe("⚠️ every timingSafeEqual call site awaits it", () => {
       expect.arrayContaining(["apps/api/src/auth/csrf.ts", "apps/web/src/lib/purge.ts"]),
     );
     expect(unawaited, "un-awaited timingSafeEqual calls authorize everyone (a Promise is truthy)").toEqual([]);
-  });
+  }, 30_000);
 });
