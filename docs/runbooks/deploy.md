@@ -306,3 +306,24 @@ Production migrations apply in this order: **0020 → 0021 → 0022 → 0023**
 (plan C → #126 → the account-legal-hold work → the keyed email reservation,
 whose secret must be set first; see above). Do not apply a later one before an
 earlier one in this list has landed.
+
+## Adding a cross-script binding (web → an api Durable Object)
+
+Workers Builds builds and deploys **both** Workers in parallel on every push to
+`main`; nothing orders `api` before `web`. A web binding with `script_name:
+"thinkersjournal-api"` points at a Durable Object class that must already be
+**deployed** on the api Worker, i.e. after the api's DO migration that adds it.
+So a change that **adds** such a binding needs one of:
+
+1. **Two pushes:** first the api change (the class and its migration), then, once
+   "Workers Builds: thinkersjournal-api" is green, the web change with the binding.
+2. **One push and a retry:** if "Workers Builds: thinkersjournal-web" fails
+   while the api build succeeds, read that build's log in the dashboard. If it
+   names the missing class or script, use **Retry build** on the web build once
+   the api build is green.
+
+Until the web retry succeeds, production keeps serving the **previous** web
+version (the failed build never deploys), and the smoke check still passes.
+Seen on 15213d7 (#157): the api build succeeded and the web build failed 5 s
+earlier. Whether the cause was this ordering is to be confirmed from that
+build's log.

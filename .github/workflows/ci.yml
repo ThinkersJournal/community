@@ -14,6 +14,10 @@ jobs:
   test:
     name: test / build / typecheck
     runs-on: ubuntu-latest
+    # A hang must fail fast, not hold a required check for GitHub's 360-min
+    # default (2026-10-07: an apt stall held #157's gate for 54 min). Sized from
+    # the 40 most recent green runs: 2.4-6.3 min (median 3.3) -> ~3x the max.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -82,10 +86,12 @@ jobs:
 
       - name: Install Playwright browser + OS deps
         if: steps.playwright-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 10
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Install Playwright OS deps only (browser cached)
         if: steps.playwright-cache.outputs.cache-hit == 'true'
+        timeout-minutes: 10
         run: pnpm exec playwright install-deps chromium
 
       - name: Run tests
@@ -97,6 +103,8 @@ jobs:
   e2e:
     name: e2e (Playwright, both Workers)
     runs-on: ubuntu-latest
+    # Same reason as the test job. 40 recent green runs: 2.1-3.3 min.
+    timeout-minutes: 15
     env:
       # Keep wrangler quiet and offline-friendly.
       WRANGLER_SEND_METRICS: "false"
@@ -147,10 +155,12 @@ jobs:
 
       - name: Install Playwright browser + OS deps
         if: steps.playwright-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 10
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Install Playwright OS deps only (browser cached)
         if: steps.playwright-cache.outputs.cache-hit == 'true'
+        timeout-minutes: 10
         run: pnpm exec playwright install-deps chromium
 
       # Playwright's own webServer config builds web and starts BOTH wrangler dev
