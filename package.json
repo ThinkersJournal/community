@@ -1,6 +1,6 @@
 {
   "name": "thinkersjournal-community",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "license": "MIT OR Apache-2.0",
   "workspaces": [
@@ -20,7 +20,7 @@
   "pnpm": {
     "overrides": {
       "@cloudflare/vite-plugin": "1.44.0",
-      "sharp": "^0.35.4",
+      "sharp": "^0.35.5",
       "undici": ">=7.29.1"
     },
     "_comment_undici_override": "Dependabot alert #35: undici >=7.28.0 <7.29.1 is vulnerable to DoS via WebSocket permessage-deflate decompression; fixed in 7.29.1. Pinned here because @cloudflare/vitest-pool-workers 0.22.0 still pulls wrangler@4.124.0 -> miniflare 5.20260815.0-alpha -> undici@7.29.0."
