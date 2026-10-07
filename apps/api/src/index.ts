@@ -9,6 +9,7 @@ import { reapUnconfirmedDsaNotices } from "./moderation/dsa-notices";
 import { runEmailDrain } from "./notifications/email-drain";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
+import { ensureLedgerAlarm } from "./security/ledger-cron";
 
 export { UserSecurityDO } from "./durable-objects/UserSecurityDO";
 export { NotifyDO } from "./durable-objects/NotifyDO";
@@ -91,6 +92,7 @@ export default {
      */
     if (controller.cron === "*/2 * * * *") {
       ctx.waitUntil(runMediaBackfillBatch(env, ctx));
+      ctx.waitUntil(ensureLedgerAlarm(env));
     }
     const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant";
     ctx.waitUntil(runEmailDrain(env, ctx, disposition));

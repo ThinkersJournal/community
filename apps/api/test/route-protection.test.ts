@@ -174,6 +174,9 @@ const EXPECTED_DISPATCHER_BODY =
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
+  // Security alerting (spec §2.2 item 3): the cron's one ledger call. It
+  // dispatches nothing.
+  'import { ensureLedgerAlarm } from "./security/ledger-cron"; ' +
   'export { UserSecurityDO } from "./durable-objects/UserSecurityDO"; ' +
   'export { NotifyDO } from "./durable-objects/NotifyDO"; ' +
   'export { PostLiveDO } from "./durable-objects/PostLiveDO"; ' +
@@ -211,6 +214,7 @@ const EXPECTED_DISPATCHER_BODY =
   "} " +
   'if (controller.cron === "*/2 * * * *") { ' +
   "ctx.waitUntil(runMediaBackfillBatch(env, ctx)); " +
+  "ctx.waitUntil(ensureLedgerAlarm(env)); " +
   "} " +
   'const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant"; ' +
   "ctx.waitUntil(runEmailDrain(env, ctx, disposition)); " +
