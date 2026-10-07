@@ -122,3 +122,20 @@ describe("m-2: forget leaves no raw user id behind", () => {
     });
   });
 });
+
+describe("m-3 and m-10: the UTC day boundary", () => {
+  const ELEVEN_PM = Date.parse("2026-10-07T23:00:00.000Z");
+  const AFTER_MIDNIGHT = Date.parse("2026-10-08T00:00:30.000Z");
+
+  it("overflow counted at 23:59:30 reaches the first digest after midnight", async () => {
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sent } = wire(ledger);
+      await ledger.alarmAt(ELEVEN_PM); // the day's last digest period starts here
+      await ledger.reportAt({ reports: [], countedOverflow: { stuffing: 7 } }, ELEVEN_PM + 59 * MINUTE + 30_000);
+      await ledger.alarmAt(AFTER_MIDNIGHT); // queues the digest …
+      await ledger.alarmAt(AFTER_MIDNIGHT + 1); // … delivered here
+      const line = ofType(sent, "digest").at(-1)?.classes.find((c) => c.signalClass === "stuffing");
+      expect(line?.heldCountedNotStored).toBe(7);
+    });
+  });
+});

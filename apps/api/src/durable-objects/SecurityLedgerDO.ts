@@ -393,7 +393,9 @@ export class SecurityLedgerDO extends DurableObject<Env> {
         dropped_permanent_refusal: store.metaNumber("notices_dropped:dropped_permanent_refusal"),
         dropped_expired: store.metaNumber("notices_dropped:dropped_expired"),
       };
-      const digest = digestFrom(store, { startMs, endMs: nowMs }, site, store.metaNumber("undeliverable"), dropped);
+      // The counted-not-stored total runs from the LAST digest, unclamped (m-3).
+      const period = { startMs, endMs: nowMs, countedFromMs: lastMs };
+      const digest = digestFrom(store, period, site, store.metaNumber("undeliverable"), dropped);
       if (digest !== null) store.queue(digest, nowMs);
       for (const state of DROP_STATES) store.setMeta(`notices_dropped:${state}`, "0");
       store.resetPeriod();

@@ -139,6 +139,20 @@ export function countedToday(store: LedgerStore, signalClass: SignalClass, day: 
   );
 }
 
+/**
+ * Counted-not-stored over every UTC day from `fromMs` to `toMs` (batch-2 review
+ * m-3). A count made after the day's last message, before 00:00, is carried into
+ * the first report after midnight instead of falling between two days.
+ */
+export function countedSince(store: LedgerStore, signalClass: SignalClass, fromMs: number, toMs: number): number {
+  return store.count(
+    "SELECT COALESCE(SUM(counted), 0) AS n FROM held_overflow WHERE signal_class = ? AND day >= ? AND day <= ?",
+    signalClass,
+    utcDay(fromMs),
+    utcDay(toMs),
+  );
+}
+
 export function openCount(store: LedgerStore, signalClass: SignalClass): number {
   return store.count(
     "SELECT COUNT(*) AS n FROM held WHERE signal_class = ? AND version > ?",
@@ -191,7 +205,6 @@ export function buildHeldReport(
   const rows: CoveredRow[] = [];
   const named = new Map<SignalClass, number>();
   pageAll(store, period.endMs, builder, rows, named);
-  const day = utcDay(period.endMs);
   return {
     report: {
       type: "held_report",
@@ -202,7 +215,7 @@ export function buildHeldReport(
         (m) => m.count > 0,
       ),
       adminUrl,
-      countedNotStored: HELD_CLASSES.map((c) => ({ signalClass: c, count: countedToday(store, c, day) })).filter(
+      countedNotStored: HELD_CLASSES.map((c) => ({ signalClass: c, count: countedSince(store, c, period.startMs, period.endMs) })).filter(
         (m) => m.count > 0,
       ),
     },

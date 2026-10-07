@@ -16,7 +16,7 @@ import {
   type SiteSummary,
 } from "@thinkersjournal/shared";
 
-import { countedToday, HELD_CLASSES, heldStored, openCount } from "./ledger-held";
+import { countedSince, HELD_CLASSES, heldStored, openCount } from "./ledger-held";
 import { utcDay, type LedgerStore } from "./ledger-store";
 
 const ALL_CLASSES = Object.keys(CLASS_POLICY) as SignalClass[];
@@ -69,12 +69,11 @@ function activityFor(c: SignalClass, site: SiteSummary | null): DigestClassLine[
 /** Counts only, so its size is fixed (§3.2). Null when nothing happened this period. */
 export function digestFrom(
   store: LedgerStore,
-  period: { readonly startMs: number; readonly endMs: number },
+  period: { readonly startMs: number; readonly endMs: number; readonly countedFromMs: number },
   site: SiteSummary | null,
   undeliverable: number,
   noticesDropped: SecurityDigest["noticesDropped"],
 ): SecurityDigest | null {
-  const day = utcDay(period.endMs);
   const classes: DigestClassLine[] = ALL_CLASSES.map((c) => {
     const p = store.period(c);
     return {
@@ -83,7 +82,7 @@ export function digestFrom(
       suppressedByCooldown: p.by_cooldown,
       suppressedByBudget: p.by_budget,
       heldOpen: HELD_CLASSES.includes(c) ? openCount(store, c) : 0,
-      heldCountedNotStored: countedToday(store, c, day),
+      heldCountedNotStored: countedSince(store, c, period.countedFromMs, period.endMs),
       activity: activityFor(c, site),
     };
   });
