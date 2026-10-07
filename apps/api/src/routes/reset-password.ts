@@ -89,7 +89,7 @@ function invalidToken(ip: string | null): Response {
 }
 
 /** The Argon2id hash this route uses — `hashPassword` in production. */
-export type PasswordHasher = (password: string) => Promise<string>;
+export type PasswordHasher = typeof hashPassword;
 
 /**
  * Build the handler around `hash`. Production uses `handleResetPassword` below
@@ -108,18 +108,8 @@ export function makeResetPasswordHandler(hash: PasswordHasher) {
 
 export const handleResetPassword = makeResetPasswordHandler(hashPassword);
 
-async function resetPassword(
-  request: Request,
-  env: Env,
-  ctx: ExecutionContext,
-  hash: PasswordHasher,
-): Promise<Response> {
-  // ---- 1. Origin (CSRF) — before ANY parsing, see the file header ----------
-  if (!checkOrigin(env, request)) {
-    return errorResponse("FORBIDDEN", 403);
-  }
-
-  // ---- 2. Parse + validate --------------------------------------------------
+/** Step 2: the parsed body, or the 400 to return. */
+async function parseInput(request: Request): Promise<{ token: string; password: string } | Response> {
   let raw: unknown;
   try {
     raw = await request.json();
@@ -132,45 +122,12 @@ async function resetPassword(
       fields: parsed.error.issues.map((issue) => issue.path.map(String).join(".")),
     });
   }
-  const { token, password } = parsed.data;
+  return parsed.data;
+}
 
-  // ---- 2b. Per-IP rate limit -------------------------------------------------
-  // See the file header's RATE LIMIT note. Keyed on the IP alone (there is no
-  // email or session here; an IPv6 client is keyed on its /64, see
-  // limiterIpKey), on its own RESET_REDEEM_LIMITER. An UNKNOWN IP skips
-  // it rather than sharing one "unknown" bucket that a single caller could spend
-  // for every user mid-reset; step 2c still keeps Argon2id off that path.
-  const ip = clientIp(request);
-  if (ip !== null) {
-    const limited = await enforceRateLimit(env.RESET_REDEEM_LIMITER, `ip:${limiterIpKey(ip)}`, {
-      route: ROUTE,
-      bucket: "ip",
-      ip,
-    });
-    if (limited !== null) {
-      return limited;
-    }
-  }
-
-  // Same SHA-256-of-token lookup key `createResetToken`/`consumeResetToken`
-  // use (src/auth/password-reset.ts) — computed here, in JS, rather than
-  // inline SQL, so this route does not depend on pgcrypto being installed.
-  const tokenHash = await sha256Hex(token);
-
-  // ---- 2c. Peek the token BEFORE Argon2id -----------------------------------
-  // ⚠️ ORDER IS THE DEFENSE. Argon2id (19 MiB, two passes) is the most expensive
-  // thing this Worker does, and this route is unauthenticated: hashing first let
-  // anyone spend that per request with a made-up token. A cheap indexed SELECT
-  // on the token hash now gates it, so only a token that is live AT THIS MOMENT
-  // ever reaches the hash. The same conditions as step 3's consume, plus the
-  // anonymised-account check step 3 applies to the user row.
-  //
-  // This is a PEEK, not the redemption: step 3 still consumes the token and
-  // writes the password in ONE transaction, re-checking every condition, so a
-  // token spent (or an account anonymised) between here and there still loses
-  // the race cleanly with the same generic 400. Validity is no new oracle: the
-  // response already says 400 vs 200.
-  const live = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+/** Step 2c's peek: is `tokenHash` a live token on a live account right now? */
+async function tokenIsLive(env: Env, ctx: ExecutionContext, tokenHash: string): Promise<boolean> {
+  return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query(
       `SELECT 1
          FROM password_reset_tokens t
@@ -181,20 +138,20 @@ async function resetPassword(
     );
     return rows.length > 0;
   });
-  if (!live) {
-    return invalidToken(ip);
-  }
+}
 
-  // Hashed OUTSIDE the transaction, same reasoning as signup.ts: Argon2id is
-  // deliberately slow, and holding a Hyperdrive connection open across it
-  // would burn a pooled connection for the duration of every reset.
-  const passwordHash = await hash(password);
-
-  // ---- 3. Consume the token + write the new password, ONE transaction -----
-  // ⚠️ INLINES the same UPDATE `consumeResetToken` runs, rather than calling
-  // it, because it must run on THIS connection/transaction — see the file
-  // header on why the consume and the password write must be atomic together.
-  const redeemed = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+/**
+ * Step 3: consume the token and write the password in ONE transaction (see the
+ * file header). Null when the token or the account no longer qualifies; the
+ * transaction is then rolled back.
+ */
+async function redeem(
+  env: Env,
+  ctx: ExecutionContext,
+  tokenHash: string,
+  passwordHash: string,
+): Promise<{ userId: string; account: AccountStatusRow | null } | null> {
+  return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     await c.query(BEGIN_BOUNDED_TX);
     try {
       const { rows } = await c.query<{ user_id: string }>(
@@ -244,6 +201,75 @@ async function resetPassword(
       throw err;
     }
   });
+}
+
+async function resetPassword(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  hash: PasswordHasher,
+): Promise<Response> {
+  // ---- 1. Origin (CSRF) — before ANY parsing, see the file header ----------
+  if (!checkOrigin(env, request)) {
+    return errorResponse("FORBIDDEN", 403);
+  }
+
+  // ---- 2. Parse + validate --------------------------------------------------
+  const input = await parseInput(request);
+  if (input instanceof Response) return input;
+  const { token, password } = input;
+
+  // ---- 2b. Per-IP rate limit -------------------------------------------------
+  // See the file header's RATE LIMIT note. Keyed on the IP alone (there is no
+  // email or session here; an IPv6 client is keyed on its /64, see
+  // limiterIpKey), on its own RESET_REDEEM_LIMITER. An UNKNOWN IP skips
+  // it rather than sharing one "unknown" bucket that a single caller could spend
+  // for every user mid-reset; step 2c still keeps Argon2id off that path.
+  const ip = clientIp(request);
+  if (ip !== null) {
+    const limited = await enforceRateLimit(env.RESET_REDEEM_LIMITER, `ip:${limiterIpKey(ip)}`, {
+      route: ROUTE,
+      bucket: "ip",
+      ip,
+    });
+    if (limited !== null) {
+      return limited;
+    }
+  }
+
+  // Same SHA-256-of-token lookup key `createResetToken`/`consumeResetToken`
+  // use (src/auth/password-reset.ts) — computed here, in JS, rather than
+  // inline SQL, so this route does not depend on pgcrypto being installed.
+  const tokenHash = await sha256Hex(token);
+
+  // ---- 2c. Peek the token BEFORE Argon2id -----------------------------------
+  // ⚠️ ORDER IS THE DEFENSE. Argon2id (19 MiB, two passes) is the most expensive
+  // thing this Worker does, and this route is unauthenticated: hashing first let
+  // anyone spend that per request with a made-up token. A cheap indexed SELECT
+  // on the token hash now gates it, so only a token that is live AT THIS MOMENT
+  // ever reaches the hash. The same conditions as step 3's consume, plus the
+  // anonymised-account check step 3 applies to the user row.
+  //
+  // This is a PEEK, not the redemption: step 3 still consumes the token and
+  // writes the password in ONE transaction, re-checking every condition, so a
+  // token spent (or an account anonymised) between here and there still loses
+  // the race cleanly with the same generic 400. Validity is no new oracle: the
+  // response already says 400 vs 200.
+  const live = await tokenIsLive(env, ctx, tokenHash);
+  if (!live) {
+    return invalidToken(ip);
+  }
+
+  // Hashed OUTSIDE the transaction, same reasoning as signup.ts: Argon2id is
+  // deliberately slow, and holding a Hyperdrive connection open across it
+  // would burn a pooled connection for the duration of every reset.
+  const passwordHash = await hash(password);
+
+  // ---- 3. Consume the token + write the new password, ONE transaction -----
+  // ⚠️ INLINES the same UPDATE `consumeResetToken` runs, rather than calling
+  // it, because it must run on THIS connection/transaction — see the file
+  // header on why the consume and the password write must be atomic together.
+  const redeemed = await redeem(env, ctx, tokenHash, passwordHash);
 
   if (redeemed === null) {
     return invalidToken(ip);

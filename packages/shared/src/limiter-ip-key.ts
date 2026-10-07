@@ -26,9 +26,11 @@ export function limiterIpKey(ip: string): string {
   if (!ip.includes(":")) return ip;
 
   const mapped = MAPPED_V4.exec(ip);
-  if (mapped !== null && IPV4.test(mapped[1]!)) return mapped[1]!;
+  const mappedV4 = mapped?.[1];
+  if (mappedV4 !== undefined && IPV4.test(mappedV4)) return mappedV4;
 
-  const hextets = expandIpv6(ip.split("%")[0]!);
+  // split() always returns at least one element; `?? ip` only satisfies the type.
+  const hextets = expandIpv6(ip.split("%")[0] ?? ip);
   if (hextets === null) return ip;
   return `${hextets.slice(0, 4).join(":")}::/64`;
 }
@@ -39,18 +41,18 @@ const HEXTET = /^[0-9a-f]{1,4}$/i;
 
 /** The 8 hextets of `s`, canonical (lowercase, no leading zeros), or null if `s` is not IPv6. */
 function expandIpv6(s: string): string[] | null {
-  const halves = s.split("::");
-  if (halves.length > 2) return null;
+  const [first = "", second, ...extra] = s.split("::");
+  if (extra.length > 0) return null;
   const parse = (part: string): string[] | null => {
     if (part === "") return [];
     const groups = part.split(":");
     return groups.every((g) => HEXTET.test(g)) ? groups : null;
   };
-  const head = parse(halves[0]!);
+  const head = parse(first);
   if (head === null) return null;
   let groups: string[];
-  if (halves.length === 2) {
-    const tail = parse(halves[1]!);
+  if (second !== undefined) {
+    const tail = parse(second);
     if (tail === null) return null;
     const missing = 8 - head.length - tail.length;
     if (missing < 1) return null;

@@ -269,7 +269,9 @@ describe("handlePurgeRequest — input", () => {
  *   - every 403 writes a `security:` line with the IP and a timestamp, never the
  *     submitted value.
  */
-describe("handlePurgeRequest — brute-force countermeasures", () => {
+// Split into three describes only to keep each callback short; they share the
+// header above and the same cleanup.
+describe("handlePurgeRequest — brute-force: refusal and throttling", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -304,6 +306,12 @@ describe("handlePurgeRequest — brute-force countermeasures", () => {
     expect((await handlePurgeRequest(fromIp("198.51.100.7", "wrong"), SECRET, limiter)).status).toBe(429);
     expect((await handlePurgeRequest(fromIp("198.51.100.8", "wrong"), SECRET, limiter)).status).toBe(403);
   });
+});
+
+describe("handlePurgeRequest — brute-force: authorized calls and 403 logging", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("the AUTHORIZED api purge is never throttled: it does not consume limiter quota at all", async () => {
     // The api's purge (apps/api/src/cache/purge.ts) sends only content-type and
@@ -334,6 +342,12 @@ describe("handlePurgeRequest — brute-force countermeasures", () => {
     expect(lines[0]).toMatch(/"at":"\d{4}-\d{2}-\d{2}T/);
     expect(JSON.stringify(warn.mock.calls)).not.toContain(submitted);
     expect(JSON.stringify(warn.mock.calls)).not.toContain(SECRET);
+  });
+});
+
+describe("handlePurgeRequest — brute-force: IPv6, 429 logging, unknown IP", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("keys an IPv6 failure on its /64, so rotating inside the /64 shares one bucket", async () => {
