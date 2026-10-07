@@ -1,17 +1,17 @@
 import { runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { SIGNAL_RULES, type CounterReport, type LedgerReportBatch } from "@thinkersjournal/shared";
 
 import { reportRetryDelayMs } from "../src/durable-objects/SecurityCounterDO";
 
-import { counterRow, freshCounter, HOUR, MINUTE, quiet, T0 } from "./helpers/security-do";
+import { counterRow, freshCounter, guardAlertingFaults, HOUR, MINUTE, quiet, T0 } from "./helpers/security-do";
 
 /**
  * `SecurityCounterDO` (security-alerting spec §2.4). Pool project,
  * real Durable Object storage, explicit clock through `runInDurableObject`.
  */
-afterEach(() => vi.restoreAllMocks());
+const { allowFaults } = guardAlertingFaults();
 
 type Count = { n: number };
 
@@ -132,6 +132,7 @@ describe("distinct measures (m2) and member privacy", () => {
 
 describe("an unreachable ledger (N3)", () => {
   it("keeps the report through every alarm, backs off 1, 5, 15, 15 min, logs one fault each, never deletes", async () => {
+    allowFaults("security-ledger ledger_unreachable");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await runInDurableObject(freshCounter(), async (c, state) => {
       quiet(c);

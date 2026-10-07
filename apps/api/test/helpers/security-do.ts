@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { afterEach, beforeEach, expect, vi, type MockInstance } from "vitest";
 
 import type {
   CounterReport,
@@ -94,4 +95,41 @@ export function quiet(instance: { armAt: (ms: number) => Promise<void> }): numbe
     armed.push(ms);
   };
   return armed;
+}
+
+const FAULT_PREFIX = "security: alerting_fault ";
+
+/**
+ * File-level guard (batch-2 review I-3): fails any test that logs a
+ * `security: alerting_fault` line it did not declare with `allowFaults`.
+ *
+ * ⚠️ WHY. `alarm()` runs every step inside a try/catch that only LOGS, so a step
+ * that fails on every run passes any test that does not look at the log. The
+ * plan's own 25,000-decoy test passed through a deliver step that threw every
+ * time (batch 2, D4). With this guard it fails.
+ *
+ * Call once at file scope. It replaces the file's `afterEach(restoreAllMocks)`:
+ * it reads `console.warn` (whichever spy a test installed on top) BEFORE it
+ * restores the mocks, so the calls are still there to read.
+ * `allowFaults("security-ledger deliver")` allows lines starting with that
+ * route and reason, for the current test only.
+ */
+export function guardAlertingFaults(): { allowFaults: (...routeAndReason: string[]) => void } {
+  let allowed: string[] = [];
+  let warn: MockInstance<typeof console.warn> | null = null;
+  beforeEach(() => {
+    allowed = [];
+    warn = vi.spyOn(console, "warn");
+  });
+  afterEach(() => {
+    const lines = (warn?.mock.calls ?? []).map((c) => String(c[0]));
+    vi.restoreAllMocks();
+    const unexpected = lines.filter((l) => l.startsWith(FAULT_PREFIX) && !allowed.some((a) => l.startsWith(FAULT_PREFIX + a)));
+    expect(unexpected, "alerting_fault lines this test did not allow").toEqual([]);
+  });
+  return {
+    allowFaults: (...routeAndReason) => {
+      allowed.push(...routeAndReason);
+    },
+  };
 }

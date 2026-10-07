@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CLASS_POLICY, HELD_ROW_CAP, type SecurityAlertMessage } from "@thinkersjournal/shared";
 
@@ -7,7 +7,7 @@ import { LIVENESS_KEY } from "../src/durable-objects/SecurityLedgerDO";
 import { ensureLedgerAlarm } from "../src/security/ledger-cron";
 import { PRUNE_CHUNK, PRUNE_CHUNKS_PER_RUN } from "../src/security/ledger-prune";
 
-import { capturingSink, crossing, freshLedger, HOUR, MINUTE, ofType, quiet, T0 } from "./helpers/security-do";
+import { capturingSink, crossing, freshLedger, guardAlertingFaults, HOUR, MINUTE, ofType, quiet, T0 } from "./helpers/security-do";
 
 /**
  * `SecurityLedgerDO` (security-alerting spec §2.6). Pool
@@ -15,7 +15,7 @@ import { capturingSink, crossing, freshLedger, HOUR, MINUTE, ofType, quiet, T0 }
  * Messages queued by one alarm are delivered by the next, so the helper runs
  * the alarm twice at the same instant.
  */
-afterEach(() => vi.restoreAllMocks());
+const { allowFaults } = guardAlertingFaults();
 
 type Count = { n: number };
 
@@ -260,6 +260,7 @@ describe("pruning keeps up (F3; plan ruling P-4; audit I-1): one large target", 
 
 describe("independent steps (R1), heartbeat (N2) and liveness (R2)", () => {
   it("with the DELIVER step throwing and summarise failing, the later steps still run and the KV key is written", async () => {
+    allowFaults("security-ledger deliver");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await runInDurableObject(freshLedger(), async (ledger, state) => {
       ledger.sinkFactory = () => {
