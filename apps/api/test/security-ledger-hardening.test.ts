@@ -1,6 +1,8 @@
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
+import { CLASS_POLICY } from "@thinkersjournal/shared";
+
 import { MAX_PENDING_REPORTS } from "../src/durable-objects/SecurityCounterDO";
 
 import { crossing, freshLedger, guardAlertingFaults, HOUR, MINUTE, ofType, T0, wire } from "./helpers/security-do";
@@ -173,6 +175,36 @@ describe("m-9: rows past the 64 KB cap are not covered by a report that did not 
       expect(second?.entries.length).toBeGreaterThan(0);
       const firstNames = new Set(first?.entries.map((e) => JSON.stringify(e.subject)));
       expect(second?.entries.some((e) => firstNames.has(JSON.stringify(e.subject)))).toBe(false);
+    });
+  });
+});
+
+describe("m-10: a UTC day rollover between report and alarm", () => {
+  const MIDNIGHT = Date.parse("2026-10-08T00:00:00.000Z");
+  const burst = (i: number) => crossing({ signal: "login_ip_burst", signalClass: "ip_burst", subject: `203.0.113.${i}`, threshold: 50 });
+
+  it("a class's daily budget spent at 23:59 is fresh at 00:00:30; budget_exhausted stays one per day", async () => {
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sent } = wire(ledger);
+      const budget = CLASS_POLICY.ip_burst.dailyBudget;
+      await ledger.reportAt({ reports: Array.from({ length: budget + 1 }, (_, i) => burst(i)), countedOverflow: {} }, MIDNIGHT - MINUTE);
+      await ledger.alarmAt(MIDNIGHT + 30_000); // delivers yesterday's, after midnight
+      await ledger.reportAt({ reports: [burst(200)], countedOverflow: {} }, MIDNIGHT + 31_000);
+      await ledger.alarmAt(MIDNIGHT + 32_000);
+      expect(ofType(sent, "alert")).toHaveLength(budget + 1);
+      expect(ofType(sent, "budget_exhausted").map((m) => m.day)).toEqual(["2026-10-07"]);
+    });
+  });
+
+  it("an alarm that first runs three days late delivers, beats once for ITS day, and faults nowhere", async () => {
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sent } = wire(ledger);
+      await ledger.reportAt({ reports: [crossing()], countedOverflow: {} }, T0);
+      const late = T0 + 3 * 86_400_000 + 10 * HOUR; // 2026-10-10T22:00Z
+      await ledger.alarmAt(late);
+      await ledger.alarmAt(late + 1);
+      expect(ofType(sent, "alert")).toHaveLength(1);
+      expect(ofType(sent, "heartbeat").map((h) => [h.day, h.lateMinutes])).toEqual([["2026-10-10", 13 * 60]]);
     });
   });
 });
