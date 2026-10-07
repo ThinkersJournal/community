@@ -46,7 +46,9 @@ describe("logSecurityEvent (security-alerting spec §2.2)", () => {
     setSecurityEventObserver(() => {
       throw new Error("observer broke");
     });
-    expect(() => logSecurityEvent(EVENT)).not.toThrow();
+    expect(() => {
+      logSecurityEvent(EVENT);
+    }).not.toThrow();
     expect(warn).toHaveBeenCalledTimes(1);
   });
 

@@ -45,9 +45,9 @@ function recorder(reject = false) {
   return {
     calls,
     stubFor: (shard: string) => ({
-      record: async (batch: CounterBatch) => {
+      record: (batch: CounterBatch) => {
         calls.push({ shard, batch });
-        if (reject) throw new Error("counter down");
+        return reject ? Promise.reject(new Error("counter down")) : Promise.resolve();
       },
     }),
   };

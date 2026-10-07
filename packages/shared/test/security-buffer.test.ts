@@ -16,9 +16,9 @@ function fakeScope(reject = false) {
       pending.push(p);
     },
     stubFor: (shard) => ({
-      record: async (batch) => {
+      record: (batch) => {
         calls.push({ shard, batch });
-        if (reject) throw new Error("record failed");
+        return reject ? Promise.reject(new Error("record failed")) : Promise.resolve();
       },
     }),
   };
@@ -32,7 +32,12 @@ function manualSleep() {
     new Promise<void>((r) => {
       release = r;
     });
-  return { sleep, release: () => release() };
+  return {
+    sleep,
+    release: () => {
+      release();
+    },
+  };
 }
 
 const loginFail = (ip: string): SecurityEvent => ({ kind: "auth_failure", route: "/auth/login", reason: "invalid_credentials", ip });

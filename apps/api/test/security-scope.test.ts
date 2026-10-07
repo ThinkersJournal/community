@@ -31,9 +31,9 @@ function recorder(reject = false) {
   return {
     calls,
     stubFor: (shard: string) => ({
-      record: async (batch: CounterBatch) => {
+      record: (batch: CounterBatch) => {
         calls.push({ shard, batch });
-        if (reject) throw new Error("counter down");
+        return reject ? Promise.reject(new Error("counter down")) : Promise.resolve();
       },
     }),
   };
@@ -48,7 +48,7 @@ class ThrowingBuffer extends SecurityEventBuffer {
 describe("withSecurityScope", () => {
   it("returns the handler's own Response object and calls it once", async () => {
     const response = new Response("handler body");
-    const handler = vi.fn(async () => response);
+    const handler = vi.fn(() => Promise.resolve(response));
     expect(await withSecurityScope(env, createExecutionContext(), handler)).toBe(response);
     expect(handler).toHaveBeenCalledTimes(1);
   });
@@ -58,9 +58,9 @@ describe("withSecurityScope", () => {
     const r = recorder();
     setSecurityScopeOverridesForTests({ buffer: new SecurityEventBuffer(now), stubFor: r.stubFor });
     const ctx = createExecutionContext();
-    await withSecurityScope(env, ctx, async () => {
+    await withSecurityScope(env, ctx, () => {
       logSecurityEvent(FAIL, { email: "p@example.invalid" });
-      return new Response(null, { status: 401 });
+      return Promise.resolve(new Response(null, { status: 401 }));
     });
     await waitOnExecutionContext(ctx);
     expect(r.calls.map((c) => c.shard).sort()).toEqual(expect.arrayContaining(["site"]));
@@ -78,9 +78,9 @@ describe("withSecurityScope", () => {
     const buffer = name === "a throwing buffer" ? new ThrowingBuffer(now) : new SecurityEventBuffer(now);
     setSecurityScopeOverridesForTests({ buffer, stubFor: r.stubFor });
     const response = new Response("x");
-    const handler = vi.fn(async () => {
+    const handler = vi.fn(() => {
       logSecurityEvent(FAIL);
-      return response;
+      return Promise.resolve(response);
     });
     const ctx = createExecutionContext();
     expect(await withSecurityScope({ ...env, ...envOver }, ctx, handler)).toBe(response);
@@ -97,9 +97,9 @@ describe("withSecurityScope — where counting reaches, and where it never does"
     setSecurityScopeOverridesForTests({ buffer: new SecurityEventBuffer(now) }); // stubFor left at its default
     const ip = `2001:db8:${Math.floor(Math.random() * 0xffff).toString(16)}:${Math.floor(Math.random() * 0xffff).toString(16)}::9`;
     const ctx = createExecutionContext();
-    await withSecurityScope(env, ctx, async () => {
+    await withSecurityScope(env, ctx, () => {
       logSecurityEvent({ ...FAIL, ip }, { email: "p@example.invalid" });
-      return new Response(null, { status: 401 });
+      return Promise.resolve(new Response(null, { status: 401 }));
     });
     await waitOnExecutionContext(ctx);
     const subject = limiterIpKey(ip);
@@ -123,9 +123,9 @@ describe("withSecurityScope — where counting reaches, and where it never does"
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const r = recorder();
     setSecurityScopeOverridesForTests({ buffer: new SecurityEventBuffer(never), stubFor: r.stubFor });
-    const res = await withSecurityScope(env, createExecutionContext(), async () => {
+    const res = await withSecurityScope(env, createExecutionContext(), () => {
       logSecurityEvent(FAIL);
-      return new Response(null, { status: 401 });
+      return Promise.resolve(new Response(null, { status: 401 }));
     });
     expect(res.status).toBe(401);
     expect(r.calls).toHaveLength(0);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CLASS_POLICY,
+  classPolicy,
   dailyMessageCeiling,
   decide,
   HeldReportBuilder,
@@ -58,7 +59,7 @@ describe("decide (security-alerting spec §2.6)", () => {
   });
 
   it("THE DECOY TEST: purge, storm and ip_burst exhausted → a targeted_account crossing still sends", () => {
-    const spent = (c: SignalClass) => ({ ...fresh, onsetSentToday: true, classSentToday: CLASS_POLICY[c].dailyBudget });
+    const spent = (c: SignalClass) => ({ ...fresh, onsetSentToday: true, classSentToday: classPolicy(c).dailyBudget });
     expect(decide("purge", spent("purge")).action).toBe("summarise");
     expect(decide("storm", spent("storm")).action).toBe("summarise");
     expect(decide("ip_burst", spent("ip_burst")).action).toBe("suppress_budget");

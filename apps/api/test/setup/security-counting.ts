@@ -24,6 +24,6 @@ import { setSecurityScopeOverridesForTests } from "../../src/security/scope";
 beforeEach(() => {
   setSecurityScopeOverridesForTests({
     buffer: new SecurityEventBuffer(() => Promise.resolve()),
-    stubFor: () => ({ record: async () => undefined }),
+    stubFor: () => ({ record: () => Promise.resolve() }),
   });
 });

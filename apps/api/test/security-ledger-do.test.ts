@@ -29,7 +29,7 @@ async function eventually<T>(read: () => Promise<T | null>): Promise<T | null> {
   return null;
 }
 const NINE_UTC = Date.parse("2026-10-07T09:00:00.000Z");
-const noSite = { summarise: async () => ({ activity: {}, overflowEvents: 0 }) };
+const noSite = { summarise: () => Promise.resolve({ activity: {}, overflowEvents: 0 }) };
 
 describe("sending, cooldowns and held subjects (C2)", () => {
   it("a suppressed subject survives the alarm and is named, with its count, by the next held report", async () => {
@@ -45,7 +45,7 @@ describe("sending, cooldowns and held subjects (C2)", () => {
       await ledger.reportAt({ reports: [crossing()], countedOverflow: {} }, T0 + HOUR + 2_000);
       await ledger.alarmAt(T0 + HOUR + 3_000);
       expect(ofType(sent, "alert")).toHaveLength(2);
-      const held = ofType(sent, "held_report")[0];
+      const held = ofType(sent, "held_report").at(0);
       expect(held?.entries[0]).toMatchObject({ signal: "credential_stuffing", suppressed: 2, events: 50 });
     });
   });
@@ -153,7 +153,7 @@ describe("versions and coverage (F2)", () => {
       expect(state.storage.sql.exec<Count>("SELECT COUNT(*) AS n FROM held").one().n).toBe(1);
       await ledger.alarmAt(T0 + 2 * HOUR); // the next hour queues report #2 …
       await ledger.alarmAt(T0 + 2 * HOUR + 1); // … and this run delivers it
-      const second = ofType(sent, "held_report")[1];
+      const second = ofType(sent, "held_report").at(1);
       expect(second?.entries[0]).toMatchObject({ signal: "credential_stuffing", events: 7 + 12 });
     });
   });
@@ -182,7 +182,7 @@ describe("row caps (F3, D6) and bounded reports (R1)", () => {
       await ledger.alarmAt(T0 + 3);
       await ledger.alarmAt(T0 + 4);
       expect(ofType(sent, "held_capped").filter((m) => m.signalClass === "stuffing").map((m) => m.cap)).toEqual([HELD_ROW_CAP.stuffing]);
-      const report = ofType(sent, "held_report")[0];
+      const report = ofType(sent, "held_report").at(0);
       expect(report?.entries[0]?.signal).toBe("targeted_account");
       expect(JSON.stringify(report?.entries).length).toBeLessThanOrEqual(64 * 1024);
       expect(report?.countedNotStored.find((c) => c.signalClass === "stuffing")?.count).toBeGreaterThanOrEqual(5_000);
@@ -267,9 +267,7 @@ describe("independent steps (R1), heartbeat (N2) and liveness (R2)", () => {
         throw new Error("sink construction failed"); // deliver() throws before any send
       };
       ledger.siteFor = () => ({
-        summarise: async () => {
-          throw new Error("site down");
-        },
+        summarise: () => Promise.reject(new Error("site down")),
       });
       quiet(ledger);
       await ledger.reportAt({ reports: [crossing(), crossing()], countedOverflow: {} }, NINE_UTC);

@@ -13,5 +13,7 @@ describe("classifyPostmark (PR 1; security-alerting spec §4.4)", () => {
     [{ ok: false, status: 429, errorCode: null } as const, "transient"],
     [{ ok: false, status: 500, errorCode: null } as const, "transient"],
     [{ ok: false, status: null, errorCode: null } as const, "transient"],
-  ])("%j → %s", (outcome, want) => expect(classifyPostmark(outcome)).toBe(want));
+  ])("%j → %s", (outcome, want) => {
+    expect(classifyPostmark(outcome)).toBe(want);
+  });
 });

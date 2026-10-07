@@ -13,7 +13,7 @@ const { allowFaults } = guardAlertingFaults();
 
 type Count = { n: number };
 const down = { report: async () => Promise.reject(new Error("ledger down")) };
-const meta = (sql: SqlStorage, k: string) => sql.exec<{ v: string }>("SELECT v FROM meta WHERE k = ?", k).toArray()[0]?.v;
+const meta = (sql: SqlStorage, k: string) => sql.exec<{ v: string }>("SELECT v FROM meta WHERE k = ?", k).toArray().at(0)?.v;
 
 describe("m-6: counted-only overflow keeps the instance alive", () => {
   it("with no other rows, an unsent overflow count survives the alarm instead of being wiped by deleteAll", async () => {
@@ -48,14 +48,16 @@ describe("m-7 and m-8: the pending-report cap is a maintained count, per class",
     await runInDurableObject(freshCounter(), async (c, state) => {
       quiet(c);
       const sql = state.storage.sql;
-      const exact = () => expect(Number(meta(sql, "pending_n:ip_burst") ?? "0")).toBe(sql.exec<Count>("SELECT COUNT(*) AS n FROM reports").one().n);
+      const exact = () => {
+        expect(Number(meta(sql, "pending_n:ip_burst") ?? "0")).toBe(sql.exec<Count>("SELECT COUNT(*) AS n FROM reports").one().n);
+      };
       const burst = (ip: string, at: number) => c.recordAt({ rows: [counterRow("login_ip_burst", ip, 50, at)], overflowEvents: 0 }, at);
       for (const ip of ["203.0.113.1", "203.0.113.2", "203.0.113.3"]) await burst(ip, T0);
       exact();
       c.ledgerFor = () => ({ report: async () => { await burst("203.0.113.1", T0 + 11 * MINUTE); throw new Error("ledger down"); } });
       await c.alarmAt(T0); // fails; the crossing that landed meanwhile merges into the detached row
       exact();
-      c.ledgerFor = () => ({ report: async () => undefined });
+      c.ledgerFor = () => ({ report: () => Promise.resolve() });
       await c.alarmAt(T0 + 20 * MINUTE);
       exact();
       expect(sql.exec<Count>("SELECT COUNT(*) AS n FROM reports").one().n).toBe(0); // control: it did drain

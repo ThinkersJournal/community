@@ -99,13 +99,11 @@ describe("postmarkSendOutcome (security-alerting spec §4.4; PM ruling: parse th
 
   it("a non-JSON non-2xx → errorCode null → transient; a thrown request → status null", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("Unauthorized", { status: 401 })));
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response("Unauthorized", { status: 401 }))));
     expect(await postmarkSendOutcome(env, msg)).toEqual({ ok: false, status: 401, errorCode: null });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
-        throw new Error("boom");
-      }),
+      vi.fn(() => Promise.reject(new Error("boom"))),
     );
     const thrown = await postmarkSendOutcome(env, msg);
     expect(thrown).toEqual({ ok: false, status: null, errorCode: null });

@@ -69,10 +69,10 @@ export function capturingSink(fail: (m: SecurityAlertMessage) => boolean = () =>
   const sent: SecurityAlertMessage[] = [];
   const sink: SecurityAlertSink = {
     name: "capture",
-    send: async (m) => {
-      if (fail(m)) return { delivered: false, reason: "test" };
+    send: (m) => {
+      if (fail(m)) return Promise.resolve({ delivered: false, reason: "test" });
       sent.push(m);
-      return { delivered: true };
+      return Promise.resolve({ delivered: true });
     },
   };
   return { sink, sent };
@@ -93,8 +93,9 @@ export function ofType<T extends SecurityAlertMessage["type"]>(
  */
 export function quiet(instance: { armAt: (ms: number) => Promise<void> }): number[] {
   const armed: number[] = [];
-  instance.armAt = async (ms) => {
+  instance.armAt = (ms) => {
     armed.push(ms);
+    return Promise.resolve();
   };
   return armed;
 }
@@ -138,7 +139,7 @@ export function guardAlertingFaults(): { allowFaults: (...routeAndReason: string
 }
 
 /** The `site` stub for a ledger whose digest should see no summary activity. */
-export const NO_SITE = { summarise: async () => ({ activity: {}, overflowEvents: 0 }) };
+export const NO_SITE = { summarise: () => Promise.resolve({ activity: {}, overflowEvents: 0 }) };
 
 /** A ledger wired for a test: capturing sink, no site activity, `armAt` recorded. */
 export function wire(

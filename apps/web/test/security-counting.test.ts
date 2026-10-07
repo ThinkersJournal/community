@@ -22,17 +22,18 @@ function ctxWith(secret: string, ip = "203.0.113.9"): PurgeContext {
       headers: { "X-Purge-Secret": secret, "content-type": "application/json", "CF-Connecting-IP": ip },
       body: JSON.stringify({ tags: ["post:1"] }),
     }),
-    cache: { invalidate: vi.fn(async () => undefined) },
+    cache: { invalidate: vi.fn(() => Promise.resolve()) },
   };
 }
 
-const allow: PurgeFailureLimiter = { limit: async () => ({ success: true }) };
+const allow: PurgeFailureLimiter = { limit: () => Promise.resolve({ success: true }) };
 
 function fakeEnv(counting = "on") {
   const calls: { shard: string; batch: CounterBatch }[] = [];
   const stub = (shard: string): SecurityCounterRpc => ({
-    record: async (batch) => {
+    record: (batch) => {
       calls.push({ shard, batch });
+      return Promise.resolve();
     },
   });
   return { calls, env: { SECURITY_COUNTING: counting, SECURITY_COUNTER: { getByName: stub } } };

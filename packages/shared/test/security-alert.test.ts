@@ -15,7 +15,7 @@ afterEach(() => {
 
 const SECRET_EMAIL = "alerts-fixture@example.invalid";
 const SECRET_TOKEN = "relay-token-fixture-0000";
-const fakeSink: SecurityAlertSink = { name: "fake", send: async () => ({ delivered: true }) };
+const fakeSink: SecurityAlertSink = { name: "fake", send: () => Promise.resolve({ delivered: true }) };
 
 describe("selectSecurityAlertSink (security-alerting spec §3.2)", () => {
   it("flag off → the log sink, whatever is configured", () => {
@@ -50,9 +50,7 @@ describe("deliverSecurityAlert", () => {
   it("a throwing sink → delivered: false, never a throw", async () => {
     const sink: SecurityAlertSink = {
       name: "t",
-      send: async () => {
-        throw new TypeError("boom");
-      },
+      send: () => Promise.reject(new TypeError("boom")),
     };
     expect(await deliverSecurityAlert(sink, msg)).toEqual({ delivered: false, reason: "TypeError" });
   });

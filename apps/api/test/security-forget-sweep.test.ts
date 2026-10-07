@@ -29,9 +29,11 @@ async function sql<T>(text: string, params: unknown[] = []): Promise<T[]> {
 }
 
 async function newUser(): Promise<string> {
-  const [row] = await sql<{ id: string }>("INSERT INTO users (email, password_hash) VALUES ($1, 'x') RETURNING id", [
-    `sweep_${crypto.randomUUID()}@example.test`,
-  ]);
+  const row = (
+    await sql<{ id: string }>("INSERT INTO users (email, password_hash) VALUES ($1, 'x') RETURNING id", [
+      `sweep_${crypto.randomUUID()}@example.test`,
+    ])
+  ).at(0);
   const id = row?.id ?? "";
   created.push(id);
   return id;

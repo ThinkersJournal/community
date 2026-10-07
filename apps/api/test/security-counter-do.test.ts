@@ -21,9 +21,10 @@ function fakeLedger(fail = false) {
   return {
     batches,
     rpc: {
-      report: async (b: LedgerReportBatch) => {
-        if (fail) throw new Error("ledger down");
+      report: (b: LedgerReportBatch) => {
+        if (fail) return Promise.reject(new Error("ledger down"));
         batches.push(b);
+        return Promise.resolve();
       },
     },
   };
