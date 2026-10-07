@@ -195,6 +195,9 @@ export default defineConfig({
         test: {
           name: "pool",
           include: ["test/**/*.test.ts"],
+          // Security alerting: counting flushes at once into no-op stubs unless a
+          // test installs its own (see the file for why bursts need this).
+          setupFiles: ["./test/setup/security-counting.ts"],
           // ⚠️ NOT A LATENCY ASSERTION — a headroom for REAL I/O. Every test in
           // this project drives the handlers through workerd against the live
           // Docker Postgres, and the seed-heavy ones do many SEQUENTIAL DB

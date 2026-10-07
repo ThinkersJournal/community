@@ -174,9 +174,11 @@ const EXPECTED_DISPATCHER_BODY =
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
-  // Security alerting (spec §2.2 item 3): the cron's one ledger call. It
-  // dispatches nothing.
+  // Security alerting (spec §2.2 item 3): the cron's one ledger call, and the
+  // request-scope wrapper whose import installs the counting observer. Neither
+  // dispatches anything.
   'import { ensureLedgerAlarm } from "./security/ledger-cron"; ' +
+  'import { withSecurityScope } from "./security/scope"; ' +
   'export { UserSecurityDO } from "./durable-objects/UserSecurityDO"; ' +
   'export { NotifyDO } from "./durable-objects/NotifyDO"; ' +
   'export { PostLiveDO } from "./durable-objects/PostLiveDO"; ' +
@@ -186,7 +188,9 @@ const EXPECTED_DISPATCHER_BODY =
   "const { pathname } = new URL(request.url); " +
   "const match = findRoute(ROUTES, request.method, pathname); " +
   "if (match === null) return notFoundResponse(); " +
-  "return await match.route.handler(request, env, ctx, match.params); " +
+  // The same handler, called once, for the same matched route — wrapped so
+  // counting can see its security events (spec §2.2; test/security-scope.test.ts).
+  "return await withSecurityScope(env, ctx, () => match.route.handler(request, env, ctx, match.params)); " +
   "}, " +
   // The scheduled() cron dispatcher (M2.3c + handle-at-signup Task 8 +
   // content-deletion/media-reclamation Task 4 + db-health-probe) — a THIN

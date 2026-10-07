@@ -10,6 +10,7 @@ import { runEmailDrain } from "./notifications/email-drain";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
 import { ensureLedgerAlarm } from "./security/ledger-cron";
+import { withSecurityScope } from "./security/scope";
 
 export { UserSecurityDO } from "./durable-objects/UserSecurityDO";
 export { NotifyDO } from "./durable-objects/NotifyDO";
@@ -28,7 +29,7 @@ export default {
     const { pathname } = new URL(request.url);
     const match = findRoute(ROUTES, request.method, pathname);
     if (match === null) return notFoundResponse();
-    return await match.route.handler(request, env, ctx, match.params);
+    return await withSecurityScope(env, ctx, () => match.route.handler(request, env, ctx, match.params));
   },
   /*
    * Six cron patterns, one dispatcher. `30 3 * * *` is the unverified-account
