@@ -240,16 +240,23 @@ function pageAll(
   }
 }
 
+/** Durable Object SQLite's limit on bound parameters in one statement. */
+export const DO_SQL_MAX_PARAMS = 100;
+/** Parameters `applyCoverage` binds per named row: (signal_class, subject_key, version). */
+const COVER_PARAMS_PER_KEY = 3;
+
 /**
  * Keys per DELETE statement on delivery (§2.6 F2: "in statements of at most 100 keys").
  *
- * ⚠️ 33, NOT 100: each key binds THREE parameters (class, key, version), and
- * Durable Object SQLite refuses a statement with more than 100 bound
- * parameters ("too many SQL variables"). At 100 keys the delete threw after the
- * sink had accepted the report, so the report was kept and re-sent by every
- * alarm (test/security-ledger-do.test.ts, "coverage of a large held report").
+ * ⚠️ DERIVED, NEVER 100: each key binds `COVER_PARAMS_PER_KEY` parameters
+ * (class, key, version), and Durable Object SQLite refuses a statement with
+ * more than `DO_SQL_MAX_PARAMS` bound parameters ("too many SQL variables").
+ * At 100 keys the delete threw after the sink had accepted the report, so the
+ * report was kept and re-sent by every alarm (test/security-ledger-do.test.ts,
+ * "coverage of a large held report"). Adding a column to the WHERE below means
+ * changing `COVER_PARAMS_PER_KEY` with it.
  */
-export const COVER_DELETE_CHUNK = 33;
+export const COVER_DELETE_CHUNK = Math.floor(DO_SQL_MAX_PARAMS / COVER_PARAMS_PER_KEY);
 
 /**
  * A held report was DELIVERED: delete each named row only if its version is at
