@@ -319,10 +319,11 @@ export class SecurityLedgerDO extends DurableObject<Env> {
    * fault, so it can never block the rows behind it or re-fire the alarm.
    */
   private async deliver(nowMs: number): Promise<void> {
+    this.dropSentRows();
     const sink = this.sinkFactory(this.env);
     const due = this.ctx.storage.sql
       .exec<OutboxRow>(
-        "SELECT id, message, covers, attempts FROM outbox WHERE next_ms <= ? ORDER BY next_ms, id LIMIT ?",
+        "SELECT id, message, covers, attempts FROM outbox WHERE sent_ms IS NULL AND next_ms <= ? ORDER BY next_ms, id LIMIT ?",
         nowMs,
         DELIVER_PER_RUN,
       )
@@ -336,6 +337,18 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     }
   }
 
+  /**
+   * Rows already sent whose delete failed (m-A). Retried here, idempotently; a
+   * failure leaves them marked for the next run, and never blocks delivery.
+   */
+  private dropSentRows(): void {
+    try {
+      this.ctx.storage.sql.exec("DELETE FROM outbox WHERE sent_ms IS NOT NULL");
+    } catch {
+      // Still marked: skipped by every send, retried by the next run.
+    }
+  }
+
   private async deliverRow(sink: SecurityAlertSink, row: OutboxRow, nowMs: number): Promise<void> {
     const message = JSON.parse(row.message) as SecurityAlertMessage;
     const result = await deliverSecurityAlert(sink, message);
@@ -343,7 +356,9 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       await this.deliveryFailed(row, message, nowMs);
       return;
     }
-    // SENT. The row goes first, on its own, so nothing after this can send it again.
+    // SENT. Marked first, then deleted, each on its own: if the delete fails, the
+    // mark keeps every later run from sending it again (batch-2 re-review m-A).
+    this.ctx.storage.sql.exec("UPDATE outbox SET sent_ms = ? WHERE id = ?", nowMs, row.id);
     this.ctx.storage.sql.exec("DELETE FROM outbox WHERE id = ?", row.id);
     if (row.covers !== null) this.coverAfterSend(row.covers);
   }
@@ -513,7 +528,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       return;
     }
     const next = this.ctx.storage.sql
-      .exec<{ next_ms: number | null }>("SELECT MIN(next_ms) AS next_ms FROM outbox")
+      .exec<{ next_ms: number | null }>("SELECT MIN(next_ms) AS next_ms FROM outbox WHERE sent_ms IS NULL")
       .one().next_ms;
     const nextHour = (Math.floor(nowMs / HOUR_MS) + 1) * HOUR_MS;
     await this.armAt(Math.max(earliestMs, Math.min(next ?? nextHour, nextHour)));

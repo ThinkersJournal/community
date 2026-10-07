@@ -242,3 +242,21 @@ describe("N-1: the per-entry fallback never drops a batch silently", () => {
     });
   });
 });
+
+describe("m-A: a sent row whose DELETE throws is never sent again", () => {
+  it("the row is marked sent before the delete; later alarms skip it and clean it up once the delete works", async () => {
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      const { sent } = wire(ledger);
+      const sql = state.storage.sql;
+      queueRaw(sql, GOOD, null, T0);
+      sql.exec("CREATE TRIGGER refuse_outbox_delete BEFORE DELETE ON outbox BEGIN SELECT RAISE(ABORT, 'delete refused'); END");
+      for (const at of [T0, T0 + MINUTE, T0 + 6 * MINUTE, T0 + 36 * MINUTE, T0 + 2 * HOUR]) await ledger.alarmAt(at);
+      expect(ofType(sent, "budget_exhausted")).toHaveLength(1);
+      expect(sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox_poison").one().n).toBe(0);
+      sql.exec("DROP TRIGGER refuse_outbox_delete");
+      await ledger.alarmAt(T0 + 3 * HOUR);
+      expect(ofType(sent, "budget_exhausted")).toHaveLength(1);
+      expect(sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox WHERE message = ?", GOOD).one().n).toBe(0);
+    });
+  });
+});

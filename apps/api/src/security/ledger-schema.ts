@@ -6,6 +6,8 @@
  * - `class_day.suppressed`: `budget_exhausted.suppressedSoFar` (§3.2).
  * - `class_period`: the digest's per-class counts since the last digest (§2.6 step 5).
  * - `outbox.covers`: a held report's `S` and each named row's key and version (§2.6, F2).
+ * - `outbox.sent_ms`: set the moment the sink accepts a row, BEFORE its delete, so
+ *   a row whose delete fails is never sent again (batch-2 re-review m-A).
  */
 export const LEDGER_SCHEMA: readonly string[] = [
   "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL) WITHOUT ROWID",
@@ -25,7 +27,7 @@ export const LEDGER_SCHEMA: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS class_period (class TEXT PRIMARY KEY, sent INTEGER NOT NULL,
      by_cooldown INTEGER NOT NULL, by_budget INTEGER NOT NULL) WITHOUT ROWID`,
   `CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY, message TEXT NOT NULL, covers TEXT,
-     attempts INTEGER NOT NULL DEFAULT 0, next_ms INTEGER NOT NULL)`,
+     attempts INTEGER NOT NULL DEFAULT 0, next_ms INTEGER NOT NULL, sent_ms INTEGER)`,
   `CREATE TABLE IF NOT EXISTS account_refs (user_id TEXT PRIMARY KEY, ref TEXT NOT NULL UNIQUE,
      last_used_ms INTEGER NOT NULL) WITHOUT ROWID`,
   // PR 2 (§2.6 m-e): an anonymised account's tombstone, so a late report cannot re-create its rows.
