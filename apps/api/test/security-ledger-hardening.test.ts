@@ -153,3 +153,26 @@ describe("m-4: held_capped names the cap that was hit", () => {
     });
   });
 });
+
+describe("m-9: rows past the 64 KB cap are not covered by a report that did not name them", () => {
+  it("the next hour's report names the rows the first one only counted in `more`", async () => {
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      const { sent } = wire(ledger);
+      const subjects = Array.from({ length: 150 }, (_, i) => `2001:db8:${i.toString(16)}::/64#${"x".repeat(500)}`);
+      await ledger.reportAt({ reports: subjects.flatMap((s) => [crossing({ subject: s }), crossing({ subject: s })]), countedOverflow: {} }, T0);
+      await ledger.alarmAt(T0 + 1); // queues report #1
+      await ledger.alarmAt(T0 + 2); // delivers it
+      const first = ofType(sent, "held_report")[0];
+      const named = first?.entries.length ?? 0;
+      expect(named).toBeLessThan(150); // control: the byte cap really cut it short
+      expect(first?.more).toEqual([{ signalClass: "stuffing", count: 150 - named }]);
+      expect(state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM held").one().n).toBe(150 - named);
+      await ledger.alarmAt(T0 + HOUR); // report #2 …
+      await ledger.alarmAt(T0 + HOUR + 1); // … delivered
+      const second = ofType(sent, "held_report")[1];
+      expect(second?.entries.length).toBeGreaterThan(0);
+      const firstNames = new Set(first?.entries.map((e) => JSON.stringify(e.subject)));
+      expect(second?.entries.some((e) => firstNames.has(JSON.stringify(e.subject)))).toBe(false);
+    });
+  });
+});

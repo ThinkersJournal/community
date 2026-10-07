@@ -273,7 +273,8 @@ export const COVER_DELETE_CHUNK = Math.floor(DO_SQL_MAX_PARAMS / COVER_PARAMS_PE
 
 /**
  * A held report was DELIVERED: delete each named row only if its version is at
- * or below the version the report named, then raise every class's watermark to S.
+ * or below the version the report named, then raise each class's watermark as
+ * far towards S as the report really reached (see `coveredUpTo`).
  */
 export function applyCoverage(store: LedgerStore, covers: HeldCovers): void {
   for (let i = 0; i < covers.rows.length; i += COVER_DELETE_CHUNK) {
@@ -281,7 +282,7 @@ export function applyCoverage(store: LedgerStore, covers: HeldCovers): void {
     const where = chunk.map(() => "(signal_class = ? AND subject_key = ? AND version <= ?)").join(" OR ");
     deleteHeld(store, where, ...chunk.flat());
   }
-  for (const c of HELD_CLASSES) store.raiseWatermark(c, covers.s);
+  for (const c of HELD_CLASSES) store.raiseWatermark(c, coveredUpTo(store, c, covers.s));
 }
 
 /**
@@ -306,4 +307,21 @@ export function forgetCovers(store: LedgerStore, userId: string): void {
     if (kept.length === covers.rows.length) continue;
     store.sql.exec("UPDATE outbox SET covers = ? WHERE id = ?", JSON.stringify({ s: covers.s, rows: kept }), row.id);
   }
+}
+
+/**
+ * How far a delivered report's coverage reaches in one class: S, unless an open
+ * row at or below S is still there after the named rows were deleted. Such a
+ * row was only counted in `more` (the 64 KB cap cut the report short), so the
+ * watermark stops just below it and the next report names it (batch-2 review
+ * m-9). Until PR 3's admin page, the mail is the only way to read a held row.
+ */
+function coveredUpTo(store: LedgerStore, signalClass: SignalClass, s: number): number {
+  const unnamed = store.count(
+    "SELECT COALESCE(MIN(version), 0) AS n FROM held WHERE signal_class = ? AND version > ? AND version <= ?",
+    signalClass,
+    store.watermark(signalClass),
+    s,
+  );
+  return unnamed === 0 ? s : unnamed - 1;
 }
