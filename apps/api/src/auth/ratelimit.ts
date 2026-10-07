@@ -35,17 +35,39 @@
  * multi-IP attacker. Anything needing exact accounting wants a Durable Object
  * (src/durable-objects/UserSecurityDO.ts), not this binding.
  */
+import { logSecurityEvent } from "@thinkersjournal/shared";
+
 import { errorResponse } from "../http/errors";
+
+/**
+ * Where a 429 happened, for its `security:` log line (packages/shared's
+ * security-log.ts). `bucket` names WHICH key kind refused (`ip`, `ip:email`,
+ * `email`…) — never the key itself, which can embed an email address.
+ */
+export interface RateLimitLogContext {
+  route: string;
+  bucket: string;
+  ip: string | null;
+}
 
 /**
  * Consume one unit of `limiter`'s quota for `key`. Resolves `null` when the
  * request is allowed to proceed, or a `429 Too Many Requests` `Response` when
  * the caller should return that response immediately instead of continuing.
+ *
+ * With `log`, a refusal also writes one `security: rate_limited` line. Optional
+ * only so the routes that predate it keep compiling; every route the brute-force
+ * work touched passes it.
  */
 export async function enforceRateLimit(
   limiter: RateLimit,
   key: string,
+  log?: RateLimitLogContext,
 ): Promise<Response | null> {
   const { success } = await limiter.limit({ key });
-  return success ? null : errorResponse("RATE_LIMITED", 429);
+  if (success) return null;
+  if (log !== undefined) {
+    logSecurityEvent({ kind: "rate_limited", route: log.route, reason: log.bucket, ip: log.ip });
+  }
+  return errorResponse("RATE_LIMITED", 429);
 }

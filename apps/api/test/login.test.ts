@@ -3,7 +3,7 @@ import {
   env,
   waitOnExecutionContext,
 } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Statically-imported, precompiled `WebAssembly.Module`s — same files
 // src/auth/password.ts uses, so this test-only helper (see `hashWithParams`
@@ -153,6 +153,25 @@ async function login(
   const response = await worker.fetch(loginRequest(body, headers), env, ctx);
   await waitOnExecutionContext(ctx);
   return response;
+}
+
+/** LOGIN_IP_LIMITER's `simple.limit` in wrangler.jsonc. */
+const LOGIN_IP_LIMIT = 30;
+
+/**
+ * A per-run-unique client IP (an IPv6 documentation-prefix address), so a test's
+ * IP-only bucket is never shared with another test or a previous run's.
+ */
+function uniqueIp(): string {
+  const hex = crypto.randomUUID().replace(/-/g, "");
+  return `2001:db8:${hex.slice(0, 4)}:${hex.slice(4, 8)}:${hex.slice(8, 12)}::1`;
+}
+
+/** Each `console.warn` call that is a `security:` event, flattened to one string. */
+function securityLines(warn: { mock: { calls: unknown[][] } }): string[] {
+  return warn.mock.calls
+    .filter((args) => typeof args[0] === "string" && args[0].startsWith("security:"))
+    .map((args) => JSON.stringify(args));
 }
 
 function validBody(email: string, password: string = VALID_PASSWORD) {
@@ -486,6 +505,124 @@ describe("POST /auth/login", () => {
     },
     60_000,
   );
+
+  /**
+   * ⚠️ THE CREDENTIAL-STUFFING / PASSWORD-SPRAYING CEILING — the per-IP-ONLY
+   * bucket (`ip:<ip>` on LOGIN_IP_LIMITER, 30/60s).
+   *
+   * The `ip:email` and `email:` buckets both have the EMAIL in the key, so a
+   * single host that tries a DIFFERENT address every time gets a fresh pair of
+   * buckets per address and is never limited at all (the brute-force audit,
+   * item #1). Every request below carries the SAME IP and a NEW address, so
+   * neither email-keyed bucket can ever be what returns the 429 — only the
+   * IP-only bucket can.
+   *
+   * Removing the IP-only `enforceRateLimit` call from src/routes/login.ts must
+   * turn this test RED (the 31st request becomes a 401).
+   */
+  it(
+    "429s ONE IP spraying many DIFFERENT emails once over the per-IP limit (30/60s), and logs the 429",
+    async () => {
+      const ip = uniqueIp();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await awaitLimiterBurstWindow();
+        for (let i = 0; i < LOGIN_IP_LIMIT; i++) {
+          const response = await login(validBody(uniqueEmail()), {
+            Origin: ORIGIN,
+            "CF-Connecting-IP": ip,
+          });
+          expect(response.status, `attempt ${i + 1} (a fresh address) should still reach a 401`).toBe(401);
+        }
+
+        const blocked = await login(validBody(uniqueEmail()), {
+          Origin: ORIGIN,
+          "CF-Connecting-IP": ip,
+        });
+        expect(
+          blocked.status,
+          "one IP spraying fresh addresses must hit a ceiling — the IP-only limiter bucket is missing",
+        ).toBe(429);
+
+        const lines = securityLines(warn);
+        expect(
+          lines.some((l) => l.includes("rate_limited") && l.includes("/auth/login") && l.includes(ip)),
+          `no security: rate_limited line for /auth/login and ${ip}; saw ${JSON.stringify(lines)}`,
+        ).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+    60_000,
+  );
+
+  /**
+   * CONTROL for the test above: the IP-only bucket is PER IP. One exhausted IP
+   * must not throttle a different one (a shared bucket would let one abuser
+   * lock every user out of login).
+   */
+  it(
+    "CONTROL: a DIFFERENT IP is not limited together with an exhausted one",
+    async () => {
+      const exhausted = uniqueIp();
+      const other = uniqueIp();
+      await awaitLimiterBurstWindow();
+      for (let i = 0; i < LOGIN_IP_LIMIT; i++) {
+        await login(validBody(uniqueEmail()), { Origin: ORIGIN, "CF-Connecting-IP": exhausted });
+      }
+      // Anti-vacuity: the first IP really IS exhausted…
+      expect(
+        (await login(validBody(uniqueEmail()), { Origin: ORIGIN, "CF-Connecting-IP": exhausted })).status,
+      ).toBe(429);
+      // …and the second one is untouched by that.
+      expect(
+        (await login(validBody(uniqueEmail()), { Origin: ORIGIN, "CF-Connecting-IP": other })).status,
+      ).toBe(401);
+    },
+    60_000,
+  );
+
+  /**
+   * ⚠️ AN UNKNOWN IP SKIPS THE IP-ONLY BUCKET — it must NOT share one "unknown"
+   * bucket. If the IP were ever missing (off Cloudflare, or a web regression),
+   * one shared bucket would let a single attacker exhaust it and lock EVERY user
+   * out of login. The email-keyed buckets still bound each address.
+   *
+   * Mapping a null IP to a literal "unknown" IP-only key must turn this RED.
+   */
+  it(
+    "does NOT pool IP-less requests into one shared IP-only bucket",
+    async () => {
+      await awaitLimiterBurstWindow();
+      for (let i = 0; i <= LOGIN_IP_LIMIT; i++) {
+        // No CF-Connecting-IP / X-TJ-Client-IP at all: clientIp() is null.
+        expect((await login(validBody(uniqueEmail()))).status, `IP-less attempt ${i + 1}`).toBe(401);
+      }
+    },
+    60_000,
+  );
+
+  it("logs a `security:` line for a failed login with the route and IP, never the password", async () => {
+    const ip = uniqueIp();
+    const password = "a-wrong-password-that-must-not-be-logged";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await login(validBody(uniqueEmail(), password), {
+        Origin: ORIGIN,
+        "CF-Connecting-IP": ip,
+      });
+      expect(response.status).toBe(401);
+
+      const lines = securityLines(warn);
+      expect(
+        lines.some((l) => l.includes("auth_failure") && l.includes("/auth/login") && l.includes(ip)),
+        `no security: auth_failure line for /auth/login and ${ip}; saw ${JSON.stringify(lines)}`,
+      ).toBe(true);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(password);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 
   /** Normalization must not break the citext lookup it exists to agree with. */
   it(

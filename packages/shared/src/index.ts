@@ -12,5 +12,6 @@ export * from './notifications-read';
 export * from './posts';
 export * from './schemas';
 export * from './search';
+export * from './security-log';
 export * from './social';
 export * from './timing-safe';
