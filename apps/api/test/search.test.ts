@@ -1,5 +1,5 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import {
   CLIENT_IP_HEADER, SEARCH_MAX_OFFSET, SEARCH_PAGE_SIZE, SEARCH_Q_MAX, SEARCH_Q_MIN,
@@ -367,8 +367,8 @@ describe("GET /public/search", () => {
    * SEARCH_LIMITER. IP-keyed only (no session on this route) — a UNIQUE key
    * per run (see the window-rollover guard above) so this test's own budget
    * burn cannot pollute or be polluted by the rest of this file, which sends
-   * no `CF-Connecting-IP` at all and shares the "unknown" bucket among
-   * themselves (same convention as test/login.test.ts).
+   * no `CF-Connecting-IP` at all and therefore skips the limiter entirely (an
+   * unknown IP is not pooled into a shared bucket; see the test below).
    */
   it("throttles a burst of searches from one IP (429 RATE_LIMITED)", async () => {
     const ip = `test-${crypto.randomUUID()}`;
@@ -410,5 +410,43 @@ describe("GET /public/search", () => {
 
     // A DIFFERENT X-TJ-Client-IP is NOT throttled by ipA's exhausted bucket.
     expect((await searchWithClientIpHeader(ipB)).status).toBe(200);
+  });
+
+  /**
+   * ⚠️ EVERY 429 IS LOGGED (brute-force review 1, I3). A search scrape that hits
+   * SEARCH_LIMITER must leave a `security: rate_limited` line the alerting
+   * follow-up can count — with the route, the bucket name and the IP.
+   */
+  it("logs its 429 as a `security: rate_limited /public/search` line with the IP", async () => {
+    const ip = `test-${crypto.randomUUID()}`;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await awaitLimiterBurstWindow();
+      for (let i = 0; i < SEARCH_LIMIT; i++) await searchWithIp(ip);
+      expect((await searchWithIp(ip)).status).toBe(429);
+      const lines = warn.mock.calls
+        .filter((args) => typeof args[0] === "string" && args[0].startsWith("security: rate_limited /public/search"))
+        .map((args) => JSON.stringify(args));
+      expect(lines.some((l) => l.includes(ip)), `saw ${JSON.stringify(warn.mock.calls)}`).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  /**
+   * ⚠️ AN UNKNOWN IP SKIPS THE LIMITER (review 1, I3). It used to fall back to one
+   * shared "unknown" bucket: had the IP ever gone missing (off Cloudflare, a web
+   * regression), one client could spend it and deny search to everyone. Same rule
+   * as every limiter the brute-force work added. More than SEARCH_LIMIT IP-less
+   * searches in one window must all succeed.
+   */
+  it("does NOT pool IP-less searches into one shared bucket", async () => {
+    await awaitLimiterBurstWindow();
+    for (let i = 0; i <= SEARCH_LIMIT; i++) {
+      const ctx = createExecutionContext();
+      const response = await worker.fetch(new Request(`${U}/public/search?q=ratelimittest&type=posts`), env, ctx);
+      await waitOnExecutionContext(ctx);
+      expect(response.status, `IP-less search ${i + 1}`).toBe(200);
+    }
   });
 });

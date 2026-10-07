@@ -55,19 +55,20 @@ export interface RateLimitLogContext {
  * request is allowed to proceed, or a `429 Too Many Requests` `Response` when
  * the caller should return that response immediately instead of continuing.
  *
- * With `log`, a refusal also writes one `security: rate_limited` line. Optional
- * only so the routes that predate it keep compiling; every route the brute-force
- * work touched passes it.
+ * ⚠️ `log` IS REQUIRED, and every refusal writes one `security: rate_limited`
+ * line (route, bucket NAME, IP — never the key, which can embed an email). It was
+ * optional once, and 20 call sites silently dropped their 429s (brute-force
+ * review 1, I3): a signup, forgot-password or search flood left nothing for the
+ * alerting follow-up to count. Required means the compiler, not review, finds a
+ * new call site that forgot.
  */
 export async function enforceRateLimit(
   limiter: RateLimit,
   key: string,
-  log?: RateLimitLogContext,
+  log: RateLimitLogContext,
 ): Promise<Response | null> {
   const { success } = await limiter.limit({ key });
   if (success) return null;
-  if (log !== undefined) {
-    logSecurityEvent({ kind: "rate_limited", route: log.route, reason: log.bucket, ip: log.ip });
-  }
+  logSecurityEvent({ kind: "rate_limited", route: log.route, reason: log.bucket, ip: log.ip });
   return errorResponse("RATE_LIMITED", 429);
 }

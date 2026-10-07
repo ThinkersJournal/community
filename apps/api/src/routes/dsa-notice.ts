@@ -99,9 +99,14 @@ export async function handleDsaNotice(
   const ipLimited = await enforceRateLimit(
     env.DSA_LIMITER,
     `${ip ?? "unknown"}:${reporterEmail}`,
+    { route: "/dsa-notice", bucket: "ip:email", ip },
   );
   if (ipLimited !== null) return ipLimited;
-  const emailLimited = await enforceRateLimit(env.DSA_LIMITER, `email:${reporterEmail}`);
+  const emailLimited = await enforceRateLimit(env.DSA_LIMITER, `email:${reporterEmail}`, {
+    route: "/dsa-notice",
+    bucket: "email",
+    ip,
+  });
   if (emailLimited !== null) return emailLimited;
 
   // ---- 4. Turnstile ----------------------------------------------------------

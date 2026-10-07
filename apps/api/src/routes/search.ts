@@ -68,9 +68,21 @@ export async function handlePublicSearch(
   // (same "spend quota only on requests that already passed the free
   // checks" ordering as every other limiter in this codebase) and BEFORE any
   // database work.
-  const ip = clientIp(request) ?? "unknown";
-  const limited = await enforceRateLimit(env.SEARCH_LIMITER, ip);
-  if (limited !== null) return limited;
+  //
+  // ⚠️ AN UNKNOWN IP SKIPS THE LIMITER (brute-force review 1, I3). It used to
+  // fall back to one shared "unknown" bucket, so had the IP ever gone missing
+  // (off Cloudflare, or a web regression that stops forwarding it) one client
+  // could spend that bucket and deny search to everyone. Same rule as every
+  // per-IP limiter the brute-force work added. The key itself is unchanged.
+  const ip = clientIp(request);
+  if (ip !== null) {
+    const limited = await enforceRateLimit(env.SEARCH_LIMITER, ip, {
+      route: "/public/search",
+      bucket: "ip",
+      ip,
+    });
+    if (limited !== null) return limited;
+  }
 
   const limit = SEARCH_PAGE_SIZE + 1;
   const page = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {

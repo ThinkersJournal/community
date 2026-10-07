@@ -405,7 +405,7 @@ describe("runMutatingPipeline opt-in steps", () => {
 
     const ctx = createExecutionContext();
     const result = await runMutatingPipeline(postPosts(authed), env, ctx, {
-      rateLimit: { limiter: exhaustedLimiter, key: `k_${userId}` },
+      rateLimit: { limiter: exhaustedLimiter, key: `k_${userId}`, route: "/posts", bucket: "user" },
     });
     await waitOnExecutionContext(ctx);
 
@@ -420,7 +420,7 @@ describe("runMutatingPipeline opt-in steps", () => {
 
     const ctx = createExecutionContext();
     const result = await runMutatingPipeline(postPosts(authed), env, ctx, {
-      rateLimit: { limiter, key: `k_${userId}` },
+      rateLimit: { limiter, key: `k_${userId}`, route: "/posts", bucket: "user" },
     });
     await waitOnExecutionContext(ctx);
 

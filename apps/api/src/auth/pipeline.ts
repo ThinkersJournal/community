@@ -19,6 +19,7 @@ import { accountBarredResponse, isBarred, loadBarReason } from "./account-status
 import { checkCsrf, checkOrigin } from "./csrf";
 import { enforceRateLimit } from "./ratelimit";
 import { destroySession, readSession } from "./session";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 import { withClient } from "../db/client";
 
@@ -189,7 +190,11 @@ export interface MutatingPipelineOptions {
    * with no limiter) is not a state a caller can reach, rather than one that
    * silently skips the limit at runtime.
    */
-  rateLimit?: { limiter: RateLimit; key: string };
+  /**
+   * `route` and `bucket` name the 429 in its `security:` log line (the key is
+   * never logged — see src/auth/ratelimit.ts).
+   */
+  rateLimit?: { limiter: RateLimit; key: string; route: string; bucket: string };
 }
 
 /**
@@ -339,6 +344,7 @@ export async function runMutatingPipeline(
     const limited = await enforceRateLimit(
       opts.rateLimit.limiter,
       opts.rateLimit.key,
+      { route: opts.rateLimit.route, bucket: opts.rateLimit.bucket, ip: clientIp(request) },
     );
     if (limited !== null) {
       return limited;

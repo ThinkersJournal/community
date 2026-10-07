@@ -33,6 +33,7 @@ import {
 } from "../auth/email-verify";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 
 export async function handleResendVerification(
@@ -50,7 +51,11 @@ export async function handleResendVerification(
   // Keyed on the SESSION's user: the only identity that can trigger mail here,
   // and one an attacker cannot rotate the way they can an IP. This is a MAIL
   // SEND, so the ceiling is tighter than the auth routes' (3/60s).
-  const limited = await enforceRateLimit(env.RESEND_LIMITER, `resend:${userId}`);
+  const limited = await enforceRateLimit(env.RESEND_LIMITER, `resend:${userId}`, {
+    route: "/auth/resend-verification",
+    bucket: "user",
+    ip: clientIp(request),
+  });
   if (limited !== null) return limited;
 
   // FRESH: a permission read, and a read-after-write against GET /verify-email.

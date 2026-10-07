@@ -11,6 +11,7 @@ import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 import { isBlockedBy } from "../moderation/is-blocked";
 import { notify } from "../notifications/create";
@@ -42,7 +43,11 @@ export async function handleAddReaction(
   if (result instanceof Response) return result;
   const { userId } = result.session;
 
-  const limited = await enforceRateLimit(env.REACTION_LIMITER, `reaction:${userId}`);
+  const limited = await enforceRateLimit(env.REACTION_LIMITER, `reaction:${userId}`, {
+    route: "/reactions",
+    bucket: "user",
+    ip: clientIp(request),
+  });
   if (limited !== null) return limited;
 
   let body: unknown;
@@ -141,7 +146,11 @@ export async function handleRemoveReaction(
   if (result instanceof Response) return result;
   const { userId } = result.session;
 
-  const limited = await enforceRateLimit(env.REACTION_LIMITER, `reaction:${userId}`);
+  const limited = await enforceRateLimit(env.REACTION_LIMITER, `reaction:${userId}`, {
+    route: "/reactions",
+    bucket: "user",
+    ip: clientIp(request),
+  });
   if (limited !== null) return limited;
 
   const url = new URL(request.url);

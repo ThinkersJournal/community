@@ -88,9 +88,14 @@ export async function handleForgotPassword(
   const ipLimited = await enforceRateLimit(
     env.RESET_LIMITER,
     `${ip ?? "unknown"}:${email}`,
+    { route: "/auth/forgot-password", bucket: "ip:email", ip },
   );
   if (ipLimited !== null) return ipLimited;
-  const emailLimited = await enforceRateLimit(env.RESET_LIMITER, `email:${email}`);
+  const emailLimited = await enforceRateLimit(env.RESET_LIMITER, `email:${email}`, {
+    route: "/auth/forgot-password",
+    bucket: "email",
+    ip,
+  });
   if (emailLimited !== null) return emailLimited;
 
   // ---- 4. Turnstile — runs UNCONDITIONALLY, before the lookup below, so it

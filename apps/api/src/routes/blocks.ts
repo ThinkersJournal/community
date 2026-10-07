@@ -20,6 +20,7 @@ import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 import { bustFolloweeCache } from "../social/followee-cache";
 
@@ -36,7 +37,11 @@ export async function handleBlock(
   if (result instanceof Response) return result;
   const { userId } = result.session;
 
-  const limited = await enforceRateLimit(env.BLOCK_LIMITER, `block:${userId}`);
+  const limited = await enforceRateLimit(env.BLOCK_LIMITER, `block:${userId}`, {
+    route: "/blocks",
+    bucket: "user",
+    ip: clientIp(request),
+  });
   if (limited !== null) return limited;
 
   let body: unknown;
