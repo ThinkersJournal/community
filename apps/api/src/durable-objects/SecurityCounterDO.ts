@@ -274,7 +274,10 @@ export class SecurityCounterDO extends DurableObject<Env> {
       this.sql.exec("UPDATE reports SET report = ? WHERE id = ?", JSON.stringify(merged), pending.id);
       return false;
     }
-    if (this.sql.exec<CountRow>("SELECT COUNT(*) AS n FROM reports").one().n >= MAX_PENDING_REPORTS) {
+    // Batch-2 review m-7/m-8: the cap is PER CLASS (so an ip_burst flood cannot
+    // push a stuffing crossing into counted-only, C1) and read from a maintained
+    // count, not a COUNT(*) over up to 10,000 rows per new crossing.
+    if (this.pendingCount(report.signalClass) >= MAX_PENDING_REPORTS) {
       this.addReportsOverflow(report.signalClass);
       return false;
     }
@@ -284,7 +287,26 @@ export class SecurityCounterDO extends DurableObject<Env> {
       JSON.stringify(report),
       nowMs,
     );
+    this.addPending(report.signalClass, 1);
     return true;
+  }
+
+  /**
+   * Pending `reports` rows of one class, kept exact by every insert and delete
+   * (`queueReport`, `deliverReports`, `reattach`). `deleteAll` resets it with the rows.
+   */
+  private pendingCount(signalClass: SignalClass): number {
+    return Number(this.sql.exec<MetaRow>("SELECT v FROM meta WHERE k = ?", `pending_n:${signalClass}`).toArray()[0]?.v ?? "0");
+  }
+
+  private addPending(signalClass: SignalClass, by: number): void {
+    this.sql.exec(
+      `INSERT INTO meta (k, v) VALUES (?, ?)
+       ON CONFLICT(k) DO UPDATE SET v = CAST(CAST(v AS INTEGER) + ? AS TEXT)`,
+      `pending_n:${signalClass}`,
+      String(Math.max(0, by)),
+      by,
+    );
   }
 
   private addReportsOverflow(signalClass: SignalClass): void {
@@ -366,7 +388,10 @@ export class SecurityCounterDO extends DurableObject<Env> {
       return;
     }
     this.ctx.storage.transactionSync(() => {
-      for (const r of due) this.sql.exec("DELETE FROM reports WHERE id = ?", r.id);
+      for (const r of due) {
+        this.sql.exec("DELETE FROM reports WHERE id = ?", r.id);
+        this.addPending((JSON.parse(r.report) as CounterReport).signalClass, -1);
+      }
       for (const [signalClass, n] of Object.entries(countedOverflow)) this.subtractOverflow(signalClass, n ?? 0);
     });
   }
@@ -378,7 +403,10 @@ export class SecurityCounterDO extends DurableObject<Env> {
       const rkey = `${sent.signal}|${sent.subject}`;
       const live = this.sql.exec<ReportRow>("SELECT id, report, attempts FROM reports WHERE rkey = ?", rkey).toArray()[0];
       const report = live === undefined ? sent : mergeReports(sent, JSON.parse(live.report) as CounterReport);
-      if (live !== undefined) this.sql.exec("DELETE FROM reports WHERE id = ?", live.id);
+      if (live !== undefined) {
+        this.sql.exec("DELETE FROM reports WHERE id = ?", live.id);
+        this.addPending(sent.signalClass, -1);
+      }
       this.sql.exec(
         "UPDATE reports SET rkey = ?, report = ?, attempts = ?, next_ms = ? WHERE id = ?",
         rkey,
@@ -405,12 +433,16 @@ export class SecurityCounterDO extends DurableObject<Env> {
     this.sql.exec("DELETE FROM overflow WHERE minute <= ?", nowMinute - OVERFLOW_RETENTION_MINUTES);
   }
 
-  /** Alarm step 4: every table but `meta` empty. A pending report keeps the instance alive. */
+  /**
+   * Alarm step 4: every table but `meta` empty, and no counted-only overflow
+   * waiting in `meta` to be reported (batch-2 review m-6). A pending report, or
+   * an overflow count, keeps the instance alive.
+   */
   private isEmpty(): boolean {
     for (const table of ["buckets", "members", "reports", "last_report", "overflow"]) {
       if (this.sql.exec<CountRow>(`SELECT COUNT(*) AS n FROM ${table}`).one().n > 0) return false;
     }
-    return true;
+    return this.sql.exec<CountRow>("SELECT COUNT(*) AS n FROM meta WHERE k LIKE 'reports_overflow:%'").one().n === 0;
   }
 }
 
