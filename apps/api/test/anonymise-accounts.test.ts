@@ -1,5 +1,5 @@
 import { createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import worker from "../src";
 import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
@@ -7,6 +7,7 @@ import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
 import { mintActionToken } from "../src/moderation/action-tokens";
 import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
+import { quiet } from "./helpers/security-do";
 
 /**
  * Board item 59 = Option C — the daily anonymisation reaper.
@@ -884,6 +885,18 @@ async function ledgerRows(id: string): Promise<number> {
  * account in the ledger (with a 30-day tombstone), beside its post-scrub bump.
  */
 describe("anonymiseExpiredAccounts — ledger clean-up", () => {
+  // ⚠️ No REAL ledger alarm during these cases. A report that queues a message
+  // arms the alarm for now, and the alarm's hourly held report, once delivered,
+  // deletes the held row these counts include. Without this, the "keeps its
+  // ledger rows" case passed only when an earlier case had already sent this
+  // hour's held report (alone it read 2, not 3).
+  beforeEach(async () => {
+    await runInDurableObject(LEDGER(), async (l, s) => {
+      quiet(l);
+      await s.storage.deleteAlarm();
+    });
+  });
+
   it("forgets the account's ledger rows (positive control: all three present before)", async () => {
     const f = await seedAccount({ eligible: false });
     await seedLedger(f.id);
