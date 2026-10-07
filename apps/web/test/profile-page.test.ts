@@ -112,6 +112,28 @@ describe("⚠️ keyset pagination — the cursor contract", () => {
     expect(code).toMatch(/status:\s*404/);
   });
 
+  /**
+   * ⚠️ A RATE-LIMITED LOOKUP IS NOT "NOT FOUND" (review 1, I2). The api answers 429
+   * when one IP exceeds PROFILE_LIMITER. Rendering that as 404 tells a crawler a
+   * REAL profile is gone (it drops the URL) and tells a person the user does not
+   * exist. It is a temporary refusal: 503 + Retry-After, the status crawlers treat
+   * as "slow down", with an explicit `no-store` so nothing caches it. It must be
+   * decided BEFORE the generic `status !== 200` 404 branch, which would swallow it.
+   */
+  it("⚠️ a 429 from the api renders 503 + Retry-After + no-store, BEFORE the generic 404 branch", () => {
+    const throttledAt = code.search(/response\.status\s*===\s*429/);
+    const notFoundAt = code.indexOf("response.status !== 200");
+    expect(throttledAt, "no 429 branch: a throttled lookup falls into the 404").toBeGreaterThan(-1);
+    expect(notFoundAt).toBeGreaterThan(-1);
+    expect(throttledAt).toBeLessThan(notFoundAt);
+
+    const branch = code.slice(throttledAt, notFoundAt);
+    expect(branch).toMatch(/status:\s*503/);
+    expect(branch).toMatch(/["\x27]Retry-After["\x27]\s*:\s*["\x27]\d+["\x27]/);
+    expect(branch).toMatch(/["\x27]Cache-Control["\x27]\s*:\s*["\x27][^"\x27]*no-store/i);
+    expect(branch).not.toMatch(/status:\s*404/);
+  });
+
   it("exposes the next page via `nextCursor`, never via an offset/page number", () => {
     // Positive proof this is keyset, not offset: the only pagination handle in
     // the page's source is the api's `nextCursor` field.
