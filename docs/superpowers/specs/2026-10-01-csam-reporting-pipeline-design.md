@@ -313,7 +313,9 @@ Every legal hold the case imposes and every `csam_cases` row references it.
    Nothing is re-filed, and nothing re-alarms.
 3. Re-resolve uploaders and embedding content for the remaining keys, inside the transaction. This is the
    authoritative set. A digest with **no `media` row** opens no case: it is recorded in `csam_unmatched_digests`,
-   which alarms (§6 condition 7), because its evidence may already be gone.
+   which alarms (§6 condition 7), because its evidence may already be gone. **Amended 2026-10-07:** an upload-time
+   match is the one exception. It never had a `media` row, and it opens a case on its evidence file through
+   `runUploadIntake`, with the uploader recorded on the case file (`2026-10-07-upload-scan-design.md` §5.2–§5.3).
 4. Write the `csam_hold` action row (`actor_admin` = the moderator or the system actor; `subject_user_id` = the
    first uploader, or null; `reason` = fixed internal text naming the case), then the `csam_cases` row
    (`source`, `kind`, `priority`, `alarm_next_at = now()`; `priority` is `urgent` for `known_hash` and
@@ -321,9 +323,10 @@ Every legal hold the case imposes and every `csam_cases` row references it.
    because it is confirmed in this transaction). A removal request also writes its `csam_removal_requests` rows.
 5. **Quarantine the matched media, and only that.** For each remaining key: `imposeLegalHold(c, { r2Key, category:
    "csam", imposedBy, moderationActionId: <the csam_hold id> })` (`legal-hold.ts:19`). This is the existing #61
-   restricted path, not a new one: a held key is served **only** by `GET /media/restricted/:sha256` to an Access
-   admin holding an approved two-person grant (`media_access_requests`; `media-restricted.ts:81-135`), and every
-   other caller gets a 404. If the key already had a hold (a `dmca` or `other` one), the insert is a no-op
+   restricted path, not a new one: a held key is served **only** by `GET /media/restricted/:sha256`, or, for a
+   case file, by `GET /media/restricted/case-file/:caseFileId` (amended 2026-10-07, `2026-10-07-upload-scan-design.md` §5.6 Task 9), to an
+   Access admin holding an approved two-person grant (`media_access_requests`; `media-restricted.ts:81-135`), and
+   every other caller gets a 404. If the key already had a hold (a `dmca` or `other` one), the insert is a no-op
    (`ON CONFLICT (r2_key) DO NOTHING`, `legal-hold.ts:31`): the key is already restricted, and that hold is not the
    case's to release (§7.2).
 6. **Quarantine the content.** For each embedding post or comment, in id order: lock it (`SELECT … FOR UPDATE`;
@@ -520,8 +523,10 @@ uploader of a matched image is reported"):
   `ncmec_reports` row on the case yet, insert one (`queued_by = 'reupload'`, `pending` or `awaiting_credentials`)
   with one `ncmec_report_files` row for the case file of that key (`viewed_by_esp` per §3.1), and impose a `csam`
   account hold on the account (§3.3 step 7a, with the case's `hold_action_id`). The report's `incidentDateTime` is
-  the attempt time, and it names no web page, because nothing was published. The refusal is still the plain 415,
-  and it never fails because of this step (an error is logged and alarms).
+  the attempt time, and it names no web page, because nothing was published. The refusal is the route's plain 415
+  until the PM rules on the upload-scan design's D14, which recommends the neutral 422 `IMAGE_NOT_ACCEPTED` for
+  **every** held-key refusal, whatever the hold's category (amended 2026-10-07, `2026-10-07-upload-scan-design.md` §5.1). Either
+  way it never fails because of this step (an error is logged and alarms).
 - **The same account** repeating an upload (any account that already has a report on the case, the original
   uploader included) is recorded in `csam_upload_attempts` and re-arms the alarm, with **no** new report.
 - A refused upload of a key whose case is **not** yet reported (an undecided `classifier` or `removal_request`
@@ -648,7 +653,7 @@ takes the reading that keeps evidence **longer**.
 
 | What | Where | Kept at least until |
 |---|---|---|
-| The images | the serving key in `MEDIA_RESTRICTED` under the case's `csam` media hold, from the match; after a CLEAR, the evidence copy `evidence/csam/<caseId>/<sha256>.webp` under its own `csam` media hold (§7.2) | `csam_case_preserve_until`. Then a **cleared** case's copy is destroyed unless a legal hold applies; a confirmed case's is kept (P7) |
+| The images | the serving key in `MEDIA_RESTRICTED` under the case's `csam` media hold, from the match; after a CLEAR, the evidence copy `evidence/csam/<caseId>/<sha256>.<ext>` under its own `csam` media hold (§7.2); `<ext>` is `webp` for a serving key's copy, and the original's own extension (`jpg`, `png`, `gif` or `webp`) for an upload-time file, which is its own evidence copy from the match (amended 2026-10-07, `2026-10-07-upload-scan-design.md` §5.3) | `csam_case_preserve_until`. Then a **cleared** case's copy is destroyed unless a legal hold applies; a confirmed case's is kept (P7) |
 | The report as sent | `ncmec_submissions.request_xml`, one row per send; UPDATE refused by trigger | `csam_case_preserve_until`, which includes the row's own `sent_at` + 1 year |
 | The content (title, source; posts and comments) | `moderation_snapshots` (#126) with the new `csam_case_id` set, written in intake step 6 | the later of `0021`'s 1-year floor and `csam_case_preserve_until` |
 | The account | a `csam` account hold, from the match (known-hash) or from CONFIRM (classifier, removal request), so neither reaper deletes or anonymises it. At a CLEAR, an account snapshot (`csam_account_snapshots`) is written before the hold is released (ruling d) | the hold: until a CLEAR releases it (§7.2). The snapshot: `csam_case_preserve_until` |
@@ -712,8 +717,8 @@ step 7a).
   - **How, per eligible case:**
     1. a short transaction locks the case, re-checks eligibility, and sets `destruction_started_at`. From then on
        an evidence legal hold can no longer be set on it;
-    2. each evidence object (`evidence/csam/<caseId>/<sha256>.webp`) is deleted from `MEDIA_RESTRICTED`, and a
-       `head` confirms it is gone;
+    2. each evidence object (`evidence/csam/<caseId>/<sha256>.<ext>`, with §5.2's `<ext>`) is deleted from
+       `MEDIA_RESTRICTED`, and a `head` confirms it is gone;
     3. a second transaction deletes the evidence keys' `media_legal_holds` rows, the case's `moderation_snapshots`
        (`csam_case_id`), `csam_account_snapshots` and `ncmec_submissions` rows (the report XML, which carries the
        user's details), sets `evidence_destroyed_at`, and writes a **`csam_evidence_destroyed`** audit row in
@@ -924,7 +929,9 @@ Who can review: any Access admin. Access to the **images** keeps #61's two-perso
 ## 8. Out of scope (stated, not forgotten)
 
 - **Email Worker intake (v2)**: after capturing one real Cloudflare notification.
-- **Our own scanning** (R2's ruling): designed in a separate document. It enters through §3.1 (b).
+- **Our own scanning** (R2's ruling): designed in a separate document, `2026-10-07-upload-scan-design.md`. The backfill of stored
+  media enters through §3.1 (b). Upload-time scanning enters through `runUploadIntake`, a variant of §3.3's intake for
+  files that were never published (amended 2026-10-07).
 - **A tool for destruction on law-enforcement request**: a runbook entry in `docs/runbooks/csam.md`, which this
   work creates, covering who, how, the two-person rule, and bypassing §5 P3's guard for the named items only.
 - **A tool to release a confirmed case's evidence**: none. Only a cleared case's evidence is destroyed, by §5 P7's
@@ -1005,13 +1012,16 @@ CSAM off the service stays ours, so Cloudflare's scanning, the classifier path a
 
 The provider's terms let it suspend or end access at any time. So:
 - **An image that cannot be scanned is never published.** On any scanner outage, error, throttling, suspension,
-  termination or credential refusal, the upload stays **in processing**: it is not served publicly and cannot
-  appear in published content. It is retried with backoff, and never marked clean on an error.
+  termination or credential refusal, the upload is **refused** with a neutral "try again later" (503): nothing is
+  stored, served or published, and the uploader retries. It is never marked clean on an error. **Amended
+  2026-10-07** by the upload-scan design (`2026-10-07-upload-scan-design.md` §6.5), which supersedes this bullet's
+  earlier "stays in processing … retried with backoff": the scan runs inline at upload, so there is no processing
+  state to hold, and a held upload would mean persisting every original.
 - **Repeated failures raise an alarm** through §6.3's surfaces: the admin banner, an immediate email on a credential
   refusal and on first raise, the daily email while it holds, and a log line every tick.
-- The scanner itself, and the "in processing" state, belong to the upload-scan plan (§8). **PM ruling (2026-10-06):
-  fail-closed upload supersedes** the self-scanning options doc's earlier "don't block at launch" recommendation
-  (`2026-10-04-csam-self-scanning-options.md` §3.3 and §8 Q1, now updated).
+- The scanner itself belongs to the upload-scan plan (§8), which chose inline refusal over an "in processing"
+  state. **PM ruling (2026-10-06): fail-closed upload supersedes** the self-scanning options doc's earlier "don't
+  block at launch" recommendation (`2026-10-04-csam-self-scanning-options.md` §3.3 and §8 Q1, now updated).
 
 ### 11.2 Match Data is never used for AI
 
@@ -1057,8 +1067,10 @@ The provider's terms let it ask us to remove content, including content it earli
 
 ### 11.5 Credentials
 
-`HMS_A_USERNAME`, `HMS_A_PASSWORD` and the var `HMS_A_BASE_URL` are held **only** as Worker secrets and vars on
-`thinkersjournal-api` (`apps/api/wrangler.jsonc:4`). As the provider's terms require, the credentials are never
+`HMS_A_USERNAME`, `HMS_A_PASSWORD` and `HMS_A_BASE_URL` are held **only** as Worker secrets on
+`thinkersjournal-api` (`apps/api/wrangler.jsonc:4`). `HMS_A_BASE_URL` is a secret, not a committed var, because a
+var in `wrangler.jsonc` would publish the provider's host (amended 2026-10-07, `2026-10-07-upload-scan-design.md` §8, pending the PM's
+D8). As the provider's terms require, the credentials are never
 shared with any third party: never written into code, docs, tests, commits or PR text, never logged (a request
 log line names the operation and the status only), and never given to another project or Worker.
 
