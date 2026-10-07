@@ -52,6 +52,7 @@
 import type { Client } from "pg";
 
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
+import { forgetAll } from "../security/forget";
 
 import { hasReservedEmailKey, ReservedEmailKeyMissingError, reservedEmailHmac } from "./reserved-email";
 
@@ -115,6 +116,8 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
   if (candidates.length === 0) return 0;
 
   let scrubbed = 0;
+  // Accounts scrubbed in this run, for the security clean-up after the loop.
+  const forgotten: string[] = [];
   let skipped = 0; // the re-check said no (a hold, a cancel, a changed row)
   let failed = 0; // a bump or the scrub threw; the row is retried next run
   await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
@@ -162,9 +165,17 @@ export async function anonymiseExpiredAccounts(env: Env, ctx: ExecutionContext):
       } catch (err) {
         console.error(`anonymise-accounts: post-scrub epoch bump failed for ${id}; step 5a still refuses writes`, err);
       }
+      forgotten.push(id);
     }
   });
 
+  // security-alerting §2.6 N7, §4.5: forget each scrubbed account in the ledger
+  // (PR 2: and its browsers and pending notices). AWAITED, after `withClient`
+  // returned, so every row lock is released first (the RF6 lock tests time the
+  // loop) and the run does not end before the forgets do. Never throws; each
+  // call is logged and continued on failure, and the nightly sweep
+  // (src/security/forget-sweep.ts) re-forgets anything a failure left behind.
+  await forgetAll(env, forgotten, "anonymise-accounts");
   const n = candidates.length;
   const summary = `anonymise-accounts: anonymised ${scrubbed}, skipped (re-check) ${skipped}, failed ${failed} of ${n}`;
   if (failed > 0) console.error(summary);

@@ -1,4 +1,4 @@
-import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
+import { createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 
 import worker from "../src";
@@ -322,5 +322,36 @@ describe("reapUnverifiedAccounts — a row another transaction has locked is ski
     expect(await present(locked.id), "a locked row was deleted").toBe(true);
     // CONTROL, same run: the reaper did run.
     expect(await present(control.id), "the reaper deleted nothing").toBe(false);
+  });
+});
+
+/** Security alerting (spec §2.6 N7) — PR 1: RETURNING id, then the ledger forgets each deleted account. */
+describe("reapUnverifiedAccounts — ledger clean-up per deleted id", () => {
+  it("a reaped account's ledger ref is gone (control: a verified account keeps its own)", async () => {
+    const gone = await seed({ verified: false, ageDays: 8 });
+    const kept = await seed({ verified: true, ageDays: 8 });
+    const ledger = env.SECURITY_LEDGER.getByName("ledger");
+    const now = Date.now();
+    for (const f of [gone, kept]) {
+      await ledger.report({
+        reports: [
+          {
+            signal: "targeted_account", signalClass: "account", subjectKind: "account", subject: f.id,
+            windowStartMs: now - 3_600_000, windowEndMs: now, observed: 30, events: 30, threshold: 30,
+            severity: "critical", byRoute: { "/auth/login": 30 },
+          },
+        ],
+        countedOverflow: {},
+      });
+    }
+    const ctx = createExecutionContext();
+    await reapUnverifiedAccounts(env, ctx);
+    await waitOnExecutionContext(ctx);
+    const refs = (id: string) =>
+      runInDurableObject(ledger, (_l, s) =>
+        s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM account_refs WHERE user_id = ?", id).one().n,
+      );
+    expect(await refs(gone.id)).toBe(0);
+    expect(await refs(kept.id)).toBe(1);
   });
 });

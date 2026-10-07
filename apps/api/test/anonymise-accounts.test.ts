@@ -1,4 +1,4 @@
-import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
+import { createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 
 import worker from "../src";
@@ -841,5 +841,75 @@ describe("anonymiseExpiredAccounts — B3: the scrub deletes the account's moder
     expect(await tokenCount(doomed.id)).toBe(0);
     // CONTROL: the query counts tokens that exist.
     expect(await tokenCount(control.id)).toBe(2);
+  });
+});
+
+// Ledger helpers for the describe below, at file scope only to keep its callback
+// under 50 lines (Codacy).
+const LEDGER = () => env.SECURITY_LEDGER.getByName("ledger");
+const crossing = (subject: string) => ({
+  signal: "targeted_account" as const,
+  signalClass: "account" as const,
+  subjectKind: "account" as const,
+  subject,
+  windowStartMs: Date.now() - 3_600_000,
+  windowEndMs: Date.now(),
+  observed: 30,
+  events: 30,
+  threshold: 30,
+  severity: "critical" as const,
+  byRoute: { "/auth/login": 30 },
+});
+
+/** A sent alert (ref + cooldown), then a held row: three ledger rows that name the account. */
+async function seedLedger(id: string): Promise<void> {
+  await LEDGER().report({ reports: [crossing(id), crossing(id)], countedOverflow: {} });
+}
+
+async function ledgerRows(id: string): Promise<number> {
+  return runInDurableObject(LEDGER(), (_l, s) =>
+    s.storage.sql
+      .exec<{ n: number }>(
+        `SELECT (SELECT COUNT(*) FROM account_refs WHERE user_id = ?1)
+              + (SELECT COUNT(*) FROM held WHERE subject_kind = 'account' AND subject = ?1)
+              + (SELECT COUNT(*) FROM cooldowns WHERE subject = ?1) AS n`,
+        id,
+      )
+      .one().n,
+  );
+}
+
+/**
+ * Security alerting (spec §2.6 N7, m-e) — PR 1: the anonymise reaper forgets the
+ * account in the ledger (with a 30-day tombstone), beside its post-scrub bump.
+ */
+describe("anonymiseExpiredAccounts — ledger clean-up", () => {
+  it("forgets the account's ledger rows (positive control: all three present before)", async () => {
+    const f = await seedAccount({ eligible: false });
+    await seedLedger(f.id);
+    expect(await ledgerRows(f.id)).toBe(3);
+    await withAnonymiseReaperLock(async () => {
+      await makeEligible(f.id);
+      const ctx = createExecutionContext();
+      await anonymiseExpiredAccounts(env, ctx);
+      await waitOnExecutionContext(ctx);
+    });
+    expect(await ledgerRows(f.id)).toBe(0);
+    expect(await env.USER_SECURITY.getByName(f.id).getEpoch()).toBe(2);
+  });
+
+  it("a report delivered after the forget re-creates nothing (the 30-day tombstone)", async () => {
+    const f = await seedAccount({ eligible: false });
+    await LEDGER().forgetAccount(f.id);
+    await seedLedger(f.id);
+    expect(await ledgerRows(f.id)).toBe(0);
+  });
+
+  it("a row the reaper does NOT scrub (a hold lands while it waits) keeps its ledger rows: the hook follows the scrub", async () => {
+    const f = await seedAccount({ eligible: false });
+    await seedLedger(f.id);
+    await whileReaperWaits(f.id, (locker) => imposeHold(locker, f.id, "dmca"));
+    expect(await anonymisedAt(f.id)).toBeNull();
+    expect(await ledgerRows(f.id)).toBe(3);
   });
 });

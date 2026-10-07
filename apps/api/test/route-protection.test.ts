@@ -177,6 +177,7 @@ const EXPECTED_DISPATCHER_BODY =
   // Security alerting (spec §2.2 item 3): the cron's one ledger call, and the
   // request-scope wrapper whose import installs the counting observer. Neither
   // dispatches anything.
+  'import { sweepForgottenAccounts } from "./security/forget-sweep"; ' +
   'import { ensureLedgerAlarm } from "./security/ledger-cron"; ' +
   'import { withSecurityScope } from "./security/scope"; ' +
   'export { UserSecurityDO } from "./durable-objects/UserSecurityDO"; ' +
@@ -202,6 +203,8 @@ const EXPECTED_DISPATCHER_BODY =
   'if (controller.cron === "30 3 * * *") { ' +
   "ctx.waitUntil(reapUnverifiedAccounts(env, ctx)); " +
   "ctx.waitUntil(reapUnconfirmedDsaNotices(env, ctx)); " +
+  // Security alerting (PM ruling R2-1): the nightly N7 sweep rides the reaper's tick.
+  "ctx.waitUntil(sweepForgottenAccounts(env, ctx)); " +
   "return; " +
   "} " +
   'if (controller.cron === "15 4 * * *") { ' +

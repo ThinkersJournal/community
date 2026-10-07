@@ -9,6 +9,7 @@ import { reapUnconfirmedDsaNotices } from "./moderation/dsa-notices";
 import { runEmailDrain } from "./notifications/email-drain";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
+import { sweepForgottenAccounts } from "./security/forget-sweep";
 import { ensureLedgerAlarm } from "./security/ledger-cron";
 import { withSecurityScope } from "./security/scope";
 
@@ -69,6 +70,7 @@ export default {
          same daily tick as the account reaper (see src/moderation/dsa-notices.ts). */
       ctx.waitUntil(reapUnverifiedAccounts(env, ctx));
       ctx.waitUntil(reapUnconfirmedDsaNotices(env, ctx));
+      ctx.waitUntil(sweepForgottenAccounts(env, ctx));
       return;
     }
     if (controller.cron === "15 4 * * *") {
