@@ -254,6 +254,16 @@
       "name": "RESET_REDEEM_LIMITER",
       "namespace_id": "1014",
       "simple": { "limit": 10, "period": 60 }
+    },
+    // Bounds `GET /public/profile` per IP (`ip:<ip>`, see src/routes/public.ts
+    // handlePublicProfile). Each lookup is an uncached FRESH query and a miss
+    // confirms a handle does not exist (enumeration). Generous on purpose: 60/60s
+    // is far beyond a person browsing, and real profiles are mostly answered by
+    // web's edge cache before reaching the api. Skipped when the IP is unknown.
+    {
+      "name": "PROFILE_LIMITER",
+      "namespace_id": "1015",
+      "simple": { "limit": 60, "period": 60 }
     }
   ],
   // Email outbox drains (M2.3c) — api's FIRST cron. */2 = instant pass; the daily

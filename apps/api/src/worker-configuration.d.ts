@@ -38,6 +38,7 @@ interface __BaseEnv_Env {
 	// established pattern and reason as DSA_LIMITER just above.
 	LOGIN_IP_LIMITER: RateLimit;
 	RESET_REDEEM_LIMITER: RateLimit;
+	PROFILE_LIMITER: RateLimit;
 	IMAGES: ImagesBinding;
 	TURNSTILE_SECRET_KEY: string;
 	POSTMARK_SERVER_TOKEN: string;
