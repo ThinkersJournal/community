@@ -94,13 +94,22 @@
     "bindings": [
       { "name": "USER_SECURITY", "class_name": "UserSecurityDO" },
       { "name": "NOTIFY", "class_name": "NotifyDO" },
-      { "name": "POST_LIVE", "class_name": "PostLiveDO" }
+      { "name": "POST_LIVE", "class_name": "PostLiveDO" },
+      // SECURITY_COUNTER / SECURITY_LEDGER — security alerting
+      // (docs/superpowers/specs/2026-10-07-security-alerting-design.md §2.1).
+      // The counter has a FIXED set of 33 instances (`ip:0`…`ip:15`,
+      // `acct:0`…`acct:15`, `site`); the ledger has one, `ledger`. Neither is
+      // reachable from a route. apps/web binds SECURITY_COUNTER cross-script, so
+      // this Worker must deploy the classes BEFORE web deploys the binding.
+      { "name": "SECURITY_COUNTER", "class_name": "SecurityCounterDO" },
+      { "name": "SECURITY_LEDGER", "class_name": "SecurityLedgerDO" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["UserSecurityDO"] },
     { "tag": "v2", "new_sqlite_classes": ["NotifyDO"] },
-    { "tag": "v3", "new_sqlite_classes": ["PostLiveDO"] }
+    { "tag": "v3", "new_sqlite_classes": ["PostLiveDO"] },
+    { "tag": "v4", "new_sqlite_classes": ["SecurityCounterDO", "SecurityLedgerDO"] }
   ],
   // ⚠️ THE PURGE HOP — api CANNOT purge web's cache.
   // Workers Cache purge is scoped to the Worker+entrypoint that OWNS the cache:
@@ -293,6 +302,17 @@
   },
   "observability": {
     "enabled": true
+  },
+  // Security alerting flags (spec §3.1, §6). Reviewed like any config: flipping
+  // one is a one-line PR plus a deploy. ⚠️ A dashboard edit works as an
+  // emergency stop, but the NEXT `wrangler deploy` resets it to this file's
+  // value. SECURITY_COUNTING "off" is the counting kill switch; the other two
+  // stay "0" until phase 1b (notices) and board 131 (a transport). TEST_ROUTES
+  // is deliberately NOT here (see vitest.config.ts).
+  "vars": {
+    "SECURITY_COUNTING": "on",
+    "SECURITY_ALERTS_ENABLED": "0",
+    "ACCOUNT_NOTICES_ENABLED": "0"
   },
   // Build-identity (2026-09-24) — GET /health/build reads this. Cloudflare's
   // OWN version registry populates `id`/`tag`/`timestamp` on every deploy

@@ -8,6 +8,14 @@ interface __BaseEnv_Env {
 	// Brute-force countermeasure (2026-10-06 audit, src/lib/purge.ts) — added by
 	// hand, same reason as CF_VERSION_METADATA below.
 	PURGE_LIMITER: RateLimit;
+	// Security alerting (docs/superpowers/specs/2026-10-07-security-alerting-design.md
+	// §2.2 item 4) — added by hand, same reason as PURGE_LIMITER. A CROSS-SCRIPT
+	// binding to the api's SecurityCounterDO: `wrangler types` would emit an
+	// untyped DurableObjectNamespace with no RPC methods, so this states the one
+	// method the purge page calls. SECURITY_COUNTING is the web half of the kill
+	// switch (wrangler.jsonc `vars`).
+	SECURITY_COUNTER: { getByName(name: string): import("@thinkersjournal/shared").SecurityCounterRpc };
+	SECURITY_COUNTING: string;
 	// Build-identity (2026-09-24) — added by hand rather than a full
 	// regeneration, matching apps/api/src/worker-configuration.d.ts's
 	// established CF_ACCESS_* precedent: a full `wrangler types` run here

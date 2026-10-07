@@ -166,6 +166,18 @@ key stops matching, which silently frees those banned users' addresses for a
 new signup. A rotation needs a plan for the existing rows; there is none
 today.
 
+## Security alerting: the flags
+
+`SECURITY_COUNTING` (api and web; "off" is the counting kill switch),
+`SECURITY_ALERTS_ENABLED` and `ACCOUNT_NOTICES_ENABLED` (api) live in each
+Worker's `wrangler.jsonc` `vars`. Flipping one is a one-line PR plus a deploy.
+A dashboard edit works as an emergency stop, but **the next `wrangler deploy`
+resets it to the file's value.**
+
+Deploy order for the first deploy: the api (which creates the two Durable
+Object classes, migration `v4`) before the web Worker (which binds the api's
+counter class cross-script).
+
 ## Destructive migrations
 
 Mark a destructive migration (drop column, drop table, rename, `NOT NULL`
