@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { timingSafeEqual } from "../src/timing-safe";
 
@@ -17,49 +17,76 @@ import { timingSafeEqual } from "../src/timing-safe";
  * no-early-return property is guarded by the doc-comment and by review — assert
  * what is real rather than a timing test that would flake.
  */
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("timingSafeEqual", () => {
-  it("is true for equal strings", () => {
-    expect(timingSafeEqual("abc123", "abc123")).toBe(true);
+  it("is true for equal strings", async () => {
+    expect(await timingSafeEqual("abc123", "abc123")).toBe(true);
   });
 
-  it("is false for same-length strings differing in ONE character", () => {
-    expect(timingSafeEqual("abc123", "abc124")).toBe(false);
+  it("is false for same-length strings differing in ONE character", async () => {
+    expect(await timingSafeEqual("abc123", "abc124")).toBe(false);
   });
 
-  it("is false when only the FIRST character differs", () => {
+  it("is false when only the FIRST character differs", async () => {
     // The case an early-return "optimization" would answer fastest — and the one
     // that would make it a timing oracle. Same answer as every other mismatch.
-    expect(timingSafeEqual("Xbc123", "abc123")).toBe(false);
+    expect(await timingSafeEqual("Xbc123", "abc123")).toBe(false);
   });
 
-  it("is false when only the LAST character differs", () => {
-    expect(timingSafeEqual("abc12X", "abc123")).toBe(false);
+  it("is false when only the LAST character differs", async () => {
+    expect(await timingSafeEqual("abc12X", "abc123")).toBe(false);
   });
 
-  it("is false for a PREFIX (length mismatch)", () => {
+  it("is false for a PREFIX (length mismatch)", async () => {
     // ⚠️ LOAD-BEARING for the purge hop: a truncated secret must not authorize.
-    // apps/web/src/lib/purge.ts relies on this being the length check, not a
-    // character match on the part that lines up.
-    expect(timingSafeEqual("abc", "abc123")).toBe(false);
-    expect(timingSafeEqual("abc123", "abc")).toBe(false);
+    // Since the compare hashes both sides there is no separate length check: the
+    // digests of a prefix and the whole differ, so the part that lines up never
+    // counts as a match.
+    expect(await timingSafeEqual("abc", "abc123")).toBe(false);
+    expect(await timingSafeEqual("abc123", "abc")).toBe(false);
   });
 
-  it("⚠️ is TRUE for two empty strings — which is why callers must guard", () => {
+  it("⚠️ is TRUE for two empty strings — which is why callers must guard", async () => {
     // NOT a bug, and NOT something to "fix" here: two empty strings ARE equal.
     // It is pinned because it is a live footgun one layer up — an unset/empty
     // secret compared against an empty submitted value would authorize the
     // caller. apps/web/src/lib/purge.ts's `authorized()` guards `=== ""`
     // explicitly BECAUSE of this, and web is the public Worker. If this ever
     // returns false, that guard looks redundant and someone will delete it.
-    expect(timingSafeEqual("", "")).toBe(true);
+    expect(await timingSafeEqual("", "")).toBe(true);
   });
 
-  it("is false for an empty string against a non-empty one", () => {
-    expect(timingSafeEqual("", "abc")).toBe(false);
+  it("is false for an empty string against a non-empty one", async () => {
+    expect(await timingSafeEqual("", "abc")).toBe(false);
   });
 
-  it("handles non-ASCII without throwing (charCodeAt is UTF-16 code units)", () => {
-    expect(timingSafeEqual("café", "café")).toBe(true);
-    expect(timingSafeEqual("café", "cafe")).toBe(false);
+  it("handles non-ASCII without throwing (charCodeAt is UTF-16 code units)", async () => {
+    expect(await timingSafeEqual("café", "café")).toBe(true);
+    expect(await timingSafeEqual("café", "cafe")).toBe(false);
+  });
+
+  /**
+   * ⚠️ LENGTH-SAFETY (brute-force audit, 2026-10-06, item #23). The old version
+   * returned early on a length mismatch, so a caller timing it learned the
+   * SECRET'S LENGTH — and `web`'s purge route compares a deploy secret against
+   * whatever the public internet submits. Both inputs are now SHA-256'd first,
+   * so the constant-time loop always runs over two 32-byte digests whatever the
+   * inputs' lengths. Timing itself is not observable from a unit test (see the
+   * header), so this pins the MECHANISM: a length mismatch must still digest
+   * BOTH values, not short-circuit before hashing.
+   */
+  it("digests BOTH inputs even when their lengths differ (no early return on length)", async () => {
+    const digest = vi.spyOn(crypto.subtle, "digest");
+    expect(await timingSafeEqual("short", "a-much-longer-secret-value")).toBe(false);
+    expect(digest).toHaveBeenCalledTimes(2);
+  });
+
+  it("digests BOTH inputs for an equal-length pair too (one code path for every length)", async () => {
+    const digest = vi.spyOn(crypto.subtle, "digest");
+    expect(await timingSafeEqual("abc123", "abc124")).toBe(false);
+    expect(digest).toHaveBeenCalledTimes(2);
   });
 });

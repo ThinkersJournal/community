@@ -49,7 +49,9 @@ export const POST: APIRoute = async (context) => {
   // ⚠️ `env` FROM `cloudflare:workers`, NOT `Astro.locals.runtime.env` — that was
   // REMOVED in Astro v6 and THROWS on access under the installed astro@7. Same
   // reasoning (and the same trap) as src/lib/api.ts's header.
-  const response = await handlePurgeRequest(context, env.PURGE_SECRET);
+  // `PURGE_LIMITER` (wrangler.jsonc) is spent only by FAILED attempts — see
+  // handlePurgeRequest's header for why the api's own purges never touch it.
+  const response = await handlePurgeRequest(context, env.PURGE_SECRET, env.PURGE_LIMITER);
 
   // ⚠️ THIS ROUTE DECLARES ITS CACHEABILITY LIKE EVERY OTHER PAGE, and is NOT
   // exempt from test/page-cache-inventory.test.ts. An earlier draft of the plan

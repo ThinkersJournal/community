@@ -30,7 +30,7 @@
  * instead of provable only by deploying. Same shape as src/lib/cache.ts: the
  * decisions live in a module with a structural context; the page is glue.
  */
-import { timingSafeEqual } from "@thinkersjournal/shared";
+import { logSecurityEvent, timingSafeEqual } from "@thinkersjournal/shared";
 
 /**
  * The subset of Astro's `APIContext` this needs. Structural rather than importing
@@ -65,11 +65,31 @@ function json(body: unknown, status: number): Response {
  * explicit guard an unset or blank `PURGE_SECRET` would authorize the entire
  * internet — and `web` is public. That is not hypothetical; it is exactly what a
  * `wrangler secret put` run on `api` but not on `web` would produce.
+ *
+ * ⚠️ LENGTH-SAFE, AND THE `await` IS LOAD-BEARING. `timingSafeEqual` hashes both
+ * sides before comparing (packages/shared/src/timing-safe.ts), so a wrong guess of
+ * any length takes the same path and the secret's length does not leak by timing.
+ * That makes it async: without the `await` it returns a Promise, which is TRUTHY,
+ * and this function would authorize every caller on the internet. Observed: the
+ * moment the shared compare went async, every refusal test in test/purge.test.ts
+ * answered 200 until this line awaited it.
  */
-function authorized(submitted: string | null, secret: string | undefined): boolean {
+async function authorized(submitted: string | null, secret: string | undefined): Promise<boolean> {
   if (submitted === null || secret === undefined || secret === "") return false;
-  return timingSafeEqual(submitted, secret);
+  return await timingSafeEqual(submitted, secret);
 }
+
+/**
+ * The slice of Cloudflare's rate-limit binding (`PURGE_LIMITER`, apps/web/
+ * wrangler.jsonc) this needs. Structural for the same reason as `PurgeContext`:
+ * this suite runs in plain Node, with a fake.
+ */
+export interface PurgeFailureLimiter {
+  limit: (options: { key: string }) => Promise<{ success: boolean }>;
+}
+
+/** This route, as its `security:` log lines name it. */
+const ROUTE = "/internal/purge";
 
 /**
  * Handle a purge request: authorize it, read its tags, invalidate them.
@@ -83,12 +103,41 @@ function authorized(submitted: string | null, secret: string | undefined): boole
  * failure into content silently stale for 25h. The caller is the one that must not
  * throw (apps/api/src/cache/purge.ts), and it doesn't: a failure here costs a log
  * line, not the user's edit.
+ *
+ * ⚠️ ONLY FAILED ATTEMPTS ARE RATE-LIMITED (brute-force audit 2026-10-06, #23).
+ * `failureLimiter` is consumed AFTER the secret check, and only when it fails,
+ * keyed `purge-fail:<CF-Connecting-IP>`. The order is the point:
+ *   - The api's legitimate purges arrive over the Service Binding with only
+ *     `content-type` and `X-Purge-Secret` (apps/api/src/cache/purge.ts). Whether
+ *     or not the platform attaches a `CF-Connecting-IP` to that hop, an
+ *     AUTHORIZED request never reaches the limiter, so it can never be throttled
+ *     — not by its own volume, and not by an attacker spending a shared bucket.
+ *   - A failure with no `CF-Connecting-IP` did not come through Cloudflare's
+ *     public edge, which always sets it. It is refused and logged but not
+ *     limited: one shared "unknown" bucket would be spendable by anyone.
+ *   - What this does NOT do: slow down a guesser who eventually guesses RIGHT.
+ *     A correct secret is authorized even from an IP over its failure limit,
+ *     because the limiter cannot be read without being spent. So the limiter
+ *     bounds the noise and makes the attempts visible (one `security:` line each);
+ *     the defense against guessing is the secret's entropy (README deploy gate:
+ *     a high-entropy value on both Workers).
  */
 export async function handlePurgeRequest(
   context: PurgeContext,
   secret: string | undefined,
+  failureLimiter: PurgeFailureLimiter,
 ): Promise<Response> {
-  if (!authorized(context.request.headers.get(SECRET_HEADER), secret)) {
+  if (!(await authorized(context.request.headers.get(SECRET_HEADER), secret))) {
+    const ip = context.request.headers.get("CF-Connecting-IP");
+    // The submitted value is NEVER logged — only that it failed, and from where.
+    logSecurityEvent({ kind: "auth_failure", route: ROUTE, reason: "bad_purge_secret", ip });
+    if (ip !== null) {
+      const { success } = await failureLimiter.limit({ key: `purge-fail:${ip}` });
+      if (!success) {
+        logSecurityEvent({ kind: "rate_limited", route: ROUTE, reason: "ip", ip });
+        return json({ code: "RATE_LIMITED" }, 429);
+      }
+    }
     // No detail: a caller that cannot authorize learns only that it cannot.
     return json({ code: "FORBIDDEN" }, 403);
   }
