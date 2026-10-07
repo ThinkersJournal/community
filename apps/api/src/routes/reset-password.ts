@@ -13,16 +13,24 @@
  * before the origin check ever ran, and that suite's "PIPELINE_EXEMPT routes
  * still 403 with no Origin" assertion would fail for the wrong reason.
  *
- * ⚠️ NO CSRF DOUBLE-SUBMIT TOKEN, and no rate limit either — neither
- * applies here, and both are absences with reasons, not omissions:
- *   - CSRF: there is no session yet to hold a `csrfSecret` to check against.
- *     The reset token is the unguessable, single-use, time-boxed secret
- *     bound to this action — the same trust model `GET /verify-email`'s
- *     token already carries, and that route has no CSRF check either.
- *   - Rate limit: guessing a 256-bit token is not a viable attack regardless
- *     of how many attempts are allowed — `verify-email.ts`'s own comment
- *     says it plainly: "the defense is the ENTROPY, not the response shape."
- *     `GET /verify-email` has no rate limit for the identical reason.
+ * ⚠️ NO CSRF DOUBLE-SUBMIT TOKEN — an absence with a reason, not an omission:
+ * there is no session yet to hold a `csrfSecret` to check against. The reset
+ * token is the unguessable, single-use, time-boxed secret bound to this
+ * action — the same trust model `GET /verify-email`'s token already carries,
+ * and that route has no CSRF check either.
+ *
+ * ⚠️ RATE LIMIT, AND TOKEN-BEFORE-ARGON2 (brute-force audit 2026-10-06, #4).
+ * This header used to say no limiter was needed because a 256-bit token cannot
+ * be guessed. That is still true of GUESSING, but it missed the COST: the route
+ * ran a full Argon2id hash of the submitted password BEFORE looking at the
+ * token, so any made-up token bought 19 MiB × 2 passes of CPU, unauthenticated
+ * and unthrottled. Two fixes, each sufficient against a different attacker:
+ *   - Step 2c peeks the token first; only a live token reaches Argon2id.
+ *   - Step 2b bounds each IP to RESET_REDEEM_LIMITER's 10/60s (per Cloudflare
+ *     location). A real user redeems one link, maybe twice after a typo, so 10
+ *     leaves room for several people behind one NAT; it caps one host's peeks
+ *     and keeps the `security:` log of refused tokens readable.
+ * Every refused token and every 429 is logged (`security:` prefix).
  *
  * ⚠️ ONE TRANSACTION, consume-then-mutate, so a failure between the token
  * redemption and the password change ROLLS BACK BOTH — same reasoning as
@@ -53,26 +61,55 @@
  * idiom elsewhere in this codebase: never rewrite an EARLIER verification
  * timestamp that already exists.
  */
-import { ResetPasswordInput } from "@thinkersjournal/shared";
+import { ResetPasswordInput, logSecurityEvent } from "@thinkersjournal/shared";
 
 import { isBarred } from "../auth/account-status";
 import { checkOrigin } from "../auth/csrf";
 import { base64urlEncode, sha256Hex } from "../auth/encoding";
 import { hashPassword } from "../auth/password";
+import { enforceRateLimit } from "../auth/ratelimit";
 import { createSession } from "../auth/session";
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 
 import type { AccountStatusRow } from "../auth/account-status";
 
-function invalidToken(): Response {
+/** This route, as its `security:` log lines name it. */
+const ROUTE = "/auth/reset-password";
+
+/**
+ * The ONE refusal for every bad-token case (unknown, expired, spent, anonymised
+ * account), each logged as a `security: auth_failure` line with the IP — never
+ * the token or the password.
+ */
+function invalidToken(ip: string | null): Response {
+  logSecurityEvent({ kind: "auth_failure", route: ROUTE, reason: "invalid_reset_token", ip });
   return errorResponse("INVALID_RESET_TOKEN", 400);
 }
 
-export async function handleResetPassword(
+/** The Argon2id hash this route uses — `hashPassword` in production. */
+export type PasswordHasher = (password: string) => Promise<string>;
+
+/**
+ * Build the handler around `hash`. Production uses `handleResetPassword` below
+ * (`hashPassword`); the factory exists so test/reset-password.test.ts can hand in
+ * a SPY and prove an invalid token never reaches Argon2id. The pool runs real
+ * workerd, where an ES module's exports cannot be spied on, and the router's
+ * fourth argument is already `params`, so the hasher cannot ride along there.
+ */
+export function makeResetPasswordHandler(hash: PasswordHasher) {
+  return (request: Request, env: Env, ctx: ExecutionContext): Promise<Response> =>
+    resetPassword(request, env, ctx, hash);
+}
+
+export const handleResetPassword = makeResetPasswordHandler(hashPassword);
+
+async function resetPassword(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
+  hash: PasswordHasher,
 ): Promise<Response> {
   // ---- 1. Origin (CSRF) — before ANY parsing, see the file header ----------
   if (!checkOrigin(env, request)) {
@@ -94,14 +131,60 @@ export async function handleResetPassword(
   }
   const { token, password } = parsed.data;
 
-  // Hashed OUTSIDE the transaction, same reasoning as signup.ts: Argon2id is
-  // deliberately slow, and holding a Hyperdrive connection open across it
-  // would burn a pooled connection for the duration of every reset.
-  const passwordHash = await hashPassword(password);
+  // ---- 2b. Per-IP rate limit -------------------------------------------------
+  // See the file header's RATE LIMIT note. Keyed on the IP alone (there is no
+  // email or session here), on its own RESET_REDEEM_LIMITER. An UNKNOWN IP skips
+  // it rather than sharing one "unknown" bucket that a single caller could spend
+  // for every user mid-reset; step 2c still keeps Argon2id off that path.
+  const ip = clientIp(request);
+  if (ip !== null) {
+    const limited = await enforceRateLimit(env.RESET_REDEEM_LIMITER, `ip:${ip}`, {
+      route: ROUTE,
+      bucket: "ip",
+      ip,
+    });
+    if (limited !== null) {
+      return limited;
+    }
+  }
+
   // Same SHA-256-of-token lookup key `createResetToken`/`consumeResetToken`
   // use (src/auth/password-reset.ts) — computed here, in JS, rather than
   // inline SQL, so this route does not depend on pgcrypto being installed.
   const tokenHash = await sha256Hex(token);
+
+  // ---- 2c. Peek the token BEFORE Argon2id -----------------------------------
+  // ⚠️ ORDER IS THE DEFENSE. Argon2id (19 MiB, two passes) is the most expensive
+  // thing this Worker does, and this route is unauthenticated: hashing first let
+  // anyone spend that per request with a made-up token. A cheap indexed SELECT
+  // on the token hash now gates it, so only a token that is live AT THIS MOMENT
+  // ever reaches the hash. The same conditions as step 3's consume, plus the
+  // anonymised-account check step 3 applies to the user row.
+  //
+  // This is a PEEK, not the redemption: step 3 still consumes the token and
+  // writes the password in ONE transaction, re-checking every condition, so a
+  // token spent (or an account anonymised) between here and there still loses
+  // the race cleanly with the same generic 400. Validity is no new oracle: the
+  // response already says 400 vs 200.
+  const live = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query(
+      `SELECT 1
+         FROM password_reset_tokens t
+         JOIN users u ON u.id = t.user_id
+        WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > now()
+          AND u.anonymised_at IS NULL`,
+      [tokenHash],
+    );
+    return rows.length > 0;
+  });
+  if (!live) {
+    return invalidToken(ip);
+  }
+
+  // Hashed OUTSIDE the transaction, same reasoning as signup.ts: Argon2id is
+  // deliberately slow, and holding a Hyperdrive connection open across it
+  // would burn a pooled connection for the duration of every reset.
+  const passwordHash = await hash(password);
 
   // ---- 3. Consume the token + write the new password, ONE transaction -----
   // ⚠️ INLINES the same UPDATE `consumeResetToken` runs, rather than calling
@@ -159,7 +242,7 @@ export async function handleResetPassword(
   });
 
   if (redeemed === null) {
-    return invalidToken();
+    return invalidToken(ip);
   }
   const { userId, account } = redeemed;
 

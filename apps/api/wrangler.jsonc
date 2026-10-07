@@ -202,9 +202,8 @@
     // and email:), same two-bucket shape as SIGNUP_LIMITER/LOGIN_LIMITER —
     // this route has no session to key on, unlike RESEND_LIMITER. Matches
     // SIGNUP_LIMITER's ceiling: both are anonymous, mail-sending, abuse-prone
-    // forms. `reset-password`'s redemption step uses NO limiter at all — see
-    // that route's own header for why (token entropy, not request volume,
-    // is its defense).
+    // forms. `reset-password`'s redemption step has its OWN limiter,
+    // RESET_REDEEM_LIMITER below (brute-force audit 2026-10-06).
     {
       "name": "RESET_LIMITER",
       "namespace_id": "1010",
@@ -245,6 +244,16 @@
       "name": "LOGIN_IP_LIMITER",
       "namespace_id": "1013",
       "simple": { "limit": 30, "period": 60 }
+    },
+    // Bounds `POST /auth/reset-password` per IP (`ip:<ip>`, see
+    // src/routes/reset-password.ts step 2b). The route is unauthenticated; the
+    // token is now checked before Argon2id, and this caps one host's peeks.
+    // A real user redeems one link (twice after a typo), so 10/60s leaves room
+    // for a shared NAT. Skipped (not pooled) when the IP is unknown.
+    {
+      "name": "RESET_REDEEM_LIMITER",
+      "namespace_id": "1014",
+      "simple": { "limit": 10, "period": 60 }
     }
   ],
   // Email outbox drains (M2.3c) — api's FIRST cron. */2 = instant pass; the daily

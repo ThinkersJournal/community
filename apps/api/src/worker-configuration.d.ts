@@ -37,6 +37,7 @@ interface __BaseEnv_Env {
 	// Brute-force countermeasures (2026-10-06 audit) — added by hand, same
 	// established pattern and reason as DSA_LIMITER just above.
 	LOGIN_IP_LIMITER: RateLimit;
+	RESET_REDEEM_LIMITER: RateLimit;
 	IMAGES: ImagesBinding;
 	TURNSTILE_SECRET_KEY: string;
 	POSTMARK_SERVER_TOKEN: string;
