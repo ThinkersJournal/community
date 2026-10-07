@@ -22,6 +22,7 @@ import {
   HELD_ROW_CAP,
   LogSecurityAlertSink,
   logSecurityEvent,
+  resolveDeviceKeys,
   selectSecurityAlertSink,
   type CounterReport,
   type LedgerReportBatch,
@@ -85,6 +86,8 @@ export class SecurityLedgerDO extends DurableObject<Env> {
    * the cron's `ensureLedgerAlarm`.
    */
   armAt = (ms: number): Promise<void> => this.ctx.storage.setAlarm(ms);
+  /** TEST SEAM (PR 2): whether `DEVICE_HASH_KEY` is set, so a test can take it away without a new env. */
+  deviceKeyPresent: () => boolean = () => resolveDeviceKeys(this.env) !== null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -315,7 +318,9 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       this.heldReport(nowMs);
     });
     await this.step("digest", () => this.digest(nowMs));
-    // Step 6 (config_fault while the device key is absent) arrives with PR 2.
+    await this.step("config_fault", () => {
+      this.configFault(nowMs);
+    });
     let pruneRemaining = false;
     await this.step("prune", () => {
       pruneRemaining = this.ctx.storage.transactionSync(() => pruneLedger(this.store, nowMs));
@@ -497,6 +502,37 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       store.setMeta("last_digest_hour", hour);
       store.setMeta("last_digest_ms", String(nowMs));
     });
+  }
+
+  /**
+   * Step 6 (N5; PM ruling R2-2): one `config_fault` per UTC day while the key is
+   * absent, WHATEVER `ACCOUNT_NOTICES_ENABLED` says — device recording runs from
+   * phase 1, and without the key it silently stops.
+   */
+  private configFault(nowMs: number): void {
+    if (this.deviceKeyPresent()) return;
+    const day = utcDay(nowMs);
+    this.ctx.storage.transactionSync(() => {
+      if (this.store.meta("config_fault_day") === day) return;
+      this.store.queue({ type: "config_fault", key: "DEVICE_HASH_KEY", detail: "missing" }, nowMs);
+      this.store.setMeta("config_fault_day", day);
+    });
+  }
+
+  /** RPC from `UserSecurityDO` (§4.4): one `notice_dropped` per drop state per UTC day; the rest counted. */
+  async noticeDropped(endState: SecurityNoticeDropped["endState"]): Promise<void> {
+    await this.noticeDroppedAt(endState, Date.now());
+  }
+
+  async noticeDroppedAt(endState: SecurityNoticeDropped["endState"], nowMs: number): Promise<void> {
+    const day = utcDay(nowMs);
+    this.ctx.storage.transactionSync(() => {
+      const store = this.store;
+      const countToday = store.addMeta(`notice_dropped:${endState}:${day}`, 1);
+      store.addMeta(`notices_dropped:${endState}`, 1);
+      if (countToday === 1) store.queue({ type: "notice_dropped", endState, day, countToday }, nowMs);
+    });
+    await this.ensureAlarm();
   }
 
   private isForgotten(userId: string, nowMs: number): boolean {

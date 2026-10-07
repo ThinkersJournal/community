@@ -413,3 +413,36 @@ describe("coverage of a large held report (bound-parameter limit)", () => {
     });
   });
 });
+
+/** PR 2: config fault and notice drops. */
+describe("PR 2 additions", () => {
+  it("R2-2: NOTICES OFF and no DEVICE_HASH_KEY → exactly one config_fault that day (control: key present → none)", async () => {
+    expect(env.ACCOUNT_NOTICES_ENABLED).toBe("0"); // the flag as shipped
+    for (const keyPresent of [false, true]) {
+      await runInDurableObject(freshLedger(), async (ledger) => {
+        const { sink, sent } = capturingSink();
+        ledger.sinkFactory = () => sink;
+        ledger.siteFor = () => noSite;
+        ledger.deviceKeyPresent = () => keyPresent;
+        quiet(ledger);
+        for (const at of [T0, T0 + 1, T0 + HOUR, T0 + HOUR + 1]) await ledger.alarmAt(at);
+        expect(ofType(sent, "config_fault"), String(keyPresent)).toHaveLength(keyPresent ? 0 : 1);
+      });
+    }
+  });
+
+  it("one notice_dropped per drop state per UTC day; the rest are counted in the digest", async () => {
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sink, sent } = capturingSink();
+      ledger.sinkFactory = () => sink;
+      ledger.siteFor = () => noSite;
+      quiet(ledger);
+      for (let i = 0; i < 3; i++) await ledger.noticeDroppedAt("dropped_expired", T0 + i);
+      await ledger.noticeDroppedAt("dropped_permanent_refusal", T0 + 5);
+      await ledger.alarmAt(T0 + 10);
+      await ledger.alarmAt(T0 + 11);
+      expect(ofType(sent, "notice_dropped").map((m) => m.endState).sort()).toEqual(["dropped_expired", "dropped_permanent_refusal"]);
+      expect(ofType(sent, "digest")[0]?.noticesDropped).toEqual({ dropped_permanent_refusal: 1, dropped_expired: 3 });
+    });
+  });
+});
