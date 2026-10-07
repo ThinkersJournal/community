@@ -34,7 +34,9 @@ export default {
   },
   /*
    * Six cron patterns, one dispatcher. `30 3 * * *` is the unverified-account
-   * reaper (handle-at-signup Task 8), `15 4 * * *` is the orphan-media
+   * reaper (handle-at-signup Task 8), with the DSA unconfirmed-notice reaper and
+   * the security-alerting N7 sweep (src/security/forget-sweep.ts) on the same
+   * tick, `15 4 * * *` is the orphan-media
    * reclaimer (content-deletion + media-reclamation, Task 4), `20 4 * * *`
    * is the #61 media-move retry (src/media/moves.ts's processPendingMoves,
    * for a public<->restricted move a prior attempt left pending or failed),
@@ -44,16 +46,18 @@ export default {
    * dispatch below, because that dispatch otherwise treats every non-`0 14`
    * cron as the INSTANT drain. The two-minute pattern below is special: it
    * ALSO drives the #61 backfill batch (src/media/backfill-hidden-media.ts's
-   * runOneBatch) — that branch does NOT `return`, so it runs ALONGSIDE the
-   * instant drain below, not instead of it. The remaining two patterns are
+   * runOneBatch) and re-arms the security ledger's alarm if it stopped
+   * (src/security/ledger-cron.ts's ensureLedgerAlarm) — that branch does NOT
+   * `return`, so it runs ALONGSIDE the instant drain below, not instead of it. The remaining two patterns are
    * the email outbox drains
    * (M2.3c): the daily pattern drains DIGEST-disposition rows, every other
    * pattern drains INSTANT. A THIN dispatcher, like `fetch` above — the reap,
-   * the reclaim, the move retry, the anonymise pass, the backfill batch and
-   * the drain themselves live in src/auth/reap-unverified.ts,
-   * src/media/reap-orphan-media.ts, src/media/moves.ts,
-   * src/auth/anonymise-accounts.ts, src/media/backfill-hidden-media.ts and
-   * src/notifications/email-drain.ts.
+   * the reclaim, the move retry, the anonymise pass, the backfill batch, the
+   * sweep, the ledger re-arm and the drain themselves live in
+   * src/auth/reap-unverified.ts, src/media/reap-orphan-media.ts,
+   * src/media/moves.ts, src/auth/anonymise-accounts.ts,
+   * src/media/backfill-hidden-media.ts, src/security/forget-sweep.ts,
+   * src/security/ledger-cron.ts and src/notifications/email-drain.ts.
    */
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     /*
