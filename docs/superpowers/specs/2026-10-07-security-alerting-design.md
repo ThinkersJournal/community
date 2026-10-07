@@ -1352,6 +1352,8 @@ export async function deliverSecurityAlert(
 }
 ```
 
+**Amendment (implementation plan, PR 1; PM ruling I-8):** `DigestClassLine.activity` carries `events` only; `distinctPrefixes` is dropped, because §2.3's `classify` collects no members for summary rules and a capped collection would report a silently truncated count. Every threshold is on events, so no signal is lost.
+
 **Payload minimisation (I7).**
 - **No user id, ever.** An account appears as an opaque ref an admin can resolve (§2.6).
 - **An IP prefix only where it is the action.** `ip_prefix` appears only on the `stuffing` and `ip_burst` classes,
