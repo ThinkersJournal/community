@@ -138,6 +138,36 @@ describe("m-2: forget leaves no raw user id behind", () => {
   });
 });
 
+describe("final review M-1: forgetting the id a sweep page ended on keeps the sweep's place", () => {
+  const id = (i: number) => `acct-${String(i).padStart(4, "0")}`;
+
+  it("the cursor steps back to the greatest id still held below it, so the next page continues, not restarts", async () => {
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      wire(ledger);
+      const sql = state.storage.sql;
+      for (let i = 0; i < 205; i++) sql.exec("INSERT INTO account_refs (user_id, ref, last_used_ms) VALUES (?, ?, ?)", id(i), `r${i}`, T0);
+      const first = await ledger.accountIdsPage(200);
+      expect(first.at(-1)).toBe(id(199));
+      await ledger.forgetAccountAt(id(199), T0);
+      const cursor = sql.exec<{ v: string }>("SELECT v FROM meta WHERE k = 'sweep_after'").one().v;
+      expect(cursor).toBe(id(198)); // an id the ledger still holds, never the forgotten one
+      expect(await ledger.accountIdsPage(200)).toEqual([200, 201, 202, 203, 204].map(id));
+    });
+  });
+
+  it("forgetting the only id below the cursor resets it to the start (control: nothing left to step back to)", async () => {
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      wire(ledger);
+      const sql = state.storage.sql;
+      for (const i of [0, 1, 2]) sql.exec("INSERT INTO account_refs (user_id, ref, last_used_ms) VALUES (?, ?, ?)", id(i), `r${i}`, T0);
+      expect(await ledger.accountIdsPage(1)).toEqual([id(0)]);
+      await ledger.forgetAccountAt(id(0), T0);
+      expect(sql.exec<{ v: string }>("SELECT v FROM meta WHERE k = 'sweep_after'").one().v).toBe("");
+      expect(await ledger.accountIdsPage(5)).toEqual([id(1), id(2)]);
+    });
+  });
+});
+
 describe("m-3 and m-10: the UTC day boundary", () => {
   const ELEVEN_PM = Date.parse("2026-10-07T23:00:00.000Z");
   const AFTER_MIDNIGHT = Date.parse("2026-10-08T00:00:30.000Z");

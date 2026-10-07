@@ -62,6 +62,10 @@ export const LIVENESS_KEY = "security-ledger:ok";
 export const DELIVER_PER_RUN = 20;
 /** Backoff after the 1st, 2nd and 3rd failed delivery; the 4th failure drops the row (§2.6 step 2). */
 export const OUTBOX_BACKOFF_MINUTES: readonly number[] = [1, 5, 30];
+/** Every account id the ledger holds by user id (held rows and refs): the sweep's page source. */
+const LEDGER_ACCOUNT_IDS = `(SELECT subject AS id FROM held WHERE subject_kind = 'account'
+                             UNION SELECT user_id AS id FROM account_refs)`;
+
 /**
  * `adminUrl` in every held-subject report (§2.6). Null until the admin page
  * ships in PR 3, so no message links to a 404 (PM ruling I-11).
@@ -485,9 +489,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       const after = store.meta("sweep_after") ?? "";
       const ids = store.sql
         .exec<{ id: string }>(
-          `SELECT id FROM (SELECT subject AS id FROM held WHERE subject_kind = 'account'
-                           UNION SELECT user_id AS id FROM account_refs)
-           WHERE id > ? ORDER BY id LIMIT ?`,
+          `SELECT id FROM ${LEDGER_ACCOUNT_IDS} WHERE id > ? ORDER BY id LIMIT ?`,
           after,
           limit,
         )
@@ -510,7 +512,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       deleteHeld(this.store, "subject_kind = 'account' AND subject = ?", userId);
       sql.exec("DELETE FROM cooldowns WHERE subject = ?", userId);
       // Batch-2 review m-2: the two other places a raw id can wait (N7).
-      if (this.store.meta("sweep_after") === userId) this.store.setMeta("sweep_after", "");
+      if (this.store.meta("sweep_after") === userId) this.stepSweepCursorBack(userId);
       forgetCovers(this.store, userId);
       sql.exec(
         `INSERT INTO forgotten (user_id, until_ms) VALUES (?, ?)
@@ -519,6 +521,19 @@ export class SecurityLedgerDO extends DurableObject<Env> {
         nowMs + TOMBSTONE_MS,
       );
     });
+  }
+
+  /**
+   * The sweep cursor named the account just forgotten (final review M-1). Step it
+   * back to the greatest id the ledger still holds below it, an id already
+   * stored here, so the next page continues where this one ended instead of
+   * restarting from the beginning. Nothing below it: the start.
+   */
+  private stepSweepCursorBack(userId: string): void {
+    const prev = this.ctx.storage.sql
+      .exec<{ id: string | null }>(`SELECT MAX(id) AS id FROM ${LEDGER_ACCOUNT_IDS} WHERE id < ?`, userId)
+      .one().id;
+    this.store.setMeta("sweep_after", prev ?? "");
   }
 
   /** Prune work left → now; otherwise the next due outbox row or the next hour, whichever is sooner. */
