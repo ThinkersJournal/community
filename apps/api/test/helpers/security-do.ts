@@ -1,0 +1,97 @@
+import { env } from "cloudflare:test";
+
+import type {
+  CounterReport,
+  CounterRow,
+  SecurityAlertMessage,
+  SecurityAlertSignal,
+  SecurityAlertSink,
+} from "@thinkersjournal/shared";
+
+/**
+ * Security-alerting test helpers (plan Tasks 8–9). Every stub is a FRESH
+ * instance (a unique name), so tests never share storage. Production uses the
+ * names `ip:0`…`site` and `ledger`; nothing in either class depends on its name.
+ *
+ * ⚠️ NO TEST SLEEPS. Both classes expose `recordAt`/`reportAt`/`alarmAt` with an
+ * explicit clock (spec §2.4 "Clock"); tests call them through
+ * `runInDurableObject`. This repo had no Durable Object alarm test before this
+ * plan (0 hits for `alarm` in apps/api/test at f3da62d; the same grep finds
+ * `evictAllDurableObjects` in test/user-security-do.test.ts).
+ */
+export const T0 = Date.parse("2026-10-07T12:00:00.000Z");
+export const MINUTE = 60_000;
+export const HOUR = 3_600_000;
+
+export function freshCounter() {
+  return env.SECURITY_COUNTER.getByName(`test-counter-${crypto.randomUUID()}`);
+}
+
+export function freshLedger() {
+  return env.SECURITY_LEDGER.getByName(`test-ledger-${crypto.randomUUID()}`);
+}
+
+/** One aggregated buffer row, as `SecurityEventBuffer.flush` would send it. */
+export function counterRow(
+  signal: SecurityAlertSignal,
+  subject: string,
+  n: number,
+  nowMs: number,
+  members: readonly string[] = [],
+  route = "/auth/login",
+): CounterRow {
+  return { signal, subject, route, minute: Math.floor(nowMs / MINUTE), n, members };
+}
+
+/** A crossing as a counter would report it. */
+export function crossing(over: Partial<CounterReport> = {}): CounterReport {
+  return {
+    signal: "credential_stuffing",
+    signalClass: "stuffing",
+    subjectKind: "ip",
+    subject: "2001:db8:1:2::/64",
+    windowStartMs: T0 - 10 * MINUTE,
+    windowEndMs: T0,
+    observed: 10,
+    events: 12,
+    threshold: 10,
+    severity: "critical",
+    byRoute: { "/auth/login": 12 },
+    ...over,
+  };
+}
+
+/** A sink that records what it was sent; `fail` decides per call whether to refuse. */
+export function capturingSink(fail: (m: SecurityAlertMessage) => boolean = () => false) {
+  const sent: SecurityAlertMessage[] = [];
+  const sink: SecurityAlertSink = {
+    name: "capture",
+    send: async (m) => {
+      if (fail(m)) return { delivered: false, reason: "test" };
+      sent.push(m);
+      return { delivered: true };
+    },
+  };
+  return { sink, sent };
+}
+
+/** Only the messages of one type, narrowed. */
+export function ofType<T extends SecurityAlertMessage["type"]>(
+  sent: readonly SecurityAlertMessage[],
+  type: T,
+): Extract<SecurityAlertMessage, { type: T }>[] {
+  return sent.filter((m): m is Extract<SecurityAlertMessage, { type: T }> => m.type === type);
+}
+
+/**
+ * Replace a Durable Object's `armAt` seam with a recorder. ⚠️ Without this a
+ * REAL alarm, set for an instant in the past of the wall clock, fires during the
+ * test and runs `alarm()` at the real time, racing the test's explicit clock.
+ */
+export function quiet(instance: { armAt: (ms: number) => Promise<void> }): number[] {
+  const armed: number[] = [];
+  instance.armAt = async (ms) => {
+    armed.push(ms);
+  };
+  return armed;
+}

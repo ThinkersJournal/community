@@ -13,6 +13,7 @@ import { findRoute } from "./routing";
 export { UserSecurityDO } from "./durable-objects/UserSecurityDO";
 export { NotifyDO } from "./durable-objects/NotifyDO";
 export { PostLiveDO } from "./durable-objects/PostLiveDO";
+export { SecurityCounterDO } from "./durable-objects/SecurityCounterDO";
 
 /**
  * ⚠️ THIS FILE ONLY DISPATCHES. Do not add an `if` here: every route belongs in

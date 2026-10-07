@@ -177,6 +177,7 @@ const EXPECTED_DISPATCHER_BODY =
   'export { UserSecurityDO } from "./durable-objects/UserSecurityDO"; ' +
   'export { NotifyDO } from "./durable-objects/NotifyDO"; ' +
   'export { PostLiveDO } from "./durable-objects/PostLiveDO"; ' +
+  'export { SecurityCounterDO } from "./durable-objects/SecurityCounterDO"; ' +
   "export default { async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> { " +
   "const { pathname } = new URL(request.url); " +
   "const match = findRoute(ROUTES, request.method, pathname); " +
