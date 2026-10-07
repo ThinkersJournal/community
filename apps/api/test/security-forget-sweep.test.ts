@@ -118,3 +118,25 @@ describe("sweepForgottenAccounts (R2-1) — bounds", () => {
     expect(left).toBe(0); // none of the ghosts is a live user
   });
 });
+
+/**
+ * Final review I-2: a failed forget must not write the id of the account being
+ * erased into Workers Logs (whose retention is not ours to scrub). The nightly
+ * sweep finds the account itself; the log needs only the step and the error name.
+ */
+describe("forgetAccountEverywhere — a failure logs no user id", () => {
+  it("logs the source, the step and the error's name, and never the id or the error's message", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const userId = crypto.randomUUID();
+    const failing = {
+      SECURITY_LEDGER: {
+        getByName: () => ({ forgetAccount: async () => Promise.reject(new TypeError(`ledger refused ${userId}`)) }),
+      },
+    };
+    await forgetAccountEverywhere(failing as unknown as Env, userId, "anonymise-accounts");
+    const text = err.mock.calls.flat().map((a) => (a instanceof Error ? `${a.name} ${a.message} ${a.stack ?? ""}` : String(a)));
+    expect(text.some((t) => t.includes("anonymise-accounts: forgetAccount failed"))).toBe(true); // control: it did log
+    expect(text).toContain("TypeError");
+    expect(text.filter((t) => t.includes(userId))).toEqual([]);
+  });
+});

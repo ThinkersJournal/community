@@ -3,8 +3,14 @@
  * N7, m-e): forget it in the ledger, leaving a 30-day tombstone. PR 2 adds the
  * device-list and pending-notice steps beside this one.
  *
- * Each call is logged and continued on failure — the same handling as the
- * anonymise reaper's post-scrub epoch bump. The backstop: the 7-day ref expiry.
+ * Each call is logged and continued on failure. The backstop is the nightly
+ * sweep (src/security/forget-sweep.ts), which finds the account itself and
+ * re-forgets it; held rows have no TTL of their own.
+ *
+ * ⚠️ NO USER ID IN THE LOG (final review I-2). This path exists to erase the
+ * account from the security system, and Workers Logs' retention is not ours to
+ * scrub: a failure logs the source, the step and the error's NAME only (an
+ * RPC error's message could carry anything).
  */
 export async function forgetAccountEverywhere(
   env: Pick<Env, "SECURITY_LEDGER">,
@@ -18,7 +24,10 @@ export async function forgetAccountEverywhere(
     try {
       await run();
     } catch (err) {
-      console.error(`${source}: ${name} failed for ${userId}; the TTL backstop applies`, err);
+      console.error(
+        `${source}: ${name} failed; the nightly sweep (src/security/forget-sweep.ts) re-forgets it`,
+        err instanceof Error ? err.name : "threw",
+      );
     }
   }
 }
