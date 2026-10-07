@@ -19,7 +19,7 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Give the deploy a moment to land
         if: github.event_name == 'push'
         run: sleep 90
