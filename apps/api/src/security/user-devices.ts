@@ -39,16 +39,28 @@ export const USER_DEVICE_SCHEMA: readonly string[] = [
      list_was_empty INTEGER NOT NULL, due_ms INTEGER NOT NULL, attempts INTEGER NOT NULL) WITHOUT ROWID`,
   // R2-3: a notice a ROUTE claimed for an immediate send, with its folds, written
   // in the same transaction that took it out of `pending_notice`. The route
-  // settles it; if the route is cut off, the alarm recovers it at `due_ms`.
-  `CREATE TABLE IF NOT EXISTS claimed_notice (kind TEXT NOT NULL, count INTEGER NOT NULL,
+  // settles it by `claim_id`; if the route is cut off, the alarm recovers it at
+  // `due_ms`. Review M-4: keyed by a never-reused id, NOT by the event time, so
+  // two claims in one millisecond stay two claims. `claimed_ms` is the cap slot
+  // (`notices.sent_ms`) the claim holds while it is in progress (review M-3).
+  `CREATE TABLE IF NOT EXISTS claimed_notice (claim_id INTEGER PRIMARY KEY AUTOINCREMENT,
+     kind TEXT NOT NULL, count INTEGER NOT NULL,
      first_event_ms INTEGER NOT NULL, last_event_ms INTEGER NOT NULL, last_country TEXT,
      list_was_empty INTEGER NOT NULL, due_ms INTEGER NOT NULL, attempts INTEGER NOT NULL,
-     PRIMARY KEY (kind, last_event_ms)) WITHOUT ROWID`,
+     claimed_ms INTEGER NOT NULL)`,
 ];
+
+/** Both notice kinds, in the order the alarm sends them. */
+export const NOTICE_KINDS: readonly AccountNoticeKind[] = ["new_sign_in", "password_reset"];
+
+/** `claimNotice`'s answer in this object: a send-now claim carries the id the route settles it by (review M-4). */
+export type NoticeClaimResult =
+  | (Extract<NoticeClaim, { send: "now" }> & { readonly claimId: number })
+  | Extract<NoticeClaim, { send: "deferred" }>;
 
 type NoticeTable = "pending_notice" | "inflight_notice" | "claimed_notice";
 
-type DeviceRow = { device_hash: string; kid: string };
+type DeviceRow = { device_hash: string; kid: string; first_seen: number };
 type PendingRow = {
   kind: string;
   count: number;
@@ -62,28 +74,30 @@ type PendingRow = {
 
 /** §4.1: `signup` clears then records; `reset` clears all but this browser; `login` records. */
 export function recordDeviceSync(sql: SqlStorage, h: DeviceHashes, nowMs: number, mode: DeviceRecordMode): SignInRecord {
-  const entries = sql.exec<DeviceRow>("SELECT device_hash, kid FROM known_devices").toArray();
+  const entries = sql.exec<DeviceRow>("SELECT device_hash, kid, first_seen FROM known_devices").toArray();
   const listWasEmpty = entries.length === 0;
-  const matched = entries.find((e) => e.device_hash === h.current || (h.prev !== null && e.device_hash === h.prev));
+  const cur = entries.find((e) => e.device_hash === h.current);
+  const old = h.prev === null || h.prev === h.current ? undefined : entries.find((e) => e.device_hash === h.prev);
   const kids = new Set([h.currentKid, h.prevKid]);
   const unknownKeysOnly = !listWasEmpty && !entries.some((e) => kids.has(e.kid));
   if (mode !== "login") {
     sql.exec("DELETE FROM known_devices");
-  } else if (matched !== undefined && matched.device_hash !== h.current) {
-    // A `prev` match is rewritten to the `current` hash in place (N5).
-    sql.exec(
-      "UPDATE known_devices SET device_hash = ?, kid = ? WHERE device_hash = ?",
-      h.current,
-      h.currentKid,
-      matched.device_hash,
-    );
+  } else if (old !== undefined) {
+    // A `prev` match moves to the `current` hash (N5). Review I-1: the browser
+    // may ALSO hold a `current` entry (a key replaced without `_PREV`, then
+    // `_PREV` set), so the prev row is deleted and merged into the upsert below,
+    // never renamed onto an existing primary key.
+    sql.exec("DELETE FROM known_devices WHERE device_hash = ?", old.device_hash);
   }
+  // The earliest first-seen survives the merge; a `current` row keeps its own through `MIN` on conflict.
+  const firstSeen = mode === "login" ? Math.min(nowMs, old?.first_seen ?? nowMs) : nowMs;
   sql.exec(
     `INSERT INTO known_devices (device_hash, kid, first_seen, last_seen) VALUES (?, ?, ?, ?)
-     ON CONFLICT(device_hash) DO UPDATE SET kid = excluded.kid, last_seen = excluded.last_seen`,
+     ON CONFLICT(device_hash) DO UPDATE SET kid = excluded.kid, last_seen = excluded.last_seen,
+       first_seen = MIN(known_devices.first_seen, excluded.first_seen)`,
     h.current,
     h.currentKid,
-    nowMs,
+    firstSeen,
     nowMs,
   );
   sql.exec(
@@ -91,7 +105,7 @@ export function recordDeviceSync(sql: SqlStorage, h: DeviceHashes, nowMs: number
        SELECT device_hash FROM known_devices ORDER BY last_seen DESC LIMIT -1 OFFSET ?)`,
     DEVICE_LIST_CAP,
   );
-  return { knownDevice: matched !== undefined, listWasEmpty, unknownKeysOnly };
+  return { knownDevice: cur !== undefined || old !== undefined, listWasEmpty, unknownKeysOnly };
 }
 
 export function readPending(sql: SqlStorage, kind: AccountNoticeKind, table: NoticeTable = "pending_notice"): PendingNotice | null {
@@ -158,41 +172,87 @@ export function mergePending(sql: SqlStorage, p: PendingNotice): void {
   });
 }
 
-/** Detach the kind's pending notice into `inflight_notice` (synchronous; call inside a transaction). */
-export function detachPending(sql: SqlStorage, kind: AccountNoticeKind): PendingNotice | null {
-  const p = readPending(sql, kind);
-  if (p === null) return null;
-  sql.exec("DELETE FROM pending_notice WHERE kind = ?", kind);
-  writePending(sql, p, "inflight_notice");
-  return p;
+/** Take one cap slot (a `notices` row) for a send now in progress (review M-3). */
+function takeSlot(sql: SqlStorage, kind: AccountNoticeKind, atMs: number): void {
+  sql.exec("INSERT INTO notices (kind, sent_ms) VALUES (?, ?)", kind, atMs);
 }
 
-/** R2-3: record a route's send-now claim durably (folds included), retried at `dueMs` unless settled. */
-export function writeClaimed(sql: SqlStorage, p: PendingNotice): void {
+/** Give back the slot a send took at `atMs` when it ended without a mail going out (review M-3). */
+export function releaseSlot(sql: SqlStorage, kind: AccountNoticeKind, atMs: number): void {
   sql.exec(
-    `INSERT INTO claimed_notice (kind, count, first_event_ms, last_event_ms, last_country, list_was_empty, due_ms, attempts)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(kind, last_event_ms) DO UPDATE SET count = count + excluded.count`,
-    p.kind,
-    p.count,
-    p.firstEventMs,
-    p.lastEventMs,
-    p.lastCountry,
-    p.listWasEmpty ? 1 : 0,
-    p.dueMs,
-    p.attempts,
+    "DELETE FROM notices WHERE rowid IN (SELECT rowid FROM notices WHERE kind = ? AND sent_ms = ? LIMIT 1)",
+    kind,
+    atMs,
   );
 }
 
-/** Take (read and delete) the claim a route made for the event at `atMs`; null if the alarm already recovered it. */
-export function takeClaimed(sql: SqlStorage, kind: AccountNoticeKind, atMs: number): PendingNotice | null {
-  const row = sql
-    .exec<PendingRow>("SELECT * FROM claimed_notice WHERE kind = ? AND last_event_ms = ?", kind, atMs)
-    .toArray()
-    .at(0);
+/**
+ * The alarm's send of the kind's pending notice, decided on FRESH state inside
+ * the caller's transaction (review M-3): only if it is still due and the cap
+ * still allows a send, counting every send in progress. Then it is detached into
+ * `inflight_notice` (due = `nowMs`, the slot it holds) with a cap slot taken. A
+ * notice the cap now refuses is re-deferred to when the cap reopens.
+ */
+export function detachDue(sql: SqlStorage, kind: AccountNoticeKind, nowMs: number): PendingNotice | null {
+  const p = readPending(sql, kind);
+  if (p === null || p.dueMs > nowMs) return null;
+  const sent = sentTimes(sql, kind, nowMs);
+  if (!capAllows(sent, nowMs, kind)) {
+    writePending(sql, { ...p, dueMs: capReopensAt(sent, nowMs, kind) });
+    return null;
+  }
+  sql.exec("DELETE FROM pending_notice WHERE kind = ?", kind);
+  writePending(sql, { ...p, dueMs: nowMs }, "inflight_notice");
+  takeSlot(sql, kind, nowMs);
+  return p;
+}
+
+type ClaimRow = PendingRow & { claim_id: number; claimed_ms: number };
+
+/** A route's claim: the notice, its id, and the cap slot it holds. */
+export interface Claimed {
+  readonly claimId: number;
+  readonly claimedMs: number;
+  readonly notice: PendingNotice;
+}
+
+function toClaimed(row: ClaimRow): Claimed {
+  return { claimId: row.claim_id, claimedMs: row.claimed_ms, notice: toPending(row) };
+}
+
+/** R2-3: record a route's send-now claim durably (folds included), retried at `dueMs` unless settled. Returns its id. */
+export function writeClaimed(sql: SqlStorage, p: PendingNotice, claimedMs: number): number {
+  return sql
+    .exec<{ claim_id: number }>(
+      `INSERT INTO claimed_notice (kind, count, first_event_ms, last_event_ms, last_country, list_was_empty, due_ms, attempts, claimed_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING claim_id`,
+      p.kind,
+      p.count,
+      p.firstEventMs,
+      p.lastEventMs,
+      p.lastCountry,
+      p.listWasEmpty ? 1 : 0,
+      p.dueMs,
+      p.attempts,
+      claimedMs,
+    )
+    .one().claim_id;
+}
+
+/** Take (read and delete) the claim `claimId`; null if it was settled already or the alarm recovered it. */
+export function takeClaimed(sql: SqlStorage, claimId: number): Claimed | null {
+  const row = sql.exec<ClaimRow>("SELECT * FROM claimed_notice WHERE claim_id = ?", claimId).toArray().at(0);
   if (row === undefined) return null;
-  sql.exec("DELETE FROM claimed_notice WHERE kind = ? AND last_event_ms = ?", kind, atMs);
-  return toPending(row);
+  sql.exec("DELETE FROM claimed_notice WHERE claim_id = ?", claimId);
+  return toClaimed(row);
+}
+
+/** Claims past their due time: routes cut off before they settled (R2-3). */
+export function overdueClaims(sql: SqlStorage, nowMs: number): Claimed[] {
+  return sql
+    .exec<ClaimRow>("SELECT * FROM claimed_notice WHERE due_ms <= ? ORDER BY claim_id", nowMs)
+    .toArray()
+    .map(toClaimed);
 }
 
 export function sentTimes(sql: SqlStorage, kind: AccountNoticeKind, nowMs: number): number[] {
@@ -215,25 +275,30 @@ export function claimNoticeSync(
   event: NoticeEvent,
   nowMs: number,
   notBeforeMs: number,
-): NoticeClaim {
+): NoticeClaimResult {
   const sent = sentTimes(sql, kind, nowMs);
   const pending = readPending(sql, kind);
   if (notBeforeMs <= nowMs && capAllows(sent, nowMs, kind)) {
     // R2-3: out of `pending_notice` and into `claimed_notice` in ONE transaction,
     // so a route cut off mid-send still leaves the notice (and its folds) on disk.
     sql.exec("DELETE FROM pending_notice WHERE kind = ?", kind);
-    writeClaimed(sql, {
-      kind,
-      count: (pending?.count ?? 0) + 1,
-      firstEventMs: pending?.firstEventMs ?? event.atMs,
-      lastEventMs: event.atMs,
-      lastCountry: event.country,
-      listWasEmpty: (pending?.listWasEmpty ?? false) || event.listWasEmpty,
-      dueMs: nowMs + noticeRetryDelayMs(1),
-      attempts: 0,
-    });
-    sql.exec("INSERT INTO notices (kind, sent_ms) VALUES (?, ?)", kind, nowMs);
-    return { send: "now", coalesced: pending === null ? null : { count: pending.count, sinceMs: pending.firstEventMs } };
+    const claimId = writeClaimed(
+      sql,
+      {
+        kind,
+        count: (pending?.count ?? 0) + 1,
+        firstEventMs: pending?.firstEventMs ?? event.atMs,
+        lastEventMs: event.atMs,
+        lastCountry: event.country,
+        listWasEmpty: (pending?.listWasEmpty ?? false) || event.listWasEmpty,
+        dueMs: nowMs + noticeRetryDelayMs(1),
+        attempts: 0,
+      },
+      nowMs,
+    );
+    takeSlot(sql, kind, nowMs);
+    const coalesced = pending === null ? null : { count: pending.count, sinceMs: pending.firstEventMs };
+    return { send: "now", claimId, coalesced };
   }
   const dueMs = foldedDueMs(pending?.dueMs ?? null, notBeforeMs, capReopensAt(sent, nowMs, kind));
   writePending(sql, {

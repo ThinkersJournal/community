@@ -55,7 +55,7 @@ export function noticeHtml(text: NoticeText): string {
 }
 
 /** The live address, or null when the account no longer exists (§4.5: anonymised, reaped). */
-async function liveAddress(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, userId: string): Promise<string | null> {
+function liveAddress(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, userId: string): Promise<string | null> {
   return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<{ email: string }>(
       "SELECT email FROM users WHERE id = $1 AND anonymised_at IS NULL",

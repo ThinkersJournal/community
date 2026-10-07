@@ -1,12 +1,21 @@
 import { createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DEVICE_TTL_MS, NOTICE_MAX_AGE_MS, deviceHashes, type DeviceRecordMode } from "@thinkersjournal/shared";
+import {
+  DEVICE_TTL_MS,
+  NOTICE_MAX_AGE_MS,
+  NOTICE_MAX_DELAY_MS,
+  WAVE_SPREAD_MS,
+  deviceHash,
+  deviceHashes,
+  keyId,
+  type DeviceRecordMode,
+} from "@thinkersjournal/shared";
 
 import { hashPassword } from "../src/auth/password";
 import { withClient } from "../src/db/client";
 import { sendNotice } from "../src/security/account-notice-send";
-import { DEVICE_LIST_CAP } from "../src/security/user-devices";
+import { DEVICE_LIST_CAP, type NoticeClaimResult } from "../src/security/user-devices";
 
 import { guardAlertingFaults, quiet } from "./helpers/security-do";
 
@@ -20,7 +29,7 @@ import { guardAlertingFaults, quiet } from "./helpers/security-do";
  * and `sendNotice` directly; the plan's Task 19 adds the login, signup and reset
  * flows on top of these.
  */
-guardAlertingFaults();
+const { allowFaults } = guardAlertingFaults();
 
 const PASSWORD = "correct-horse-battery-staple";
 const ON: Env = { ...env, ACCOUNT_NOTICES_ENABLED: "1" };
@@ -75,6 +84,29 @@ async function newUser(): Promise<{ email: string; id: string }> {
 }
 
 const tokenOf = (c: string) => c.padEnd(43, c).slice(0, 43);
+const event = (atMs: number, country: string | null = null) => ({ atMs, country, listWasEmpty: false });
+/** The route's handle on a send-now claim (review M-4); -1 for a deferred one. */
+const claimIdOf = (c: NoticeClaimResult) => (c.send === "now" ? c.claimId : -1);
+const HOUR = 3_600_000;
+
+/** Every Postmark request the global `fetch` stub saw, refused ones included. */
+const postmarkCalls = () => vi.mocked(fetch).mock.calls.length;
+
+/** Anonymise `id` the way the reaper leaves it: the address lookup then finds no live row. */
+async function anonymise(id: string): Promise<void> {
+  const ctx = createExecutionContext();
+  await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => c.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [id]));
+  await waitOnExecutionContext(ctx);
+}
+
+/** A token for `userId` whose K1 hash sorts before (or after) its K2 hash: the order a `WITHOUT ROWID` scan returns. */
+async function tokenWithOrder(userId: string, prevFirst: boolean): Promise<string> {
+  for (const c of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+    const t = tokenOf(c);
+    if ((await deviceHash("K1", userId, t)) < (await deviceHash("K2", userId, t)) === prevFirst) return t;
+  }
+  throw new Error("no token with the wanted order in 26 tries");
+}
 
 /** A ledger stand-in that records each drop it is told about. */
 function dropRecorder(dropped: string[]) {
@@ -101,19 +133,19 @@ async function quietClaim(userId: string, atMs: number, notBeforeMs: number, cou
 /** Record `token`'s browser for `userId` under `keys`, inside the object with `armAt` replaced. */
 async function quietRecord(userId: string, token: string, mode: DeviceRecordMode, nowMs: number, keys = { current: "K1", prev: null as string | null }) {
   const hashes = await deviceHashes(keys, userId, token);
-  return runInDurableObject(env.USER_SECURITY.getByName(userId), async (u) => {
+  return runInDurableObject(env.USER_SECURITY.getByName(userId), (u) => {
     quiet(u);
     return u.recordDevice(hashes, nowMs, mode);
   });
 }
 
-async function pendingRows(userId: string) {
+function pendingRows(userId: string) {
   return runInDurableObject(env.USER_SECURITY.getByName(userId), (_u, s) =>
     s.storage.sql.exec<{ count: number; due_ms: number; attempts: number }>("SELECT count, due_ms, attempts FROM pending_notice").toArray(),
   );
 }
 
-async function deviceCount(userId: string): Promise<number> {
+function deviceCount(userId: string): Promise<number> {
   return runInDurableObject(env.USER_SECURITY.getByName(userId), (_u, state) =>
     state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM known_devices").one().n,
   );
@@ -217,13 +249,13 @@ describe("caps and deferral (§4.4)", () => {
 });
 
 describe("end states: Postmark refusals (§4.4)", () => {
-  it("ErrorCode 406 on a deferred notice → dropped_permanent_refusal at once, logged, one notice_dropped", async () => {
+  it.each([300, 406])("ErrorCode %i on a deferred notice → dropped_permanent_refusal at once, logged, one notice_dropped", async (code) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { id } = await newUser();
     const stub = env.USER_SECURITY.getByName(id);
     const now = Date.now();
     await quietClaim(id, now, now + 60_000);
-    postmarkStatus = { status: 422, body: { ErrorCode: 406 } };
+    postmarkStatus = { status: 422, body: { ErrorCode: code } };
     const dropped: string[] = [];
     await runInDurableObject(stub, async (u, s) => {
       quiet(u);
@@ -236,6 +268,7 @@ describe("end states: Postmark refusals (§4.4)", () => {
   });
 
   it("transient refusals (HTTP 503) retry at 15, 30, 60 min … then drop as expired after 7 days", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { id } = await newUser();
     const stub = env.USER_SECURITY.getByName(id);
     const t0 = Date.now();
@@ -255,22 +288,29 @@ describe("end states: Postmark refusals (§4.4)", () => {
       }
       expect(delays).toEqual([15, 30, 60]);
       await u.alarmAt(t0 + NOTICE_MAX_AGE_MS);
+      expect(s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM pending_notice").one().n).toBe(0);
     });
     expect(dropped).toEqual(["dropped_expired"]);
+    expect(warn.mock.calls.filter((c) => c[0] === "account-notice: dropped dropped_expired new_sign_in")).toHaveLength(1);
   });
 });
 
 describe("end states: account gone, and a route's claim settled (§4.4; P-5)", () => {
-  it("a pending notice for an account that is gone → dropped_account_gone, no Postmark call, no alert", async () => {
+  it("dropPendingNotices (a reaper): dropped_account_gone, logged, no Postmark call, no ledger call", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { id } = await newUser();
     const stub = env.USER_SECURITY.getByName(id);
     const now = Date.now();
     await quietClaim(id, now, now + 1);
+    const dropped: string[] = [];
     await runInDurableObject(stub, async (u) => {
       quiet(u);
+      u.ledgerFor = dropRecorder(dropped);
       await u.dropPendingNotices();
     });
-    expect(mails).toHaveLength(0);
+    expect(postmarkCalls()).toBe(0);
+    expect(dropped).toEqual([]);
+    expect(warn.mock.calls.filter((c) => c[0] === "account-notice: dropped dropped_account_gone new_sign_in")).toHaveLength(1);
     expect(
       await runInDurableObject(stub, (_u, s) => s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM pending_notice").one().n),
     ).toBe(0);
@@ -283,8 +323,8 @@ describe("end states: account gone, and a route's claim settled (§4.4; P-5)", (
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
       quiet(u);
       const claim = await u.claimNotice("new_sign_in", { atMs: now, country: null, listWasEmpty: false }, now, now);
-      expect(claim).toEqual({ send: "now", coalesced: { count: 1, sinceMs: now - 60_000 } });
-      await u.settleClaim("new_sign_in", now, "transient", now + 1);
+      expect(claim).toEqual({ send: "now", claimId: expect.any(Number) as number, coalesced: { count: 1, sinceMs: now - 60_000 } });
+      expect(await u.settleClaim(claimIdOf(claim), "transient", now + 1)).toBe(true);
       expect(s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM claimed_notice").one().n).toBe(0);
     });
     expect(await pendingRows(id)).toEqual([{ count: 2, due_ms: now + 1 + 15 * 60_000, attempts: 1 }]);
@@ -295,8 +335,9 @@ describe("end states: account gone, and a route's claim settled (§4.4; P-5)", (
     const now = Date.now();
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
       quiet(u);
-      await u.claimNotice("new_sign_in", { atMs: now, country: null, listWasEmpty: false }, now, now);
-      await u.settleClaim("new_sign_in", now, "sent", now + 1);
+      const claim = await u.claimNotice("new_sign_in", { atMs: now, country: null, listWasEmpty: false }, now, now);
+      expect(await u.settleClaim(claimIdOf(claim), "sent", now + 1)).toBe(true);
+      expect(await u.settleClaim(claimIdOf(claim), "sent", now + 2)).toBe(false); // settled once only
       expect(s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM claimed_notice").one().n).toBe(0);
     });
     expect(await pendingRows(id)).toEqual([]);
@@ -392,5 +433,121 @@ describe("sendNotice for an anonymised account (§4.5)", () => {
     expect(await sendNotice(ON, ctx, gone.id, facts)).toBe("gone");
     await waitOnExecutionContext(ctx);
     expect(mails.map((m) => m.to)).toEqual([live.email]);
+  });
+});
+
+describe("key rotation: one browser with entries under BOTH keys (review I-1)", () => {
+  it.each([true, false])("prev-key entry sorts first = %s: no throw, one entry under the current key, the earliest first-seen kept", async (prevFirst) => {
+    const { id } = await newUser();
+    const now = Date.now();
+    const token = await tokenWithOrder(id, prevFirst);
+    await quietRecord(id, token, "login", now, { current: "K1", prev: null });
+    await quietRecord(id, token, "login", now + 1, { current: "K2", prev: null }); // replaced WITHOUT _PREV: a second entry
+    expect(await deviceCount(id)).toBe(2);
+    const r = await quietRecord(id, token, "login", now + 2, { current: "K2", prev: "K1" }); // _PREV set belatedly
+    expect(r.knownDevice).toBe(true);
+    const rows = await runInDurableObject(env.USER_SECURITY.getByName(id), (_u, s) =>
+      s.storage.sql.exec("SELECT device_hash, kid, first_seen, last_seen FROM known_devices").toArray(),
+    );
+    expect(rows).toEqual([{ device_hash: await deviceHash("K2", id, token), kid: await keyId("K2"), first_seen: now, last_seen: now + 2 }]);
+  });
+});
+
+describe("the alarm isolates each notice, and always re-arms (review M-2)", () => {
+  it("one kind's settle throws: the other kind is still sent, the alarm re-arms, and the stranded one goes out next run", async () => {
+    allowFaults("account-notice alarm_send");
+    const { id } = await newUser();
+    const t0 = Date.now();
+    const sent: string[] = [];
+    await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
+      const armed = quiet(u);
+      await u.claimNotice("new_sign_in", event(t0), t0, t0 + 1);
+      await u.claimNotice("password_reset", event(t0), t0, t0 + 2);
+      u.noticeSender = (_env, _ctx, _id, facts) => {
+        sent.push(facts.kind);
+        // The NEXT storage transaction (this kind's settle) throws.
+        if (sent.length === 1) vi.spyOn(s.storage, "transactionSync").mockImplementationOnce(() => { throw new Error("injected"); });
+        return Promise.resolve("sent" as const);
+      };
+      await u.alarmAt(t0 + 2);
+      expect(sent).toEqual(["new_sign_in", "password_reset"]);
+      expect(armed.at(-1)).toBe(t0 + 2 + 60_000);
+      await u.alarmAt(t0 + 2 + 60_000);
+      expect(sent).toEqual(["new_sign_in", "password_reset", "new_sign_in"]);
+      const left = s.storage.sql.exec<{ n: number }>("SELECT (SELECT COUNT(*) FROM pending_notice) + (SELECT COUNT(*) FROM inflight_notice) AS n").one().n;
+      expect(left).toBe(0);
+    });
+  });
+});
+
+describe("the cap counts a send in progress (review M-3)", () => {
+  it("a route's claim while the alarm's 3rd send of the hour awaits Postmark is deferred, never a 4th", async () => {
+    const { id } = await newUser();
+    const t0 = Date.now();
+    const during: string[] = [];
+    await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
+      quiet(u);
+      for (let i = 0; i < 2; i++) await u.claimNotice("new_sign_in", event(t0 + i), t0 + i, t0 + i); // two sends this hour
+      await u.claimNotice("new_sign_in", event(t0 + 2), t0 + 2, t0 + 10); // deferred, under the cap
+      u.noticeSender = async () => {
+        const c = await u.claimNotice("new_sign_in", event(t0 + 11), t0 + 11, t0 + 11); // a route, mid-send
+        during.push(c.send);
+        return "sent";
+      };
+      await u.alarmAt(t0 + 10);
+    });
+    expect(during).toEqual(["deferred"]);
+  });
+});
+
+describe("two send-now claims in the same millisecond (review M-4)", () => {
+  it("get distinct claims: one settled sent, the other transient → the other is retried and sent", async () => {
+    const { email, id } = await newUser();
+    const now = Date.now();
+    await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
+      quiet(u);
+      const a = await u.claimNotice("new_sign_in", event(now), now, now);
+      const b = await u.claimNotice("new_sign_in", event(now), now, now);
+      expect(claimIdOf(a)).not.toBe(claimIdOf(b));
+      expect(s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM claimed_notice").one().n).toBe(2);
+      expect(await u.settleClaim(claimIdOf(a), "sent", now + 1)).toBe(true);
+      expect(await u.settleClaim(claimIdOf(b), "transient", now + 1)).toBe(true);
+      await u.alarmAt(now + 1 + 15 * 60_000);
+    });
+    expect(mails.map((m) => m.to)).toEqual([email]);
+  });
+});
+
+describe("account gone at send time, and repeated folds (review M-5)", () => {
+  it("the alarm finds no live account → dropped_account_gone, logged; no Postmark call, no ledger call", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { id } = await newUser();
+    await anonymise(id);
+    const now = Date.now();
+    await quietClaim(id, now, now + 1);
+    const dropped: string[] = [];
+    await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
+      quiet(u);
+      u.ledgerFor = dropRecorder(dropped);
+      await u.alarmAt(now + 1);
+    });
+    expect(postmarkCalls()).toBe(0);
+    expect(dropped).toEqual([]);
+    expect(await pendingRows(id)).toEqual([]);
+    expect(warn.mock.calls.filter((c) => c[0] === "account-notice: dropped dropped_account_gone new_sign_in")).toHaveLength(1);
+  });
+
+  it("folds under a full daily cap, each as late as the wave allows, never push the due time past NOTICE_MAX_DELAY_MS", async () => {
+    const { id } = await newUser();
+    const t0 = Date.now();
+    await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
+      quiet(u);
+      for (const ago of [23, 23, 23, 20, 20, 20, 10, 10, 10, 0]) await u.claimNotice("new_sign_in", event(t0 - ago * HOUR), t0 - ago * HOUR, t0 - ago * HOUR);
+      for (let i = 1; i <= 30; i++) {
+        const at = t0 + i * HOUR;
+        const c = await u.claimNotice("new_sign_in", event(at), at, at + WAVE_SPREAD_MS);
+        if (c.send === "deferred") expect(c.dueMs - t0 - HOUR, String(i)).toBeLessThanOrEqual(NOTICE_MAX_DELAY_MS);
+      }
+    });
   });
 });

@@ -526,13 +526,17 @@ export class SecurityLedgerDO extends DurableObject<Env> {
 
   async noticeDroppedAt(endState: SecurityNoticeDropped["endState"], nowMs: number): Promise<void> {
     const day = utcDay(nowMs);
-    this.ctx.storage.transactionSync(() => {
+    const queued = this.ctx.storage.transactionSync(() => {
       const store = this.store;
       const countToday = store.addMeta(`notice_dropped:${endState}:${day}`, 1);
       store.addMeta(`notices_dropped:${endState}`, 1);
       if (countToday === 1) store.queue({ type: "notice_dropped", endState, day, countToday }, nowMs);
+      return countToday === 1;
     });
-    await this.ensureAlarm();
+    // Review I-2 (as batch-2 I-1 for `report`): an idle alarm sits at the next
+    // hour, so a queued message brings it forward to the next tick.
+    if (queued) await this.armNoLaterThan(nowMs);
+    else await this.ensureAlarm();
   }
 
   private isForgotten(userId: string, nowMs: number): boolean {

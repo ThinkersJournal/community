@@ -23,12 +23,12 @@ import { DurableObject } from "cloudflare:workers";
 
 import {
   DEVICE_TTL_MS,
+  logSecurityEvent,
   NOTICE_MAX_AGE_MS,
   noticeRetryDelayMs,
   type AccountNoticeKind,
   type DeviceHashes,
   type DeviceRecordMode,
-  type NoticeClaim,
   type PendingNotice,
   type SignInRecord,
 } from "@thinkersjournal/shared";
@@ -37,15 +37,21 @@ import { sendNotice, type NoticeFacts, type NoticeSendResult } from "../security
 import {
   allPending,
   claimNoticeSync,
-  detachPending,
+  detachDue,
   mergePending,
+  NOTICE_KINDS,
+  overdueClaims,
   recordDeviceSync,
+  releaseSlot,
   takeClaimed,
   USER_DEVICE_SCHEMA,
+  type NoticeClaimResult,
   type NoticeEvent,
 } from "../security/user-devices";
 
 const DAY_MS = 86_400_000;
+/** After an alarm step faulted, the next alarm is at least this far off, so a persistent fault cannot spin (review M-2). */
+const ALARM_FAULT_RETRY_MS = 60_000;
 
 interface SecurityRow extends Record<string, string | number | null> {
   epoch: number;
@@ -76,7 +82,7 @@ export class UserSecurityDO extends DurableObject<Env> {
     // Runs before any request this instance handles, and only once per
     // instance lifetime — safe to call unconditionally on every construction
     // because both the CREATE TABLE and the seed INSERT are idempotent.
-    this.ctx.blockConcurrencyWhile(async () => {
+    void this.ctx.blockConcurrencyWhile(() => {
       this.ctx.storage.sql.exec(
         `CREATE TABLE IF NOT EXISTS security (
            id INTEGER PRIMARY KEY,
@@ -88,6 +94,7 @@ export class UserSecurityDO extends DurableObject<Env> {
          ON CONFLICT(id) DO NOTHING`,
       );
       for (const ddl of USER_DEVICE_SCHEMA) this.ctx.storage.sql.exec(ddl);
+      return Promise.resolve();
     });
   }
 
@@ -96,24 +103,24 @@ export class UserSecurityDO extends DurableObject<Env> {
   }
 
   /** The current security epoch for this user (starts at 0). */
-  async getEpoch(): Promise<number> {
+  getEpoch(): Promise<number> {
     const row = this.ctx.storage.sql
       .exec<SecurityRow>("SELECT epoch FROM security WHERE id = 1")
       .one();
-    return Number(row.epoch);
+    return Promise.resolve(row.epoch);
   }
 
   /**
    * Atomically increments the epoch and returns the new value. Strictly
    * monotonic: each call increments by exactly 1.
    */
-  async bumpEpoch(): Promise<number> {
+  bumpEpoch(): Promise<number> {
     const row = this.ctx.storage.sql
       .exec<SecurityRow>(
         "UPDATE security SET epoch = epoch + 1 WHERE id = 1 RETURNING epoch",
       )
       .one();
-    return Number(row.epoch);
+    return Promise.resolve(row.epoch);
   }
 
   /** Plan ruling P-7: remember whose object this is, for the alarm's deferred send. */
@@ -137,7 +144,7 @@ export class UserSecurityDO extends DurableObject<Env> {
   }
 
   /** §4.4: never drops a notice; sends now or folds it into the one pending notice of its kind. */
-  async claimNotice(kind: AccountNoticeKind, event: NoticeEvent, nowMs: number, notBeforeMs: number): Promise<NoticeClaim> {
+  async claimNotice(kind: AccountNoticeKind, event: NoticeEvent, nowMs: number, notBeforeMs: number): Promise<NoticeClaimResult> {
     const claim = this.ctx.storage.transactionSync(() => {
       this.rememberOwner();
       return claimNoticeSync(this.sql, kind, event, nowMs, notBeforeMs);
@@ -147,21 +154,27 @@ export class UserSecurityDO extends DurableObject<Env> {
   }
 
   /**
-   * Plan rulings P-5 and R2-3: the route reports how its immediate send of the
-   * claim for the event at `atMs` ended. Sent or a drop state: the durable claim
-   * is cleared. Transient (a refusal or a throw, CR-1): it becomes this kind's
-   * pending notice, folded with any that arrived meanwhile, retried after
-   * `noticeRetryDelayMs(1)`; its cap slot was spent at claim time. If this call
-   * never arrives, the alarm recovers the claim at its `due_ms`.
+   * Plan rulings P-5 and R2-3: the route reports how its immediate send of claim
+   * `claimId` ended. Sent: the claim is cleared and its cap slot stays spent.
+   * Anything else gives the slot back (review M-3: only a send in progress or a
+   * mail that went out counts). Transient (a refusal or a throw, CR-1): it
+   * becomes this kind's pending notice, folded with any that arrived meanwhile,
+   * retried after `noticeRetryDelayMs(1)`. If this call never arrives, the alarm
+   * recovers the claim at its `due_ms`. Returns false when there was no such
+   * claim (settled already, or recovered by the alarm), so the caller logs an
+   * end state only once.
    */
-  async settleClaim(kind: AccountNoticeKind, atMs: number, result: NoticeSendResult, nowMs: number): Promise<void> {
-    this.ctx.storage.transactionSync(() => {
-      const claimed = takeClaimed(this.sql, kind, atMs);
-      if (claimed !== null && result === "transient") {
-        mergePending(this.sql, { ...claimed, attempts: 1, dueMs: nowMs + noticeRetryDelayMs(1) });
-      }
+  async settleClaim(claimId: number, result: NoticeSendResult, nowMs: number): Promise<boolean> {
+    const took = this.ctx.storage.transactionSync(() => {
+      const claimed = takeClaimed(this.sql, claimId);
+      if (claimed === null) return false;
+      const p = claimed.notice;
+      if (result !== "sent") releaseSlot(this.sql, p.kind, claimed.claimedMs);
+      if (result === "transient") mergePending(this.sql, { ...p, attempts: 1, dueMs: nowMs + noticeRetryDelayMs(1) });
+      return true;
     });
     await this.rearm();
+    return took;
   }
 
   /** Clears the device list only; the epoch and the notice tables are untouched (§4.1). */
@@ -172,12 +185,14 @@ export class UserSecurityDO extends DurableObject<Env> {
 
   /** Both reapers call this: every pending (or in-flight) notice ends `dropped_account_gone`, logged (§4.5). */
   async dropPendingNotices(): Promise<void> {
-    for (const table of ["pending_notice", "inflight_notice", "claimed_notice"] as const) {
-      for (const p of allPending(this.sql, table)) {
-        this.sql.exec(`DELETE FROM ${table} WHERE kind = ? AND last_event_ms = ?`, p.kind, p.lastEventMs);
-        logNoticeEnd("dropped_account_gone", p.kind);
-      }
-    }
+    const ended = this.ctx.storage.transactionSync(() =>
+      (["pending_notice", "inflight_notice", "claimed_notice"] as const).flatMap((table) => {
+        const rows = allPending(this.sql, table);
+        this.sql.exec(`DELETE FROM ${table}`);
+        return rows.map((p) => p.kind);
+      }),
+    );
+    for (const kind of ended) logNoticeEnd("dropped_account_gone", kind);
     await this.rearm();
   }
 
@@ -185,34 +200,83 @@ export class UserSecurityDO extends DurableObject<Env> {
     await this.alarmAt(Date.now());
   }
 
-  /** Prune expired browsers and send times, send what is due, re-arm (§4.1, §4.4). */
+  /**
+   * Prune expired browsers and send times, recover stranded sends, send what is
+   * due, re-arm (§4.1, §4.4). Review M-2: each step and each kind's send is
+   * isolated, so one throw never strands the others, and the re-arm runs in a
+   * `finally`, so pending or in-flight work always has an alarm.
+   */
   async alarmAt(nowMs: number): Promise<void> {
+    let faulted = false;
+    try {
+      const pruned = this.step("prune", () => {
+        this.pruneExpired(nowMs);
+      });
+      const recovered = this.step("recover", () => {
+        this.ctx.storage.transactionSync(() => {
+          this.recoverStranded(nowMs);
+        });
+      });
+      faulted = !pruned || !recovered;
+      for (const kind of NOTICE_KINDS) {
+        try {
+          await this.sendPending(kind, nowMs);
+        } catch (err) {
+          faulted = true;
+          this.fault("send", err);
+        }
+      }
+    } finally {
+      await this.rearm(faulted ? nowMs + ALARM_FAULT_RETRY_MS : null);
+    }
+  }
+
+  private pruneExpired(nowMs: number): void {
     this.sql.exec("DELETE FROM known_devices WHERE last_seen <= ?", nowMs - DEVICE_TTL_MS);
     this.sql.exec("DELETE FROM notices WHERE sent_ms <= ?", nowMs - DAY_MS);
-    // A send interrupted by an eviction left its row in flight, and a route cut
-    // off after its claim left a claimed row past its timeout (R2-3): both are
-    // pending again, and go out in this run.
-    this.ctx.storage.transactionSync(() => {
-      for (const p of allPending(this.sql, "inflight_notice")) {
-        this.sql.exec("DELETE FROM inflight_notice WHERE kind = ?", p.kind);
-        mergePending(this.sql, p);
-      }
-      for (const p of allPending(this.sql, "claimed_notice")) {
-        if (p.dueMs > nowMs) continue;
-        this.sql.exec("DELETE FROM claimed_notice WHERE kind = ? AND last_event_ms = ?", p.kind, p.lastEventMs);
-        mergePending(this.sql, { ...p, dueMs: nowMs, attempts: Math.max(p.attempts, 1) });
-      }
-    });
-    for (const p of allPending(this.sql)) {
-      if (p.dueMs <= nowMs) await this.sendPending(p.kind, nowMs);
+  }
+
+  /**
+   * A send interrupted by an eviction (or a fault) left its row in flight, and a
+   * route cut off after its claim left a claimed row past its timeout (R2-3):
+   * both are pending again and go out in this run. Each gives back the cap slot
+   * it held; the send that follows takes its own (review M-3).
+   */
+  private recoverStranded(nowMs: number): void {
+    for (const p of allPending(this.sql, "inflight_notice")) {
+      this.sql.exec("DELETE FROM inflight_notice WHERE kind = ?", p.kind);
+      releaseSlot(this.sql, p.kind, p.dueMs);
+      mergePending(this.sql, p);
     }
-    await this.rearm();
+    for (const c of overdueClaims(this.sql, nowMs)) {
+      this.sql.exec("DELETE FROM claimed_notice WHERE claim_id = ?", c.claimId);
+      releaseSlot(this.sql, c.notice.kind, c.claimedMs);
+      mergePending(this.sql, { ...c.notice, dueMs: nowMs, attempts: Math.max(c.notice.attempts, 1) });
+    }
+  }
+
+  /** One isolated alarm step: a throw is logged as `alerting_fault account-notice alarm_<step>`. True when it completed. */
+  private step(name: string, run: () => void): boolean {
+    try {
+      run();
+      return true;
+    } catch (err) {
+      this.fault(name, err);
+      return false;
+    }
+  }
+
+  /** Never an id, an address or the error's message: the step and the error's name only. */
+  private fault(name: string, err: unknown): void {
+    console.error(`account-notice: alarm step ${name} failed`, err instanceof Error ? err.name : "threw");
+    logSecurityEvent({ kind: "alerting_fault", route: "account-notice", reason: `alarm_${name}`, ip: null });
   }
 
   private async sendPending(kind: AccountNoticeKind, nowMs: number): Promise<void> {
-    // Detach BEFORE the await (audit I-2): a sign-in folded while Postmark is
-    // answering lands in a fresh pending row, which settle never touches.
-    const p = this.ctx.storage.transactionSync(() => detachPending(this.sql, kind));
+    // Detach BEFORE the await (audit I-2), on fresh state (review M-3): a sign-in
+    // folded while Postmark is answering lands in a fresh pending row, which
+    // settle never touches, and sees this send's cap slot.
+    const p = this.ctx.storage.transactionSync(() => detachDue(this.sql, kind, nowMs));
     if (p === null) return;
     const userId = this.owner();
     if (userId === null) {
@@ -241,13 +305,17 @@ export class UserSecurityDO extends DurableObject<Env> {
     await this.settle(p, result, nowMs);
   }
 
-  /** The named end states (§4.4 G1). Only the detached in-flight row is settled; pending folds are untouched. */
+  /**
+   * The named end states (§4.4 G1). Only the detached in-flight row is settled;
+   * pending folds are untouched. `nowMs` is the detach time, so it names the cap
+   * slot this send took: kept when the mail went out, given back otherwise.
+   */
   private async settle(p: PendingNotice, result: NoticeSendResult, nowMs: number): Promise<void> {
     const retry = result === "transient" && nowMs - p.firstEventMs < NOTICE_MAX_AGE_MS;
     this.ctx.storage.transactionSync(() => {
       this.sql.exec("DELETE FROM inflight_notice WHERE kind = ?", p.kind);
+      if (result !== "sent") releaseSlot(this.sql, p.kind, nowMs);
       if (retry) mergePending(this.sql, { ...p, attempts: p.attempts + 1, dueMs: nowMs + noticeRetryDelayMs(p.attempts + 1) });
-      if (result === "sent") this.sql.exec("INSERT INTO notices (kind, sent_ms) VALUES (?, ?)", p.kind, nowMs);
     });
     if (retry || result === "sent") return;
     if (result === "gone") {
@@ -263,8 +331,11 @@ export class UserSecurityDO extends DurableObject<Env> {
     }
   }
 
-  /** The earliest of: the oldest browser's expiry, the oldest send time's expiry, the next due notice. */
-  private async rearm(): Promise<void> {
+  /**
+   * The earliest of: the oldest browser's expiry, the oldest send time's expiry,
+   * the next due notice (pending, in flight or claimed); never before `notBeforeMs`.
+   */
+  private async rearm(notBeforeMs: number | null = null): Promise<void> {
     const next = this.sql
       .exec<{ t: number | null }>(
         `SELECT MIN(t) AS t FROM (
@@ -277,6 +348,6 @@ export class UserSecurityDO extends DurableObject<Env> {
         DAY_MS,
       )
       .one().t;
-    await this.armAt(next);
+    await this.armAt(next === null || notBeforeMs === null ? next : Math.max(next, notBeforeMs));
   }
 }
