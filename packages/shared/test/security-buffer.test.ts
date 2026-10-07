@@ -39,7 +39,7 @@ const loginFail = (ip: string): SecurityEvent => ({ kind: "auth_failure", route:
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("SecurityEventBuffer (security-alerting spec §2.5)", () => {
+describe("SecurityEventBuffer (security-alerting spec §2.5): one record per shard, capped subjects", () => {
   it("100 user-keyed 429s → no record until sleep resolves, then ONE record to `site` with n = 100", async () => {
     const { sleep, release } = manualSleep();
     const buffer = new SecurityEventBuffer(sleep);
@@ -84,6 +84,9 @@ describe("SecurityEventBuffer (security-alerting spec §2.5)", () => {
     expect(ips.size).toBe(50);
   });
 
+});
+
+describe("SecurityEventBuffer (security-alerting spec §2.5): separate caps and failures", () => {
   it("I-10: a reset-token flood from 60 networks never pushes a stuffing /64 into overflow (its own cap)", async () => {
     const { sleep, release } = manualSleep();
     const buffer = new SecurityEventBuffer(sleep);

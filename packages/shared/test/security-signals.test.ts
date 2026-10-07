@@ -14,7 +14,7 @@ const loginFail = (ip: string | null): SecurityEvent => ({
 });
 const signals = (e: SecurityEvent, c = {}) => classify(e, AT, c).map((i) => i.signal).sort();
 
-describe("classify (security-alerting spec §2.3)", () => {
+describe("classify (security-alerting spec §2.3): which signals an event yields", () => {
   it("a login failure with an account yields exactly six increments, by name", () => {
     expect(signals(loginFail("203.0.113.9"), { email: "a@example.invalid", userId: "u1" })).toEqual([
       "credential_stuffing",
@@ -46,6 +46,9 @@ describe("classify (security-alerting spec §2.3)", () => {
     expect(signals(e)).toEqual(["rate_limit_storm"]);
   });
 
+});
+
+describe("classify (security-alerting spec §2.3): subjects and shards", () => {
   it("two IPv6 addresses in one /64 share a subject and a shard; another /64 does not", () => {
     const sub = (ip: string) => classify(loginFail(ip), AT, {}).find((i) => i.signal === "login_ip_burst");
     const a = sub("2001:db8:1:2::1");
@@ -84,6 +87,9 @@ describe("classify (security-alerting spec §2.3)", () => {
     expect(signals(fault)).toEqual([]);
   });
 
+});
+
+describe("classify (security-alerting spec §2.3): shards, minutes, members and rules", () => {
   it("shardFor always returns one of the 33 names", () => {
     const names = new Set(["site", ...Array.from({ length: SHARDS_PER_KIND }, (_, i) => [`ip:${i}`, `acct:${i}`]).flat()]);
     expect(names.size).toBe(33);

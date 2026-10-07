@@ -75,6 +75,9 @@ describe("sending, cooldowns and held subjects (C2)", () => {
     });
   });
 
+});
+
+describe("sending (C2): no user id in any message", () => {
   it("I-7: nothing the ledger sends about an account carries its user id", async () => {
     const userId = "11111111-2222-4333-8444-555555555555";
     await runInDurableObject(freshLedger(), async (ledger) => {
@@ -222,6 +225,9 @@ describe("pruning keeps up (F3; plan ruling P-4; audit I-1)", () => {
     });
   });
 
+});
+
+describe("pruning keeps up (F3; plan ruling P-4; audit I-1): one large target", () => {
   it("10,000 aged covered rows: one alarm prunes its chunk budget and re-arms for now; the next finishes", async () => {
     await runInDurableObject(freshLedger(), async (ledger, state) => {
       const { sink } = capturingSink();
@@ -300,6 +306,9 @@ describe("independent steps (R1), heartbeat (N2) and liveness (R2)", () => {
     }
   });
 
+});
+
+describe("alarm arming (N2, m-d)", () => {
   it("report() with nothing queued still arms an alarm (N2)", async () => {
     await runInDurableObject(freshLedger(), async (ledger) => {
       const armed = quiet(ledger);
