@@ -61,7 +61,7 @@
  * idiom elsewhere in this codebase: never rewrite an EARLIER verification
  * timestamp that already exists.
  */
-import { ResetPasswordInput, logSecurityEvent } from "@thinkersjournal/shared";
+import { ResetPasswordInput, limiterIpKey, logSecurityEvent } from "@thinkersjournal/shared";
 
 import { isBarred } from "../auth/account-status";
 import { checkOrigin } from "../auth/csrf";
@@ -133,12 +133,13 @@ async function resetPassword(
 
   // ---- 2b. Per-IP rate limit -------------------------------------------------
   // See the file header's RATE LIMIT note. Keyed on the IP alone (there is no
-  // email or session here), on its own RESET_REDEEM_LIMITER. An UNKNOWN IP skips
+  // email or session here; an IPv6 client is keyed on its /64, see
+  // limiterIpKey), on its own RESET_REDEEM_LIMITER. An UNKNOWN IP skips
   // it rather than sharing one "unknown" bucket that a single caller could spend
   // for every user mid-reset; step 2c still keeps Argon2id off that path.
   const ip = clientIp(request);
   if (ip !== null) {
-    const limited = await enforceRateLimit(env.RESET_REDEEM_LIMITER, `ip:${ip}`, {
+    const limited = await enforceRateLimit(env.RESET_REDEEM_LIMITER, `ip:${limiterIpKey(ip)}`, {
       route: ROUTE,
       bucket: "ip",
       ip,

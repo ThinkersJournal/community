@@ -44,7 +44,7 @@
  *     bullet describes, reopened. Nothing enforces that automatically; it is a
  *     fact about today's only two callers, not a property of this route's name.
  */
-import { MAX_CURSOR } from "@thinkersjournal/shared";
+import { MAX_CURSOR, limiterIpKey } from "@thinkersjournal/shared";
 
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
@@ -157,7 +157,8 @@ export async function handlePublicProfile(
   // does not open 60 profiles a minute, and real profiles are mostly served from
   // web's edge cache (1h + swr) without reaching here, so a crawler fetching
   // existing profiles rarely spends it. The IP is the browser's, forwarded by
-  // web's apiFetch as X-TJ-Client-IP (src/http/client-ip.ts).
+  // web's apiFetch as X-TJ-Client-IP (src/http/client-ip.ts); an IPv6 client is
+  // keyed on its /64 (limiterIpKey), since one subscriber can rotate through it.
   //
   // ⚠️ VIEWER-INDEPENDENCE (this file's header) STILL HOLDS: a 429 is not a
   // per-viewer variant of the profile — web renders it as its uncached
@@ -167,7 +168,7 @@ export async function handlePublicProfile(
   // which a single client could spend to take every profile page down.
   const ip = clientIp(request);
   if (ip !== null) {
-    const limited = await enforceRateLimit(env.PROFILE_LIMITER, `ip:${ip}`, {
+    const limited = await enforceRateLimit(env.PROFILE_LIMITER, `ip:${limiterIpKey(ip)}`, {
       route: "/public/profile",
       bucket: "ip",
       ip,

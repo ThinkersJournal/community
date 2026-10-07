@@ -583,6 +583,41 @@ describe("POST /auth/login", () => {
   );
 
   /**
+   * ⚠️ IPv6 ROTATION (review 1, I1). One subscriber holds a whole /64 — 2^64
+   * addresses — so a bucket on the FULL address is one fresh bucket per request.
+   * The IP-only bucket keys on the /64 (packages/shared limiterIpKey). Here the
+   * burst rotates the interface id on every request inside ONE /64; the 31st
+   * must still be refused. CONTROL: a different /64 is untouched.
+   *
+   * Keying the bucket on the raw `ip` again must turn this RED.
+   */
+  it(
+    "429s a burst that ROTATES addresses inside ONE IPv6 /64 (the bucket is the /64), but not another /64",
+    async () => {
+      const hex = crypto.randomUUID().replace(/-/g, "");
+      const prefix = `2001:db8:${hex.slice(0, 4)}:${hex.slice(4, 8)}`;
+      const otherPrefix = `2001:db8:${hex.slice(8, 12)}:${hex.slice(12, 16)}`;
+      await awaitLimiterBurstWindow();
+      for (let i = 0; i < LOGIN_IP_LIMIT; i++) {
+        const response = await login(validBody(uniqueEmail()), {
+          Origin: ORIGIN,
+          "CF-Connecting-IP": `${prefix}::${(i + 1).toString(16)}`,
+        });
+        expect(response.status, `attempt ${i + 1} from ${prefix}::${(i + 1).toString(16)}`).toBe(401);
+      }
+      expect(
+        (await login(validBody(uniqueEmail()), { Origin: ORIGIN, "CF-Connecting-IP": `${prefix}:dead:beef:0:1` }))
+          .status,
+        "a fresh address in the SAME /64 got a fresh bucket — the IP-only key is not the /64",
+      ).toBe(429);
+      expect(
+        (await login(validBody(uniqueEmail()), { Origin: ORIGIN, "CF-Connecting-IP": `${otherPrefix}::1` })).status,
+      ).toBe(401);
+    },
+    60_000,
+  );
+
+  /**
    * ⚠️ AN UNKNOWN IP SKIPS THE IP-ONLY BUCKET — it must NOT share one "unknown"
    * bucket. If the IP were ever missing (off Cloudflare, or a web regression),
    * one shared bucket would let a single attacker exhaust it and lock EVERY user

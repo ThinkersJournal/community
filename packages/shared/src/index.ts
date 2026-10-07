@@ -4,6 +4,7 @@ export * from './cookie';
 export * from './engagement';
 export * from './engagement-write';
 export * from './errors';
+export * from './limiter-ip-key';
 export * from './moderation';
 export * from './notifications';
 export * from './notifications-categories';

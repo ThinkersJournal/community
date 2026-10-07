@@ -84,7 +84,7 @@
  *       same Argon2id cost before returning the same 401. See `DUMMY_HASH`'s
  *       own comment for how that constant was produced.
  */
-import { LoginInput, logSecurityEvent } from "@thinkersjournal/shared";
+import { LoginInput, limiterIpKey, logSecurityEvent } from "@thinkersjournal/shared";
 
 import { accountBarredResponse, isBarred, loadBarReason } from "../auth/account-status";
 import { checkOrigin } from "../auth/csrf";
@@ -229,6 +229,10 @@ export async function handleLogin(
   // many strangers behind one address, so the limit is deliberately looser than
   // (a)/(b); the per-address buckets remain the tight ones.
   //
+  // ⚠️ (0) KEYS AN IPv6 CLIENT ON ITS /64 (`limiterIpKey`, packages/shared). One
+  // subscriber holds a whole /64 — 2^64 addresses — so a key on the full address
+  // would hand a rotating attacker a fresh bucket per request. IPv4 stays whole.
+  //
   // ⚠️ AN UNKNOWN IP SKIPS (0) ENTIRELY — it does NOT fall back to one shared
   // "unknown" bucket. Off Cloudflare, or after a web regression that stops
   // forwarding the IP, every request would land in that one bucket, and a single
@@ -273,7 +277,7 @@ export async function handleLogin(
   // per-location one, which is the property being bought here.
   const ip = clientIp(request);
   if (ip !== null) {
-    const ipOnlyLimited = await enforceRateLimit(env.LOGIN_IP_LIMITER, `ip:${ip}`, {
+    const ipOnlyLimited = await enforceRateLimit(env.LOGIN_IP_LIMITER, `ip:${limiterIpKey(ip)}`, {
       route: ROUTE,
       bucket: "ip",
       ip,

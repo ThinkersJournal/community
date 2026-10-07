@@ -30,7 +30,7 @@
  * instead of provable only by deploying. Same shape as src/lib/cache.ts: the
  * decisions live in a module with a structural context; the page is glue.
  */
-import { logSecurityEvent, timingSafeEqual } from "@thinkersjournal/shared";
+import { limiterIpKey, logSecurityEvent, timingSafeEqual } from "@thinkersjournal/shared";
 
 /**
  * The subset of Astro's `APIContext` this needs. Structural rather than importing
@@ -106,7 +106,8 @@ const ROUTE = "/internal/purge";
  *
  * ⚠️ ONLY FAILED ATTEMPTS ARE RATE-LIMITED (brute-force audit 2026-10-06, #23).
  * `failureLimiter` is consumed AFTER the secret check, and only when it fails,
- * keyed `purge-fail:<CF-Connecting-IP>`. The order is the point:
+ * keyed `purge-fail:<CF-Connecting-IP>` (an IPv6 client on its /64, see
+ * limiterIpKey). The order is the point:
  *   - The api's legitimate purges arrive over the Service Binding with only
  *     `content-type` and `X-Purge-Secret` (apps/api/src/cache/purge.ts). Whether
  *     or not the platform attaches a `CF-Connecting-IP` to that hop, an
@@ -132,7 +133,7 @@ export async function handlePurgeRequest(
     // The submitted value is NEVER logged — only that it failed, and from where.
     logSecurityEvent({ kind: "auth_failure", route: ROUTE, reason: "bad_purge_secret", ip });
     if (ip !== null) {
-      const { success } = await failureLimiter.limit({ key: `purge-fail:${ip}` });
+      const { success } = await failureLimiter.limit({ key: `purge-fail:${limiterIpKey(ip)}` });
       if (!success) {
         logSecurityEvent({ kind: "rate_limited", route: ROUTE, reason: "ip", ip });
         return json({ code: "RATE_LIMITED" }, 429);

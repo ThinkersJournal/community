@@ -336,6 +336,18 @@ describe("handlePurgeRequest — brute-force countermeasures", () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain(SECRET);
   });
 
+  it("keys an IPv6 failure on its /64, so rotating inside the /64 shares one bucket", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const limiter = countingLimiter(5);
+    for (let i = 1; i <= 5; i++) {
+      expect((await handlePurgeRequest(fromIp(`2001:db8:1:2::${i}`, "wrong"), SECRET, limiter)).status).toBe(403);
+    }
+    expect((await handlePurgeRequest(fromIp("2001:db8:1:2:aaaa::9", "wrong"), SECRET, limiter)).status).toBe(429);
+    expect(limiter.limit).toHaveBeenCalledWith({ key: "purge-fail:2001:db8:1:2::/64" });
+    // CONTROL: another /64 is untouched.
+    expect((await handlePurgeRequest(fromIp("2001:db8:1:3::1", "wrong"), SECRET, limiter)).status).toBe(403);
+  });
+
   it("logs the 429 too", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const blocked: PurgeFailureLimiter = { limit: async () => ({ success: false }) };
