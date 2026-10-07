@@ -325,5 +325,7 @@ So a change that **adds** such a binding needs one of:
 Until the web retry succeeds, production keeps serving the **previous** web
 version (the failed build never deploys), and the smoke check still passes.
 Seen on 15213d7 (#157): the api build succeeded and the web build failed 5 s
-earlier. Whether the cause was this ordering is to be confirmed from that
-build's log.
+earlier, while `SecurityCounterDO` had not yet been deployed. The next push
+(3db31a4, #158) rebuilt both Workers with the class already live, and the web
+build succeeded. That is consistent with this ordering race. The build log was
+not read, so it is not proven.
