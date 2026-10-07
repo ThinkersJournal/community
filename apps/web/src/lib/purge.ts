@@ -30,7 +30,7 @@
  * instead of provable only by deploying. Same shape as src/lib/cache.ts: the
  * decisions live in a module with a structural context; the page is glue.
  */
-import { limiterIpKey, logSecurityEvent, timingSafeEqual } from "@thinkersjournal/shared";
+import { limiterIpKey, logSecurityEvent, timingSafeEqual, type SecurityEvent } from "@thinkersjournal/shared";
 
 /**
  * The subset of Astro's `APIContext` this needs. Structural rather than importing
@@ -88,6 +88,24 @@ export interface PurgeFailureLimiter {
   limit: (options: { key: string }) => Promise<{ success: boolean }>;
 }
 
+/**
+ * Where a purge failure is COUNTED (security-alerting spec §2.2 item 4). The web
+ * Worker installs no observer: this route is its one source, so it hands each
+ * event over explicitly. The page passes a module-scoped `SecurityEventBuffer`
+ * (src/lib/security-counting.ts), or a no-op when `SECURITY_COUNTING` is "off".
+ */
+export type PurgeSecurityEventSink = (event: SecurityEvent, at: Date) => void;
+
+/** Log the `security:` line, then count it. Counting can never fail the refusal. */
+function logAndCount(event: SecurityEvent, onSecurityEvent: PurgeSecurityEventSink): void {
+  logSecurityEvent(event);
+  try {
+    onSecurityEvent(event, new Date());
+  } catch {
+    // A counting failure must never turn a 403 into a 500.
+  }
+}
+
 /** This route, as its `security:` log lines name it. */
 const ROUTE = "/internal/purge";
 
@@ -127,15 +145,16 @@ export async function handlePurgeRequest(
   context: PurgeContext,
   secret: string | undefined,
   failureLimiter: PurgeFailureLimiter,
+  onSecurityEvent: PurgeSecurityEventSink,
 ): Promise<Response> {
   if (!(await authorized(context.request.headers.get(SECRET_HEADER), secret))) {
     const ip = context.request.headers.get("CF-Connecting-IP");
     // The submitted value is NEVER logged — only that it failed, and from where.
-    logSecurityEvent({ kind: "auth_failure", route: ROUTE, reason: "bad_purge_secret", ip });
+    logAndCount({ kind: "auth_failure", route: ROUTE, reason: "bad_purge_secret", ip }, onSecurityEvent);
     if (ip !== null) {
       const { success } = await failureLimiter.limit({ key: `purge-fail:${limiterIpKey(ip)}` });
       if (!success) {
-        logSecurityEvent({ kind: "rate_limited", route: ROUTE, reason: "ip", ip });
+        logAndCount({ kind: "rate_limited", route: ROUTE, reason: "ip", ip }, onSecurityEvent);
         return json({ code: "RATE_LIMITED" }, 429);
       }
     }

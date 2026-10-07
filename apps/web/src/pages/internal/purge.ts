@@ -36,10 +36,11 @@
  * binding and declares cacheability. The two things it does are the two things
  * that cannot be done there.
  */
-import { env } from "cloudflare:workers";
+import { env, waitUntil } from "cloudflare:workers";
 
 import { markPrivate } from "../../lib/cache";
 import { handlePurgeRequest } from "../../lib/purge";
+import { purgeSecurityEventSink } from "../../lib/security-counting";
 
 import type { APIRoute } from "astro";
 
@@ -51,7 +52,14 @@ export const POST: APIRoute = async (context) => {
   // reasoning (and the same trap) as src/lib/api.ts's header.
   // `PURGE_LIMITER` (wrangler.jsonc) is spent only by FAILED attempts — see
   // handlePurgeRequest's header for why the api's own purges never touch it.
-  const response = await handlePurgeRequest(context, env.PURGE_SECRET, env.PURGE_LIMITER);
+  // Counting (security-alerting spec §2.2 item 4): a module-scoped buffer, one
+  // `site` RPC per isolate per 5 s at most, flushed in THIS request's waitUntil.
+  const response = await handlePurgeRequest(
+    context,
+    env.PURGE_SECRET,
+    env.PURGE_LIMITER,
+    purgeSecurityEventSink(env, waitUntil),
+  );
 
   // ⚠️ THIS ROUTE DECLARES ITS CACHEABILITY LIKE EVERY OTHER PAGE, and is NOT
   // exempt from test/page-cache-inventory.test.ts. An earlier draft of the plan

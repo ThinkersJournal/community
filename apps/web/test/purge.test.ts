@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { handlePurgeRequest } from "../src/lib/purge";
 import { readRouteManifest, serverBuilt } from "./helpers/route-manifest";
 
-import type { PurgeContext, PurgeFailureLimiter } from "../src/lib/purge";
+import type { PurgeContext, PurgeFailureLimiter, PurgeSecurityEventSink } from "../src/lib/purge";
+
+/** The fourth argument for every case that is not about counting. */
+const noCount: PurgeSecurityEventSink = () => undefined;
 
 /**
  * The web half of the purge hop — the ONLY place cached renders are invalidated,
@@ -153,7 +156,7 @@ describe("handlePurgeRequest — authorization", () => {
   it("authorizes the correct secret and invalidates the tags", async () => {
     // ⚠️ THE ANTI-VACUITY ANCHOR for every `not.toHaveBeenCalled()` below.
     const ctx = withSecret(SECRET);
-    const response = await handlePurgeRequest(ctx, SECRET, allowAll());
+    const response = await handlePurgeRequest(ctx, SECRET, allowAll(), noCount);
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ purged: 2 });
@@ -165,7 +168,7 @@ describe("handlePurgeRequest — authorization", () => {
 
   it("REJECTS a wrong secret, and purges nothing", async () => {
     const ctx = withSecret("wrong-secret-of-the-same-length-000000");
-    const response = await handlePurgeRequest(ctx, SECRET, allowAll());
+    const response = await handlePurgeRequest(ctx, SECRET, allowAll(), noCount);
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ code: "FORBIDDEN" });
@@ -176,13 +179,13 @@ describe("handlePurgeRequest — authorization", () => {
     // timingSafeEqual compares SHA-256 digests, and a prefix digests differently
     // from the whole, so the characters that do line up never count as a match.
     const ctx = withSecret(SECRET.slice(0, 10));
-    expect((await handlePurgeRequest(ctx, SECRET, allowAll())).status).toBe(403);
+    expect((await handlePurgeRequest(ctx, SECRET, allowAll(), noCount)).status).toBe(403);
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
   });
 
   it("REJECTS a MISSING secret header", async () => {
     const ctx = context({ "content-type": "application/json" }, JSON.stringify({ tags: ["x"] }));
-    expect((await handlePurgeRequest(ctx, SECRET, allowAll())).status).toBe(403);
+    expect((await handlePurgeRequest(ctx, SECRET, allowAll(), noCount)).status).toBe(403);
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
   });
 
@@ -190,7 +193,7 @@ describe("handlePurgeRequest — authorization", () => {
     // An unset PURGE_SECRET must never make every caller authorized. This is the
     // shape of a real deploy mistake: `wrangler secret put` run on api but not web.
     const ctx = withSecret(SECRET);
-    expect((await handlePurgeRequest(ctx, undefined, allowAll())).status).toBe(403);
+    expect((await handlePurgeRequest(ctx, undefined, allowAll(), noCount)).status).toBe(403);
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
   });
 
@@ -198,7 +201,7 @@ describe("handlePurgeRequest — authorization", () => {
     // Without the explicit `=== ""` guard, `timingSafeEqual("", "")` is TRUE and
     // an empty secret authorizes the entire internet.
     const ctx = withSecret("");
-    expect((await handlePurgeRequest(ctx, "", allowAll())).status).toBe(403);
+    expect((await handlePurgeRequest(ctx, "", allowAll(), noCount)).status).toBe(403);
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
   });
 });
@@ -206,7 +209,7 @@ describe("handlePurgeRequest — authorization", () => {
 describe("handlePurgeRequest — input", () => {
   it("400s on a malformed JSON body, and purges nothing", async () => {
     const ctx = context({ "X-Purge-Secret": SECRET }, "not json{");
-    const response = await handlePurgeRequest(ctx, SECRET, allowAll());
+    const response = await handlePurgeRequest(ctx, SECRET, allowAll(), noCount);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: "INVALID_JSON" });
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
@@ -214,7 +217,7 @@ describe("handlePurgeRequest — input", () => {
 
   it("400s on an empty tag list rather than purging nothing expensively", async () => {
     const ctx = withSecret(SECRET, []);
-    const response = await handlePurgeRequest(ctx, SECRET, allowAll());
+    const response = await handlePurgeRequest(ctx, SECRET, allowAll(), noCount);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ code: "INVALID_INPUT", fields: ["tags"] });
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
@@ -225,13 +228,13 @@ describe("handlePurgeRequest — input", () => {
     // the helper's DEFAULT and would silently send the real tags, making this
     // assert 200 === 400. The omitted key has to actually be omitted.
     const ctx = context({ "X-Purge-Secret": SECRET }, JSON.stringify({}));
-    expect((await handlePurgeRequest(ctx, SECRET, allowAll())).status).toBe(400);
+    expect((await handlePurgeRequest(ctx, SECRET, allowAll(), noCount)).status).toBe(400);
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
   });
 
   it("400s when `tags` is not an array", async () => {
     const ctx = withSecret(SECRET, "listing");
-    expect((await handlePurgeRequest(ctx, SECRET, allowAll())).status).toBe(400);
+    expect((await handlePurgeRequest(ctx, SECRET, allowAll(), noCount)).status).toBe(400);
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
   });
 
@@ -240,20 +243,20 @@ describe("handlePurgeRequest — input", () => {
     // undefined. Both must land on the same 400.
     for (const body of ["null", "[]", '"a string"', "42"]) {
       const ctx = context({ "X-Purge-Secret": SECRET }, body);
-      expect((await handlePurgeRequest(ctx, SECRET, allowAll())).status).toBe(400);
+      expect((await handlePurgeRequest(ctx, SECRET, allowAll(), noCount)).status).toBe(400);
     }
   });
 
   it("drops non-string and empty tags rather than forwarding junk to the purge API", async () => {
     const ctx = withSecret(SECRET, ["post:1", 42, "", null, "listing"]);
-    const response = await handlePurgeRequest(ctx, SECRET, allowAll());
+    const response = await handlePurgeRequest(ctx, SECRET, allowAll(), noCount);
     expect(response.status).toBe(200);
     expect(ctx.cache.invalidate).toHaveBeenCalledWith({ tags: ["post:1", "listing"] });
   });
 
   it("400s when EVERY tag was junk (nothing survived the filter)", async () => {
     const ctx = withSecret(SECRET, [42, "", null]);
-    expect((await handlePurgeRequest(ctx, SECRET, allowAll())).status).toBe(400);
+    expect((await handlePurgeRequest(ctx, SECRET, allowAll(), noCount)).status).toBe(400);
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
   });
 });
@@ -279,7 +282,7 @@ describe("handlePurgeRequest — brute-force: refusal and throttling", () => {
   it("REFUSES a wrong secret of a DIFFERENT (longer) length", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const ctx = withSecret(`${SECRET}-and-then-some-more-characters`);
-    expect((await handlePurgeRequest(ctx, SECRET, allowAll())).status).toBe(403);
+    expect((await handlePurgeRequest(ctx, SECRET, allowAll(), noCount)).status).toBe(403);
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
   });
 
@@ -288,10 +291,10 @@ describe("handlePurgeRequest — brute-force: refusal and throttling", () => {
     const limiter = countingLimiter(5);
     for (let i = 0; i < 5; i++) {
       const ctx = fromIp("198.51.100.7", `wrong-${i}`);
-      expect((await handlePurgeRequest(ctx, SECRET, limiter)).status, `failure ${i + 1}`).toBe(403);
+      expect((await handlePurgeRequest(ctx, SECRET, limiter, noCount)).status, `failure ${i + 1}`).toBe(403);
     }
     const ctx = fromIp("198.51.100.7", "wrong-again");
-    const response = await handlePurgeRequest(ctx, SECRET, limiter);
+    const response = await handlePurgeRequest(ctx, SECRET, limiter, noCount);
     expect(response.status).toBe(429);
     expect(await response.json()).toEqual({ code: "RATE_LIMITED" });
     expect(ctx.cache.invalidate).not.toHaveBeenCalled();
@@ -302,9 +305,9 @@ describe("handlePurgeRequest — brute-force: refusal and throttling", () => {
   it("CONTROL: another IP's failures do not count against this one", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const limiter = countingLimiter(5);
-    for (let i = 0; i < 6; i++) await handlePurgeRequest(fromIp("198.51.100.7", "wrong"), SECRET, limiter);
-    expect((await handlePurgeRequest(fromIp("198.51.100.7", "wrong"), SECRET, limiter)).status).toBe(429);
-    expect((await handlePurgeRequest(fromIp("198.51.100.8", "wrong"), SECRET, limiter)).status).toBe(403);
+    for (let i = 0; i < 6; i++) await handlePurgeRequest(fromIp("198.51.100.7", "wrong"), SECRET, limiter, noCount);
+    expect((await handlePurgeRequest(fromIp("198.51.100.7", "wrong"), SECRET, limiter, noCount)).status).toBe(429);
+    expect((await handlePurgeRequest(fromIp("198.51.100.8", "wrong"), SECRET, limiter, noCount)).status).toBe(403);
   });
 });
 
@@ -322,7 +325,7 @@ describe("handlePurgeRequest — brute-force: authorized calls and 403 logging",
       limit: vi.fn(async () => ({ success: false })),
     };
     for (const ctx of [withSecret(SECRET), fromIp("198.51.100.7", SECRET)]) {
-      const response = await handlePurgeRequest(ctx, SECRET, exhausted);
+      const response = await handlePurgeRequest(ctx, SECRET, exhausted, noCount);
       expect(response.status).toBe(200);
       expect(ctx.cache.invalidate).toHaveBeenCalledTimes(1);
     }
@@ -332,7 +335,7 @@ describe("handlePurgeRequest — brute-force: authorized calls and 403 logging",
   it("logs every 403 as a security: line with the client IP and a timestamp, never the submitted value", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const submitted = "a-guess-that-must-never-be-logged";
-    expect((await handlePurgeRequest(fromIp("198.51.100.9", submitted), SECRET, allowAll())).status).toBe(403);
+    expect((await handlePurgeRequest(fromIp("198.51.100.9", submitted), SECRET, allowAll(), noCount)).status).toBe(403);
 
     const lines = securityLines(warn);
     expect(lines, `saw ${JSON.stringify(warn.mock.calls)}`).toHaveLength(1);
@@ -356,18 +359,18 @@ describe("handlePurgeRequest — brute-force: IPv6, 429 logging, unknown IP", ()
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const limiter = countingLimiter(5);
     for (let i = 1; i <= 5; i++) {
-      expect((await handlePurgeRequest(fromIp(`2001:db8:1:2::${i}`, "wrong"), SECRET, limiter)).status).toBe(403);
+      expect((await handlePurgeRequest(fromIp(`2001:db8:1:2::${i}`, "wrong"), SECRET, limiter, noCount)).status).toBe(403);
     }
-    expect((await handlePurgeRequest(fromIp("2001:db8:1:2:aaaa::9", "wrong"), SECRET, limiter)).status).toBe(429);
+    expect((await handlePurgeRequest(fromIp("2001:db8:1:2:aaaa::9", "wrong"), SECRET, limiter, noCount)).status).toBe(429);
     expect(limiter.limit).toHaveBeenCalledWith({ key: "purge-fail:2001:db8:1:2::/64" });
     // CONTROL: another /64 is untouched.
-    expect((await handlePurgeRequest(fromIp("2001:db8:1:3::1", "wrong"), SECRET, limiter)).status).toBe(403);
+    expect((await handlePurgeRequest(fromIp("2001:db8:1:3::1", "wrong"), SECRET, limiter, noCount)).status).toBe(403);
   });
 
   it("logs the 429 too", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const blocked: PurgeFailureLimiter = { limit: async () => ({ success: false }) };
-    expect((await handlePurgeRequest(fromIp("198.51.100.10", "wrong"), SECRET, blocked)).status).toBe(429);
+    expect((await handlePurgeRequest(fromIp("198.51.100.10", "wrong"), SECRET, blocked, noCount)).status).toBe(429);
     expect(securityLines(warn).some((l) => l.includes("rate_limited") && l.includes("198.51.100.10"))).toBe(true);
   });
 
@@ -378,7 +381,7 @@ describe("handlePurgeRequest — brute-force: IPv6, 429 logging, unknown IP", ()
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const limiter = allowAll();
     const ctx = withSecret("wrong");
-    expect((await handlePurgeRequest(ctx, SECRET, limiter)).status).toBe(403);
+    expect((await handlePurgeRequest(ctx, SECRET, limiter, noCount)).status).toBe(403);
     expect(limiter.limit).not.toHaveBeenCalled();
     expect(securityLines(warn)).toHaveLength(1);
   });
