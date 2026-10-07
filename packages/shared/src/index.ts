@@ -16,6 +16,7 @@ export * from './search';
 export * from './security-log';
 export * from './social';
 export * from './timing-safe';
+export * from './account-notices';
 export * from './security-alert';
 export * from './security-buffer';
 export * from './security-ledger-policy';
