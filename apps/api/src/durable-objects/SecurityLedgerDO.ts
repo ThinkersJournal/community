@@ -98,12 +98,19 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   }
 
   async reportAt(batch: LedgerReportBatch, nowMs: number): Promise<void> {
+    const lastQueued = this.lastOutboxId();
     this.ctx.storage.transactionSync(() => {
       for (const r of batch.reports) this.processReport(r, nowMs);
       for (const [signalClass, n] of Object.entries(batch.countedOverflow)) {
         if (n !== undefined && n > 0) this.countNotStored(signalClass as SignalClass, nowMs, n);
       }
     });
+    if (this.lastOutboxId() > lastQueued) {
+      // Batch-2 review I-1: a queued message goes out on the NEXT tick. An idle
+      // alarm sits at the next hour, so "an alarm exists" is not enough here.
+      await this.armNoLaterThan(nowMs);
+      return;
+    }
     // ALWAYS, even for an empty batch: a dead alarm must not survive a report (N2).
     await this.ensureAlarm();
   }
@@ -111,6 +118,16 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   /** RPC from the two-minute cron (m-d): set an alarm for now if none is set. Idempotent. */
   async ensureAlarm(): Promise<void> {
     if ((await this.ctx.storage.getAlarm()) === null) await this.armAt(Date.now());
+  }
+
+  /** Move the alarm to `ms` unless one is already set at or before it. */
+  private async armNoLaterThan(ms: number): Promise<void> {
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > ms) await this.armAt(ms);
+  }
+
+  private lastOutboxId(): number {
+    return this.store.count("SELECT COALESCE(MAX(id), 0) AS n FROM outbox");
   }
 
   private processReport(r: CounterReport, nowMs: number): void {

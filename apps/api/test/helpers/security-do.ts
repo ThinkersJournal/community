@@ -9,6 +9,8 @@ import type {
   SecurityAlertSink,
 } from "@thinkersjournal/shared";
 
+import type { SecurityLedgerDO } from "../../src/durable-objects/SecurityLedgerDO";
+
 /**
  * Security-alerting test helpers (plan Tasks 8–9). Every stub is a FRESH
  * instance (a unique name), so tests never share storage. Production uses the
@@ -132,4 +134,18 @@ export function guardAlertingFaults(): { allowFaults: (...routeAndReason: string
       allowed.push(...routeAndReason);
     },
   };
+}
+
+/** The `site` stub for a ledger whose digest should see no summary activity. */
+export const NO_SITE = { summarise: async () => ({ activity: {}, overflowEvents: 0 }) };
+
+/** A ledger wired for a test: capturing sink, no site activity, `armAt` recorded. */
+export function wire(
+  ledger: Pick<SecurityLedgerDO, "sinkFactory" | "siteFor" | "armAt">,
+  fail: (m: SecurityAlertMessage) => boolean = () => false,
+) {
+  const { sink, sent } = capturingSink(fail);
+  ledger.sinkFactory = () => sink;
+  ledger.siteFor = () => NO_SITE;
+  return { sent, armed: quiet(ledger) };
 }
