@@ -95,7 +95,7 @@ describe("withSecurityScope — where counting reaches, and where it never does"
   it("confirmation 3: with the DEFAULT stubFor, a flush in a request's waitUntil reaches the REAL counter instance", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     setSecurityScopeOverridesForTests({ buffer: new SecurityEventBuffer(now) }); // stubFor left at its default
-    const ip = `2001:db8:${Math.floor(Math.random() * 0xffff).toString(16)}:${Math.floor(Math.random() * 0xffff).toString(16)}::9`;
+    const ip = `2001:db8:${Array.from(crypto.getRandomValues(new Uint16Array(2)), (w) => w.toString(16)).join(":")}::9`;
     const ctx = createExecutionContext();
     await withSecurityScope(env, ctx, () => {
       logSecurityEvent({ ...FAIL, ip }, { email: "p@example.invalid" });

@@ -1,13 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { SecurityEventBuffer, setSecurityEventObserver } from "@thinkersjournal/shared";
-import type { SecurityCounterRpc, SecurityRequestScope } from "@thinkersjournal/shared";
+import type { SecurityRequestScope } from "@thinkersjournal/shared";
 
 /** The env keys this module reads. `Env` satisfies it once the binding is added. */
 export interface SecurityScopeEnv {
   /** `"off"` is the kill switch (§6). */
   readonly SECURITY_COUNTING?: string;
-  readonly SECURITY_COUNTER: { getByName(name: string): SecurityCounterRpc };
+  readonly SECURITY_COUNTER: Pick<Env["SECURITY_COUNTER"], "getByName">;
 }
 
 /**
@@ -17,7 +17,7 @@ export interface SecurityScopeEnv {
  */
 export interface SecurityScopeOverrides {
   readonly buffer?: SecurityEventBuffer;
-  readonly stubFor?: (shard: string) => SecurityCounterRpc;
+  readonly stubFor?: SecurityRequestScope["stubFor"];
 }
 
 let overrides: SecurityScopeOverrides = {};
@@ -42,7 +42,7 @@ setSecurityEventObserver((event, at, counting) => {
  */
 export function withSecurityScope<T>(
   env: SecurityScopeEnv,
-  ctx: { waitUntil(promise: Promise<unknown>): void },
+  ctx: Pick<ExecutionContext, "waitUntil">,
   run: () => Promise<T>,
 ): Promise<T> {
   if (env.SECURITY_COUNTING === "off") return run();

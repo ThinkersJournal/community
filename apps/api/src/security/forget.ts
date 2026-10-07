@@ -24,12 +24,17 @@ export async function forgetAccountEverywhere(
     try {
       await run();
     } catch (err) {
-      console.error(
-        `${source}: ${name} failed; the nightly sweep (src/security/forget-sweep.ts) re-forgets it`,
-        err instanceof Error ? err.name : "threw",
-      );
+      logForgetFailure(source, name, err);
     }
   }
+}
+
+/** A clean-up that failed: the source, the step and the error's NAME only (I-2: never the account id). */
+function logForgetFailure(source: string, step: string, err: unknown): void {
+  console.error(
+    `${source}: ${step} failed; the nightly sweep (src/security/forget-sweep.ts) re-forgets it`,
+    err instanceof Error ? err.name : "threw",
+  );
 }
 
 /** At most this many accounts' clean-ups in flight at once (bounds concurrent RPCs per run). */
@@ -46,6 +51,12 @@ export async function forgetAll(
   source: string,
 ): Promise<void> {
   for (let i = 0; i < ids.length; i += FORGET_CONCURRENCY) {
-    await Promise.all(ids.slice(i, i + FORGET_CONCURRENCY).map((id) => forgetAccountEverywhere(env, id, source)));
+    try {
+      await Promise.all(ids.slice(i, i + FORGET_CONCURRENCY).map((id) => forgetAccountEverywhere(env, id, source)));
+    } catch (err) {
+      // Unreachable while forgetAccountEverywhere keeps its own catch; logged, never
+      // thrown, so a reaper's run still ends normally ("Never throws" above).
+      logForgetFailure(source, "forgetAll", err);
+    }
   }
 }

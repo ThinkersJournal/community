@@ -102,7 +102,7 @@ export function networkKey(ip: string): string {
   if (k.endsWith("::/64")) return `${k.slice(0, -"::/64".length).split(":").slice(0, 3).join(":")}::/48`;
   const v4 = IPV4_KEY.exec(k);
   // Octets over 255 are not an address: returned unchanged, like any unparsed value.
-  if (v4 !== null && v4.slice(1).every((o) => Number(o) <= 255)) return `${v4[1]}.${v4[2]}.${v4[3]}.0/24`;
+  if (v4?.slice(1).every((o) => Number(o) <= 255)) return `${v4[1]}.${v4[2]}.${v4[3]}.0/24`;
   return k;
 }
 

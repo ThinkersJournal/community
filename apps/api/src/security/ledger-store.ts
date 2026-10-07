@@ -42,8 +42,15 @@ export function newRef(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** `T` or `null`, named once (a shared-package type in a bare `| null` union reads as `any` to an analyser that cannot resolve the workspace). */
+export type Nullable<T> = T | null;
+
 export class LedgerStore {
-  constructor(readonly sql: SqlStorage) {}
+  readonly sql: SqlStorage;
+
+  constructor(sql: SqlStorage) {
+    this.sql = sql;
+  }
 
   meta(k: string): string | null {
     return this.sql.exec<MetaRow>("SELECT v FROM meta WHERE k = ?", k).toArray()[0]?.v ?? null;

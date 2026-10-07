@@ -127,7 +127,11 @@ export class HeldReportBuilder {
   private bytes = 0;
   private readonly list: HeldEntry[] = [];
 
-  constructor(private readonly capBytes: number = HELD_REPORT_BYTE_CAP) {}
+  private readonly capBytes: number;
+
+  constructor(capBytes: number = HELD_REPORT_BYTE_CAP) {
+    this.capBytes = capBytes;
+  }
 
   tryAdd(entry: HeldEntry): boolean {
     const size = JSON.stringify(entry).length + 1;

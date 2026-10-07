@@ -49,7 +49,7 @@ import {
 } from "../security/ledger-held";
 import { pruneLedger } from "../security/ledger-prune";
 import { LEDGER_SCHEMA } from "../security/ledger-schema";
-import { LedgerStore, logLedgerError, utcDay, type ClassDay } from "../security/ledger-store";
+import { LedgerStore, logLedgerError, utcDay, type ClassDay, type Nullable } from "../security/ledger-store";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
@@ -76,7 +76,7 @@ type OutboxRow = { id: number; message: string; covers: string | null; attempts:
 
 export class SecurityLedgerDO extends DurableObject<Env> {
   /** TEST SEAM (§3.3): which sink delivers. Board 131 changes `null` to its factory, here only. */
-  sinkFactory: (env: SecurityAlertEnv) => SecurityAlertSink = (env) => selectSecurityAlertSink(env, null);
+  sinkFactory = (env: SecurityAlertEnv): SecurityAlertSink => selectSecurityAlertSink(env, null);
   /** TEST SEAM: the `site` counter, read for the digest's summary-class activity. */
   siteFor: () => SiteSummaryRpc = () => this.env.SECURITY_COUNTER.getByName("site");
   /**
@@ -84,7 +84,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
    * races their explicit clock (`alarmAt(nowMs)`); one test keeps it real to pin
    * the cron's `ensureLedgerAlarm`.
    */
-  armAt: (ms: number) => Promise<void> = (ms) => this.ctx.storage.setAlarm(ms);
+  armAt = (ms: number): Promise<void> => this.ctx.storage.setAlarm(ms);
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -474,7 +474,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     // period says exactly what was counted, never more.
     const lastMs = Number(this.store.meta("last_digest_ms") ?? String(nowMs - HOUR_MS));
     const startMs = Math.max(lastMs, nowMs - (COUNTER_RETENTION_MINUTES - 1) * MINUTE_MS);
-    let site: SiteSummary | null = null;
+    let site: Nullable<SiteSummary> = null;
     try {
       site = await this.siteFor().summarise(Math.floor(startMs / MINUTE_MS), Math.floor(nowMs / MINUTE_MS));
     } catch (err) {

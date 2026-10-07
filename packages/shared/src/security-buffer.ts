@@ -48,6 +48,12 @@ type CapKind = keyof typeof MAX_SUBJECTS_PER_FLUSH;
 /** The same caps as a Map, so a kind is looked up rather than used as an object key. */
 const CAP_BY_KIND: ReadonlyMap<CapKind, number> = new Map(Object.entries(MAX_SUBJECTS_PER_FLUSH) as [CapKind, number][]);
 
+/** The production wait before a flush; tests pass their own with the same type. */
+const realSleep = (ms: number): Promise<void> =>
+  new Promise((r) => {
+    setTimeout(r, ms);
+  });
+
 /** Signals whose subject is a network (§2.3 `SubjectKind` "net"). */
 const NET_SIGNALS: ReadonlySet<string> = new Set(SIGNAL_RULES.filter((r) => r.subject === "net").map((r) => r.signal));
 
@@ -77,7 +83,11 @@ export class SecurityEventBuffer {
   private overflow = 0;
   private timerArmed = false;
 
-  constructor(private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))) {}
+  private readonly sleep: typeof realSleep;
+
+  constructor(sleep: typeof realSleep = realSleep) {
+    this.sleep = sleep;
+  }
 
   add(event: SecurityEvent, at: Date, counting: SecurityEventCounting, scope: SecurityRequestScope): void {
     for (const inc of classify(event, at, counting)) this.addOne(inc);

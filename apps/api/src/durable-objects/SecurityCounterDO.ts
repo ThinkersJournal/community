@@ -89,7 +89,7 @@ export class SecurityCounterDO extends DurableObject<Env> {
   /** TEST SEAM (§3.3): tests replace this on the instance via `runInDurableObject`. */
   ledgerFor: () => SecurityLedgerReportRpc = () => this.env.SECURITY_LEDGER.getByName("ledger");
   /** TEST SEAM: where the next alarm goes, so a real alarm never races a test's explicit clock. */
-  armAt: (ms: number) => Promise<void> = (ms) => this.ctx.storage.setAlarm(ms);
+  armAt = (ms: number): Promise<void> => this.ctx.storage.setAlarm(ms);
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -454,8 +454,8 @@ export class SecurityCounterDO extends DurableObject<Env> {
 
 /** Two reports for one (signal, subject) while the ledger is down: events added, window widened (§2.4 m4). */
 export function mergeReports(a: CounterReport, b: CounterReport): CounterReport {
-  const byRoute = new Map(Object.entries(a.byRoute));
-  for (const [route, n] of Object.entries(b.byRoute)) byRoute.set(route, (byRoute.get(route) ?? 0) + n);
+  const byRoute = new Map<string, number>(Object.entries<number>(a.byRoute));
+  for (const [route, n] of Object.entries<number>(b.byRoute)) byRoute.set(route, (byRoute.get(route) ?? 0) + n);
   return {
     ...b,
     windowStartMs: Math.min(a.windowStartMs, b.windowStartMs),

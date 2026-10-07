@@ -18,15 +18,13 @@
  * and logs each run's counts.
  */
 import { withClient } from "../db/client";
+import type { SecurityLedgerDO } from "../durable-objects/SecurityLedgerDO";
 
 export const SWEEP_BATCH = 200;
 export const SWEEP_RECENT_DAYS = 3;
 
-/** The ledger slice the sweep uses. */
-export interface ForgetSweepLedger {
-  accountIdsPage(limit: number): Promise<string[]>;
-  forgetAccount(userId: string): Promise<void>;
-}
+/** The ledger slice the sweep uses: the two RPCs, as `SecurityLedgerDO` declares them. */
+export type ForgetSweepLedger = Pick<SecurityLedgerDO, "accountIdsPage" | "forgetAccount">;
 
 export interface SweepCounts {
   readonly recentAnonymised: number;

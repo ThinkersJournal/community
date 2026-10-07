@@ -18,7 +18,7 @@ import {
 } from "@thinkersjournal/shared";
 
 import { countedSince, HELD_CLASSES, heldStored, openCount } from "./ledger-held";
-import { utcDay, type LedgerStore } from "./ledger-store";
+import { utcDay, type LedgerStore, type Nullable } from "./ledger-store";
 
 const ALL_CLASSES = Object.keys(CLASS_POLICY) as SignalClass[];
 /** The heartbeat's hour (§2.6 step 3): the first alarm at or after 09:00 UTC. */
@@ -57,7 +57,7 @@ export function heartbeatFrom(store: LedgerStore, nowMs: number): SecurityHeartb
   };
 }
 
-function activityFor(c: SignalClass, site: SiteSummary | null): DigestClassLine["activity"] {
+function activityFor(c: SignalClass, site: Nullable<SiteSummary>): DigestClassLine["activity"] {
   if (site === null || classPolicy(c).mode !== "summary") return {};
   const out: Record<string, { events: number }> = {};
   for (const rule of SIGNAL_RULES) {
@@ -71,10 +71,10 @@ function activityFor(c: SignalClass, site: SiteSummary | null): DigestClassLine[
 export function digestFrom(
   store: LedgerStore,
   period: { readonly startMs: number; readonly endMs: number; readonly countedFromMs: number },
-  site: SiteSummary | null,
+  site: Nullable<SiteSummary>,
   undeliverable: number,
   noticesDropped: SecurityDigest["noticesDropped"],
-): SecurityDigest | null {
+): Nullable<SecurityDigest> {
   const classes: DigestClassLine[] = ALL_CLASSES.map((c) => {
     const p = store.period(c);
     return {
