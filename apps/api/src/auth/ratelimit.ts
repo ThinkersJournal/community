@@ -35,17 +35,40 @@
  * multi-IP attacker. Anything needing exact accounting wants a Durable Object
  * (src/durable-objects/UserSecurityDO.ts), not this binding.
  */
+import { logSecurityEvent } from "@thinkersjournal/shared";
+
 import { errorResponse } from "../http/errors";
+
+/**
+ * Where a 429 happened, for its `security:` log line (packages/shared's
+ * security-log.ts). `bucket` names WHICH key kind refused (`ip`, `ip:email`,
+ * `email`…) — never the key itself, which can embed an email address.
+ */
+export interface RateLimitLogContext {
+  route: string;
+  bucket: string;
+  ip: string | null;
+}
 
 /**
  * Consume one unit of `limiter`'s quota for `key`. Resolves `null` when the
  * request is allowed to proceed, or a `429 Too Many Requests` `Response` when
  * the caller should return that response immediately instead of continuing.
+ *
+ * ⚠️ `log` IS REQUIRED, and every refusal writes one `security: rate_limited`
+ * line (route, bucket NAME, IP — never the key, which can embed an email). It was
+ * optional once, and 20 call sites silently dropped their 429s (brute-force
+ * review 1, I3): a signup, forgot-password or search flood left nothing for the
+ * alerting follow-up to count. Required means the compiler, not review, finds a
+ * new call site that forgot.
  */
 export async function enforceRateLimit(
   limiter: RateLimit,
   key: string,
+  log: RateLimitLogContext,
 ): Promise<Response | null> {
   const { success } = await limiter.limit({ key });
-  return success ? null : errorResponse("RATE_LIMITED", 429);
+  if (success) return null;
+  logSecurityEvent({ kind: "rate_limited", route: log.route, reason: log.bucket, ip: log.ip });
+  return errorResponse("RATE_LIMITED", 429);
 }

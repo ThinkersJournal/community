@@ -83,6 +83,19 @@ if (cursor !== null) query.set("cursor", cursor);
 
 // ⚠️ ANONYMOUS — no `request`. See the header.
 const response = await apiFetch<PublicProfile>(`/public/profile?${query.toString()}`);
+if (response.status === 429) {
+  // ⚠️ THROTTLED IS NOT "NOT FOUND" (brute-force review 1, I2). The api's
+  // PROFILE_LIMITER refused this IP BEFORE looking the handle up, so the answer
+  // reveals nothing about whether it exists — and a 404 here would tell a
+  // crawler that a REAL profile is gone and a reader that the user does not
+  // exist. 503 + Retry-After is the temporary "slow down" crawlers honour. No
+  // cacheability is declared and `no-store` is stated outright, so neither the
+  // edge nor a browser keeps it.
+  return new Response(null, {
+    status: 503,
+    headers: { "Retry-After": "60", "Cache-Control": "no-store" },
+  });
+}
 if (response.status !== 200 || response.data === null) {
   // Covers an unknown username, a request for a user with zero published posts'
   // OWN malformed input, AND the api's 400 on a malformed cursor — a hand-edited

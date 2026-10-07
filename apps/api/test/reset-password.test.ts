@@ -1,12 +1,16 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
 import { sha256Hex } from "../src/auth/encoding";
-import { verifyPassword } from "../src/auth/password";
+import { hashPassword, verifyPassword } from "../src/auth/password";
 import { createResetToken } from "../src/auth/password-reset";
 import { withClient } from "../src/db/client";
+import { makeResetPasswordHandler } from "../src/routes/reset-password";
 import { createUnverifiedActor, createVerifiedActor, deleteCreatedUsers } from "./actor";
+import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
+
+import type { PasswordHasher } from "../src/routes/reset-password";
 
 /**
  * #70 — `POST /auth/reset-password`. Runs in the POOL project (real
@@ -266,5 +270,142 @@ describe("POST /auth/reset-password — an anonymised account", () => {
     expect(response.headers.get("Set-Cookie")).toBeNull();
     expect((await userRow(actor.userId)).password_hash).toBe("!anonymised!");
     expect(await env.USER_SECURITY.getByName(actor.userId).getEpoch()).toBe(epoch);
+  });
+});
+
+/**
+ * ⚠️ BRUTE-FORCE COUNTERMEASURES (audit 2026-10-06, item #4). This route is
+ * unauthenticated, and it used to run a full Argon2id `hashPassword` (19 MiB,
+ * two passes) BEFORE looking at the token, with no limiter: a free CPU/memory
+ * lever for anyone. Now the token is checked first, a per-IP limiter bounds the
+ * route, and every refusal is logged.
+ */
+describe("POST /auth/reset-password — brute-force countermeasures", () => {
+  /** RESET_REDEEM_LIMITER's `simple.limit` in wrangler.jsonc. */
+  const RESET_REDEEM_LIMIT = 10;
+
+  /** A per-run-unique client IP, so no two tests share an IP bucket. */
+  function uniqueIp(): string {
+    const hex = crypto.randomUUID().replace(/-/g, "");
+    return `2001:db8:${hex.slice(0, 4)}:${hex.slice(4, 8)}:${hex.slice(8, 12)}::2`;
+  }
+
+  /** Drive the route through a handler built around `hash`, as the router would. */
+  async function resetWith(
+    hash: PasswordHasher,
+    body: unknown,
+    headers: Record<string, string> = { Origin: ALLOWED_ORIGIN },
+  ): Promise<Response> {
+    const ctx = createExecutionContext();
+    const response = await makeResetPasswordHandler(hash)(resetPasswordRequest(body, headers), env, ctx);
+    await waitOnExecutionContext(ctx);
+    return response;
+  }
+
+  function securityLines(warn: { mock: { calls: unknown[][] } }): string[] {
+    return warn.mock.calls
+      .filter((args) => typeof args[0] === "string" && args[0].startsWith("security:"))
+      .map((args) => JSON.stringify(args));
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("400s an UNKNOWN token WITHOUT running Argon2id", async () => {
+    const hash = vi.fn(hashPassword);
+    const response = await resetWith(hash, { token: "not-a-real-token", password: NEW_PASSWORD });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { code: string }).code).toBe("INVALID_RESET_TOKEN");
+    expect(hash, "an invalid token reached the Argon2id hash").not.toHaveBeenCalled();
+  });
+
+  it("400s an EXPIRED token WITHOUT running Argon2id", async () => {
+    const actor = await createVerifiedActor();
+    const token = await mintToken(actor.userId);
+    await expireToken(token);
+    const hash = vi.fn(hashPassword);
+
+    const response = await resetWith(hash, { token, password: NEW_PASSWORD });
+    expect(response.status).toBe(400);
+    expect(hash).not.toHaveBeenCalled();
+  });
+
+  it("CONTROL: a VALID token runs Argon2id exactly once and resets the password", async () => {
+    // Anti-vacuity for the two above: the same spy, through the same handler,
+    // DOES see the hash when the token is good.
+    const actor = await createVerifiedActor();
+    const token = await mintToken(actor.userId);
+    const hash = vi.fn(hashPassword);
+
+    const response = await resetWith(hash, { token, password: NEW_PASSWORD });
+    expect(response.status).toBe(200);
+    expect(hash).toHaveBeenCalledTimes(1);
+    expect(await verifyPassword(NEW_PASSWORD, (await userRow(actor.userId)).password_hash)).toBe(true);
+  });
+
+  it(
+    "429s a burst from ONE IP once over the per-IP limit (10/60s), and logs the 429",
+    async () => {
+      const ip = uniqueIp();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await awaitLimiterBurstWindow();
+      for (let i = 0; i < RESET_REDEEM_LIMIT; i++) {
+        const response = await resetPassword(
+          { token: crypto.randomUUID(), password: NEW_PASSWORD },
+          { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": ip },
+        );
+        expect(response.status, `attempt ${i + 1}`).toBe(400);
+      }
+      const blocked = await resetPassword(
+        { token: crypto.randomUUID(), password: NEW_PASSWORD },
+        { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": ip },
+      );
+      expect(blocked.status, "no per-IP limiter on /auth/reset-password").toBe(429);
+      expect(
+        securityLines(warn).some((l) => l.includes("rate_limited") && l.includes("/auth/reset-password") && l.includes(ip)),
+      ).toBe(true);
+    },
+    60_000,
+  );
+
+  it(
+    "CONTROL: a DIFFERENT IP is not limited together with an exhausted one",
+    async () => {
+      const exhausted = uniqueIp();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      await awaitLimiterBurstWindow();
+      for (let i = 0; i < RESET_REDEEM_LIMIT; i++) {
+        await resetPassword(
+          { token: crypto.randomUUID(), password: NEW_PASSWORD },
+          { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": exhausted },
+        );
+      }
+      const body = { token: crypto.randomUUID(), password: NEW_PASSWORD };
+      expect((await resetPassword(body, { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": exhausted })).status).toBe(429);
+      expect((await resetPassword(body, { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": uniqueIp() })).status).toBe(400);
+    },
+    60_000,
+  );
+
+  it("logs a refused token as a `security:` auth_failure with the IP, never the token or password", async () => {
+    const ip = uniqueIp();
+    const token = `a-token-that-must-not-be-logged-${crypto.randomUUID()}`;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const response = await resetPassword(
+      { token, password: NEW_PASSWORD },
+      { Origin: ALLOWED_ORIGIN, "CF-Connecting-IP": ip },
+    );
+    expect(response.status).toBe(400);
+
+    const lines = securityLines(warn);
+    expect(
+      lines.some((l) => l.includes("auth_failure") && l.includes("/auth/reset-password") && l.includes(ip)),
+      `saw ${JSON.stringify(lines)}`,
+    ).toBe(true);
+    const everything = JSON.stringify(warn.mock.calls);
+    expect(everything).not.toContain(token);
+    expect(everything).not.toContain(NEW_PASSWORD);
   });
 });

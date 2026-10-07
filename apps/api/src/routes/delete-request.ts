@@ -118,8 +118,16 @@ export async function handleDeleteRequestResend(request: Request, env: Env, ctx:
 
   const ip = clientIp(request) ?? "unknown";
   const limited =
-    (await enforceRateLimit(env.RESET_LIMITER, `delreq:${ip}:${email}`)) ??
-    (await enforceRateLimit(env.RESET_LIMITER, `delreq-email:${email}`));
+    (await enforceRateLimit(env.RESET_LIMITER, `delreq:${ip}:${email}`, {
+      route: "/account/delete-request/resend",
+      bucket: "ip:email",
+      ip: ip === "unknown" ? null : ip,
+    })) ??
+    (await enforceRateLimit(env.RESET_LIMITER, `delreq-email:${email}`, {
+      route: "/account/delete-request/resend",
+      bucket: "email",
+      ip: ip === "unknown" ? null : ip,
+    }));
   if (limited !== null) return limited;
 
   let human = false;

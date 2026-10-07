@@ -44,10 +44,12 @@
  *     bullet describes, reopened. Nothing enforces that automatically; it is a
  *     fact about today's only two callers, not a property of this route's name.
  */
-import { MAX_CURSOR } from "@thinkersjournal/shared";
+import { MAX_CURSOR, limiterIpKey } from "@thinkersjournal/shared";
 
+import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
 import { isInvalidTextRepresentation } from "../db/errors";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 // The write path's slug canonicalizer. Reused here so a read (`?slug=`) and a
 // write (which mints the slug the `tag:<slug>` purge emits) canonicalize
@@ -147,6 +149,32 @@ export async function handlePublicProfile(
   // The all-f sentinel: every uuid sorts below it, so ONE query serves page 1
   // and page N and the two cannot drift apart.
   const cursor = url.searchParams.get("cursor") ?? MAX_CURSOR;
+
+  // ⚠️ PER-IP LIMITER, BEFORE THE QUERY (brute-force audit 2026-10-06, #22).
+  // Every lookup is an uncached FRESH query, and a miss answers "this handle
+  // does not exist" — so without a ceiling a script walks the handle space for
+  // free. PROFILE_LIMITER is 60/60s per IP per Cloudflare location: a reader
+  // does not open 60 profiles a minute, and real profiles are mostly served from
+  // web's edge cache (1h + swr) without reaching here, so a crawler fetching
+  // existing profiles rarely spends it. The IP is the browser's, forwarded by
+  // web's apiFetch as X-TJ-Client-IP (src/http/client-ip.ts); an IPv6 client is
+  // keyed on its /64 (limiterIpKey), since one subscriber can rotate through it.
+  //
+  // ⚠️ VIEWER-INDEPENDENCE (this file's header) STILL HOLDS: a 429 is not a
+  // per-viewer variant of the profile — web renders it as its uncached
+  // `no-store` 404 branch, so it never enters the edge cache.
+  //
+  // An UNKNOWN IP skips the limiter rather than sharing one "unknown" bucket,
+  // which a single client could spend to take every profile page down.
+  const ip = clientIp(request);
+  if (ip !== null) {
+    const limited = await enforceRateLimit(env.PROFILE_LIMITER, `ip:${limiterIpKey(ip)}`, {
+      route: "/public/profile",
+      bucket: "ip",
+      ip,
+    });
+    if (limited !== null) return limited;
+  }
 
   try {
     const profile = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {

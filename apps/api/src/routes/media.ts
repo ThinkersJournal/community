@@ -32,6 +32,7 @@
 import { runMutatingPipeline } from "../auth/pipeline";
 import { enforceRateLimit } from "../auth/ratelimit";
 import { withClient } from "../db/client";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 import { readCappedBody, sha256HexOf } from "../media/body";
 import {
@@ -113,7 +114,11 @@ export async function handleUploadMedia(
   // only by a request otherwise fully entitled to proceed. Keyed on the user —
   // the only identity that means anything for an authenticated upload, and one
   // an attacker cannot rotate the way they can an IP.
-  const limited = await enforceRateLimit(env.MEDIA_LIMITER, `media:${userId}`);
+  const limited = await enforceRateLimit(env.MEDIA_LIMITER, `media:${userId}`, {
+    route: "/media",
+    bucket: "user",
+    ip: clientIp(request),
+  });
   if (limited !== null) return limited;
 
   // ---- 3. Body, capped WHILE STREAMING -------------------------------------

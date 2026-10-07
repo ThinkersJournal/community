@@ -123,9 +123,12 @@
   // field as `ratelimits` and rejects singular "ratelimit" with "Unexpected
   // fields found in top-level field: 'ratelimit'". `period` MUST be `10` or
   // `60`; no other value is accepted (enforced by the same validator).
-  // `namespace_id` just needs to be unique per binding within this Worker
-  // (arbitrary small strings are fine — Cloudflare doesn't provision anything
-  // from it for the `simple` algorithm).
+  // `namespace_id` is a positive integer (as a string) that must be unique
+  // across the whole Cloudflare ACCOUNT, not just this Worker — Cloudflare's
+  // rate-limit binding docs scope it to the account. apps/web/wrangler.jsonc's
+  // PURGE_LIMITER therefore continues this sequence (1016) instead of restarting
+  // at 1001. (This comment used to say "unique per binding within this Worker";
+  // corrected 2026-10-06, brute-force review 1, M3.)
   "ratelimits": [
     {
       "name": "SIGNUP_LIMITER",
@@ -202,9 +205,8 @@
     // and email:), same two-bucket shape as SIGNUP_LIMITER/LOGIN_LIMITER —
     // this route has no session to key on, unlike RESEND_LIMITER. Matches
     // SIGNUP_LIMITER's ceiling: both are anonymous, mail-sending, abuse-prone
-    // forms. `reset-password`'s redemption step uses NO limiter at all — see
-    // that route's own header for why (token entropy, not request volume,
-    // is its defense).
+    // forms. `reset-password`'s redemption step has its OWN limiter,
+    // RESET_REDEEM_LIMITER below (brute-force audit 2026-10-06).
     {
       "name": "RESET_LIMITER",
       "namespace_id": "1010",
@@ -233,6 +235,38 @@
       "name": "DSA_LIMITER",
       "namespace_id": "1012",
       "simple": { "limit": 5, "period": 60 }
+    },
+    // The per-IP-ONLY login bucket (`ip:<ip>`, see src/routes/login.ts step 3).
+    // LOGIN_LIMITER's two keys both embed the email, so without this one IP got
+    // a fresh 10/60s for EVERY address it tried (credential stuffing). Its own
+    // binding because the limit differs: 30/60s per IP per location is looser
+    // than the per-address 10/60s so a shared NAT is not locked out, and still
+    // a hard ceiling on one host's total. Skipped (not pooled) when the IP is
+    // unknown.
+    {
+      "name": "LOGIN_IP_LIMITER",
+      "namespace_id": "1013",
+      "simple": { "limit": 30, "period": 60 }
+    },
+    // Bounds `POST /auth/reset-password` per IP (`ip:<ip>`, see
+    // src/routes/reset-password.ts step 2b). The route is unauthenticated; the
+    // token is now checked before Argon2id, and this caps one host's peeks.
+    // A real user redeems one link (twice after a typo), so 10/60s leaves room
+    // for a shared NAT. Skipped (not pooled) when the IP is unknown.
+    {
+      "name": "RESET_REDEEM_LIMITER",
+      "namespace_id": "1014",
+      "simple": { "limit": 10, "period": 60 }
+    },
+    // Bounds `GET /public/profile` per IP (`ip:<ip>`, see src/routes/public.ts
+    // handlePublicProfile). Each lookup is an uncached FRESH query and a miss
+    // confirms a handle does not exist (enumeration). Generous on purpose: 60/60s
+    // is far beyond a person browsing, and real profiles are mostly answered by
+    // web's edge cache before reaching the api. Skipped when the IP is unknown.
+    {
+      "name": "PROFILE_LIMITER",
+      "namespace_id": "1015",
+      "simple": { "limit": 60, "period": 60 }
     }
   ],
   // Email outbox drains (M2.3c) — api's FIRST cron. */2 = instant pass; the daily

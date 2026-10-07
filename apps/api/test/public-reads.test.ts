@@ -1,9 +1,10 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
 import { createVerifiedActor, deleteCreatedUsers } from "./actor";
+import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 
 import type { Actor } from "./actor";
 import type { PublicPost, PublicProfile } from "@thinkersjournal/shared";
@@ -363,6 +364,78 @@ describe("GET /public/profile", () => {
     expect(response.status).toBe(400);
     expect(((await response.json()) as { code: string }).code).toBe("INVALID_INPUT");
   });
+});
+
+/**
+ * ⚠️ BRUTE-FORCE COUNTERMEASURE (audit 2026-10-06, item #22). Every miss here is an
+ * uncached FRESH Postgres query, and its 404-vs-200 answers "does this handle
+ * exist?" — so a script could walk the handle space for free. PROFILE_LIMITER
+ * bounds each IP to 60 lookups per 60s (per Cloudflare location). Hits for real
+ * profiles are mostly answered by web's edge cache and never reach this route.
+ */
+describe("GET /public/profile — per-IP limiter", () => {
+  /** PROFILE_LIMITER's `simple.limit` in wrangler.jsonc. */
+  const PROFILE_LIMIT = 60;
+
+  function uniqueIp(): string {
+    const hex = crypto.randomUUID().replace(/-/g, "");
+    return `2001:db8:${hex.slice(0, 4)}:${hex.slice(4, 8)}:${hex.slice(8, 12)}::3`;
+  }
+
+  const lookup = (username: string, ip: string) =>
+    fetchWorker(
+      new Request(`https://api.test/public/profile?username=${encodeURIComponent(username)}`, {
+        headers: { "CF-Connecting-IP": ip },
+      }),
+    );
+
+  it(
+    "429s a burst of lookups from ONE IP once over the limit (60/60s), and logs the 429",
+    async () => {
+      const ip = uniqueIp();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await awaitLimiterBurstWindow();
+        for (let i = 0; i < PROFILE_LIMIT; i++) {
+          // Enumeration-shaped: a different made-up handle every time.
+          expect((await lookup(`nobody_${crypto.randomUUID().slice(0, 8)}`, ip)).status, `lookup ${i + 1}`).toBe(404);
+        }
+        expect(
+          (await lookup(`nobody_${crypto.randomUUID().slice(0, 8)}`, ip)).status,
+          "no per-IP limiter on /public/profile",
+        ).toBe(429);
+        const logged = warn.mock.calls.some(
+          (args) =>
+            typeof args[0] === "string" &&
+            args[0].startsWith("security: rate_limited /public/profile") &&
+            JSON.stringify(args).includes(ip),
+        );
+        expect(logged, `saw ${JSON.stringify(warn.mock.calls)}`).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    "CONTROL: normal browsing is fine, and another IP is not limited by an exhausted one",
+    async () => {
+      const author = await onboardedActor();
+      const reader = uniqueIp();
+      // A reader paging back and forth between a few profiles: well under the limit.
+      for (let i = 0; i < 5; i++) {
+        expect((await lookup(author.username, reader)).status, `view ${i + 1}`).toBe(200);
+      }
+
+      const exhausted = uniqueIp();
+      await awaitLimiterBurstWindow();
+      for (let i = 0; i < PROFILE_LIMIT; i++) await lookup(`nobody_${i}`, exhausted);
+      expect((await lookup(author.username, exhausted)).status).toBe(429);
+      expect((await lookup(author.username, uniqueIp())).status).toBe(200);
+    },
+    60_000,
+  );
 });
 
 describe("GET /public/recent", () => {

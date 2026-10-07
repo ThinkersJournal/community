@@ -187,5 +187,7 @@ export async function checkCsrf(
   }
 
   const expected = await csrfTokenFor(session);
-  return timingSafeEqual(submitted, expected);
+  // ⚠️ `await` is load-bearing: timingSafeEqual is async, and an un-awaited
+  // Promise is truthy.
+  return await timingSafeEqual(submitted, expected);
 }

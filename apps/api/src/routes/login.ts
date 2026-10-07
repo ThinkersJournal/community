@@ -84,7 +84,7 @@
  *       same Argon2id cost before returning the same 401. See `DUMMY_HASH`'s
  *       own comment for how that constant was produced.
  */
-import { LoginInput } from "@thinkersjournal/shared";
+import { LoginInput, limiterIpKey, logSecurityEvent } from "@thinkersjournal/shared";
 
 import { accountBarredResponse, isBarred, loadBarReason } from "../auth/account-status";
 import { checkOrigin } from "../auth/csrf";
@@ -132,6 +132,9 @@ import { errorResponse } from "../http/errors";
 export const DUMMY_HASH =
   "$argon2id$v=19$m=19456,t=2,p=1$QkJCQkJCQkJCQkJCQkJCQg$uREWjDiAO3pY5UG33fbKbLCW2BBdEoCNm7s5sr8Admo";
 
+/** This route, as its `security:` log lines name it. */
+const ROUTE = "/auth/login";
+
 /** A `users` row as read by the login lookup. */
 interface UserRow {
   id: string;
@@ -153,8 +156,14 @@ function json(body: unknown, status: number, headers: HeadersInit = {}): Respons
  * email and a wrong password are indistinguishable from this response alone.
  * See the file header's "NO USER ENUMERATION" note — this is defense (a);
  * defense (b) is what makes both call sites take comparably long to reach it.
+ *
+ * Every one is logged as a `security: auth_failure` line (packages/shared's
+ * security-log.ts) with the SAME reason for both cases, so the log cannot become
+ * the enumeration oracle the response refuses to be. Never the password, and
+ * never the email: the alerting follow-up counts by IP and route.
  */
-function unauthorized(): Response {
+function unauthorized(ip: string | null): Response {
+  logSecurityEvent({ kind: "auth_failure", route: ROUTE, reason: "invalid_credentials", ip });
   return errorResponse("INVALID_CREDENTIALS", 401);
 }
 
@@ -193,11 +202,44 @@ export async function handleLogin(
   }
 
   // ---- 3. Rate limit ---------------------------------------------------------
-  // TWO buckets, and BOTH are required — they bound different attacks:
+  // THREE buckets, checked in this order, and ALL are required — they bound
+  // different attacks:
   //
-  //   (a) `ip:email` — one IP cannot brute-force many addresses.
+  //   (0) `ip:<ip>`  — on its OWN limiter, LOGIN_IP_LIMITER (30/60s). One IP
+  //                    has a ceiling no matter how many ADDRESSES it tries.
+  //                    This is the credential-stuffing / password-spraying
+  //                    case: one host, a list of addresses, a guess or two each.
+  //   (a) `ip:email` — one IP cannot hammer ONE address (10/60s).
   //   (b) `email`    — one ADDRESS has a ceiling no matter how many IPs the
-  //                    attempts come from. This is the credential-stuffing case.
+  //                    attempts come from (10/60s) — the distributed case.
+  //
+  // ⚠️ (a) DOES NOT BOUND ONE IP ACROSS MANY ADDRESSES. Both (a) and (b) have
+  // the EMAIL in the key, so a host that tries a new address every time gets a
+  // fresh pair of buckets per address and is never limited by either. This
+  // comment used to say "(a) `ip:email` — one IP cannot brute-force many
+  // addresses"; that was false, and the brute-force audit (2026-10-06, item #1)
+  // caught it. Only a key with NO email in it, (0), bounds one IP's total.
+  //
+  // ⚠️ WHY 30/60s FOR (0). The binding counts per Cloudflare LOCATION, so this
+  // is 30 attempts a minute from one IP into one location. A real person types a
+  // password a handful of times a minute at most; a household or office behind
+  // one NAT address needs several people failing repeatedly in the SAME minute to
+  // reach 30. What it removes is the unbounded case: before it, one IP could make
+  // 10 guesses a minute against EVERY account. A large carrier-grade NAT can put
+  // many strangers behind one address, so the limit is deliberately looser than
+  // (a)/(b); the per-address buckets remain the tight ones.
+  //
+  // ⚠️ (0) KEYS AN IPv6 CLIENT ON ITS /64 (`limiterIpKey`, packages/shared). One
+  // subscriber holds a whole /64 — 2^64 addresses — so a key on the full address
+  // would hand a rotating attacker a fresh bucket per request. IPv4 stays whole.
+  //
+  // ⚠️ AN UNKNOWN IP SKIPS (0) ENTIRELY — it does NOT fall back to one shared
+  // "unknown" bucket. Off Cloudflare, or after a web regression that stops
+  // forwarding the IP, every request would land in that one bucket, and a single
+  // attacker could spend it and lock EVERY user out of login for the window.
+  // (a) and (b) still apply to an IP-less request, so each address keeps its
+  // ceiling. (a)'s own "unknown" fallback below is safe for the same reason in
+  // reverse: it is still per-address.
   //
   // ⚠️ (b) IS NOT REDUNDANT, and (a) DOES NOT IMPLY IT. Putting the IP IN the
   // key gives every IP its own private bucket, so N IPs against one address get
@@ -214,7 +256,7 @@ export async function handleLogin(
   // (apps/api/src/http/client-ip.ts) reads that first and falls back to
   // `CF-Connecting-IP` only for a direct `worker.fetch()` call that bypasses
   // `web` entirely (every test in this file). Either way, an absent IP still
-  // falls back to the stable "unknown" placeholder below. The `email:` prefix
+  // falls back to the stable "unknown" placeholder in (a). The `email:` prefix
   // on (b) cannot practically collide with (a)'s `<ip>:<email>` shape:
   // Cloudflare sets `CF-Connecting-IP` itself, so it is never the literal
   // string "email" — and were it ever spoofed to collide, the two keys would
@@ -234,14 +276,29 @@ export async function handleLogin(
   // one. It still collapses an unbounded per-IP multiplier down to a bounded
   // per-location one, which is the property being bought here.
   const ip = clientIp(request);
+  if (ip !== null) {
+    const ipOnlyLimited = await enforceRateLimit(env.LOGIN_IP_LIMITER, `ip:${limiterIpKey(ip)}`, {
+      route: ROUTE,
+      bucket: "ip",
+      ip,
+    });
+    if (ipOnlyLimited !== null) {
+      return ipOnlyLimited;
+    }
+  }
   const ipLimited = await enforceRateLimit(
     env.LOGIN_LIMITER,
     `${ip ?? "unknown"}:${email}`,
+    { route: ROUTE, bucket: "ip:email", ip },
   );
   if (ipLimited !== null) {
     return ipLimited;
   }
-  const emailLimited = await enforceRateLimit(env.LOGIN_LIMITER, `email:${email}`);
+  const emailLimited = await enforceRateLimit(env.LOGIN_LIMITER, `email:${email}`, {
+    route: ROUTE,
+    bucket: "email",
+    ip,
+  });
   if (emailLimited !== null) {
     return emailLimited;
   }
@@ -262,12 +319,12 @@ export async function handleLogin(
     // costs about the same as a wrong-password rejection below. The result is
     // never used for anything — see `DUMMY_HASH`'s comment.
     await verifyPassword(password, DUMMY_HASH);
-    return unauthorized();
+    return unauthorized(ip);
   }
 
   const passwordOk = await verifyPassword(password, row.password_hash);
   if (!passwordOk) {
-    return unauthorized();
+    return unauthorized(ip);
   }
 
   // ---- 6. Barring refusal (issue #35) ----------------------------------------

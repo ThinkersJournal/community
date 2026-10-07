@@ -652,11 +652,14 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
     "GET /public/tags",
     {
       reason: "no client-error path: no params — a fixed GROUP BY query with one 200 branch, no lookup that can miss and nothing to validate. See src/routes/public.ts's handlePublicTags.",
-      // ⚠️ The `__vite_ssr_import_1__` ref is the pool's vite-SSR transform of
+      // ⚠️ The `__vite_ssr_import_2__` ref is the pool's vite-SSR transform of
       // public.ts's `withClient` import; deterministic for this code and, like
-      // every pin here, breaks loudly if the handler is edited.
+      // every pin here, breaks loudly if the handler is edited. (It was `_1__`
+      // until the profile limiter added `../auth/ratelimit` ahead of
+      // `../db/client` in public.ts's imports, 2026-10-06; the handler itself
+      // was not touched — re-read and re-pinned deliberately.)
       handlerSource:
-        "async function handlePublicTags(_request, env, ctx) { const tags = await (0,__vite_ssr_import_1__.withClient)(env.HYPERDRIVE_FRESH, ctx, async (c) => { const { rows } = await c.query(`SELECT t.slug, t.label, count(*)::int AS count FROM tags t JOIN post_tags pt ON pt.tag_id = t.id JOIN posts p ON p.id = pt.post_id WHERE p.status = 'published' AND p.hidden_at IS NULL GROUP BY t.slug, t.label ORDER BY count DESC, t.slug ASC LIMIT ${TAGS_INDEX_MAX}`); return rows; }); return json({ tags }); }",
+        "async function handlePublicTags(_request, env, ctx) { const tags = await (0,__vite_ssr_import_2__.withClient)(env.HYPERDRIVE_FRESH, ctx, async (c) => { const { rows } = await c.query(`SELECT t.slug, t.label, count(*)::int AS count FROM tags t JOIN post_tags pt ON pt.tag_id = t.id JOIN posts p ON p.id = pt.post_id WHERE p.status = 'published' AND p.hidden_at IS NULL GROUP BY t.slug, t.label ORDER BY count DESC, t.slug ASC LIMIT ${TAGS_INDEX_MAX}`); return rows; }); return json({ tags }); }",
     },
   ],
 ]);

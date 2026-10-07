@@ -69,8 +69,9 @@ const BURST_LEAD_IN_MS = 2_000;
 
 /**
  * How much room the burst needs BEFORE the next boundary. The widest burst in
- * the suite (login's 11 Argon2id-paying requests) measured ~1s under full-suite
- * load, so this is a ~10x margin.
+ * the suite is now login's IP-only burst (31-32 Argon2id-paying requests, about
+ * 2.7s at the ~85ms each measured under full-suite load), so this is a ~3-4x
+ * margin. (It was ~10x when the widest was login's 11-request ip:email burst.)
  */
 const BURST_BUDGET_MS = 10_000;
 

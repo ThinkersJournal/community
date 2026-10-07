@@ -159,11 +159,16 @@ export async function handleSignup(
   const ipLimited = await enforceRateLimit(
     env.SIGNUP_LIMITER,
     `${ip ?? "unknown"}:${email}`,
+    { route: "/auth/signup", bucket: "ip:email", ip },
   );
   if (ipLimited !== null) {
     return ipLimited;
   }
-  const emailLimited = await enforceRateLimit(env.SIGNUP_LIMITER, `email:${email}`);
+  const emailLimited = await enforceRateLimit(env.SIGNUP_LIMITER, `email:${email}`, {
+    route: "/auth/signup",
+    bucket: "email",
+    ip,
+  });
   if (emailLimited !== null) {
     return emailLimited;
   }

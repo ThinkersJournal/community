@@ -14,6 +14,7 @@ import { enforceRateLimit } from "../auth/ratelimit";
 import { purgeTags } from "../cache/purge";
 import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
+import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 import { maybeAutoHide } from "../moderation/auto-hide";
 import { purgeTagsFor, type PurgeTarget } from "../moderation/purge-target";
@@ -29,7 +30,11 @@ export async function handleCreateReport(
   if (result instanceof Response) return result;
   const { userId } = result.session;
 
-  const limited = await enforceRateLimit(env.REPORT_LIMITER, `report:${userId}`);
+  const limited = await enforceRateLimit(env.REPORT_LIMITER, `report:${userId}`, {
+    route: "/reports",
+    bucket: "user",
+    ip: clientIp(request),
+  });
   if (limited !== null) return limited;
 
   let body: unknown;

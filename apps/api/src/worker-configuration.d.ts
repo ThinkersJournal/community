@@ -34,6 +34,11 @@ interface __BaseEnv_Env {
 	// a full `wrangler types` regeneration in this checkout pulls in an
 	// unrelated diff.
 	DSA_LIMITER: RateLimit;
+	// Brute-force countermeasures (2026-10-06 audit) — added by hand, same
+	// established pattern and reason as DSA_LIMITER just above.
+	LOGIN_IP_LIMITER: RateLimit;
+	RESET_REDEEM_LIMITER: RateLimit;
+	PROFILE_LIMITER: RateLimit;
 	IMAGES: ImagesBinding;
 	TURNSTILE_SECRET_KEY: string;
 	POSTMARK_SERVER_TOKEN: string;

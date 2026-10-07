@@ -5,6 +5,9 @@ interface __BaseEnv_Env {
 	ASSETS: Fetcher;
 	PURGE_SECRET: string;
 	API: Fetcher /* thinkersjournal-api */;
+	// Brute-force countermeasure (2026-10-06 audit, src/lib/purge.ts) — added by
+	// hand, same reason as CF_VERSION_METADATA below.
+	PURGE_LIMITER: RateLimit;
 	// Build-identity (2026-09-24) — added by hand rather than a full
 	// regeneration, matching apps/api/src/worker-configuration.d.ts's
 	// established CF_ACCESS_* precedent: a full `wrangler types` run here

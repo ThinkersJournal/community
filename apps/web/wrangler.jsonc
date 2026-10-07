@@ -198,6 +198,28 @@
       "service": "thinkersjournal-api"
     }
   ],
+  // Brute-force countermeasure for the PUBLIC `POST /internal/purge` (audit
+  // 2026-10-06, item #23; see src/lib/purge.ts). Spent ONLY by a FAILED secret
+  // check, keyed `purge-fail:<CF-Connecting-IP>`, so the api's authorized purges
+  // over the Service Binding never touch it. 5 failures per 60s per IP per
+  // location: no legitimate caller ever fails, so this only has to make a
+  // scripted guesser's attempts visible and refuse them. It does NOT bound the
+  // log volume: every failure writes a `security: auth_failure` line, and once
+  // over the limit each one ALSO writes a `rate_limited` line, so a flood logs
+  // two lines per request. Nor does it slow a guess that is right (see
+  // src/lib/purge.ts) — the secret's entropy is the defense against guessing.
+  // The PLURAL `ratelimits` key, `period` 10 or 60 only — same rules as
+  // apps/api/wrangler.jsonc's block. `namespace_id` is unique across the
+  // ACCOUNT (Cloudflare's rate-limit binding docs), not just this Worker, so it
+  // continues the api's sequence (1001-1015) rather than restarting at 1001,
+  // which could collide with the api's SIGNUP_LIMITER namespace.
+  "ratelimits": [
+    {
+      "name": "PURGE_LIMITER",
+      "namespace_id": "1016",
+      "simple": { "limit": 5, "period": 60 }
+    }
+  ],
   "observability": {
     "enabled": true
   },

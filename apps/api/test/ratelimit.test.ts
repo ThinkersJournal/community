@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
 import { enforceRateLimit } from "../src/auth/ratelimit";
@@ -15,7 +15,36 @@ import type { ApiErrorBody } from "@thinkersjournal/shared";
  * `enforceRateLimit` against the REAL binding, past its configured threshold,
  * rather than needing a stub for that part.
  */
+/** A log context for the cases that are not about logging. */
+const LOG = { route: "/test", bucket: "test", ip: null };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("enforceRateLimit", () => {
+  /**
+   * ⚠️ EVERY 429 IS LOGGED, unconditionally (brute-force review 1, I3): one
+   * `security: rate_limited` line with the route, bucket NAME and IP — never the
+   * key, which can embed an email. An allowed request logs nothing.
+   */
+  it("logs every refusal as a `security: rate_limited` line, never the key, and nothing when allowed", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const key = "203.0.113.5:victim@example.com";
+    const allowed: RateLimit = { limit: async () => ({ success: true }) };
+    const blocked: RateLimit = { limit: async () => ({ success: false }) };
+
+    expect(await enforceRateLimit(allowed, key, { route: "/auth/signup", bucket: "ip:email", ip: "203.0.113.5" })).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+
+    expect((await enforceRateLimit(blocked, key, { route: "/auth/signup", bucket: "ip:email", ip: "203.0.113.5" }))?.status).toBe(429);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = JSON.stringify(warn.mock.calls[0]);
+    expect(line).toContain("security: rate_limited /auth/signup ip:email");
+    expect(line).toContain("203.0.113.5");
+    expect(line).not.toContain("victim@example.com");
+  });
+
   it("returns null for calls within LOGIN_LIMITER's quota, then a 429 Response once exhausted", async () => {
     // Unique key per test run so this test never collides with quota consumed
     // by other tests/files sharing the same binding within the isolate.
@@ -28,10 +57,10 @@ describe("enforceRateLimit", () => {
     await awaitLimiterBurstWindow();
 
     for (let i = 0; i < 10; i++) {
-      expect(await enforceRateLimit(env.LOGIN_LIMITER, key)).toBeNull();
+      expect(await enforceRateLimit(env.LOGIN_LIMITER, key, LOG)).toBeNull();
     }
 
-    const blocked = await enforceRateLimit(env.LOGIN_LIMITER, key);
+    const blocked = await enforceRateLimit(env.LOGIN_LIMITER, key, LOG);
     expect(blocked).toBeInstanceOf(Response);
     expect(blocked?.status).toBe(429);
   },
@@ -56,12 +85,12 @@ describe("enforceRateLimit", () => {
       limit: async () => ({ success: true }),
     };
 
-    const blocked = await enforceRateLimit(alwaysBlocked, "k");
+    const blocked = await enforceRateLimit(alwaysBlocked, "k", LOG);
     expect(blocked).toBeInstanceOf(Response);
     expect(blocked?.status).toBe(429);
     expect(((await blocked?.json()) as ApiErrorBody).code).toBe("RATE_LIMITED");
 
-    expect(await enforceRateLimit(alwaysAllowed, "k")).toBeNull();
+    expect(await enforceRateLimit(alwaysAllowed, "k", LOG)).toBeNull();
   });
 
   it("wires the real SIGNUP_LIMITER / LOGIN_LIMITER bindings as callable RateLimits", () => {
