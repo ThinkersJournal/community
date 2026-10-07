@@ -34,7 +34,7 @@
 import { env } from "cloudflare:workers";
 
 import { markPrivate } from "../../lib/cache";
-import { applyClientIpHeader, clientIpStore } from "../../lib/client-ip-store";
+import { applyClientCountryHeader, applyClientIpHeader, clientIpStore } from "../../lib/client-ip-store";
 
 import type { APIRoute } from "astro";
 
@@ -63,6 +63,7 @@ export const GET: APIRoute = async (context) => {
   // incoming request out from under the rest of this handler.
   const h = new Headers(context.request.headers);
   applyClientIpHeader(h, clientIpStore.getStore()?.clientIp ?? null);
+  applyClientCountryHeader(h, clientIpStore.getStore()?.clientCountry ?? null);
   const upstream = await (
     env as unknown as { API: { fetch: (url: string, init: RequestInit) => Promise<Response> } }
   ).API.fetch("https://api.internal/notifications/ws", {

@@ -43,7 +43,7 @@ import { env } from "cloudflare:workers";
 
 import { isApiErrorBody, type ApiErrorCode } from "@thinkersjournal/shared";
 
-import { applyClientIpHeader, clientIpStore } from "./client-ip-store";
+import { applyClientCountryHeader, applyClientIpHeader, clientIpStore } from "./client-ip-store";
 import { resolveOutgoingBody } from "./outgoing-body";
 
 /** What every call through this module returns. */
@@ -195,6 +195,7 @@ export async function apiFetch<T = unknown>(
   // pre-existing value before (re)setting it, so nothing set above can
   // inject or override it.
   applyClientIpHeader(headers, clientIpStore.getStore()?.clientIp ?? null);
+  applyClientCountryHeader(headers, clientIpStore.getStore()?.clientCountry ?? null);
 
   // `body` (JSON) and `rawBody` (passthrough) are mutually exclusive; rawBody
   // wins if both are somehow set, and the type comment says not to. Pulled

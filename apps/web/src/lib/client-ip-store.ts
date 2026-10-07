@@ -15,10 +15,27 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import { CLIENT_IP_HEADER } from "@thinkersjournal/shared";
+import { CLIENT_COUNTRY_HEADER, CLIENT_IP_HEADER } from "@thinkersjournal/shared";
 
 export interface ClientIpStore {
   clientIp: string | null;
+  /** The edge's ISO 3166-1 alpha-2 country, or null (security-alerting spec §4.2). */
+  clientCountry: string | null;
+}
+
+const COUNTRY_RE = /^[A-Z]{2}$/;
+
+/**
+ * The edge's country for `request`: `request.cf.country` when the adapter
+ * passes the incoming request through, else the `CF-IPCountry` header. Which
+ * one reaches the middleware under @astrojs/cloudflare is implementer
+ * confirmation 5 (plan Task 20; only a deployed Worker can answer it). A value
+ * that is not two capital letters is null. Never an IP.
+ */
+export function edgeCountry(request: Request): string | null {
+  const cf = (request as Request & { cf?: { country?: unknown } }).cf;
+  const raw = typeof cf?.country === "string" ? cf.country : request.headers.get("CF-IPCountry");
+  return raw !== null && COUNTRY_RE.test(raw) ? raw : null;
 }
 
 export const clientIpStore = new AsyncLocalStorage<ClientIpStore>();
@@ -34,7 +51,7 @@ export const clientIpStore = new AsyncLocalStorage<ClientIpStore>();
  */
 export function runWithClientIp<T>(request: Request, next: () => T): T {
   const clientIp = request.headers.get("CF-Connecting-IP");
-  return clientIpStore.run({ clientIp }, next);
+  return clientIpStore.run({ clientIp, clientCountry: edgeCountry(request) }, next);
 }
 
 /**
@@ -60,5 +77,18 @@ export function applyClientIpHeader(headers: Headers, ip: string | null): void {
   headers.delete(CLIENT_IP_HEADER);
   if (ip !== null) {
     headers.set(CLIENT_IP_HEADER, ip);
+  }
+}
+
+/**
+ * Sets (or removes) `headers`' `CLIENT_COUNTRY_HEADER` to exactly `country`.
+ * The same delete-then-set discipline as `applyClientIpHeader`, and called
+ * beside it at every `API.fetch` call site (test/client-country.test.ts
+ * enumerates them), always as `clientIpStore.getStore()?.clientCountry ?? null`.
+ */
+export function applyClientCountryHeader(headers: Headers, country: string | null): void {
+  headers.delete(CLIENT_COUNTRY_HEADER);
+  if (country !== null) {
+    headers.set(CLIENT_COUNTRY_HEADER, country);
   }
 }
