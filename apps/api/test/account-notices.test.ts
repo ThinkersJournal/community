@@ -12,9 +12,11 @@ import {
   type DeviceRecordMode,
 } from "@thinkersjournal/shared";
 
+import worker from "../src";
 import { hashPassword } from "../src/auth/password";
 import { withClient } from "../src/db/client";
 import { sendNotice } from "../src/security/account-notice-send";
+import { afterPasswordReset, afterSignIn } from "../src/security/account-notices-flow";
 import { DEVICE_LIST_CAP, type NoticeClaimResult } from "../src/security/user-devices";
 
 import { guardAlertingFaults, quiet } from "./helpers/security-do";
@@ -25,9 +27,9 @@ import { guardAlertingFaults, quiet } from "./helpers/security-do";
  * (`vi.stubGlobal("fetch")`); the stub reaches `UserSecurityDO` too, because the
  * pool runs the Durable Objects in the test's isolate.
  *
- * PR 2 batch A (plan Task 17) holds only the tests that drive `UserSecurityDO`
- * and `sendNotice` directly; the plan's Task 19 adds the login, signup and reset
- * flows on top of these.
+ * PR 2 batch A (plan Task 17) holds the tests that drive `UserSecurityDO` and
+ * `sendNotice` directly; batch B (plan Task 19) adds the login, signup and reset
+ * flows at the end of the file.
  */
 const { allowFaults } = guardAlertingFaults();
 
@@ -549,5 +551,300 @@ describe("account gone at send time, and repeated folds (review M-5)", () => {
         if (c.send === "deferred") expect(c.dueMs - t0 - HOUR, String(i)).toBeLessThanOrEqual(NOTICE_MAX_DELAY_MS);
       }
     });
+  });
+});
+
+// ---- PR 2 batch B (plan Task 19): the login, signup and reset flows ----------
+
+const ORIGIN = "https://community.thinkersjournal.com";
+const DEV_COOKIE = "tj_device_dev=";
+
+/**
+ * A per-call-unique client IP in its own /64 (the IPv6 documentation prefix), so
+ * no login here shares LOGIN_IP_LIMITER's IP-only bucket (30 a minute) with
+ * another, as test/login.test.ts does.
+ */
+function uniqueIp(): string {
+  const hex = crypto.randomUUID().replace(/-/g, "");
+  return `2001:db8:${hex.slice(0, 4)}:${hex.slice(4, 8)}:${hex.slice(8, 12)}::1`;
+}
+
+/** POST /auth/login through the Worker; returns the response and the device token it carried or minted. */
+async function login(email: string, carried: string | null, e: Env = ON, ip = uniqueIp(), password = PASSWORD) {
+  const ctx = createExecutionContext();
+  const headers = new Headers({ "content-type": "application/json", Origin: ORIGIN, "X-TJ-Client-Country": "DE", "CF-Connecting-IP": ip });
+  if (carried !== null) headers.set("Cookie", `${DEV_COOKIE}${carried}`);
+  const res = await worker.fetch(
+    new Request("https://api.test/auth/login", { method: "POST", headers, body: JSON.stringify({ email, password }) }),
+    e,
+    ctx,
+  );
+  await waitOnExecutionContext(ctx);
+  const minted = res.headers.getSetCookie().find((c) => c.startsWith(DEV_COOKIE));
+  return { res, token: minted === undefined ? carried : (minted.split(";").at(0) ?? "").slice(DEV_COOKIE.length) };
+}
+
+/** Run a flow inside its own execution context, the way a route's waitUntil would. */
+async function flow(run: (ctx: ExecutionContext) => Promise<void>): Promise<void> {
+  const ctx = createExecutionContext();
+  await run(ctx);
+  await waitOnExecutionContext(ctx);
+}
+
+/** A Hyperdrive binding whose connect always fails: the address lookup THROWS (CR-1). */
+const DEAD_DB = { ...ON, HYPERDRIVE_FRESH: { connectionString: "postgres://x:y@127.0.0.1:1/none" } } as Env;
+
+/** Run the object's alarm at `atMs` with its alarm seam replaced. */
+async function quietAlarm(userId: string, atMs: number): Promise<void> {
+  await runInDurableObject(env.USER_SECURITY.getByName(userId), async (u) => {
+    quiet(u);
+    await u.alarmAt(atMs);
+  });
+}
+
+function pendingNotice(userId: string) {
+  return runInDurableObject(env.USER_SECURITY.getByName(userId), (_u, s) =>
+    s.storage.sql.exec<{ due_ms: number; count: number }>("SELECT due_ms, count FROM pending_notice").toArray(),
+  );
+}
+
+describe("the routes: cookies and when the flow runs (§4.1; plan Task 19)", () => {
+  it("a login without a device cookie gets one AFTER the session cookie; with a well-formed one, no second Set-Cookie", async () => {
+    const { email } = await newUser();
+    const first = await login(email, null);
+    expect(first.res.status).toBe(200);
+    const cookies = first.res.headers.getSetCookie();
+    expect(cookies).toHaveLength(2);
+    expect(cookies.at(1)?.startsWith(DEV_COOKIE)).toBe(true);
+    const again = await login(email, first.token);
+    expect(again.res.headers.getSetCookie()).toHaveLength(1);
+  });
+
+  it("a FAILED login records nothing, mints no device cookie and mails nothing (control: the same browser's success does)", async () => {
+    const { email, id } = await newUser();
+    const failed = await login(email, null, ON, uniqueIp(), "not-the-password");
+    expect(failed.res.status).toBe(401);
+    expect(failed.res.headers.getSetCookie().filter((c) => c.startsWith(DEV_COOKIE))).toEqual([]);
+    expect(await deviceCount(id)).toBe(0);
+    expect(mails).toHaveLength(0);
+    await login(email, null);
+    expect(await deviceCount(id)).toBe(1);
+  });
+});
+
+describe("when notices fire (§4.1; plan Task 19)", () => {
+  it("signup is silent, and records its browser", async () => {
+    const { id } = await newUser();
+    await flow((ctx) => afterSignIn(ON, ctx, "signup", { userId: id, token: tokenOf("S"), country: null, nowMs: Date.now() }));
+    expect(mails).toHaveLength(0);
+    expect(await deviceCount(id)).toBe(1);
+  });
+
+  it("rollout: an empty list → the first login mails, with the 'no browser on record' sentence", async () => {
+    const { email } = await newUser();
+    const first = await login(email, null);
+    expect(first.res.status).toBe(200);
+    expect(mails).toHaveLength(1);
+    expect(mails.at(0)?.text).toContain("had no browser on record");
+    expect(mails.at(0)?.text).toContain("Germany");
+    expect(mails.at(0)?.text).not.toMatch(/\d+\.\d+\.\d+\.\d+/);
+  });
+
+  it("a new browser mails once, without that sentence; the known one does not (control)", async () => {
+    const { email } = await newUser();
+    const a = await login(email, null);
+    mails = [];
+    await login(email, a.token);
+    expect(mails).toHaveLength(0);
+    await login(email, null);
+    expect(mails).toHaveLength(1);
+    expect(mails.at(0)?.text).not.toContain("had no browser on record");
+  });
+
+  it("expiry: a browser last seen 401 days ago is pruned by the alarm, and its next login mails", async () => {
+    const { email, id } = await newUser();
+    const a = await login(email, null);
+    await runInDurableObject(env.USER_SECURITY.getByName(id), (_u, state) => {
+      state.storage.sql.exec("UPDATE known_devices SET last_seen = ?", Date.now() - DEVICE_TTL_MS - DAY);
+    });
+    await quietAlarm(id, Date.now());
+    mails = [];
+    await login(email, a.token);
+    expect(mails).toHaveLength(1);
+  });
+});
+
+describe("signup and reset clear the list (§4.1; plan Task 19)", () => {
+  it("re-signup clears: claimant A's browser is gone after B's signup, so A's cookie mails", async () => {
+    const { email, id } = await newUser();
+    await flow((ctx) => afterSignIn(ON, ctx, "signup", { userId: id, token: tokenOf("A"), country: null, nowMs: Date.now() }));
+    await flow((ctx) => afterSignIn(ON, ctx, "signup", { userId: id, token: tokenOf("B"), country: null, nowMs: Date.now() }));
+    await login(email, tokenOf("A"));
+    expect(mails).toHaveLength(1);
+  });
+
+  it("a reset clears every browser but the resetting one; it mails 'password was changed'", async () => {
+    const { email, id } = await newUser();
+    await login(email, tokenOf("A"));
+    await login(email, tokenOf("B"));
+    mails = [];
+    await flow((ctx) => afterPasswordReset(ON, ctx, { userId: id, token: tokenOf("C"), country: null, nowMs: Date.now() }));
+    expect(mails.map((m) => m.subject)).toEqual(["Your Thinkers Journal password was changed"]);
+    expect(await deviceCount(id)).toBe(1);
+    mails = [];
+    await login(email, tokenOf("A"));
+    expect(mails).toHaveLength(1);
+  });
+
+  it("a barred reset (no token) forgets every browser and still mails", async () => {
+    const { email, id } = await newUser();
+    await login(email, tokenOf("A"));
+    mails = [];
+    await flow((ctx) => afterPasswordReset(ON, ctx, { userId: id, token: null, country: null, nowMs: Date.now() }));
+    expect(mails).toHaveLength(1);
+    expect(await deviceCount(id)).toBe(0);
+  });
+
+  it("a barred reset (forgetDevices) leaves pending sign-in notices alone", async () => {
+    const { id } = await newUser();
+    const now = Date.now();
+    await quietClaim(id, now, now + HOUR);
+    await flow((ctx) => afterPasswordReset(ON, ctx, { userId: id, token: null, country: null, nowMs: now }));
+    expect((await pendingRows(id)).map((r) => r.count)).toEqual([1]);
+  });
+});
+
+describe("device keys through the flow (N5; plan Task 19)", () => {
+  it("rotation with _PREV: no mail, the entry is rewritten to K2; after _PREV goes, still no mail", async () => {
+    const { email, id } = await newUser();
+    const k1: Env = { ...ON, DEVICE_HASH_KEY: "K1" };
+    const both: Env = { ...ON, DEVICE_HASH_KEY: "K2", DEVICE_HASH_KEY_PREV: "K1" };
+    const k2: Env = { ...ON, DEVICE_HASH_KEY: "K2" };
+    const a = await login(email, null, k1);
+    const stale = await login(email, null, k1); // a second browser that will sit the rotation out
+    mails = [];
+    await login(email, a.token, both);
+    expect(mails).toHaveLength(0);
+    const kid2 = await keyId("K2");
+    const underK2 = await runInDurableObject(env.USER_SECURITY.getByName(id), (_u, s) =>
+      s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM known_devices WHERE kid = ?", kid2).one().n,
+    );
+    expect(underK2).toBe(1);
+    await login(email, a.token, k2);
+    expect(mails).toHaveLength(0);
+    await login(email, stale.token, k2); // control: unused during the rotation → mails
+    expect(mails).toHaveLength(1);
+  });
+
+  it("no key: logins send nothing, record nothing and log NOTHING per login (I-3); a reset still mails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { email, id } = await newUser();
+    const noKey: Env = { ...ON, DEVICE_HASH_KEY: "" };
+    await login(email, null, noKey);
+    await login(email, null, noKey);
+    expect(mails).toHaveLength(0);
+    expect(await deviceCount(id)).toBe(0);
+    // The operator hears through the ledger's ONE config_fault a day (test/security-ledger-do.test.ts).
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes("device_hash_key_missing"))).toEqual([]);
+    await flow((ctx) => afterPasswordReset(noKey, ctx, { userId: id, token: tokenOf("R"), country: null, nowMs: Date.now() }));
+    expect(mails).toHaveLength(1);
+  });
+
+});
+
+// Split from the describe above only to keep each callback under 50 lines (Codacy).
+describe("device keys through the flow: HMAC and the wave (N5, §4.4; plan Task 19)", () => {
+  it("HMAC: one token under two user ids → two different stored hashes", async () => {
+    expect(await deviceHash("K", "u1", tokenOf("T"))).not.toBe(await deviceHash("K", "u2", tokenOf("T")));
+  });
+
+  it("wave spread: a key replaced WITHOUT _PREV → unknownKeysOnly; pending inside 6 h; the alarm sends it", async () => {
+    const { email, id } = await newUser();
+    const a = await login(email, null, { ...ON, DEVICE_HASH_KEY: "OLD" });
+    mails = [];
+    await login(email, a.token, { ...ON, DEVICE_HASH_KEY: "NEW" });
+    expect(mails).toHaveLength(0);
+    const due = (await pendingNotice(id)).at(0)?.due_ms ?? 0;
+    expect(due - Date.now()).toBeLessThanOrEqual(WAVE_SPREAD_MS);
+    await quietAlarm(id, due);
+    expect(mails).toHaveLength(1);
+  });
+});
+
+describe("caps through the flow (§4.4; plan Task 19)", () => {
+  it("cap: after one known login, four new browsers in an hour → two more mails; the rest are deferred, and say 'also covers'", async () => {
+    const { email, id } = await newUser();
+    await login(email, null);
+    mails = [];
+    for (let i = 0; i < 4; i++) await login(email, null);
+    expect(mails).toHaveLength(2); // the first login's own mail used one of the three slots
+    const pending = await pendingNotice(id);
+    expect(pending.map((p) => p.count)).toEqual([2]);
+    await quietAlarm(id, pending.at(0)?.due_ms ?? 0);
+    expect(mails.at(-1)?.text).toContain("also covers 1 other new sign-in since");
+  });
+
+  it("flag off: no Postmark call, one would_send line, the browser recorded, and the cap not consumed", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { email, id } = await newUser();
+    await login(email, null, env);
+    expect(postmarkCalls()).toBe(0);
+    expect(warn.mock.calls.filter((c) => c[0] === "account-notice: would_send new_sign_in")).toHaveLength(1);
+    expect(await deviceCount(id)).toBe(1);
+    const sent = await runInDurableObject(env.USER_SECURITY.getByName(id), (_u, s) =>
+      s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM notices").one().n,
+    );
+    expect(sent).toBe(0);
+  });
+
+  it("CR-1: the address lookup THROWS on an immediate send → the notice and its folded sign-in stay, retrying", async () => {
+    allowFaults("account-notice notice_send_threw");
+    const { id } = await newUser();
+    const now = Date.now();
+    await quietClaim(id, now - 60_000, now + HOUR); // an earlier sign-in, deferred
+    await flow((ctx) => afterSignIn(DEAD_DB, ctx, "login", { userId: id, token: tokenOf("Z"), country: null, nowMs: now }));
+    expect(mails).toHaveLength(0);
+    const rows = await pendingRows(id);
+    expect(rows.map((r) => [r.count, r.attempts])).toEqual([[2, 1]]); // the folded sign-in AND this one, retrying
+    const claimed = await runInDurableObject(env.USER_SECURITY.getByName(id), (_u, s) =>
+      s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM claimed_notice").one().n,
+    );
+    expect(claimed).toBe(0);
+  });
+
+});
+
+// Split from the describe above only to keep each callback under 50 lines (Codacy).
+describe("an immediate send's end state (§4.4 G1; plan Task 19)", () => {
+  it("a permanent refusal on an immediate send → dropped_permanent_refusal logged ONCE and reported to the ledger once", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { id } = await newUser();
+    postmarkStatus = { status: 422, body: { ErrorCode: 406 } };
+    const dropped: string[] = [];
+    const recorded = { ...ON, SECURITY_LEDGER: { getByName: dropRecorder(dropped) } } as unknown as Env;
+    await flow((ctx) => afterSignIn(recorded, ctx, "login", { userId: id, token: tokenOf("P"), country: null, nowMs: Date.now() }));
+    expect(warn.mock.calls.filter((c) => c[0] === "account-notice: dropped dropped_permanent_refusal new_sign_in")).toHaveLength(1);
+    expect(dropped).toEqual(["dropped_permanent_refusal"]);
+    expect(await pendingRows(id)).toEqual([]);
+  });
+});
+
+describe("takeover under saturation (F1; plan Task 19)", () => {
+  it("50 other accounts' sign-ins never change when or whether the victim is told", { timeout: 180_000 }, async () => {
+    const victim = await newUser();
+    for (let i = 0; i < 3; i++) await login(victim.email, null); // the victim's own cap: 3 in the hour
+    const attackers = await Promise.all(Array.from({ length: 50 }, () => newUser()));
+    mails = [];
+    await login(victim.email, null, ON, "198.51.100.200"); // the takeover sign-in, over the cap → deferred
+    await login(victim.email, null, ON, "198.51.100.201");
+    const before = await pendingNotice(victim.id);
+    expect(before.map((p) => p.count)).toEqual([2]);
+    for (const [i, a] of attackers.entries()) await login(a.email, null, ON, `192.0.2.${String(i)}`);
+    expect(await pendingNotice(victim.id)).toEqual(before); // no other account's traffic moved it
+    expect(mails.filter((m) => m.to === victim.email)).toHaveLength(0);
+    await quietAlarm(victim.id, before.at(0)?.due_ms ?? 0);
+    const told = mails.filter((m) => m.to === victim.email);
+    expect(told).toHaveLength(1);
+    expect(told.at(0)?.text).toContain("also covers 1 other new sign-in since");
   });
 });

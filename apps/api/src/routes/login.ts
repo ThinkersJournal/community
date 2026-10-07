@@ -30,7 +30,9 @@
  *   7. rehash-on-upgrade   — ONLY after a successful verify.
  *   8. security epoch      — read fresh from the DO, stamped into the session.
  *   9. session             — opaque KV token.
- *   10. 200 + Set-Cookie.
+ *   10. device record + new-sign-in notice — in ONE waitUntil, after the
+ *                            response is decided (security-alerting spec §4.1).
+ *   11. 200 + Set-Cookie (the session's, then a minted device cookie's).
  *
  * ⚠️ CHECKORIGIN RECONCILIATION: the task brief's step list for this route
  * does not mention an origin check, but the Global Constraints require an
@@ -95,6 +97,8 @@ import { createSession } from "../auth/session";
 import { withClient } from "../db/client";
 import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
+import { afterSignIn } from "../security/account-notices-flow";
+import { clientCountry, deviceCookieFor, sessionAndDeviceHeaders } from "../security/device-cookie";
 
 /**
  * A fixed, valid Argon2id PHC hash used ONLY to equalize timing on the
@@ -142,13 +146,6 @@ interface UserRow {
   suspended_until: Date | null;
   disabled_at: Date | null;
   disabled_reason: string | null;
-}
-
-function json(body: unknown, status: number, headers: HeadersInit = {}): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", ...headers },
-  });
 }
 
 /**
@@ -417,6 +414,18 @@ export async function handleLogin(
     createdAt: Date.now(),
   });
 
-  // ---- 10. 200 + Set-Cookie ------------------------------------------------
-  return json({ userId: row.id }, 200, { "Set-Cookie": cookie });
+  // ---- 10. Device record + new-sign-in notice (security-alerting §4.1) -------
+  // After the response is decided, in one waitUntil: never on the response path
+  // and never on a failed login. The response gains only a cookie read and, when
+  // the browser has no well-formed device cookie, a second Set-Cookie.
+  const device = deviceCookieFor(request, env);
+  ctx.waitUntil(
+    afterSignIn(env, ctx, "login", { userId: row.id, token: device.token, country: clientCountry(request), nowMs: Date.now() }),
+  );
+
+  // ---- 11. 200 + Set-Cookie ------------------------------------------------
+  return new Response(JSON.stringify({ userId: row.id }), {
+    status: 200,
+    headers: sessionAndDeviceHeaders(cookie, device, true),
+  });
 }
