@@ -9,7 +9,13 @@
  * secret is an event. The buffer is what bounds the cost: at most one `record`
  * RPC per isolate per `FLUSH_DELAY_MS`, however many failures arrive.
  */
-import { SecurityEventBuffer, type SecurityCounterRpc, type SecurityEvent } from "@thinkersjournal/shared";
+import {
+  logSecurityEvent,
+  SecurityEventBuffer,
+  type CounterBatch,
+  type SecurityCounterRpc,
+  type SecurityEvent,
+} from "@thinkersjournal/shared";
 
 /** The env keys this module reads. The web `Env` satisfies it. */
 export interface SecurityCountingEnv {
@@ -30,6 +36,35 @@ export function purgeSecurityEventSink(
   target: SecurityEventBuffer = isolateBuffer,
 ): (event: SecurityEvent, at: Date) => void {
   if (env.SECURITY_COUNTING === "off") return () => undefined;
-  const scope = { waitUntil, stubFor: (shard: string) => env.SECURITY_COUNTER.getByName(shard) };
+  const scope = { waitUntil, stubFor: (shard: string) => guardedCounter(env, shard) };
   return (event, at) => target.add(event, at, {}, scope);
+}
+
+/**
+ * The counter, reached so that a failure can neither reach the purge response
+ * nor pass silently (PM ruling on batch-2 review I-5, option A).
+ *
+ * ⚠️ THE CROSS-SCRIPT CALL CAN FAIL. Under two separate local `wrangler dev`
+ * processes (the E2E's topology, playwright.config.ts) it answers "Network
+ * connection lost." Whatever fails, `getByName` or `record`, is caught here and
+ * logged ONCE per failed call as a `security:` line, the same prefix as this
+ * route's refusals and the api's own `alerting_fault`s:
+ * `security: alerting_fault security-counter counter_unreachable`.
+ *
+ * No counter is bumped: the web Worker has no metrics or counter mechanism to
+ * bump (src/pages/api/turnstile-signal.ts's header records that none exists;
+ * wrangler.jsonc has no Analytics Engine or KV binding). The `security:` line
+ * IS the countable signal: Workers Logs is this codebase's observability
+ * surface, and an operator counts it with a query on that prefix.
+ */
+function guardedCounter(env: SecurityCountingEnv, shard: string): SecurityCounterRpc {
+  return {
+    record: async (batch: CounterBatch) => {
+      try {
+        await env.SECURITY_COUNTER.getByName(shard).record(batch);
+      } catch {
+        logSecurityEvent({ kind: "alerting_fault", route: "security-counter", reason: "counter_unreachable", ip: null });
+      }
+    },
+  };
 }

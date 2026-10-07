@@ -82,3 +82,30 @@ describe("purge counting", () => {
     expect((await handlePurgeRequest(ctxWith("wrong"), SECRET, allow, boom)).status).toBe(403);
   });
 });
+
+/**
+ * PM ruling (I-5, option A): the cross-script counter call may fail (it does
+ * across two local `wrangler dev` processes, the E2E's topology). It must
+ * never reach the purge response, and it must never be silent.
+ */
+describe("a failing SECURITY_COUNTER binding (PM ruling I-5)", () => {
+  const throwsOnGet = { getByName: (): SecurityCounterRpc => { throw new Error("binding broke"); } };
+  const rejectsRecord = { getByName: (): SecurityCounterRpc => ({ record: async () => Promise.reject(new Error("Network connection lost.")) }) };
+
+  it.each([
+    ["getByName throws", throwsOnGet],
+    ["record rejects", rejectsRecord],
+  ])("%s: the purge response is unchanged, the flush resolves, and one alerting_fault line is logged", async (_name, binding) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const baseline = await handlePurgeRequest(ctxWith("wrong-secret"), SECRET, allow, () => undefined);
+    const pending: Promise<unknown>[] = [];
+    const env = { SECURITY_COUNTING: "on", SECURITY_COUNTER: binding };
+    const sink = purgeSecurityEventSink(env, (p) => pending.push(p), new SecurityEventBuffer(() => Promise.resolve()));
+    const response = await handlePurgeRequest(ctxWith("wrong-secret"), SECRET, allow, sink);
+    await expect(Promise.all(pending)).resolves.toBeDefined();
+    expect(response.status).toBe(baseline.status);
+    expect(await response.text()).toBe(await baseline.text());
+    const faults = warn.mock.calls.filter((c) => String(c[0]) === "security: alerting_fault security-counter counter_unreachable");
+    expect(faults).toHaveLength(1);
+  });
+});
