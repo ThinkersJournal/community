@@ -166,6 +166,68 @@ key stops matching, which silently frees those banned users' addresses for a
 new signup. A rotation needs a plan for the existing rows; there is none
 today.
 
+## Security alerting: the flags
+
+`SECURITY_COUNTING` (api and web; "off" is the counting kill switch),
+`SECURITY_ALERTS_ENABLED` and `ACCOUNT_NOTICES_ENABLED` (api) live in each
+Worker's `wrangler.jsonc` `vars`. Flipping one is a one-line PR plus a deploy.
+A dashboard edit works as an emergency stop, but **the next `wrangler deploy`
+resets it to the file's value.**
+
+Deploy order for the first deploy: the api (which creates the two Durable
+Object classes, migration `v4`) before the web Worker (which binds the api's
+counter class cross-script).
+
+## Security alerting: turning it off and rolling it back
+
+⚠️ **Do not use `wrangler rollback` (or the dashboard's Deployments view) to
+take the api back to a version from before security alerting.** Cloudflare
+refuses a rollback when "a Durable Object class lifecycle change (via
+`exports` or the legacy `migrations` array) has occurred between the version
+in the active deployment and the version selected to roll back to", and
+migration `v4` (which creates `SecurityCounterDO` and `SecurityLedgerDO`) is
+exactly such a change. Source: Cloudflare, "Rollbacks",
+<https://developers.cloudflare.com/workers/configuration/versions-and-deployments/rollbacks/>
+(page last updated 2026-07-15; read 2026-10-07). A plain `git revert` of the
+whole PR will not deploy either: it drops the two class exports and the `v4`
+entry while the classes still exist, and while the web Worker still binds
+`SECURITY_COUNTER` cross-script.
+
+Use these steps instead, in order, stopping at the first one that is enough:
+
+1. **Stop counting.** Set `SECURITY_COUNTING="off"` on BOTH Workers (api and
+   web). In an emergency, edit it in the dashboard, then land the same change as
+   a one-line PR, because the next `wrangler deploy` resets the dashboard value
+   (see the flags section above). Counting is the only thing PR 1 turns on:
+   `SECURITY_ALERTS_ENABLED` and `ACCOUNT_NOTICES_ENABLED` are already `"0"`.
+2. **Revert behaviour, keep the classes.** Revert the wiring only: the
+   `index.ts` scope wrapper and its cron lines (`ensureLedgerAlarm`,
+   `sweepForgottenAccounts`), login's counting argument, the reapers' forget
+   calls, and the web purge page's counting sink. **Keep** both classes exported
+   from `apps/api/src/index.ts`, keep their bindings, and keep migration `v4`
+   in `apps/api/wrangler.jsonc`. This is the only code revert that is safe to
+   deploy.
+3. **Full removal (irreversible: deletes every counter and ledger object and
+   all of its stored data).** Cloudflare's legacy-migrations page requires that,
+   before a delete migration, the class's binding and every code reference are
+   removed and no other Worker depends on it; a deploy that deletes a class
+   another Worker still binds is rejected. Source: Cloudflare, "Durable Object
+   class migrations (legacy)",
+   <https://developers.cloudflare.com/durable-objects/reference/durable-object-class-migrations-legacy/>,
+   and "Durable Objects migrations",
+   <https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/>
+   (both last updated 2026-09-28; read 2026-10-07). So:
+   1. deploy the **web** Worker without its `SECURITY_COUNTER` binding (and
+      without the code that uses it) first;
+   2. then deploy the **api** with both classes' bindings and exports removed,
+      and a new migration
+      `{ "tag": "v5", "deleted_classes": ["SecurityCounterDO", "SecurityLedgerDO"] }`
+      appended after `v4`.
+
+   Migration tags are unique names, each applied once, in order (same legacy
+   page), so `v5` can never be reused: bringing the classes back later needs a
+   new tag (`v6`) with `new_sqlite_classes`.
+
 ## Destructive migrations
 
 Mark a destructive migration (drop column, drop table, rename, `NOT NULL`
@@ -227,7 +289,11 @@ environment variable or argument.
 
 ## Rollback
 
-A manual `wrangler rollback` (or the equivalent in the Cloudflare dashboard's
+⚠️ **Not for security alerting:** a rollback of the api across Durable Object
+migration `v4` is refused by Cloudflare. Use "Security alerting: turning it off
+and rolling it back" above instead.
+
+For everything else: a manual `wrangler rollback` (or the equivalent in the Cloudflare dashboard's
 Deployments view) for the affected Worker. **The migration is never
 auto-reverted** (design §3 step 3: node-pg-migrate's `down` is not generally
 a safe automated action, and an additive migration left in place after a

@@ -220,6 +220,23 @@
       "simple": { "limit": 5, "period": 60 }
     }
   ],
+  // Security alerting (docs/superpowers/specs/2026-10-07-security-alerting-design.md
+  // §2.2 item 4): a CROSS-SCRIPT binding to the api's counter class, used only
+  // by POST /internal/purge (src/lib/security-counting.ts). No `migrations`
+  // here: the class lives in, and is migrated by, thinkersjournal-api.
+  // ⚠️ DEPLOY ORDER: the api must deploy the class (its migration v4) BEFORE
+  // this binding deploys, the same kind of first-deploy ordering as the purge
+  // hop (apps/api/wrangler.jsonc's `services` comment).
+  "durable_objects": {
+    "bindings": [
+      { "name": "SECURITY_COUNTER", "class_name": "SecurityCounterDO", "script_name": "thinkersjournal-api" }
+    ]
+  },
+  // The web half of the counting kill switch (spec §3.1): "off" makes the purge
+  // page pass a no-op. A dashboard edit is reset by the next `wrangler deploy`.
+  "vars": {
+    "SECURITY_COUNTING": "on"
+  },
   "observability": {
     "enabled": true
   },

@@ -84,7 +84,7 @@
  *       same Argon2id cost before returning the same 401. See `DUMMY_HASH`'s
  *       own comment for how that constant was produced.
  */
-import { LoginInput, limiterIpKey, logSecurityEvent } from "@thinkersjournal/shared";
+import { LoginInput, limiterIpKey, logSecurityEvent, type SecurityEventCounting } from "@thinkersjournal/shared";
 
 import { accountBarredResponse, isBarred, loadBarReason } from "../auth/account-status";
 import { checkOrigin } from "../auth/csrf";
@@ -160,10 +160,12 @@ function json(body: unknown, status: number, headers: HeadersInit = {}): Respons
  * Every one is logged as a `security: auth_failure` line (packages/shared's
  * security-log.ts) with the SAME reason for both cases, so the log cannot become
  * the enumeration oracle the response refuses to be. Never the password, and
- * never the email: the alerting follow-up counts by IP and route.
+ * never the email in the line. `counting` (the address, and the account id
+ * when the password was wrong) goes only to the security-alerting counter's
+ * observer, never to `console` (packages/shared's SecurityEventCounting).
  */
-function unauthorized(ip: string | null): Response {
-  logSecurityEvent({ kind: "auth_failure", route: ROUTE, reason: "invalid_credentials", ip });
+function unauthorized(ip: string | null, counting: SecurityEventCounting): Response {
+  logSecurityEvent({ kind: "auth_failure", route: ROUTE, reason: "invalid_credentials", ip }, counting);
   return errorResponse("INVALID_CREDENTIALS", 401);
 }
 
@@ -319,12 +321,12 @@ export async function handleLogin(
     // costs about the same as a wrong-password rejection below. The result is
     // never used for anything — see `DUMMY_HASH`'s comment.
     await verifyPassword(password, DUMMY_HASH);
-    return unauthorized(ip);
+    return unauthorized(ip, { email });
   }
 
   const passwordOk = await verifyPassword(password, row.password_hash);
   if (!passwordOk) {
-    return unauthorized(ip);
+    return unauthorized(ip, { email, userId: row.id });
   }
 
   // ---- 6. Barring refusal (issue #35) ----------------------------------------

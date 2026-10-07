@@ -67,6 +67,18 @@ interface __BaseEnv_Env {
 	NOTIFY: DurableObjectNamespace<import("./index").NotifyDO>;
 	POST_LIVE: DurableObjectNamespace<import("./index").PostLiveDO>;
 	WEB: Fetcher /* thinkersjournal-web */;
+	// Security alerting, phase 1 (docs/superpowers/specs/2026-10-07-security-alerting-design.md)
+	// — added by hand, same established pattern and reason as the brute-force
+	// limiters above. Both classes are exported from ./index; the three flags
+	// come from wrangler.jsonc's `vars`; the two secrets stay unset until board
+	// 131 picks a transport, so they are optional.
+	SECURITY_COUNTER: DurableObjectNamespace<import("./index").SecurityCounterDO>;
+	SECURITY_LEDGER: DurableObjectNamespace<import("./index").SecurityLedgerDO>;
+	SECURITY_COUNTING: string;
+	SECURITY_ALERTS_ENABLED: string;
+	ACCOUNT_NOTICES_ENABLED: string;
+	SECURITY_ALERT_EMAIL?: string;
+	SECURITY_ALERT_RELAY_TOKEN?: string;
 	// Build-identity (2026-09-24) — added by hand, same reason as CF_ACCESS_*
 	// above: a full `wrangler types` regeneration in this checkout drops
 	// several hand-added bindings and pulls in an unrelated diff. See
@@ -83,7 +95,7 @@ interface __BaseEnv_Env {
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./index");
-		durableNamespaces: "UserSecurityDO" | "NotifyDO" | "PostLiveDO";
+		durableNamespaces: "UserSecurityDO" | "NotifyDO" | "PostLiveDO" | "SecurityCounterDO" | "SecurityLedgerDO";
 	}
 	interface Env extends __BaseEnv_Env {}
 }

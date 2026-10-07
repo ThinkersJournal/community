@@ -28,6 +28,7 @@
  * nightly run reconsiders it.
  */
 import { withClient } from "../db/client";
+import { forgetAll } from "../security/forget";
 
 /**
  * Caps one run's DELETE so a pathological backlog cannot turn a routine cron
@@ -54,13 +55,13 @@ export async function reapUnverifiedAccounts(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<number> {
-  const n = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+  const ids = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     // ⚠️ A HELD ACCOUNT IS NEVER REAPED, even unverified and stale: deleting
     // it would take the user AND THE EVIDENCE the hold preserves. A ban or
     // suspension alone does not spare it (see the file header). AC-3 (as
     // reworded by the account-legal-hold spec); test/reap-unverified.test.ts
     // pins it against this function.
-    const { rowCount } = await c.query(
+    const { rows } = await c.query<{ id: string }>(
       `DELETE FROM users
         WHERE id IN (
           SELECT id FROM users
@@ -71,11 +72,17 @@ export async function reapUnverifiedAccounts(
            ORDER BY created_at
            LIMIT $1
            FOR UPDATE SKIP LOCKED
-        )`,
+        )
+       RETURNING id`,
       [REAP_BATCH],
     );
-    return rowCount ?? 0;
+    return rows.map((r) => r.id);
   });
+  // security-alerting §2.6 N7, §4.5: the same clean-up as the anonymise reaper,
+  // per deleted id, AWAITED after `withClient` returned (the lock is released).
+  // The nightly sweep (R2-1, src/security/forget-sweep.ts) re-forgets whatever a failure left.
+  await forgetAll(env, ids, "reap-unverified");
+  const n = ids.length;
   if (n > 0) {
     console.log(`reap-unverified: deleted ${n} account(s)`);
   }
