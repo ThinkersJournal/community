@@ -113,8 +113,9 @@ const FAULT_PREFIX = "security: alerting_fault ";
  * Call once at file scope. It replaces the file's `afterEach(restoreAllMocks)`:
  * it reads `console.warn` (whichever spy a test installed on top) BEFORE it
  * restores the mocks, so the calls are still there to read.
- * `allowFaults("security-ledger deliver")` allows lines starting with that
- * route and reason, for the current test only.
+ * `allowFaults("security-ledger deliver")` allows exactly that route and
+ * reason, for the current test only: an EXACT match, so it does not also allow
+ * `deliver_poison` or `deliver_bookkeeping` (batch-2 re-review m-B).
  */
 export function guardAlertingFaults(): { allowFaults: (...routeAndReason: string[]) => void } {
   let allowed: string[] = [];
@@ -126,7 +127,7 @@ export function guardAlertingFaults(): { allowFaults: (...routeAndReason: string
   afterEach(() => {
     const lines = (warn?.mock.calls ?? []).map((c) => String(c[0]));
     vi.restoreAllMocks();
-    const unexpected = lines.filter((l) => l.startsWith(FAULT_PREFIX) && !allowed.some((a) => l.startsWith(FAULT_PREFIX + a)));
+    const unexpected = lines.filter((l) => l.startsWith(FAULT_PREFIX) && !allowed.some((a) => l === FAULT_PREFIX + a));
     expect(unexpected, "alerting_fault lines this test did not allow").toEqual([]);
   });
   return {
