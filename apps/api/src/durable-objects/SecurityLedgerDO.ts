@@ -49,7 +49,7 @@ import {
 } from "../security/ledger-held";
 import { pruneLedger } from "../security/ledger-prune";
 import { LEDGER_SCHEMA } from "../security/ledger-schema";
-import { LedgerStore, utcDay, type ClassDay } from "../security/ledger-store";
+import { LedgerStore, logLedgerError, utcDay, type ClassDay } from "../security/ledger-store";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
@@ -112,6 +112,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     try {
       invalid = this.ctx.storage.transactionSync(() => this.applyEntries(batch, nowMs));
     } catch (err) {
+      logLedgerError("report batch", err);
       invalid = this.applyIsolated(batch, nowMs, err);
     }
     if (invalid > 0) logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason: "report_invalid", ip: null });
@@ -172,7 +173,8 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       try {
         this.ctx.storage.transactionSync(apply);
         succeeded += 1;
-      } catch {
+      } catch (err) {
+        logLedgerError("report entry", err);
         dropped.push(signalClass as SignalClass);
       }
     }
@@ -308,7 +310,8 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     try {
       await run();
       return true;
-    } catch {
+    } catch (err) {
+      logLedgerError(reason, err);
       logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason, ip: null });
       return false;
     }
@@ -335,7 +338,8 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     for (const row of due) {
       try {
         await this.deliverRow(sink, row, nowMs);
-      } catch {
+      } catch (err) {
+        logLedgerError("deliver row", err);
         this.rowThrew(row, nowMs);
       }
     }
@@ -348,7 +352,8 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   private dropSentRows(): void {
     try {
       this.ctx.storage.sql.exec("DELETE FROM outbox WHERE sent_ms IS NOT NULL");
-    } catch {
+    } catch (err) {
+      logLedgerError("drop sent rows", err);
       // Still marked: skipped by every send, retried by the next run.
     }
   }
@@ -371,7 +376,8 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   private coverAfterSend(covers: string): void {
     try {
       this.ctx.storage.transactionSync(() => applyCoverage(this.store, JSON.parse(covers) as HeldCovers));
-    } catch {
+    } catch (err) {
+      logLedgerError("deliver bookkeeping", err);
       logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason: "deliver_bookkeeping", ip: null });
     }
   }
@@ -450,7 +456,8 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     let site: SiteSummary | null = null;
     try {
       site = await this.siteFor().summarise(Math.floor(startMs / MINUTE_MS), Math.floor(nowMs / MINUTE_MS));
-    } catch {
+    } catch (err) {
+      logLedgerError("site summary", err);
       site = null; // the digest says `siteSummaryUnavailable`
     }
     this.ctx.storage.transactionSync(() => {

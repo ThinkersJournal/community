@@ -24,6 +24,14 @@ export interface ClassDay {
 
 export type PeriodField = "sent" | "by_cooldown" | "by_budget";
 
+/**
+ * Every catch in the ledger logs at least WHY (final review M-2): the error's
+ * name only, never its message, which could carry a subject or a user id.
+ */
+export function logLedgerError(where: string, err: unknown): void {
+  console.error(`security-ledger: ${where} threw`, err instanceof Error ? err.name : "threw");
+}
+
 /** `YYYY-MM-DD`, UTC. */
 export function utcDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);

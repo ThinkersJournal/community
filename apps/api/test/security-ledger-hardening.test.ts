@@ -290,3 +290,97 @@ describe("m-A: a sent row whose DELETE throws is never sent again", () => {
     });
   });
 });
+
+/**
+ * Final review M-2: every catch in the ledger logs at least the error's NAME
+ * (PII-free), so an operator reading a fault line can say why. The ledger's
+ * line is `security-ledger: <where> threw` with the name as its argument.
+ */
+function errorLog() {
+  const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  return Object.assign(
+    (where: string, name: string) => spy.mock.calls.some((c) => c[0] === `security-ledger: ${where} threw` && c[1] === name),
+    { spy },
+  );
+}
+
+class SinkBroke extends Error {
+  override name = "SinkBroke";
+}
+
+describe("final review M-2: the alarm's catches log the error's name", () => {
+  it("a step that throws outright", async () => {
+    allowFaults("security-ledger deliver");
+    const logged = errorLog();
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      wire(ledger);
+      ledger.sinkFactory = () => {
+        throw new SinkBroke("no sink");
+      };
+      queueRaw(state.storage.sql, GOOD, null, T0 - HOUR);
+      await ledger.alarmAt(T0);
+    });
+    expect(logged("deliver", "SinkBroke")).toBe(true);
+  });
+
+  it("a row that throws (logged on its FIRST attempt, not only at quarantine), and post-send bookkeeping", async () => {
+    allowFaults("security-ledger deliver_bookkeeping");
+    const logged = errorLog();
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      wire(ledger);
+      queueRaw(state.storage.sql, "{not json", null, T0);
+      queueRaw(state.storage.sql, GOOD, "{not json", T0);
+      await ledger.alarmAt(T0);
+    });
+    expect(logged("deliver row", "SyntaxError")).toBe(true);
+    expect(logged("deliver bookkeeping", "SyntaxError")).toBe(true);
+  });
+});
+
+describe("final review M-2: the clean-up's and the digest's catches log the error's name", () => {
+  it("a sent row whose clean-up delete keeps failing", async () => {
+    const logged = errorLog();
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      wire(ledger);
+      const sql = state.storage.sql;
+      queueRaw(sql, GOOD, null, T0);
+      sql.exec("CREATE TRIGGER refuse_outbox_delete BEFORE DELETE ON outbox BEGIN SELECT RAISE(ABORT, 'delete refused'); END");
+      await ledger.alarmAt(T0);
+      await ledger.alarmAt(T0 + MINUTE);
+      sql.exec("DROP TRIGGER refuse_outbox_delete");
+    });
+    expect(logged("drop sent rows", "Error")).toBe(true);
+  });
+
+  it("a site summary that throws (the digest still goes, marked unavailable)", async () => {
+    const logged = errorLog();
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sent } = wire(ledger);
+      ledger.siteFor = () => ({
+        summarise: async () => {
+          throw new SinkBroke("site down");
+        },
+      });
+      await ledger.alarmAt(T0);
+      await ledger.alarmAt(T0 + 1);
+      expect(ofType(sent, "digest")).toHaveLength(1);
+    });
+    expect(logged("site summary", "SinkBroke")).toBe(true);
+  });
+});
+
+describe("final review M-2: report()'s catches log the error's name", () => {
+  it("the batch that threw, and each entry dropped by its own throw", async () => {
+    allowFaults("security-ledger report_invalid");
+    const logged = errorLog();
+    const broken = crossing({ signal: "targeted_account", signalClass: "account", subjectKind: "account", subject: undefined as never });
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      wire(ledger);
+      await ledger.reportAt({ reports: [crossing(), broken], countedOverflow: {} }, T0);
+    });
+    const lines = logged.spy.mock.calls.filter((c) => String(c[0]).startsWith("security-ledger: report"));
+    expect(lines.map((c) => c[0])).toEqual(["security-ledger: report batch threw", "security-ledger: report entry threw"]);
+    // A bare error name each time: an identifier, never a message or a subject.
+    expect(lines.every((c) => typeof c[1] === "string" && /^[A-Za-z]+$/.test(c[1]))).toBe(true);
+  });
+});
