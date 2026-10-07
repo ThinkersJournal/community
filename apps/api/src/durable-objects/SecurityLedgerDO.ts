@@ -222,7 +222,7 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   /** §2.6's seven independent steps, then re-arm. */
   async alarmAt(nowMs: number): Promise<void> {
     await this.step("liveness", () => this.env.HEALTH.put(LIVENESS_KEY, String(nowMs)));
-    await this.step("deliver", () => this.deliver(nowMs));
+    const delivered = await this.step("deliver", () => this.deliver(nowMs));
     await this.step("heartbeat", () => this.heartbeat(nowMs));
     await this.step("held_report", () => this.heldReport(nowMs));
     await this.step("digest", () => this.digest(nowMs));
@@ -231,18 +231,29 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     await this.step("prune", () => {
       pruneRemaining = this.ctx.storage.transactionSync(() => pruneLedger(this.store, nowMs));
     });
-    await this.rearm(nowMs, pruneRemaining);
+    // A deliver step that threw outright must not re-fire at once (batch-2 review I-2).
+    await this.rearm(nowMs, pruneRemaining, delivered ? nowMs : nowMs + MINUTE_MS);
   }
 
-  private async step(reason: string, run: () => Promise<void> | void): Promise<void> {
+  /** One independent step: a throw is logged as `alerting_fault <reason>`. True when it completed. */
+  private async step(reason: string, run: () => Promise<void> | void): Promise<boolean> {
     try {
       await run();
+      return true;
     } catch {
       logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason, ip: null });
+      return false;
     }
   }
 
-  /** Step 2: up to 20 due rows through `deliverSecurityAlert`; backoff 1, 5, 30 min; the 4th failure drops. */
+  /**
+   * Step 2: up to 20 due rows through `deliverSecurityAlert`; backoff 1, 5, 30
+   * min; the 4th failure drops.
+   *
+   * ⚠️ EACH ROW IS ISOLATED (batch-2 review I-2). A row whose handling throws is
+   * backed off like a refusal and, on its 4th attempt, quarantined with ONE
+   * fault, so it can never block the rows behind it or re-fire the alarm.
+   */
   private async deliver(nowMs: number): Promise<void> {
     const sink = this.sinkFactory(this.env);
     const due = this.ctx.storage.sql
@@ -253,17 +264,50 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       )
       .toArray();
     for (const row of due) {
-      const message = JSON.parse(row.message) as SecurityAlertMessage;
-      const result = await deliverSecurityAlert(sink, message);
-      if (result.delivered) {
-        this.ctx.storage.transactionSync(() => {
-          this.ctx.storage.sql.exec("DELETE FROM outbox WHERE id = ?", row.id);
-          if (row.covers !== null) applyCoverage(this.store, JSON.parse(row.covers) as HeldCovers);
-        });
-      } else {
-        await this.deliveryFailed(row, message, nowMs);
+      try {
+        await this.deliverRow(sink, row, nowMs);
+      } catch {
+        this.rowThrew(row, nowMs);
       }
     }
+  }
+
+  private async deliverRow(sink: SecurityAlertSink, row: OutboxRow, nowMs: number): Promise<void> {
+    const message = JSON.parse(row.message) as SecurityAlertMessage;
+    const result = await deliverSecurityAlert(sink, message);
+    if (!result.delivered) {
+      await this.deliveryFailed(row, message, nowMs);
+      return;
+    }
+    // SENT. The row goes first, on its own, so nothing after this can send it again.
+    this.ctx.storage.sql.exec("DELETE FROM outbox WHERE id = ?", row.id);
+    if (row.covers !== null) this.coverAfterSend(row.covers);
+  }
+
+  /** Post-send bookkeeping for a held report. A failure leaves its rows held; the next report names them. */
+  private coverAfterSend(covers: string): void {
+    try {
+      this.ctx.storage.transactionSync(() => applyCoverage(this.store, JSON.parse(covers) as HeldCovers));
+    } catch {
+      logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason: "deliver_bookkeeping", ip: null });
+    }
+  }
+
+  /** A row whose handling THREW (not a refusal): back off, then quarantine it with one fault. */
+  private rowThrew(row: OutboxRow, nowMs: number): void {
+    const attempts = row.attempts + 1;
+    const backoff = OUTBOX_BACKOFF_MINUTES[attempts - 1];
+    const sql = this.ctx.storage.sql;
+    if (backoff !== undefined) {
+      sql.exec("UPDATE outbox SET attempts = ?, next_ms = ? WHERE id = ?", attempts, nowMs + backoff * MINUTE_MS, row.id);
+      return;
+    }
+    this.ctx.storage.transactionSync(() => {
+      sql.exec("INSERT INTO outbox_poison (message, poisoned_ms) VALUES (?, ?)", row.message, nowMs);
+      sql.exec("DELETE FROM outbox WHERE id = ?", row.id);
+      this.store.addMeta("undeliverable", 1);
+    });
+    logSecurityEvent({ kind: "alerting_fault", route: "security-ledger", reason: "deliver_poison", ip: null });
   }
 
   private async deliveryFailed(row: OutboxRow, message: SecurityAlertMessage, nowMs: number): Promise<void> {
@@ -394,15 +438,15 @@ export class SecurityLedgerDO extends DurableObject<Env> {
   }
 
   /** Prune work left → now; otherwise the next due outbox row or the next hour, whichever is sooner. */
-  private async rearm(nowMs: number, pruneRemaining: boolean): Promise<void> {
+  private async rearm(nowMs: number, pruneRemaining: boolean, earliestMs: number): Promise<void> {
     if (pruneRemaining) {
-      await this.armAt(nowMs);
+      await this.armAt(earliestMs);
       return;
     }
     const next = this.ctx.storage.sql
       .exec<{ next_ms: number | null }>("SELECT MIN(next_ms) AS next_ms FROM outbox")
       .one().next_ms;
     const nextHour = (Math.floor(nowMs / HOUR_MS) + 1) * HOUR_MS;
-    await this.armAt(Math.min(next ?? nextHour, nextHour));
+    await this.armAt(Math.max(earliestMs, Math.min(next ?? nextHour, nextHour)));
   }
 }

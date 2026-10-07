@@ -30,4 +30,7 @@ export const LEDGER_SCHEMA: readonly string[] = [
      last_used_ms INTEGER NOT NULL) WITHOUT ROWID`,
   // PR 2 (§2.6 m-e): an anonymised account's tombstone, so a late report cannot re-create its rows.
   "CREATE TABLE IF NOT EXISTS forgotten (user_id TEXT PRIMARY KEY, until_ms INTEGER NOT NULL) WITHOUT ROWID",
+  // Batch-2 review I-2: an outbox row whose HANDLING threw on every attempt, moved
+  // out of the way (message only, never `covers`) and kept a week for inspection.
+  "CREATE TABLE IF NOT EXISTS outbox_poison (id INTEGER PRIMARY KEY, message TEXT NOT NULL, poisoned_ms INTEGER NOT NULL)",
 ];

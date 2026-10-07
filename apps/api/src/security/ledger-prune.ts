@@ -60,6 +60,12 @@ function targets(store: LedgerStore, nowMs: number): PruneTarget[] {
          SELECT user_id FROM forgotten WHERE until_ms <= ? LIMIT ${PRUNE_CHUNK}) RETURNING 1`,
       nowMs,
     ),
+    sqlTarget(
+      store,
+      `DELETE FROM outbox_poison WHERE id IN (
+         SELECT id FROM outbox_poison WHERE poisoned_ms < ? LIMIT ${PRUNE_CHUNK}) RETURNING 1`,
+      nowMs - COVERED_TTL_MS,
+    ),
     sqlTarget(store, "DELETE FROM meta WHERE k LIKE 'notice_dropped:%' AND substr(k, -10) < ? RETURNING 1", yesterday),
     sqlTarget(store, "DELETE FROM class_day WHERE day < ? RETURNING 1", yesterday),
     sqlTarget(store, "DELETE FROM held_overflow WHERE day < ? RETURNING 1", yesterday),
