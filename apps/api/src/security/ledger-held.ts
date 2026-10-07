@@ -240,8 +240,16 @@ function pageAll(
   }
 }
 
-/** Keys per DELETE statement on delivery (§2.6 F2: "in statements of at most 100 keys"). */
-export const COVER_DELETE_CHUNK = 100;
+/**
+ * Keys per DELETE statement on delivery (§2.6 F2: "in statements of at most 100 keys").
+ *
+ * ⚠️ 33, NOT 100: each key binds THREE parameters (class, key, version), and
+ * Durable Object SQLite refuses a statement with more than 100 bound
+ * parameters ("too many SQL variables"). At 100 keys the delete threw after the
+ * sink had accepted the report, so the report was kept and re-sent by every
+ * alarm (test/security-ledger-do.test.ts, "coverage of a large held report").
+ */
+export const COVER_DELETE_CHUNK = 33;
 
 /**
  * A held report was DELIVERED: delete each named row only if its version is at

@@ -377,3 +377,31 @@ describe("forgetAccount", () => {
     });
   });
 });
+
+/**
+ * Durable Object SQLite refuses a statement with more than 100 bound
+ * parameters ("too many SQL variables"). A held report's coverage delete binds
+ * three per named row, so it must stay under that whatever the report names;
+ * otherwise the deliver step throws AFTER the sink accepted the report, the
+ * outbox row is kept, and every later alarm sends it again.
+ */
+describe("coverage of a large held report (bound-parameter limit)", () => {
+  it("a delivered report naming 150 rows covers all of them, once, with no deliver fault", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      const { sink, sent } = capturingSink();
+      ledger.sinkFactory = () => sink;
+      ledger.siteFor = () => noSite;
+      quiet(ledger);
+      const subjects = Array.from({ length: 150 }, (_, i) => `2001:db8:${i.toString(16)}::/64`);
+      await ledger.reportAt({ reports: subjects.flatMap((s) => [crossing({ subject: s }), crossing({ subject: s })]), countedOverflow: {} }, T0);
+      await ledger.alarmAt(T0 + 1); // queues the held report
+      await ledger.alarmAt(T0 + 2); // delivers it
+      await ledger.alarmAt(T0 + 3); // nothing left to resend
+      expect(ofType(sent, "held_report")).toHaveLength(1);
+      expect(ofType(sent, "held_report")[0]?.entries).toHaveLength(150); // control: all 150 were named
+      expect(state.storage.sql.exec<Count>("SELECT COUNT(*) AS n FROM held").one().n).toBe(0);
+      expect(warn.mock.calls.filter((c) => c[0] === "security: alerting_fault security-ledger deliver")).toHaveLength(0);
+    });
+  });
+});
