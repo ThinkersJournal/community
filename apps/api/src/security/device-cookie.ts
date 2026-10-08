@@ -55,8 +55,8 @@ export function sessionAndDeviceHeaders(sessionCookie: string, device: DeviceCoo
   return headers;
 }
 
-/** The edge's country for the original request, or null. Never an IP (§4.2). */
+/** The edge's country for the original request, or null (`XX`, Cloudflare's "unknown", included; M-3). Never an IP (§4.2). */
 export function clientCountry(request: Request): string | null {
   const value = request.headers.get(CLIENT_COUNTRY_HEADER) ?? request.headers.get("CF-IPCountry");
-  return value !== null && COUNTRY_RE.test(value) ? value : null;
+  return value !== null && COUNTRY_RE.test(value) && value !== "XX" ? value : null;
 }

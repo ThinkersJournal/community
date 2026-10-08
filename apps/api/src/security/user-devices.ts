@@ -8,6 +8,7 @@ import {
   capAllows,
   capReopensAt,
   foldedDueMs,
+  NOTICE_MAX_AGE_MS,
   noticeRetryDelayMs,
   type AccountNoticeKind,
   type DeviceHashes,
@@ -205,6 +206,27 @@ export function detachDue(sql: SqlStorage, kind: AccountNoticeKind, nowMs: numbe
   writePending(sql, { ...p, dueMs: nowMs }, "inflight_notice");
   takeSlot(sql, kind, nowMs);
   return p;
+}
+
+/** How long a notice held by the flag (final review M-5) waits before the alarm looks again. */
+export const NOTICE_HOLD_MS = 3_600_000;
+
+/**
+ * Final review M-5: with notices OFF at send time, the kind's due notice is
+ * HELD (kept, its due time moved `NOTICE_HOLD_MS` on, so the alarm does not
+ * spin) until the flag is on again, or it is taken out and returned for a
+ * `dropped_expired` once it is `NOTICE_MAX_AGE_MS` old. Null when nothing is due
+ * or it was held.
+ */
+export function holdDue(sql: SqlStorage, kind: AccountNoticeKind, nowMs: number): PendingNotice | null {
+  const p = readPending(sql, kind);
+  if (p === null || p.dueMs > nowMs) return null;
+  if (nowMs - p.firstEventMs >= NOTICE_MAX_AGE_MS) {
+    sql.exec("DELETE FROM pending_notice WHERE kind = ?", kind);
+    return p;
+  }
+  writePending(sql, { ...p, dueMs: nowMs + NOTICE_HOLD_MS });
+  return null;
 }
 
 type ClaimRow = PendingRow & { claim_id: number; claimed_ms: number };

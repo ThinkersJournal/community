@@ -8,6 +8,11 @@ import { CLIENT_COUNTRY_HEADER } from "@thinkersjournal/shared";
 
 import { applyClientCountryHeader, clientIpStore, edgeCountry, runWithClientIp } from "../src/lib/client-ip-store";
 
+/** `request` as the edge hands it over, with `cf.country` set to `country`. */
+function withCf(request: Request, country: unknown): Request {
+  return Object.assign(request, { cf: { country } });
+}
+
 /**
  * `X-TJ-Client-Country` (security-alerting spec §4.2): the same
  * overwrite, delete and enumeration cases as test/client-ip-store.test.ts has
@@ -15,18 +20,21 @@ import { applyClientCountryHeader, clientIpStore, edgeCountry, runWithClientIp }
  */
 describe("edgeCountry / runWithClientIp", () => {
   it("seeds the store with the edge's country for the life of `next`", () => {
-    const request = new Request("https://x.test/", { headers: { "CF-IPCountry": "DE", "CF-Connecting-IP": "203.0.113.9" } });
+    const request = withCf(new Request("https://x.test/", { headers: { "CF-Connecting-IP": "203.0.113.9" } }), "DE");
     expect(runWithClientIp(request, () => clientIpStore.getStore()?.clientCountry)).toBe("DE");
   });
 
-  it("prefers request.cf.country to the CF-IPCountry header", () => {
-    const request = Object.assign(new Request("https://x.test/", { headers: { "CF-IPCountry": "DE" } }), { cf: { country: "FR" } });
-    expect(edgeCountry(request)).toBe("FR");
+  // Final review M-4: request.cf.country is set by Cloudflare's edge and cannot
+  // be forged; a CF-IPCountry header can arrive from the client, so it is never read.
+  it("reads ONLY request.cf.country: a CF-IPCountry header is ignored, with or without cf", () => {
+    const spoofed = new Request("https://x.test/", { headers: { "CF-IPCountry": "DE" } });
+    expect(edgeCountry(spoofed)).toBeNull();
+    expect(edgeCountry(withCf(spoofed, "FR"))).toBe("FR"); // control: the cf value is read
   });
 
-  it.each([null, "de", "DEU", "203.0.113.9", "XX1"])("%j is not a country → null", (value) => {
-    const headers: Record<string, string> = value === null ? {} : { "CF-IPCountry": value };
-    expect(edgeCountry(new Request("https://x.test/", { headers }))).toBeNull();
+  // M-3: "XX" is Cloudflare's "unknown country", never a place.
+  it.each([null, undefined, 42, "de", "DEU", "203.0.113.9", "XX1", "XX"])("cf.country %j is not a country → null", (value) => {
+    expect(edgeCountry(withCf(new Request("https://x.test/"), value))).toBeNull();
   });
 });
 

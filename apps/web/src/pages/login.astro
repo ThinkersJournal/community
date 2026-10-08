@@ -47,6 +47,9 @@ if (Astro.request.method === "POST") {
     // origin here would launder a cross-site `Origin: evil.com` into a trusted
     // one and let evil.com log a victim into the ATTACKER's account.
     origin: Astro.request.headers.get("Origin") ?? "",
+    // The browser's device cookie ONLY (never the session), so the api knows a
+    // browser it has seen (security-alerting §4.1; final review C-1).
+    deviceCookieFrom: Astro.request,
   });
 
   if (response.status === 200) {

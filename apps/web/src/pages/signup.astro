@@ -60,7 +60,10 @@ if (Astro.request.method === "POST") {
       // carries no Origin of its own, so this must be passed explicitly; an
       // empty string is fine (the api falls back to Referer, then fails closed).
       origin: Astro.request.headers.get("Origin") ?? "",
-      // No `request`/cookie: signup is how a session first comes to exist.
+      // No `request`/session cookie: signup is how a session first comes to
+      // exist. Only the browser's device cookie is forwarded (security-alerting
+      // §4.1; final review C-1).
+      deviceCookieFrom: Astro.request,
     },
   );
 

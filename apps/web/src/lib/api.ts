@@ -44,6 +44,7 @@ import { env } from "cloudflare:workers";
 import { isApiErrorBody, type ApiErrorCode } from "@thinkersjournal/shared";
 
 import { applyClientCountryHeader, applyClientIpHeader, clientIpStore } from "./client-ip-store";
+import { applyDeviceCookie } from "./device-cookie-forward";
 import { resolveOutgoingBody } from "./outgoing-body";
 
 /** What every call through this module returns. */
@@ -95,6 +96,14 @@ export interface ApiFetchOptions {
    * this makes the call anonymous — only correct for genuinely public reads.
    */
   request?: Request;
+  /**
+   * The incoming browser request, for login, signup and reset ONLY: its device
+   * cookie (`__Host-tj_device`, dev `tj_device_dev`), and nothing else from its
+   * `Cookie` header, is forwarded (`deviceCookieOnly`), so the api recognises
+   * a browser it has seen (security-alerting spec §4.1; final review C-1).
+   * Ignored when `request` already forwarded the whole header.
+   */
+  deviceCookieFrom?: Request;
   /**
    * Value for the `Origin` header, FORWARDED FROM THE BROWSER'S REQUEST:
    *
@@ -160,7 +169,7 @@ export async function apiFetch<T = unknown>(
   path: string,
   options: ApiFetchOptions = {},
 ): Promise<ApiResponse<T>> {
-  const { method = "GET", body, request, origin, csrfToken, rawBody } = options;
+  const { method = "GET", body, request, deviceCookieFrom, origin, csrfToken, rawBody } = options;
 
   const headers = new Headers();
 
@@ -171,6 +180,7 @@ export async function apiFetch<T = unknown>(
   if (cookie !== null && cookie !== undefined) {
     headers.set("Cookie", cookie);
   }
+  applyDeviceCookie(headers, deviceCookieFrom);
 
   // The api's `checkOrigin` allowlist. A Service-Binding request has no Origin
   // unless we set one; without it every non-GET fails closed with a 403.

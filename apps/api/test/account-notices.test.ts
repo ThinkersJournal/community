@@ -18,6 +18,8 @@ import { withClient } from "../src/db/client";
 import { sendNotice } from "../src/security/account-notice-send";
 import { afterPasswordReset, afterSignIn } from "../src/security/account-notices-flow";
 import { DEVICE_LIST_CAP, type NoticeClaimResult } from "../src/security/user-devices";
+import type { UserSecurityDO } from "../src/durable-objects/UserSecurityDO";
+import { deviceCookieOnly } from "../../web/src/lib/device-cookie-forward";
 
 import { guardAlertingFaults, quiet } from "./helpers/security-do";
 
@@ -86,6 +88,17 @@ async function newUser(): Promise<{ email: string; id: string }> {
 }
 
 const tokenOf = (c: string) => c.padEnd(43, c).slice(0, 43);
+
+/**
+ * `quiet` for `UserSecurityDO`, with notices ON inside the object. The object
+ * reads `ACCOUNT_NOTICES_ENABLED` from its OWN env at send time (final review
+ * M-5), and the pool's env has it "0", so a test that drives a send turns it on
+ * through the `noticesEnabled` seam.
+ */
+function quietOn(u: Parameters<typeof quiet>[0] & Pick<UserSecurityDO, "noticesEnabled">): number[] {
+  u.noticesEnabled = () => true;
+  return quiet(u);
+}
 const event = (atMs: number, country: string | null = null) => ({ atMs, country, listWasEmpty: false });
 /** The route's handle on a send-now claim (review M-4); -1 for a deferred one. */
 const claimIdOf = (c: NoticeClaimResult) => (c.send === "now" ? c.claimId : -1);
@@ -202,7 +215,7 @@ describe("the device list: its cap, expiry and forgetDevices (§4.1)", () => {
     await quietRecord(id, tokenOf("A"), "login", now - DEVICE_TTL_MS - DAY);
     await quietRecord(id, tokenOf("B"), "login", now - DEVICE_TTL_MS + DAY);
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
-      quiet(u);
+      quietOn(u);
       await u.alarmAt(now);
     });
     expect(await deviceCount(id)).toBe(1);
@@ -215,7 +228,7 @@ describe("the device list: its cap, expiry and forgetDevices (§4.1)", () => {
     await quietRecord(id, tokenOf("A"), "login", now);
     await quietClaim(id, now, now + 3_600_000);
     const epoch = await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
-      quiet(u);
+      quietOn(u);
       const e = await u.bumpEpoch();
       await u.forgetDevices();
       return e;
@@ -232,7 +245,7 @@ describe("caps and deferral (§4.4)", () => {
     const t0 = Date.now();
     const sends: string[] = [];
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
-      quiet(u);
+      quietOn(u);
       for (let i = 0; i < 4; i++) {
         const claim = await u.claimNotice("new_sign_in", { atMs: t0 + i, country: null, listWasEmpty: false }, t0 + i, t0 + i);
         sends.push(claim.send);
@@ -260,7 +273,7 @@ describe("end states: Postmark refusals (§4.4)", () => {
     postmarkStatus = { status: 422, body: { ErrorCode: code } };
     const dropped: string[] = [];
     await runInDurableObject(stub, async (u, s) => {
-      quiet(u);
+      quietOn(u);
       u.ledgerFor = dropRecorder(dropped);
       await u.alarmAt(now + 60_000);
       expect(s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM pending_notice").one().n).toBe(0);
@@ -278,7 +291,7 @@ describe("end states: Postmark refusals (§4.4)", () => {
     postmarkStatus = { status: 503, body: {} };
     const dropped: string[] = [];
     await runInDurableObject(stub, async (u, s) => {
-      quiet(u);
+      quietOn(u);
       u.ledgerFor = dropRecorder(dropped);
       const delays: number[] = [];
       let at = t0 + 1;
@@ -306,7 +319,7 @@ describe("end states: account gone, and a route's claim settled (§4.4; P-5)", (
     await quietClaim(id, now, now + 1);
     const dropped: string[] = [];
     await runInDurableObject(stub, async (u) => {
-      quiet(u);
+      quietOn(u);
       u.ledgerFor = dropRecorder(dropped);
       await u.dropPendingNotices();
     });
@@ -323,7 +336,7 @@ describe("end states: account gone, and a route's claim settled (§4.4; P-5)", (
     const now = Date.now();
     await quietClaim(id, now - 60_000, now + 3_600_000); // an earlier sign-in, deferred
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
-      quiet(u);
+      quietOn(u);
       const claim = await u.claimNotice("new_sign_in", { atMs: now, country: null, listWasEmpty: false }, now, now);
       expect(claim).toEqual({ send: "now", claimId: expect.any(Number) as number, coalesced: { count: 1, sinceMs: now - 60_000 } });
       expect(await u.settleClaim(claimIdOf(claim), "transient", now + 1)).toBe(true);
@@ -336,7 +349,7 @@ describe("end states: account gone, and a route's claim settled (§4.4; P-5)", (
     const { id } = await newUser();
     const now = Date.now();
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
-      quiet(u);
+      quietOn(u);
       const claim = await u.claimNotice("new_sign_in", { atMs: now, country: null, listWasEmpty: false }, now, now);
       expect(await u.settleClaim(claimIdOf(claim), "sent", now + 1)).toBe(true);
       expect(await u.settleClaim(claimIdOf(claim), "sent", now + 2)).toBe(false); // settled once only
@@ -352,7 +365,7 @@ describe("claims cut off, and races across the send (R2-3, I-2)", () => {
     const now = Date.now();
     await quietClaim(id, now - 60_000, now + 3_600_000); // an earlier sign-in, deferred
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
-      quiet(u);
+      quietOn(u);
       const claim = await u.claimNotice("new_sign_in", { atMs: now, country: "DE", listWasEmpty: false }, now, now);
       expect(claim.send).toBe("now");
       // … and the route is cut off here: no send, no settleClaim.
@@ -372,7 +385,7 @@ describe("claims cut off, and races across the send (R2-3, I-2)", () => {
       const t0 = Date.now();
       await quietClaim(id, t0, t0 + 1);
       await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
-        quiet(u);
+        quietOn(u);
         u.noticeSender = async () => {
           // The input gate is open during the real send's awaits: a new sign-in folds now.
           await u.claimNotice("new_sign_in", { atMs: t0 + 5, country: "FR", listWasEmpty: false }, t0 + 5, t0 + 3_600_000);
@@ -394,7 +407,7 @@ describe("unknown owner, and what a deferred notice says (I-9, G2)", () => {
     const t0 = Date.now();
     await quietClaim(id, t0, t0 + 1);
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
-      quiet(u);
+      quietOn(u);
       s.storage.sql.exec("DELETE FROM owner");
       await u.alarmAt(t0 + 1);
       const rows = s.storage.sql.exec<{ attempts: number }>("SELECT attempts FROM pending_notice").toArray();
@@ -411,7 +424,7 @@ describe("unknown owner, and what a deferred notice says (I-9, G2)", () => {
     await quietClaim(id, t + 60_000, t + 5 * 3_600_000, "DE", false); // the takeover, folded: due keeps the earlier time
     expect((await pendingRows(id)).map((r) => r.due_ms)).toEqual([t + 2 * 3_600_000]);
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
-      quiet(u);
+      quietOn(u);
       await u.alarmAt(t + 2 * 3_600_000);
     });
     const text = mails.at(0)?.text ?? "";
@@ -462,7 +475,7 @@ describe("the alarm isolates each notice, and always re-arms (review M-2)", () =
     const t0 = Date.now();
     const sent: string[] = [];
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
-      const armed = quiet(u);
+      const armed = quietOn(u);
       await u.claimNotice("new_sign_in", event(t0), t0, t0 + 1);
       await u.claimNotice("password_reset", event(t0), t0, t0 + 2);
       u.noticeSender = (_env, _ctx, _id, facts) => {
@@ -488,7 +501,7 @@ describe("the cap counts a send in progress (review M-3)", () => {
     const t0 = Date.now();
     const during: string[] = [];
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
-      quiet(u);
+      quietOn(u);
       for (let i = 0; i < 2; i++) await u.claimNotice("new_sign_in", event(t0 + i), t0 + i, t0 + i); // two sends this hour
       await u.claimNotice("new_sign_in", event(t0 + 2), t0 + 2, t0 + 10); // deferred, under the cap
       u.noticeSender = async () => {
@@ -507,7 +520,7 @@ describe("two send-now claims in the same millisecond (review M-4)", () => {
     const { email, id } = await newUser();
     const now = Date.now();
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
-      quiet(u);
+      quietOn(u);
       const a = await u.claimNotice("new_sign_in", event(now), now, now);
       const b = await u.claimNotice("new_sign_in", event(now), now, now);
       expect(claimIdOf(a)).not.toBe(claimIdOf(b));
@@ -529,7 +542,7 @@ describe("account gone at send time, and repeated folds (review M-5)", () => {
     await quietClaim(id, now, now + 1);
     const dropped: string[] = [];
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
-      quiet(u);
+      quietOn(u);
       u.ledgerFor = dropRecorder(dropped);
       await u.alarmAt(now + 1);
     });
@@ -543,7 +556,7 @@ describe("account gone at send time, and repeated folds (review M-5)", () => {
     const { id } = await newUser();
     const t0 = Date.now();
     await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
-      quiet(u);
+      quietOn(u);
       for (const ago of [23, 23, 23, 20, 20, 20, 10, 10, 10, 0]) await u.claimNotice("new_sign_in", event(t0 - ago * HOUR), t0 - ago * HOUR, t0 - ago * HOUR);
       for (let i = 1; i <= 30; i++) {
         const at = t0 + i * HOUR;
@@ -597,7 +610,7 @@ const DEAD_DB = { ...ON, HYPERDRIVE_FRESH: { connectionString: "postgres://x:y@1
 /** Run the object's alarm at `atMs` with its alarm seam replaced. */
 async function quietAlarm(userId: string, atMs: number): Promise<void> {
   await runInDurableObject(env.USER_SECURITY.getByName(userId), async (u) => {
-    quiet(u);
+    quietOn(u);
     await u.alarmAt(atMs);
   });
 }
@@ -846,5 +859,118 @@ describe("takeover under saturation (F1; plan Task 19)", () => {
     const told = mails.filter((m) => m.to === victim.email);
     expect(told).toHaveLength(1);
     expect(told.at(0)?.text).toContain("also covers 1 other new sign-in since");
+  });
+});
+
+// ---- Final review fixes (C-1, M-1, M-2, M-5) ---------------------------------
+
+/** POST /auth/login with exactly `cookie` as the Cookie header (or none). */
+async function loginWithCookie(email: string, cookie: string | null) {
+  const ctx = createExecutionContext();
+  const headers = new Headers({ "content-type": "application/json", Origin: ORIGIN, "CF-Connecting-IP": uniqueIp() });
+  if (cookie !== null) headers.set("Cookie", cookie);
+  const res = await worker.fetch(
+    new Request("https://api.test/auth/login", { method: "POST", headers, body: JSON.stringify({ email, password: PASSWORD }) }),
+    ON,
+    ctx,
+  );
+  await waitOnExecutionContext(ctx);
+  return res;
+}
+
+describe("the web Worker's forwarded device cookie (final review C-1)", () => {
+  it("a second login carrying what web forwards from the browser's whole Cookie is a KNOWN browser: nothing mailed or queued", async () => {
+    const { email, id } = await newUser();
+    const first = await login(email, null);
+    mails = [];
+    const browser = `tj_session_dev=stale; ${DEV_COOKIE}${first.token ?? ""}; theme=dark`;
+    const forwarded = deviceCookieOnly(browser);
+    expect(forwarded).toBe(`${DEV_COOKIE}${first.token ?? ""}`); // only the device pair
+    const second = await loginWithCookie(email, forwarded);
+    expect(second.status).toBe(200);
+    expect(second.headers.getSetCookie()).toHaveLength(1); // no new device cookie
+    expect(mails).toHaveLength(0);
+    expect(await pendingRows(id)).toEqual([]);
+    expect(await deviceCount(id)).toBe(1);
+  });
+});
+
+describe("a reset without DEVICE_HASH_KEY (final review M-1)", () => {
+  it("still clears every browser, so a browser recorded before is NEW once the same key is back", async () => {
+    const { email, id } = await newUser();
+    const before = await login(email, null); // recorded under the test key
+    expect(await deviceCount(id)).toBe(1);
+    const noKey: Env = { ...ON, DEVICE_HASH_KEY: "" };
+    await flow((ctx) => afterPasswordReset(noKey, ctx, { userId: id, token: tokenOf("R"), country: null, nowMs: Date.now() }));
+    expect(await deviceCount(id)).toBe(0);
+    mails = [];
+    await login(email, before.token); // the SAME key restored, as the runbook says
+    expect(mails).toHaveLength(1);
+  });
+});
+
+describe("a reaper's drop during a send in progress (final review M-2)", () => {
+  it.each(["transient", "permanent", "sent"] as const)("the send ends %s: nothing comes back, and the drop is logged once", async (outcome) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { id } = await newUser();
+    const t0 = Date.now();
+    await quietClaim(id, t0, t0 + 1);
+    const dropped: string[] = [];
+    await runInDurableObject(env.USER_SECURITY.getByName(id), async (u, s) => {
+      quietOn(u);
+      u.ledgerFor = dropRecorder(dropped);
+      u.noticeSender = async () => {
+        await u.dropPendingNotices(); // the reaper, while Postmark is answering
+        return outcome;
+      };
+      await u.alarmAt(t0 + 1);
+      const left = s.storage.sql.exec<{ n: number }>(
+        "SELECT (SELECT COUNT(*) FROM pending_notice) + (SELECT COUNT(*) FROM inflight_notice) + (SELECT COUNT(*) FROM claimed_notice) AS n",
+      ).one().n;
+      expect(left).toBe(0);
+    });
+    expect(warn.mock.calls.filter((c) => String(c[0]).startsWith("account-notice: dropped "))).toEqual([
+      ["account-notice: dropped dropped_account_gone new_sign_in"],
+    ]);
+    expect(dropped).toEqual([]);
+  });
+});
+
+describe("notices off at SEND time (final review M-5)", () => {
+  it("a queued notice is HELD while the flag is off: not sent, not dropped; it goes once the flag is on", async () => {
+    const { email, id } = await newUser();
+    const t0 = Date.now();
+    await quietClaim(id, t0, t0 + 1);
+    const stub = env.USER_SECURITY.getByName(id);
+    const due = await runInDurableObject(stub, async (u, s) => {
+      quiet(u); // the object's own env: ACCOUNT_NOTICES_ENABLED "0"
+      await u.alarmAt(t0 + 1);
+      return s.storage.sql.exec<{ due_ms: number; count: number }>("SELECT due_ms, count FROM pending_notice").toArray();
+    });
+    expect(postmarkCalls()).toBe(0);
+    expect(due.map((r) => r.count)).toEqual([1]);
+    expect(due.at(0)?.due_ms ?? 0).toBeGreaterThan(t0 + 1); // re-armed later, so the alarm does not spin
+    await runInDurableObject(stub, async (u) => {
+      quietOn(u);
+      await u.alarmAt(due.at(0)?.due_ms ?? 0);
+    });
+    expect(mails.map((m) => m.to)).toEqual([email]);
+  });
+
+  it("a held notice still ages out under NOTICE_MAX_AGE_MS: dropped_expired, never sent", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { id } = await newUser();
+    const t0 = Date.now();
+    await quietClaim(id, t0, t0 + 1);
+    const dropped: string[] = [];
+    await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
+      quiet(u);
+      u.ledgerFor = dropRecorder(dropped);
+      await u.alarmAt(t0 + NOTICE_MAX_AGE_MS);
+    });
+    expect(postmarkCalls()).toBe(0);
+    expect(await pendingRows(id)).toEqual([]);
+    expect(dropped).toEqual(["dropped_expired"]);
+    expect(warn.mock.calls.filter((c) => c[0] === "account-notice: dropped dropped_expired new_sign_in")).toHaveLength(1);
   });
 });

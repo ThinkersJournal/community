@@ -66,7 +66,10 @@ export async function afterSignIn(
 /**
  * A completed reset, on BOTH 200 paths. `token` is null on the barred path,
  * which mints no device cookie and forgets every browser (§4.1 m4). The reset
- * notice does not depend on the key.
+ * notice does not depend on the key, and neither does clearing (final review
+ * M-1): with no key this browser cannot be hashed, so EVERY browser is
+ * forgotten, and none recorded before the reset is still "known" once the key
+ * is back.
  */
 export async function afterPasswordReset(
   env: Env,
@@ -76,8 +79,8 @@ export async function afterPasswordReset(
   try {
     const stub = env.USER_SECURITY.getByName(s.userId);
     const keys = resolveDeviceKeys(env);
-    if (s.token === null) await stub.forgetDevices();
-    else if (keys !== null) await stub.recordDevice(await deviceHashes(keys, s.userId, s.token), s.nowMs, "reset");
+    if (s.token === null || keys === null) await stub.forgetDevices();
+    else await stub.recordDevice(await deviceHashes(keys, s.userId, s.token), s.nowMs, "reset");
     await notify(env, ctx, s.userId, "password_reset", { atMs: s.nowMs, country: s.country, listWasEmpty: false }, s.nowMs);
   } catch (err) {
     console.error("account-notice: reset follow-up failed", err instanceof Error ? err.name : "threw");

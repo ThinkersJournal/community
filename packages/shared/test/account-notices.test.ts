@@ -110,10 +110,17 @@ describe("device keys and hashes (PR 2; N5)", () => {
 describe("notice text (PR 2; §4.2)", () => {
   const base = { at: new Date(NOW), coalesced: null, forgotPasswordUrl: URL_ };
 
-  it("names the country, never an IP; a bad code omits the phrase", () => {
-    expect(newSignInNotice({ ...base, country: "DE", listWasEmpty: false }).textBody).toContain("(approximate)");
-    expect(newSignInNotice({ ...base, country: "de", listWasEmpty: false }).textBody).not.toContain(" from ");
-    expect(newSignInNotice({ ...base, country: null, listWasEmpty: false }).textBody).not.toContain(" from ");
+  it("names the country, never an IP", () => {
+    expect(newSignInNotice({ ...base, country: "DE", listWasEmpty: false }).textBody).toContain("from Germany (approximate)");
+  });
+
+  // Final review M-3 (coordinator ruling): an absent, malformed or unknown (`XX`,
+  // Cloudflare's "unknown") country reads "from an unknown location", in both notices.
+  it.each([null, "de", "XX"])("country %j → 'from an unknown location', never a code", (country) => {
+    for (const text of [newSignInNotice({ ...base, country, listWasEmpty: false }), passwordResetNotice({ ...base, country })]) {
+      expect(text.textBody).toContain(" from an unknown location");
+      expect(text.textBody).not.toContain("(approximate)");
+    }
   });
 
   it("the empty-list sentence appears only for an empty list", () => {

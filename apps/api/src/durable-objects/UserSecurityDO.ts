@@ -38,6 +38,7 @@ import {
   allPending,
   claimNoticeSync,
   detachDue,
+  holdDue,
   mergePending,
   NOTICE_KINDS,
   overdueClaims,
@@ -72,6 +73,8 @@ export class UserSecurityDO extends DurableObject<Env> {
   noticeSender: typeof sendNotice = sendNotice;
   /** TEST SEAM: where a Postmark drop is reported. */
   ledgerFor: () => NoticeDropRpc = () => this.env.SECURITY_LEDGER.getByName("ledger");
+  /** TEST SEAM: whether notices are on at SEND time (final review M-5); production reads this object's own env. */
+  noticesEnabled: () => boolean = () => this.env.ACCOUNT_NOTICES_ENABLED === "1";
   /** TEST SEAM: where the next alarm goes (null clears it), so a real alarm never races `alarmAt`. */
   armAt: (ms: number | null) => Promise<void> = (ms) =>
     ms === null ? this.ctx.storage.deleteAlarm() : this.ctx.storage.setAlarm(ms);
@@ -273,6 +276,10 @@ export class UserSecurityDO extends DurableObject<Env> {
   }
 
   private async sendPending(kind: AccountNoticeKind, nowMs: number): Promise<void> {
+    if (!this.noticesEnabled()) {
+      await this.holdPending(kind, nowMs);
+      return;
+    }
     // Detach BEFORE the await (audit I-2), on fresh state (review M-3): a sign-in
     // folded while Postmark is answering lands in a fresh pending row, which
     // settle never touches, and sees this send's cap slot.
@@ -306,24 +313,48 @@ export class UserSecurityDO extends DurableObject<Env> {
   }
 
   /**
+   * Final review M-5: notices are off at send time, so nothing is sent. The due
+   * notice is held (see `holdDue`), or, once too old, ends `dropped_expired`.
+   */
+  private async holdPending(kind: AccountNoticeKind, nowMs: number): Promise<void> {
+    const expired = this.ctx.storage.transactionSync(() => holdDue(this.sql, kind, nowMs));
+    if (expired === null) {
+      console.warn(`account-notice: held ${kind}`);
+      return;
+    }
+    await this.endDropped(expired.kind, "dropped_expired");
+  }
+
+  /**
    * The named end states (§4.4 G1). Only the detached in-flight row is settled;
    * pending folds are untouched. `nowMs` is the detach time, so it names the cap
    * slot this send took: kept when the mail went out, given back otherwise.
+   *
+   * Final review M-2: if the in-flight row is gone, a reaper's
+   * `dropPendingNotices` ended this notice (and logged it) while Postmark was
+   * answering. Nothing is merged back, and nothing is logged twice.
    */
   private async settle(p: PendingNotice, result: NoticeSendResult, nowMs: number): Promise<void> {
     const retry = result === "transient" && nowMs - p.firstEventMs < NOTICE_MAX_AGE_MS;
-    this.ctx.storage.transactionSync(() => {
+    const live = this.ctx.storage.transactionSync(() => {
+      const inflight = this.sql.exec("SELECT 1 FROM inflight_notice WHERE kind = ?", p.kind).toArray().length > 0;
+      if (!inflight) return false;
       this.sql.exec("DELETE FROM inflight_notice WHERE kind = ?", p.kind);
       if (result !== "sent") releaseSlot(this.sql, p.kind, nowMs);
       if (retry) mergePending(this.sql, { ...p, attempts: p.attempts + 1, dueMs: nowMs + noticeRetryDelayMs(p.attempts + 1) });
+      return true;
     });
-    if (retry || result === "sent") return;
+    if (!live || retry || result === "sent") return;
     if (result === "gone") {
       logNoticeEnd("dropped_account_gone", p.kind);
       return;
     }
-    const state = result === "permanent" ? "dropped_permanent_refusal" : "dropped_expired";
-    logNoticeEnd(state, p.kind);
+    await this.endDropped(p.kind, result === "permanent" ? "dropped_permanent_refusal" : "dropped_expired");
+  }
+
+  /** A Postmark-side end state: logged once, and told to the ledger (§4.4). */
+  private async endDropped(kind: AccountNoticeKind, state: "dropped_permanent_refusal" | "dropped_expired"): Promise<void> {
+    logNoticeEnd(state, kind);
     try {
       await this.ledgerFor().noticeDropped(state);
     } catch {

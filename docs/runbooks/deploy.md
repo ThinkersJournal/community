@@ -286,6 +286,14 @@ Use these steps instead, in order, stopping at the first one that is enough:
    page), so `v5` can never be reused: bringing the classes back later needs a
    new tag (`v6`) with `new_sqlite_classes`.
 
+**Reverting PR 2 (browsers and notices) follows step 2's pattern: revert behaviour, keep the class.**
+PR 2 adds no Durable Object class or migration, but every `UserSecurityDO` that recorded a browser
+holds a stored alarm (up to 400 days out), and a class without an `alarm()` handler turns each one into
+a failing, retried invocation. So keep `UserSecurityDO` and its `alarm()` as they are, and revert only the
+wiring: the `afterSignIn`/`afterPasswordReset` calls in login, signup and reset, and the web Worker's
+`deviceCookieFrom` and `applyClientCountryHeader` lines. (If the class must change, leave it a no-op
+`async alarm() { await this.ctx.storage.deleteAlarm(); }`.)
+
 ## Destructive migrations
 
 Mark a destructive migration (drop column, drop table, rename, `NOT NULL`

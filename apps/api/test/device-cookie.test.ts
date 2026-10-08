@@ -50,6 +50,7 @@ describe("readDeviceToken / deviceCookieFor", () => {
     expect(clientCountry(req(undefined, { "X-TJ-Client-Country": "de" }))).toBeNull();
     expect(clientCountry(req(undefined, { "X-TJ-Client-Country": "203.0.113.9" }))).toBeNull();
     expect(clientCountry(req())).toBeNull();
+    expect(clientCountry(req(undefined, { "X-TJ-Client-Country": "XX" }))).toBeNull(); // M-3: Cloudflare's "unknown"
   });
 });
 

@@ -256,8 +256,12 @@ export interface NoticeText {
   readonly textBody: string;
 }
 
+/** What a notice says when the edge gave no usable country (final review M-3). */
+const UNKNOWN_PLACE = " from an unknown location";
+
 function where(country: string | null): string {
-  if (country === null || !/^[A-Z]{2}$/.test(country)) return "";
+  // `XX` is Cloudflare's "unknown country" code, not a place.
+  if (country === null || country === "XX" || !/^[A-Z]{2}$/.test(country)) return UNKNOWN_PLACE;
   try {
     const name = new Intl.DisplayNames(["en"], { type: "region" }).of(country);
     return ` from ${name ?? country} (approximate)`;

@@ -26,16 +26,18 @@ export interface ClientIpStore {
 const COUNTRY_RE = /^[A-Z]{2}$/;
 
 /**
- * The edge's country for `request`: `request.cf.country` when the adapter
- * passes the incoming request through, else the `CF-IPCountry` header. Which
- * one reaches the middleware under @astrojs/cloudflare is implementer
- * confirmation 5 (plan Task 20; only a deployed Worker can answer it). A value
- * that is not two capital letters is null. Never an IP.
+ * The edge's country for `request`: `request.cf.country` ONLY, which
+ * Cloudflare's edge sets and a client cannot forge. Final review M-4: the
+ * `CF-IPCountry` header is NOT read, because a client can send one and whether
+ * the edge overwrites it depends on a zone setting. If the adapter does not pass
+ * `cf` through, the country is null and notices say "an unknown location":
+ * implementer confirmation 5 (plan Task 20) checks on a deployed Worker that
+ * `cf.country` reaches the middleware. A value that is not two capital letters,
+ * or `XX` (Cloudflare's "unknown", M-3), is null. Never an IP.
  */
 export function edgeCountry(request: Request): string | null {
-  const cf = (request as Request & { cf?: { country?: unknown } }).cf;
-  const raw = typeof cf?.country === "string" ? cf.country : request.headers.get("CF-IPCountry");
-  return raw !== null && COUNTRY_RE.test(raw) ? raw : null;
+  const raw = (request as Request & { cf?: { country?: unknown } }).cf?.country;
+  return typeof raw === "string" && COUNTRY_RE.test(raw) && raw !== "XX" ? raw : null;
 }
 
 export const clientIpStore = new AsyncLocalStorage<ClientIpStore>();
