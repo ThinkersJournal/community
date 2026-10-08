@@ -1,0 +1,15 @@
+<!--
+PROVES: nothing about the spike's claims; it is the permissive resource policy (8GiB memory/map/disk, 1GP area, 64KP width/height, no coder or path rules) used only to generate the 50 MP fixtures in stageb1.sh. By its content.
+INPUTS: copied by stageb1.sh to /tmp/pol/open/policy.xml and selected with MAGICK_CONFIGURE_PATH inside the container (/s/pol/open.xml).
+EFFECTS: none by itself; when selected, it removes the production limits for that ImageMagick process.
+BENIGN: it issues no docker, wsl or host-level kill/stop/prune command; run only inside a throwaway container you created yourself with a unique name such as tjspike1-* (never touch other containers). (This is a configuration file; it executes nothing itself.)
+ARCHIVED: preserved verbatim from the spike session.
+-->
+<policymap>
+  <policy domain="resource" name="memory" value="8GiB"/>
+  <policy domain="resource" name="map" value="8GiB"/>
+  <policy domain="resource" name="disk" value="8GiB"/>
+  <policy domain="resource" name="area" value="1GP"/>
+  <policy domain="resource" name="width" value="64KP"/>
+  <policy domain="resource" name="height" value="64KP"/>
+</policymap>

@@ -5,8 +5,8 @@ Provider named only as HMS-A. No abusive or questionable material, no HMS-A call
 
 **Read this first.** The spike ran on **Docker Desktop (WSL2 backend) on the founder's Windows box, not on the production
 VPS**. It is **not a pass of the whole design.** It answers the resize/hash-fidelity questions (C3/C6 in part) and several
-no-disk questions. The items listed in section 7 are still open. Raw outputs and scripts were kept locally by the spike
-author (not committed); fixture images are not committed.
+no-disk questions. The items listed in section 7 are still open. The spike scripts are committed under `scripts/pass1/` (see `scripts/README.md`); raw outputs and
+fixture images are not committed.
 
 ## 1. Environment
 
