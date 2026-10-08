@@ -5,12 +5,9 @@
 
 ## Rulings
 
-CireSnave, 2026-10-08 (the only words of his that this design quotes; the draft carried no longer quotation):
+CireSnave, 2026-10-08, relayed verbatim by the PM (board 137):
 
-> "ImageMagick on my VPS to do image conversions"
-
-CireSnave's later acceptance of multiple VPSes (section 7, item 3) is paraphrased in this design, not quoted.
-D11 ruling, relayed by the PM: the recheck must exist and must not gate launch (section 6).
+> "Get the D11 recheck on the roadmap so we get the recheck built.  You're right that it shouldn't hold launch but needs to exist.  Lets go with using ImageMagick on my VPS to do image conversions.  I don't think we need to worry about my VPS holding potentially illegal child imagery so long as it receives an image, checks it, and returns the result without storing it on the VPS's drive.  If we work it that way, it is part of a system used by our services as a whole and our services already have the mechanism in place to catch and report bad images.  For rechecks that aren't performed on our system, we don't need to worry about a diff...I was only talking about a diff as an optimization for checks we run ourselves.  We will eventually expand to multiple VPSs or some sort of cloud service to replace the parts that currently run on my VPS so we don't need to worry about outages."
 
 PM rulings, 2026-10-08:
 
