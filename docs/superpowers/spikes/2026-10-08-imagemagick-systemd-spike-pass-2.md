@@ -341,6 +341,8 @@ the design doc, section 3.3.
    `MemoryDenyWriteExecute` with the VPS's Python/ImageMagick build, `PrivateNetwork` with socket activation, `ProtectProc=invisible`
    with its systemd version, whether `/tmp` is tmpfs or disk (`findmnt -no FSTYPE /tmp /var/tmp /dev/shm`; `/var/tmp` was
    disk-backed ext4 here), and that the pipe `core_pattern` handler actually exists on that kernel.
+   The proof-suite scripts (`t1` to `t7`, `t2b`, `t2c`, the `wrapper.py` harness and the unit files) are committed under
+   `scripts/pass2/`; `scripts/README.md` lists the environment variables they need.
 7. **Real CPU/RAM sizing.** `nproc; lscpu | grep -E 'Model name|Flags' | grep -o -E 'Model name.*|avx2|sse4_2'; free -m; cat
    /sys/fs/cgroup/system.slice/tj-decoder.service/memory.max` and the latency script on the VPS; then `systemd-run --wait --pipe -p
    MemoryMax=2G -p CPUQuota=200% ...` with 3 to 4 simultaneous 50 MP uploads, reading `memory.peak` / `memory.events` (`oom_kill
