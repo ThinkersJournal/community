@@ -51,7 +51,8 @@ export function sessionAndDeviceHeaders(sessionCookie: string, device: DeviceCoo
   const headers = new Headers();
   if (json) headers.set("content-type", "application/json");
   headers.append("Set-Cookie", sessionCookie);
-  if (device !== null && device.setCookie !== null) headers.append("Set-Cookie", device.setCookie);
+  const deviceCookie = device?.setCookie ?? null;
+  if (deviceCookie !== null) headers.append("Set-Cookie", deviceCookie);
   return headers;
 }
 

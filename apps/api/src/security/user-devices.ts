@@ -18,6 +18,8 @@ import {
   type SignInRecord,
 } from "@thinkersjournal/shared";
 
+import type { Nullable } from "./ledger-store";
+
 /** At most this many browsers per account; the least recently seen is evicted (§4.1). */
 export const DEVICE_LIST_CAP = 20;
 const DAY_MS = 86_400_000;
@@ -54,10 +56,28 @@ export const USER_DEVICE_SCHEMA: readonly string[] = [
 /** Both notice kinds, in the order the alarm sends them. */
 export const NOTICE_KINDS: readonly AccountNoticeKind[] = ["new_sign_in", "password_reset"];
 
-/** `claimNotice`'s answer in this object: a send-now claim carries the id the route settles it by (review M-4). */
-export type NoticeClaimResult =
-  | (Extract<NoticeClaim, { send: "now" }> & { readonly claimId: number })
-  | Extract<NoticeClaim, { send: "deferred" }>;
+/** A send-now claim: the shared `NoticeClaim`'s "now" arm plus the id the route settles it by (review M-4). */
+export interface NoticeClaimNow {
+  readonly send: "now";
+  readonly claimId: number;
+  /** Earlier sign-ins folded into this notice, and when the first of them happened. */
+  readonly coalesced: Nullable<{ readonly count: number; readonly sinceMs: number }>;
+}
+
+/** A deferred claim: the shared `NoticeClaim`'s "deferred" arm. */
+export interface NoticeClaimDeferred {
+  readonly send: "deferred";
+  readonly dueMs: number;
+}
+
+/**
+ * Written out as local types (not `Extract<NoticeClaim, …>`) so static analysis
+ * that cannot resolve the shared package still sees the members.
+ * `ShapedAsNoticeClaim` keeps the compiler checking that both arms stay
+ * assignable to the shared `NoticeClaim`.
+ */
+type ShapedAsNoticeClaim<T extends NoticeClaim> = T;
+export type NoticeClaimResult = ShapedAsNoticeClaim<NoticeClaimNow> | ShapedAsNoticeClaim<NoticeClaimDeferred>;
 
 type NoticeTable = "pending_notice" | "inflight_notice" | "claimed_notice";
 
@@ -109,7 +129,7 @@ export function recordDeviceSync(sql: SqlStorage, h: DeviceHashes, nowMs: number
   return { knownDevice: cur !== undefined || old !== undefined, listWasEmpty, unknownKeysOnly };
 }
 
-export function readPending(sql: SqlStorage, kind: AccountNoticeKind, table: NoticeTable = "pending_notice"): PendingNotice | null {
+export function readPending(sql: SqlStorage, kind: AccountNoticeKind, table: NoticeTable = "pending_notice"): Nullable<PendingNotice> {
   const row = sql.exec<PendingRow>(`SELECT * FROM ${table} WHERE kind = ?`, kind).toArray().at(0);
   return row === undefined ? null : toPending(row);
 }
@@ -194,7 +214,7 @@ export function releaseSlot(sql: SqlStorage, kind: AccountNoticeKind, atMs: numb
  * `inflight_notice` (due = `nowMs`, the slot it holds) with a cap slot taken. A
  * notice the cap now refuses is re-deferred to when the cap reopens.
  */
-export function detachDue(sql: SqlStorage, kind: AccountNoticeKind, nowMs: number): PendingNotice | null {
+export function detachDue(sql: SqlStorage, kind: AccountNoticeKind, nowMs: number): Nullable<PendingNotice> {
   const p = readPending(sql, kind);
   if (p === null || p.dueMs > nowMs) return null;
   const sent = sentTimes(sql, kind, nowMs);
@@ -218,7 +238,7 @@ export const NOTICE_HOLD_MS = 3_600_000;
  * `dropped_expired` once it is `NOTICE_MAX_AGE_MS` old. Null when nothing is due
  * or it was held.
  */
-export function holdDue(sql: SqlStorage, kind: AccountNoticeKind, nowMs: number): PendingNotice | null {
+export function holdDue(sql: SqlStorage, kind: AccountNoticeKind, nowMs: number): Nullable<PendingNotice> {
   const p = readPending(sql, kind);
   if (p === null || p.dueMs > nowMs) return null;
   if (nowMs - p.firstEventMs >= NOTICE_MAX_AGE_MS) {
