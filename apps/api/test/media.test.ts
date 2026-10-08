@@ -604,6 +604,31 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
     }
   });
 
+  it("a held-key refusal stores nothing for the re-uploader, including no original hashes (#114 Task 12)", async () => {
+    const owner = await createVerifiedActor();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { image, key } = await uploadUnique(owner);
+      await imposeHoldThroughModeration(await seedHiddenPostReferencing(owner, key));
+      const reuploader = await createVerifiedActor();
+      const rowsFor = (userId: string) =>
+        ctxRun(async (c) => {
+          const { rows } = await c.query<{ n: number }>(
+            "SELECT count(*)::int AS n FROM media WHERE owner_id = $1",
+            [userId],
+          );
+          return rows[0]!.n;
+        });
+      expect(await rowsFor(reuploader.userId)).toBe(0);
+      expect((await fetchWorker(upload(image, reuploader))).status).toBe(415);
+      expect(await rowsFor(reuploader.userId)).toBe(0);
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("CONTROL: an UNHELD duplicate upload still succeeds, idempotently", async () => {
     const owner = await createVerifiedActor(); // its own MEDIA_LIMITER bucket (20/min per user)
     const { image, key } = await uploadUnique(owner);
@@ -679,7 +704,7 @@ describe("the original upload's hashes are recorded (#114 Task 12)", () => {
     expect(row.sha256).not.toBe(row.original_sha256);
   });
 
-  it("a refused upload (415 SVG, 415 arbitrary bytes, 413 oversize) stores nothing", async () => {
+  it("a refused upload (415 SVG, 415 arbitrary bytes, 413 oversize, 403 quota) stores nothing", async () => {
     const owner = await createVerifiedActor();
     // Control: an accepted upload does store a row for this owner.
     expect((await fetchWorker(upload(uniquePng(), owner))).status).toBe(201);
@@ -691,5 +716,19 @@ describe("the original upload's hashes are recorded (#114 Task 12)", () => {
     expect((await fetchWorker(upload(oversizeBytes(MAX_UPLOAD_BYTES), owner))).status).toBe(413);
 
     expect(await ownerRowCount(owner.userId)).toBe(before);
+
+    // 403 quota: a seeded row at the cap, then a refusal that adds no second row.
+    const broke = await createVerifiedActor();
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query(
+        "INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height) VALUES ($1,'seed','seed',$2,1,1)",
+        [broke.userId, MEDIA_QUOTA_BYTES],
+      ),
+    );
+    await waitOnExecutionContext(ctx);
+    expect(await ownerRowCount(broke.userId)).toBe(1);
+    expect((await fetchWorker(upload(uniquePng(), broke))).status).toBe(403);
+    expect(await ownerRowCount(broke.userId)).toBe(1);
   });
 });

@@ -16,8 +16,10 @@
  *   5. IMAGES.info() cross-check   -> 415. FREE; catches LYING signatures.
  *      + pixel-bomb bound          -> 413.
  *   6. quota (FRESH)               -> 403. BEFORE paying for a transform.
- *   6b. MD5/SHA-1/SHA-256 of the ORIGINAL bytes (#114 Task 12). Only a request
- *      that passed every check above is hashed; a refusal stores nothing.
+ *   6b. MD5/SHA-1/SHA-256 of the ORIGINAL bytes (#114 Task 12). Done after the
+ *      validity and quota checks above. Steps 7 and 8b can still refuse (the
+ *      transform yields nothing; the key is legally held) and discard the
+ *      hashes: nothing is stored on any refusal path.
  *   7. transform -> WebP           THE POLYGLOT DEFENSE (EXIF auto-stripped).
  *   8. SHA-256 the OUTPUT
  *      + legal hold on that key   -> 415 (generic). Re-checked by step 10.
@@ -108,8 +110,12 @@ function mediaKey(hash: string): string {
  * MD5, SHA-1 and SHA-256 (lowercase hex) of the uploaded bytes. ⚠️ MD5 and SHA-1
  * are for matching published hash lists only. `"MD5"` is accepted by Workers'
  * `crypto.subtle.digest` as a Cloudflare extension; if the runtime ever stopped
- * accepting it the digest rejects and the upload fails closed with a 500 rather
- * than storing a row with a missing hash.
+ * accepting it the digest rejects. That rejection is not caught here: the upload
+ * fails closed with nothing stored (never a row with a missing hash) and surfaces
+ * as an uncaught/platform error, not as the app's JSON error body.
+ *
+ * SEQUENTIAL ON PURPOSE: each digest may copy the (up to 15MiB) buffer, so running
+ * them concurrently would hold up to three copies at once.
  */
 async function originalHashes(
   bytes: Uint8Array<ArrayBuffer>,
@@ -118,11 +124,9 @@ async function originalHashes(
     Array.from(new Uint8Array(d))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
-  const [md5, sha1, sha256] = await Promise.all([
-    crypto.subtle.digest("MD5", bytes),
-    crypto.subtle.digest("SHA-1", bytes),
-    crypto.subtle.digest("SHA-256", bytes),
-  ]);
+  const md5 = await crypto.subtle.digest("MD5", bytes);
+  const sha1 = await crypto.subtle.digest("SHA-1", bytes);
+  const sha256 = await crypto.subtle.digest("SHA-256", bytes);
   return { md5: hex(md5), sha1: hex(sha1), sha256: hex(sha256) };
 }
 

@@ -203,6 +203,13 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "profiles")).toBe(false);
       expect(await tableExists(client, "posts")).toBe(false);
       expect(await tableExists(client, "media")).toBe(false);
+      // 0027 — its tables are gone. (media_original_sha256_idx went with the
+      // media table itself: after a full down the index cannot be checked
+      // separately from the table drop, so only the tables are asserted.)
+      expect(await tableExists(client, "upload_scan_outcomes")).toBe(false);
+      expect(await tableExists(client, "media_scan_backfill")).toBe(false);
+      expect(await tableExists(client, "media_scan_backfill_progress")).toBe(false);
+      expect(await indexExists(client, "media_original_sha256_idx")).toBe(false);
       expect(await tableExists(client, "blocks")).toBe(false);
       expect(await tableExists(client, "reports")).toBe(false);
       expect(await tableExists(client, "moderation_actions")).toBe(false);
