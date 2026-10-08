@@ -1,7 +1,8 @@
 # D7 (stateless ImageMagick VPS decoder) and D11 (post-launch recheck) — design
 
-**Status:** Revision 1, 2026-10-08, PROPOSAL. The C3/C6 spike has NOT been run, no numbers exist. Docs only. Part of #114.
+**Status:** Revision 2, 2026-10-08, PROPOSAL. The C3/C6 spike has been **partly run** on Docker Desktop (WSL2), **not on the VPS**; results are in `../spikes/2026-10-08-imagemagick-pdq-spike.md` (the "spike"). It is **not a pass of the whole design.** Still open: C7 (WebP determinism), `cloudflared` body spooling and no-disk proof steps 7 and 8, the systemd directives, latency, non-sRGB ICC / HEIC / TIFF input, behaviour on the VPS host itself, and the TS-port leg of C5/C6 (the port does not exist yet). Docs only. Part of #114.
 **Amends:** `2026-10-07-upload-scan-design.md` (revision 3). Its amendments are listed in section 8 below.
+**Revision 2** replaces the assumed pipeline and `policy.xml` of revision 1 with the ones the spike proved, and adds the hard rules the spike found (sections 3.1, 3.2). Two contract decisions were APPROVED by the PM on 2026-10-08 after the spike: `-alpha off` for the scan frame, and native-size frames for small images (section 2.3).
 
 ## Rulings
 
@@ -11,14 +12,24 @@ CireSnave, 2026-10-08, relayed verbatim by the PM (board 137):
 
 PM rulings, 2026-10-08:
 
-1. All three transforms (the header and pixel-bound check, the 512x512 raw scan frame, and `toWebp`) move to ONE stateless
+1. All three transforms (the header and pixel-bound check, the raw scan frame, and `toWebp`) move to ONE stateless
    VPS endpoint. There is no fallback decoder: the service fails closed.
 2. Cloudflare Tunnel, application-level HMAC, and a Cloudflare Access service token are approved (sections 2.1 and 2.2).
 3. New alarm U11 is approved (section 2.6).
 4. A separate `decoder_credentials_refused` outcome is approved (section 2.6).
 5. The D11 roadmap text already lives in `PORTFOLIO-ROADMAP.md`, which the PM owns. Section 6 points to it and does not
    repeat it.
-6. Section 3.3 (what CireSnave must set up on the VPS) is NOT YET BOARDED. The PM boards it only after the spike passes.
+6. Section 3.3 (what CireSnave must set up on the VPS) is NOT YET BOARDED. The PM boards it only after a second spike pass.
+
+PM rulings on the spike, 2026-10-08:
+
+7. Alpha: `-alpha off` for the scan frame is APPROVED. The stored WebP is a separate transform.
+8. Small images: native size for images with both sides <= 512 (no upscale) is APPROVED. The scan-frame contract becomes variable
+   width and height, with explicit dimensions in the signed response header (section 2.3).
+9. The spike's pipeline is approved. "Point first" (revision 1) is **withdrawn**.
+10. The hardening findings are DESIGN RULES, not suggestions (section 3.1): seekable stdin only; any non-empty stderr is failure;
+    time limits through `MAGICK_TIME_LIMIT` / `-limit time`; `LimitCORE=0`; swap off for tmpfs files.
+11. The design stays a PROPOSAL pending a second pass (section 3.3). Nothing in that list is claimed to pass.
 
 Labels used below: **READ** = seen in the files named under it; **INFERRED** = reasoning; **UNVERIFIED** = needs the
 spike or CireSnave. Unverified items stay unverified until the spike reports.
@@ -45,7 +56,7 @@ Provider = HMS-A only.
 
 ## 1. Recommendation: what moves
 
-**Move all three to one VPS endpoint: header inspection (`.info()` equivalent + pixel bound), the 512x512 raw scan frame,
+**Move all three to one VPS endpoint: header inspection (`.info()` equivalent + pixel bound), the raw scan frame (512x512, or native size when both sides are <= 512, section 2.3),
 and the WebP conversion. One request, one upload of the bytes, one decode pass, three outputs.**
 
 Why one call rather than "scan decode only" or "toWebp only":
@@ -133,10 +144,13 @@ signed headers: `X-TJ-Format` (Worker's sniff: jpeg|png|gif|webp; service re-sni
 
 200 response, `application/octet-stream`, one framed body (no multipart): `u32be headerLen | header JSON | rgb | webp`.
 Header JSON: `{ v:1, decoder:{build_id, magick_version, delegates:{jpeg,png,webp,gif}, policy_sha256},
-info:{format,width,height,frames,animated}, stored:{width,height}, rgb_len:786432, webp_len:N, orientation_applied_to_webp:true }`.
-Worker checks `rgb_len === 512*512*3` itself (spec `hasExpectedGeometry`, §3.3/§3.5), `webp_len > 0` (the existing
-zero-byte guard, `images.ts:175`), the pixel bound (keep `exceedsPixelBound`, `images.ts:75`), and `decoder.build_id` +
-`policy_sha256` against an allowlist (section 2.5).
+info:{format,width,height,frames,animated}, stored:{width,height}, frame:{width,height}, rgb_len:N, webp_len:N, orientation_applied_to_webp:true }`.
+Worker checks `rgb_len === frame.width*frame.height*3`, that `frame` matches the reference rule (it is exactly 512x512 when `info.width > 512 || info.height > 512`, and otherwise equals `info.width` x `info.height`, never upscaled; decision (b) below), that `frame` is carried in the signed header so the signature covers it, and that the dimensions are within bounds, `webp_len > 0` (the existing zero-byte guard, `images.ts:175`), the pixel bound (keep `exceedsPixelBound`, `images.ts:75`), and `decoder.build_id` + `policy_sha256` against an allowlist (section 2.5). The spec's `hasExpectedGeometry` (§3.3/§3.5) must be changed to this rule; its fixed 786,432-byte check no longer holds.
+
+**Two contract decisions, APPROVED (PM, 2026-10-08)** (the spike measured both; see spike sections 4c, 4d):
+
+- **(a) Alpha.** Use `-alpha off` for the scan frame, not flatten-on-white (approved). The reference ignores alpha, so `-alpha off` matches it exactly (d = 0 on both transparent fixtures), while flatten-on-white gave d = 52 and 54. The stored WebP's treatment of alpha is a separate product choice and is not decided here.
+- **(b) Small images.** An image with both sides <= 512 is hashed by the reference at native size, and a forced 512x512 frame cost d = 12 to 16 (at the edge of the 16 bar). The approved rule is to emit the native-size frame for such images (no upscale), so the response frame has a **variable** width and height, carried explicitly in the signed response header (d = 0 on all 12 such fixtures). This replaces revision 1's fixed `rgb_len` of 786,432 bytes. The PDQ code (spec US1) must accept variable dimensions, and the decoder self-test (spec §3.6) must include one fixture of at most 512 on both sides and one larger than 512 on a side, and expect the right frame dimensions for each (native size, and exactly 512x512). Revision 1's fixed 512x512 frame is withdrawn.
 
 Errors (JSON `{code}`): `invalid_image` (header unparseable/mismatch; **Worker -> existing 415**, `media.ts:77`),
 `pixel_limit` (**-> existing 413**), `resource_limit` / `timeout` / `decode_error` after header parsed OK (**-> 503**, spec
@@ -150,8 +164,8 @@ policy_sha256, uptime}`. 503 if any check fails, so a degraded box drops out of 
 
 ### 2.4 Limits and timeouts
 
-Body cap 15 MiB + 4 KiB (service-enforced while streaming, not trusting Content-Length). Response cap: rgb 786,432 + WebP
-<= ~8 MiB (service aborts a larger WebP). Concurrency semaphore 2 (excess -> `busy`). IM `time` limit 10 s; service hard
+Body cap 15 MiB + 4 KiB (service-enforced while streaming, not trusting Content-Length). Response cap: rgb at most 786,432 bytes (512x512x3) + WebP
+<= ~8 MiB (service aborts a larger WebP). Concurrency semaphore 2 (excess -> `busy`). IM time limit 10 s via `MAGICK_TIME_LIMIT` / `-limit time` (the policy `time` key is ignored, section 3.1); service hard
 deadline 12 s (kills the process group); **Worker `AbortSignal.timeout(15_000)`**, no inline retry against the same
 backend (a retry doubles a 15 MB upload), at most one attempt against a *second configured backend* if one exists.
 Sits ahead of the spec's HMS-A budget (§6.2: 8 s + retry), so worst case wall time becomes ~15 s + ~17 s; CPU unaffected.
@@ -166,7 +180,7 @@ replica). Selection rule: first backend whose newest self-test passed (below), i
 
 **Self-test generalised (spec §3.6):** key it on `(worker version_id, backend id, decoder build_id, policy_sha256)`, not only
 `version_id`. Reason (INFERRED, important): the decoder can change without a Worker deploy (VPS upgrade), which the
-current gate (`CF_VERSION_METADATA` version only) would not notice. Same four synthetic fixtures through `/v1/process`
+current gate (`CF_VERSION_METADATA` version only) would not notice. Same four synthetic fixtures through `/v1/process`, **plus one fixture of at most 512 pixels on both sides and one larger than 512 on a side, each with its expected frame dimensions** (the native size for the first, exactly 512x512 for the second; the check fails on any other dimensions)
 (no HMS-A call). The `*/2` tick may also record a `/v1/health` result as a selftest row so a VPS outage with zero upload
 traffic still raises U9 within minutes rather than at the 23 h re-run.
 
@@ -193,13 +207,20 @@ traffic still raises U9 within minutes rather than at the 23 h re-run.
   run IM with **explicit coder prefixes** (`jpeg:-`, `png:-`, `gif:-[0]`, `webp:-[0]`) so IM never auto-detects a format
   (blocks SVG/MVG/MSL/PDF/`ephemeral:`/`label:`-style coder tricks), feed bytes on stdin, read outputs from pipes, return.
   No database, no cache, no queue, no disk writes, no state beyond the in-memory nonce set.
-- Pipeline (single IM process, one decode; syntax **UNVERIFIED**, spike confirms; fallback = two IM processes fed the same
-  in-RAM buffer):
-  `magick jpeg:- -auto-orient ( +clone -filter <F> -resize 512x512! -depth 8 rgb:fd:3 +delete ) -resize 2048x2048> -strip -quality 82 -define webp:method=4 webp:-`
-  with `fd:3` an extra pipe the service reads. Flatten alpha onto a recorded background (`-background white -alpha remove
-  -alpha off`; colour chosen and recorded by spike input 8). For the scan frame, `-auto-orient` is a **spike variable**
-  (reference does not rotate; dihedral hashes cover both, spec §3.5): default OFF for the scan frame if C6 is better that
-  way, ON for the stored WebP always.
+- Pipeline (single IM process, one decode; **proven by the spike** for the scan frame and for the single-pass form):
+  scan frame, when either side is > 512:
+  `magick <fmt>:fd:0[0 for gif/webp] -alpha off -colorspace sRGB -define sample:offset=0 -sample 512x512! -depth 8 rgb:fd:1`
+  scan frame, when both sides are <= 512 (report the width and height; PDQ runs at that size):
+  `magick <fmt>:fd:0[0 for gif/webp] -alpha off -colorspace sRGB -depth 8 rgb:fd:1`
+  No `-auto-orient` for the scan frame: the reference does not rotate, and with auto-orient on the best of the 8 dihedral hashes was only within 12 to 22 for flipped images (spike 4c). The stored WebP is auto-oriented always.
+  Single pass (scan frame and WebP from one decode): the frame is written with `-write` inside parentheses (a bare `rgb:fd:3` inside parentheses is parsed as an input and fails). The scan-frame branch must come first so it is not auto-oriented. Only the form `\( +clone -colorspace sRGB -define sample:offset=0 -sample 512x512! -depth 8 -write rgb:fd:3 +delete \)` was proven (frame byte-identical to the separate-process frame, WebP 363,258 bytes at q82 method 4); the fully assembled command with the 2048 resize and `-strip` is not yet run. The fallback is two IM processes fed the same seekable input.
+  **`-sample` with `sample:offset=0` is the resizer, not `-filter Point -resize`.** Revision 1 named Point as the first candidate; measured, Point is worse than Lanczos on real photos (max d 20 vs 10), while Sample0 has max d 8 on the same 27 photos. The reference's resampler is CImg nearest-neighbour: **verified** at the pinned commit (spike section 2). Revision 1's "forced 512x512 frame" is replaced by decision (b) in section 2.3.
+- **Hard rules the spike found** (each is a DESIGN RULE, a requirement and not a suggestion):
+  1. **IM must be given a SEEKABLE stdin**: a regular file or a **memfd**. With an anonymous pipe, IM copies the whole input to a `magick-XXXX` temp file before decoding (the likeliest spool, and it is in IM itself). Spike: pipe mode wrote the body to disk (75 trace violations, 85 inotify events); file and memfd modes had none. The service therefore writes the verified body into a memfd and passes that as fd 0. A regular file on tmpfs is allowed only with swap OFF on the host, because tmpfs pages can swap: `MemorySwapMax=0` and host swap disabled are part of the no-disk claim. A pipe is never allowed.
+  2. **Treat ANY non-empty stderr as failure, and never trust the exit code.** IM exits 0 on time-limit-exceeded (and emits garbage) and exits 0 on a truncated JPEG with a full-length frame and `Premature end of JPEG file` on stderr; `-regard-warnings` did not change this. Cost: a benign input that merely warns (for example an odd iCCP chunk) becomes a 503. The six benign photos in the spike produced empty stderr.
+  3. **Enforce time with `MAGICK_TIME_LIMIT` / `-limit time` plus the service's own deadline.** The policy `time` key is ignored (`-list resource` prints `Time: unlimited`).
+  4. **`RLIMIT_FSIZE=0` as a belt, plus `LimitCORE=0`.** A process that exceeds `RLIMIT_FSIZE` gets SIGXFSZ, whose default action dumps core, so the core limit must be 0 as well: the unit sets `LimitCORE=0`.
+  5. Do not rely on IM's error text to choose `pixel_limit` over `resource_limit`: an area limit and a memory limit give the same `cache resources exhausted` text. The service's header pre-check produces `pixel_limit`.
 - Must not use anything that spools: no `multipart`/form parsers, no framework body buffering to temp files, no nginx or
   other proxy in front with default `client_body_buffer_size` (it writes bodies over the buffer to `/var/lib/nginx`).
   Terminate in the service (the tunnel connects straight to it) or set `proxy_request_buffering off`.
@@ -208,33 +229,35 @@ traffic still raises U9 within minutes rather than at the 23 h re-run.
 ### 3.2 Hardening, exact list
 
 **`policy.xml`** (installed read-only; `MAGICK_CONFIGURE_PATH=/etc/tj-decoder/magick` so no user/system override can win).
-Base = ImageMagick's own "secure" policy example, then tighten (key names are IM's policy keys; **values are proposals the
-spike must validate against the installed IM version**):
+This is the **working** policy from the spike (`prod2.xml`, ImageMagick 7.1.1-43). **Revision 1's policy did not work**: every decode failed with `no decode delegate for this image format ''`, for two reasons: (1) `module rights="none" pattern="*"` blocks the module-built coders, fixed by an allow rule with **upper-case** coder names (lower-case names do not match); (2) `path rights="none" pattern="*"` blocks stdin `-` even with a later allow for `-`, in either order, fixed by allowing `fd:*` and feeding every input as `<coder>:fd:0`. Values below were validated on that version only; revalidate on any IM upgrade.
 
 ```xml
 <policymap>
-  <policy domain="resource" name="disk"   value="0"/>       <!-- never spill; exceed memory => hard error (fail closed) -->
+  <policy domain="resource" name="disk"   value="0"/>
   <policy domain="resource" name="memory" value="512MiB"/>
-  <policy domain="resource" name="map"    value="0"/>       <!-- UNVERIFIED: 0 may break; else equal to memory -->
-  <policy domain="resource" name="area"   value="128MP"/>   <!-- > MAX_PIXELS 50MP with room for the 2x working copy -->
+  <policy domain="resource" name="map"    value="0"/>
+  <policy domain="resource" name="area"   value="128MP"/>
   <policy domain="resource" name="width"  value="16KP"/>
   <policy domain="resource" name="height" value="16KP"/>
-  <policy domain="resource" name="time"   value="10"/>      <!-- seconds -->
+  <policy domain="resource" name="time"   value="10"/>   <!-- IGNORED by IM; kept for documentation. Enforce with MAGICK_TIME_LIMIT -->
   <policy domain="resource" name="thread" value="2"/>
   <policy domain="resource" name="list-length" value="64"/>
   <policy domain="resource" name="file"   value="64"/>
-  <policy domain="cache"  name="memory-map" value="anonymous"/>   <!-- no file-backed pixel cache -->
+  <policy domain="cache"  name="memory-map" value="anonymous"/>
   <policy domain="cache"  name="synchronize" value="false"/>
   <policy domain="system" name="shred"    value="0"/>
   <policy domain="coder"    rights="none"       pattern="*"/>
-  <policy domain="coder"    rights="read|write" pattern="{JPEG,PNG,GIF,WEBP,RGB}"/>   <!-- RGB: raw out; confirm needed in/out -->
+  <policy domain="coder"    rights="read|write" pattern="{JPEG,PNG,GIF,WEBP,RGB}"/>
   <policy domain="delegate" rights="none" pattern="*"/>
   <policy domain="filter"   rights="none" pattern="*"/>
-  <policy domain="module"   rights="none" pattern="*"/>   <!-- UNVERIFIED: breaks module-built coders; use per-coder instead if so -->
-  <policy domain="path"     rights="none" pattern="@*"/>  <!-- no @file indirection -->
-  <policy domain="path"     rights="none" pattern="*"/>   <!-- UNVERIFIED: must still allow "-" and fd:N; spike -->
+  <policy domain="module"   rights="none" pattern="*"/>
+  <policy domain="module"   rights="read|write" pattern="{JPEG,PNG,GIF,WEBP,RGB}"/>  <!-- upper-case names; lower-case do not match -->
+  <policy domain="path"     rights="none" pattern="@*"/>
+  <policy domain="path"     rights="none" pattern="*"/>
+  <policy domain="path"     rights="read|write" pattern="fd:*"/>  <!-- input <coder>:fd:0, output rgb:fd:1 / rgb:fd:3 -->
 </policymap>
 ```
+Spike results for this policy: `-list resource` shows `Memory: 512MiB Map: 0B Disk: 0B`; a 50 MP decode fits in 512 MiB with `map 0` (peak RSS about 303 MB, 2.8 s for PNG); an over-memory decode errors (`cache resources exhausted`) and writes no temp file; reading by path, `@file`, `xc:` and `info:` are blocked.
 Environment: `MAGICK_TEMPORARY_PATH=/nonexistent`, `TMPDIR=/nonexistent`, `HOME=/nonexistent`, `MAGICK_TIME_LIMIT=10`. Decoder
 options pinned for determinism: `-define jpeg:dct-method=islow`, `-define webp:thread-level=0`; never `jpeg:size=` (scaled
 decode changes pixels, only as a measured performance option).
@@ -244,8 +267,7 @@ decode changes pixels, only as a measured performance option).
 (empty); `AmbientCapabilities=`; `ProtectSystem=strict`; `ProtectHome=yes`; `PrivateTmp=yes`; `PrivateDevices=yes`;
 `ReadWritePaths=` **(empty: nothing writable)**; `TemporaryFileSystem=/var:ro`; `ProtectProc=invisible`; `ProcSubset=pid`;
 `ProtectKernelTunables/Modules/Logs/ControlGroups/Clock=yes`; `RestrictNamespaces=yes`; `RestrictAddressFamilies=AF_INET
-AF_INET6 AF_UNIX`; `RestrictRealtime=yes`; `LockPersonality=yes`; `MemoryDenyWriteExecute=yes` (**UNVERIFIED** vs IM/libwebp
-SIMD JIT: none expected, spike); `SystemCallFilter=@system-service` with `~@privileged @resources @mount`; `SystemCallArchitectures=native`;
+AF_INET6 AF_UNIX`; `RestrictRealtime=yes`; `LockPersonality=yes`; `MemoryDenyWriteExecute=yes` (**UNVERIFIED**: not run in the spike, which had no systemd; every systemd directive in this paragraph is unverified); `SystemCallFilter=@system-service` with `~@privileged @resources @mount`; `SystemCallArchitectures=native`;
 `LimitCORE=0`; `MemoryMax=2G`; `MemorySwapMax=0` (**the unit forbids swapping this service**); `TasksMax=64`; `CPUQuota=200%`;
 `IPAddressDeny=any` + `IPAddressAllow=` the tunnel/loopback only; `StandardOutput=null` for the IM children (service logs
 only its own fixed-format lines to journald); `UMask=0077`; `PrivateNetwork` not usable (it must accept requests).
@@ -264,7 +286,7 @@ default-deny inbound; the container (if used) as `--read-only`, no volumes, `--t
 
 ### 3.3 What this repo can and cannot enforce (NOT YET BOARDED)
 
-**NOT YET BOARDED:** the PM boards the ops items below for CireSnave only after the spike passes. Nothing here is yet a request to him.
+**NOT YET BOARDED:** the PM boards the ops items below for CireSnave only after the spike passes. Nothing here is yet a request to him. It also waits on a **second spike pass** that closes the open items in the Status line (C7, `cloudflared` spooling and proof steps 7 and 8, systemd directives, latency, host behaviour), run on the VPS or an equivalent Linux host.
 
 Repo can enforce: the service code, `policy.xml`, systemd unit, container build (pinned base digest, IM version), the
 Worker client, the HMAC contract, the proof tests (run by the PR author and, on a Linux GitHub runner, by CI), the
@@ -325,7 +347,9 @@ it. Assert **each negative produced the predicted flag** (count == 1 on each), s
 
 ## 5. Spike plan: re-run spec C3 and C6 against ImageMagick
 
-The spec's US0 spike used a throwaway Worker with the Images binding (spec §2.4). Replace it with a **throwaway container
+**Standing rule for any spike or test run on a shared machine:** no unscoped `docker kill`, `stop`, `rm` or `prune`; never touch containers, volumes or networks you did not create; name yours with a unique prefix (for example `tjspike-`) and act only on that prefix; run nothing that needs more than the Docker/WSL resources the spike itself created. (The first spike broke this once, see spike section 6, item 9.)
+
+**Status: partly run on 2026-10-08, see `../spikes/2026-10-08-imagemagick-pdq-spike.md`.** What follows is the plan; the spike's results supersede it where they differ, and the items the spike did not run remain open. The spec's US0 spike used a throwaway Worker with the Images binding (spec §2.4). Replace it with a **throwaway container
 (same image that will ship) + a script**; the Worker only matters for C1/C2/latency (PDQ CPU in the Worker is unchanged, and
 the decoder is no longer inside the isolate, so C2's memory worry mostly disappears: INFERRED). Nothing here needs HMS-A
 or any real abusive material.
@@ -339,7 +363,7 @@ or any real abusive material.
   (spec §3.1). The PM's note says the reference uses ImageMagick; confirm in source, then match IM options to it.
 - Our PDQ: the TS port (spec US1). Until it exists, use the reference's own raw-input mode on IM's 512 raw output for (b).
 
-**C3 re-expressed (decode shape), per input of spec §2.4 list items 1-8:** output exactly `512*512*3` bytes for JPEG, PNG,
+**C3 re-expressed (decode shape), per input of spec §2.4 list items 1-8:** output `512*512*3` bytes (or `w*h*3` at native size when both sides are <= 512, section 2.3 (b)) for JPEG, PNG,
 GIF, WebP; EXIF Orientation 6 and 8 at 400x300 and 3000x2000; GIF/animated-WebP frame 0 only (PDQ within 10 of a frame-0
 still, > 31 from a frame-1 still); alpha background colour recorded; 1x1 and 10000x5; flat image (low quality). **New for
 IM:** (i) forced resource errors recorded verbatim (disk-limit, memory, time, pixel-limit exit codes and stderr: these map to
@@ -353,7 +377,7 @@ and the generated non-photographic set from C8; each listed with source and lice
 - (c) `ts_pdq(IM_raw512(F))`: our port on the same bytes — **must equal (b) bit for bit** (this is C5; it isolates the port
   from the resampler);
 - distance d = Hamming((a),(b)); also dmin over the 8 dihedral variants of (b).
-Sweep IM `-filter` in {Point, Box, Triangle, Mitchell, Lanczos} x auto-orient {off,on}. `Point` is the first candidate: if
+Sweep IM `-filter` in {Point, Box, Triangle, Mitchell, Lanczos} x auto-orient {off,on}. *(Revision 1 said `Point` is the first candidate. Run: Point is worse than Lanczos on real photos, and `-define sample:offset=0 -sample` was the match, section 3.1.)* The original reasoning was: if
 the reference truly uses nearest-neighbour to 512 (spec §3.1, unverified), IM `-filter Point` may reproduce it almost
 exactly, which is better than the binding could ever be. **Pass (spec §3.4, unchanged): d <= 10 for every image of reference
 quality >= 80, and d <= 16 for every image.** Pick the configuration with the best max/p95 and freeze it into the contract
@@ -426,13 +450,9 @@ built, this section moves into the upload-scan spec as a numbered section.
    then a VPS outage is a content outage for images. Not a launch problem if monitored (U1/U9).
 4. **[Residual risk]** Hosting-provider-level snapshots/live migration can capture RAM; swap/core settings cannot reach it.
    The "never on the VPS drive" claim is about the guest filesystem; state it that way in the legal wording.
-5. **[UNVERIFIED]** Every `policy.xml` value/key behaviour (esp. `map 0`, `path *` vs stdin/`fd:N`, `module` domain, `coder`
-   pattern syntax, `cache memory-map anonymous` existing in the installed IM version). Spike + section 4 test 4 settle it.
-6. **[UNVERIFIED]** Single-pass `rgb:fd:3` pipeline, animated-WebP read, `MemoryDenyWriteExecute` compatibility, whether
-   `cloudflared` body-spools to disk, whether the 50 MP decode fits `memory 512MiB` (it may need ~1 GB; the failure is closed,
-   so it is a tuning question, not a safety one).
-7. **[UNVERIFIED]** Reference PDQ's actual loader/resampler; the spec's CImg-nearest claim is secondhand (spec §3.1: "reported
-   by the audit... unchecked"). C6 outcome could be excellent with `-filter Point` or poor; unknown until run.
+5. **[Partly verified]** The `policy.xml` in section 3.2 works on ImageMagick 7.1.1-43 only. `map 0`, the `module` and `path` rules, and `cache memory-map anonymous` were verified there; revalidate on any upgrade.
+6. **[UNVERIFIED]** Still open after the spike (second pass needed): C7 WebP determinism; C8 share of quality <= 49; whether `cloudflared` body-spools to disk and no-disk proof steps 7 and 8; the systemd directives, including `MemoryDenyWriteExecute`; latency; non-sRGB ICC, HEIC and TIFF input; animated inputs of more than 4 frames; behaviour on the VPS host (the spike ran on Docker Desktop WSL2); `kill -SEGV` and `coredumpctl`.
+7. **[OPEN ITEM]** The TS PDQ port leg of C5/C6 (our port equals the reference core on the IM frame) was not run: no port exists on `origin/main`. All distances in the spike are reference core on the IM frame against reference on the original. The reference's CImg nearest-neighbour resampler is now **verified** (revision 1 called it secondhand). The reference's loader is itself ImageMagick `convert`, so decode agreement with it is not independent evidence (spike 4d).
 8. **[Behaviour change]** IM re-encode will not byte-match Cloudflare's WebP for the same upload; old objects stay as stored.
    Colour management: applying an embedded ICC profile needs an sRGB ICC file on disk (read-only is fine); otherwise
    `-colorspace sRGB` only. Decide in the spike which is acceptable visually; the old binding applied profiles
@@ -451,5 +471,6 @@ Applied in `2026-10-07-upload-scan-design.md`:
 - Section 11.1 gains alarm U11 (decoder identity drift), and U7 (Images allowance) goes dead once the binding is removed.
 - Sections 6.1 and 6.6 gain the reason `decoder_credentials_refused`. It is a new value of the free-text `reason` column. The
   `outcome` CHECK (`scanned`, `unavailable`) is unchanged, so no schema change is needed.
+- Section 3.3 (frame geometry) and the §3.6 self-test change with this design: the scan frame is 512x512 only when a side is > 512, and otherwise native size. The spec's `PDQ_DECODE_EDGE` / `hasExpectedGeometry` text must follow when it is next revised.
 - Sections 2 and 3.3 note that the decoder seam's production implementation is the VPS service. The binding-based text stays and
   is marked superseded by this document.
