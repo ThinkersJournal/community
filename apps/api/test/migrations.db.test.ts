@@ -188,6 +188,13 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "moderation_action_tokens")).toBe(true);
       // 0025 — the legacy unsalted reservation column is gone.
       expect(await columnExists(client, "users", "reserved_email_sha256")).toBe(false);
+      // 0027_media_original_hashes.sql — original-upload hashes + the upload-scan schema.
+      expect(await columnExists(client, "media", "original_sha256")).toBe(true);
+      expect(await columnExists(client, "media", "pdq")).toBe(true);
+      expect(await indexExists(client, "media_original_sha256_idx")).toBe(true);
+      expect(await tableExists(client, "upload_scan_outcomes")).toBe(true);
+      expect(await tableExists(client, "media_scan_backfill")).toBe(true);
+      expect(await tableExists(client, "media_scan_backfill_progress")).toBe(true);
     });
 
     await migrate("down");
@@ -249,6 +256,13 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "moderation_action_tokens")).toBe(true);
       // 0025 — absent again after the full down/up round-trip re-applies it.
       expect(await columnExists(client, "users", "reserved_email_sha256")).toBe(false);
+      // 0027 — re-applied by the round-trip.
+      expect(await columnExists(client, "media", "original_sha256")).toBe(true);
+      expect(await columnExists(client, "media", "pdq")).toBe(true);
+      expect(await indexExists(client, "media_original_sha256_idx")).toBe(true);
+      expect(await tableExists(client, "upload_scan_outcomes")).toBe(true);
+      expect(await tableExists(client, "media_scan_backfill")).toBe(true);
+      expect(await tableExists(client, "media_scan_backfill_progress")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });

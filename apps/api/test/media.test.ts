@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   createExecutionContext,
   env,
@@ -613,5 +615,81 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
     expect(media.puts).toContain(key);
     expect(await env.MEDIA.head(key)).not.toBeNull();
     expect(await mediaRowCount(key)).toBe(2);
+  });
+});
+
+/**
+ * #114 Task 12 — the ORIGINAL upload's MD5/SHA-1/SHA-256 are recorded on the
+ * media row (migration 0027). Hashes only: the original bytes are still
+ * discarded. Expected values come from node:crypto over the same fixture bytes,
+ * an implementation independent of the route's crypto.subtle.
+ */
+describe("the original upload's hashes are recorded (#114 Task 12)", () => {
+  const hex = (alg: "md5" | "sha1" | "sha256", b: Uint8Array): string =>
+    createHash(alg).update(b).digest("hex");
+
+  async function rowFor(id: string): Promise<{
+    original_md5: string | null;
+    original_sha1: string | null;
+    original_sha256: string | null;
+    sha256: string;
+  }> {
+    const ctx = createExecutionContext();
+    const { rows } = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query(
+        "SELECT original_md5, original_sha1, original_sha256, sha256 FROM media WHERE id = $1",
+        [id],
+      ),
+    );
+    await waitOnExecutionContext(ctx);
+    return rows[0] as never;
+  }
+
+  async function ownerRowCount(userId: string): Promise<number> {
+    const ctx = createExecutionContext();
+    const { rows } = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query("SELECT count(*)::int AS n FROM media WHERE owner_id = $1", [userId]),
+    );
+    await waitOnExecutionContext(ctx);
+    return (rows[0] as { n: number }).n;
+  }
+
+  it("stores the MD5, SHA-1 and SHA-256 of the REQUEST BODY bytes", async () => {
+    const owner = await createVerifiedActor();
+    const image = uniquePng();
+    const response = await fetchWorker(upload(image, owner));
+    expect(response.status).toBe(201);
+    const { id } = (await response.json()) as { id: string };
+
+    const row = await rowFor(id);
+    expect(row.original_md5).toBe(hex("md5", image));
+    expect(row.original_sha1).toBe(hex("sha1", image));
+    expect(row.original_sha256).toBe(hex("sha256", image));
+    expect(row.original_md5).toMatch(/^[0-9a-f]{32}$/);
+    expect(row.original_sha1).toMatch(/^[0-9a-f]{40}$/);
+    expect(row.original_sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("original_sha256 is the ORIGINAL's, and differs from the stored WebP's sha256", async () => {
+    const owner = await createVerifiedActor();
+    const response = await fetchWorker(upload(PNG_1X1, owner));
+    const { id } = (await response.json()) as { id: string };
+    const row = await rowFor(id);
+    expect(row.original_sha256).toBe(hex("sha256", PNG_1X1));
+    expect(row.sha256).not.toBe(row.original_sha256);
+  });
+
+  it("a refused upload (415 SVG, 415 arbitrary bytes, 413 oversize) stores nothing", async () => {
+    const owner = await createVerifiedActor();
+    // Control: an accepted upload does store a row for this owner.
+    expect((await fetchWorker(upload(uniquePng(), owner))).status).toBe(201);
+    const before = await ownerRowCount(owner.userId);
+    expect(before).toBe(1);
+
+    expect((await fetchWorker(upload(SVG_BYTES, owner))).status).toBe(415);
+    expect((await fetchWorker(upload(TEXT_BYTES, owner))).status).toBe(415);
+    expect((await fetchWorker(upload(oversizeBytes(MAX_UPLOAD_BYTES), owner))).status).toBe(413);
+
+    expect(await ownerRowCount(owner.userId)).toBe(before);
   });
 });
