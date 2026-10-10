@@ -71,7 +71,7 @@ export const BEGIN_BOUNDED_TX = `BEGIN;
  */
 export async function withClient<T>(
   hd: Hyperdrive,
-  ctx: ExecutionContext,
+  ctx: Pick<ExecutionContext, "waitUntil">,
   fn: (client: Client) => Promise<T>,
 ): Promise<T> {
   const client = new pg.Client({ connectionString: hd.connectionString });

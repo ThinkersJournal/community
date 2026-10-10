@@ -16,7 +16,8 @@
  *   6. verification email  — never fails the signup (see step note below).
  *   7. security epoch      — read AFTER the bump, stamped into the session.
  *   8. session             — opaque KV token.
- *   9. 201 + Set-Cookie.
+ *   9. device record       — silent, in ONE waitUntil (security-alerting §4.1).
+ *   10. 201 + Set-Cookie (the session's, then a minted device cookie's).
  *
  * ⚠️ ORIGIN BEFORE THE LIMITER — this is a DELIBERATE deviation from the task
  * brief's literal step order, and it matches the rule src/auth/pipeline.ts
@@ -59,6 +60,8 @@ import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
 import { isUniqueViolation } from "../db/errors";
 import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
+import { afterSignIn } from "../security/account-notices-flow";
+import { clientCountry, deviceCookieFor, sessionAndDeviceHeaders } from "../security/device-cookie";
 
 /**
  * The 403 returned for BOTH a failed Turnstile challenge and a rejected origin.
@@ -437,9 +440,18 @@ export async function handleSignup(
     createdAt: Date.now(),
   });
 
-  // ---- 9. 201 + Set-Cookie -------------------------------------------------
+  // ---- 9. Device record (security-alerting §4.1): the ONE silent path -----
+  // `recordDevice(…, "signup")` CLEARS the list and records this browser, so a
+  // re-signup of an unverified address leaves the earlier claimant's browsers
+  // nowhere. No notice. In one waitUntil, never on the response path.
+  const device = deviceCookieFor(request, env);
+  ctx.waitUntil(
+    afterSignIn(env, ctx, "signup", { userId, token: device.token, country: clientCountry(request), nowMs: Date.now() }),
+  );
+
+  // ---- 10. 201 + Set-Cookie (the session's, then a minted device cookie's) --
   return new Response(JSON.stringify({ userId }), {
     status: 201,
-    headers: { "content-type": "application/json", "Set-Cookie": cookie },
+    headers: sessionAndDeviceHeaders(cookie, device, true),
   });
 }

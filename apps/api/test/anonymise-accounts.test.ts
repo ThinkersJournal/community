@@ -942,3 +942,32 @@ describe("anonymiseExpiredAccounts — ledger clean-up", () => {
     expect(await ledgerRows(f.id)).toBe(3);
   });
 });
+
+/** The account's browsers and pending notices in its UserSecurityDO: [known_devices, pending_notice]. */
+function devicesAndPending(id: string): Promise<number[]> {
+  return runInDurableObject(env.USER_SECURITY.getByName(id), (_u, s) => [
+    s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM known_devices").one().n,
+    s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM pending_notice").one().n,
+  ]);
+}
+
+/** PR 2 (spec §4.5; plan Task 21): the same hook also forgets the browsers and ends pending notices. */
+describe("anonymiseExpiredAccounts — device clean-up", () => {
+  it("clears the device list and drops pending notices (positive control: both present before)", async () => {
+    const f = await seedAccount({ eligible: false });
+    const now = Date.now();
+    await runInDurableObject(env.USER_SECURITY.getByName(f.id), async (u) => {
+      quiet(u);
+      await u.recordDevice({ current: "a".repeat(64), currentKid: "kid00000", prev: null, prevKid: null }, now, "login");
+      await u.claimNotice("new_sign_in", { atMs: now, country: null, listWasEmpty: false }, now, now + 3_600_000);
+    });
+    expect(await devicesAndPending(f.id)).toEqual([1, 1]);
+    await withAnonymiseReaperLock(async () => {
+      await makeEligible(f.id);
+      const ctx = createExecutionContext();
+      await anonymiseExpiredAccounts(env, ctx);
+      await waitOnExecutionContext(ctx);
+    });
+    expect(await devicesAndPending(f.id)).toEqual([0, 0]);
+  });
+});

@@ -5,6 +5,8 @@ import worker from "../src";
 import { reapUnverifiedAccounts } from "../src/auth/reap-unverified";
 import { withClient } from "../src/db/client";
 
+import { quiet } from "./helpers/security-do";
+
 /**
  * Task 8 (handle-at-signup) — the daily reaper.
  *
@@ -353,5 +355,31 @@ describe("reapUnverifiedAccounts — ledger clean-up per deleted id", () => {
       );
     expect(await refs(gone.id)).toBe(0);
     expect(await refs(kept.id)).toBe(1);
+  });
+});
+
+/** PR 2 (spec §4.5; plan Task 21): the same per-id hook also forgets browsers and ends pending notices. */
+describe("reapUnverifiedAccounts — device clean-up per deleted id", () => {
+  it("a reaped account's browsers and pending notices are gone (control: a verified account keeps its own)", async () => {
+    const gone = await seed({ verified: false, ageDays: 8 });
+    const kept = await seed({ verified: true, ageDays: 8 });
+    const now = Date.now();
+    for (const f of [gone, kept]) {
+      await runInDurableObject(env.USER_SECURITY.getByName(f.id), async (u) => {
+        quiet(u);
+        await u.recordDevice({ current: "b".repeat(64), currentKid: "kid00000", prev: null, prevKid: null }, now, "signup");
+        await u.claimNotice("password_reset", { atMs: now, country: null, listWasEmpty: false }, now, now + 3_600_000);
+      });
+    }
+    const ctx = createExecutionContext();
+    await reapUnverifiedAccounts(env, ctx);
+    await waitOnExecutionContext(ctx);
+    const count = (id: string) =>
+      runInDurableObject(env.USER_SECURITY.getByName(id), (_u, s) => [
+        s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM known_devices").one().n,
+        s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM pending_notice").one().n,
+      ]);
+    expect(await count(gone.id)).toEqual([0, 0]);
+    expect(await count(kept.id)).toEqual([1, 1]);
   });
 });

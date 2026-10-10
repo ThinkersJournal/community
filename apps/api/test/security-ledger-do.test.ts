@@ -7,7 +7,7 @@ import { LIVENESS_KEY } from "../src/durable-objects/SecurityLedgerDO";
 import { ensureLedgerAlarm } from "../src/security/ledger-cron";
 import { PRUNE_CHUNK, PRUNE_CHUNKS_PER_RUN } from "../src/security/ledger-prune";
 
-import { capturingSink, crossing, freshLedger, guardAlertingFaults, HOUR, MINUTE, ofType, quiet, T0 } from "./helpers/security-do";
+import { capturingSink, crossing, freshLedger, guardAlertingFaults, HOUR, MINUTE, ofType, quiet, T0, wire } from "./helpers/security-do";
 
 /**
  * `SecurityLedgerDO` (security-alerting spec §2.6). Pool
@@ -410,6 +410,65 @@ describe("coverage of a large held report (bound-parameter limit)", () => {
       expect(ofType(sent, "held_report")[0]?.entries).toHaveLength(150); // control: all 150 were named
       expect(state.storage.sql.exec<Count>("SELECT COUNT(*) AS n FROM held").one().n).toBe(0);
       expect(warn.mock.calls.filter((c) => c[0] === "security: alerting_fault security-ledger deliver")).toHaveLength(0);
+    });
+  });
+});
+
+/** PR 2: config fault and notice drops. */
+describe("PR 2 additions", () => {
+  it("R2-2: NOTICES OFF and no DEVICE_HASH_KEY → exactly one config_fault that day (control: key present → none)", async () => {
+    expect(env.ACCOUNT_NOTICES_ENABLED).toBe("0"); // the flag as shipped
+    for (const keyPresent of [false, true]) {
+      await runInDurableObject(freshLedger(), async (ledger) => {
+        const { sink, sent } = capturingSink();
+        ledger.sinkFactory = () => sink;
+        ledger.siteFor = () => noSite;
+        ledger.deviceKeyPresent = () => keyPresent;
+        quiet(ledger);
+        for (const at of [T0, T0 + 1, T0 + HOUR, T0 + HOUR + 1]) await ledger.alarmAt(at);
+        expect(ofType(sent, "config_fault"), String(keyPresent)).toHaveLength(keyPresent ? 0 : 1);
+      });
+    }
+  });
+
+  it("one notice_dropped per drop state per UTC day; the rest are counted in the digest", async () => {
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sink, sent } = capturingSink();
+      ledger.sinkFactory = () => sink;
+      ledger.siteFor = () => noSite;
+      quiet(ledger);
+      for (let i = 0; i < 3; i++) await ledger.noticeDroppedAt("dropped_expired", T0 + i);
+      await ledger.noticeDroppedAt("dropped_permanent_refusal", T0 + 5);
+      await ledger.alarmAt(T0 + 10);
+      await ledger.alarmAt(T0 + 11);
+      expect(ofType(sent, "notice_dropped").map((m) => m.endState).sort()).toEqual(["dropped_expired", "dropped_permanent_refusal"]);
+      expect(ofType(sent, "digest")[0]?.noticesDropped).toEqual({ dropped_permanent_refusal: 1, dropped_expired: 3 });
+    });
+  });
+});
+
+describe("PR 2 additions: timing (review I-2, M-5)", () => {
+  it("I-2: the first notice_dropped of the day brings the alarm forward to now; a repeat leaves it", async () => {
+    await runInDurableObject(freshLedger(), async (ledger, state) => {
+      const { armed } = wire(ledger);
+      await state.storage.setAlarm(Date.now() + 86_400_000); // an idle ledger's alarm, far off
+      try {
+        await ledger.noticeDroppedAt("dropped_permanent_refusal", T0);
+        expect(armed).toEqual([T0]);
+        await ledger.noticeDroppedAt("dropped_permanent_refusal", T0 + 1);
+        expect(armed).toEqual([T0]);
+      } finally {
+        await state.storage.deleteAlarm();
+      }
+    });
+  });
+
+  it("R2-2: a second UTC day without the key gets its own config_fault", async () => {
+    await runInDurableObject(freshLedger(), async (ledger) => {
+      const { sent } = wire(ledger);
+      ledger.deviceKeyPresent = () => false;
+      for (const at of [T0, T0 + 1, T0 + 24 * HOUR, T0 + 24 * HOUR + 1]) await ledger.alarmAt(at);
+      expect(ofType(sent, "config_fault")).toHaveLength(2);
     });
   });
 });

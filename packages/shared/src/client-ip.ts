@@ -13,3 +13,12 @@
  * same reasoning as SESSION_COOKIE_NAME in ./cookie.
  */
 export const CLIENT_IP_HEADER = 'X-TJ-Client-IP';
+
+/**
+ * Header the `web` Worker sets, on every call over the `API` Service Binding,
+ * carrying the edge's ISO 3166-1 alpha-2 country for the ORIGINAL request
+ * (security-alerting spec §4.2). Same delete-then-set discipline as
+ * CLIENT_IP_HEADER: only ever the web Worker's own value reaches the api. Used
+ * only for the account-holder notices' "from <country> (approximate)" phrase.
+ */
+export const CLIENT_COUNTRY_HEADER = 'X-TJ-Client-Country';

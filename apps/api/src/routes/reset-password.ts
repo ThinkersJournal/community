@@ -72,6 +72,8 @@ import { createSession } from "../auth/session";
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
 import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
+import { afterPasswordReset } from "../security/account-notices-flow";
+import { clientCountry, deviceCookieFor, sessionAndDeviceHeaders } from "../security/device-cookie";
 
 import type { AccountStatusRow } from "../auth/account-status";
 
@@ -285,6 +287,8 @@ async function resetPassword(
   // cookie is missing. The caller holds the address's own token, so that
   // absence tells them nothing about someone else.
   if (account !== null && isBarred(account)) {
+    // security-alerting §4.1 m4: no device cookie, every browser forgotten, the reset notice still sent.
+    ctx.waitUntil(afterPasswordReset(env, ctx, { userId, token: null, country: clientCountry(request), nowMs: Date.now() }));
     return new Response(null, { status: 200 });
   }
 
@@ -300,5 +304,11 @@ async function resetPassword(
     createdAt: Date.now(),
   });
 
-  return new Response(null, { status: 200, headers: { "Set-Cookie": cookie } });
+  // security-alerting §4.1: the reset clears every browser but this one, then
+  // records it, and sends the reset notice. In one waitUntil, never on the response path.
+  const device = deviceCookieFor(request, env);
+  ctx.waitUntil(
+    afterPasswordReset(env, ctx, { userId, token: device.token, country: clientCountry(request), nowMs: Date.now() }),
+  );
+  return new Response(null, { status: 200, headers: sessionAndDeviceHeaders(cookie, device, false) });
 }

@@ -15,10 +15,29 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import { CLIENT_IP_HEADER } from "@thinkersjournal/shared";
+import { CLIENT_COUNTRY_HEADER, CLIENT_IP_HEADER } from "@thinkersjournal/shared";
 
 export interface ClientIpStore {
   clientIp: string | null;
+  /** The edge's ISO 3166-1 alpha-2 country, or null (security-alerting spec §4.2). */
+  clientCountry: string | null;
+}
+
+const COUNTRY_RE = /^[A-Z]{2}$/;
+
+/**
+ * The edge's country for `request`: `request.cf.country` ONLY, which
+ * Cloudflare's edge sets and a client cannot forge. Final review M-4: the
+ * `CF-IPCountry` header is NOT read, because a client can send one and whether
+ * the edge overwrites it depends on a zone setting. If the adapter does not pass
+ * `cf` through, the country is null and notices say "an unknown location":
+ * implementer confirmation 5 (plan Task 20) checks on a deployed Worker that
+ * `cf.country` reaches the middleware. A value that is not two capital letters,
+ * or `XX` (Cloudflare's "unknown", M-3), is null. Never an IP.
+ */
+export function edgeCountry(request: Request): string | null {
+  const raw = (request as Request & { cf?: { country?: unknown } }).cf?.country;
+  return typeof raw === "string" && COUNTRY_RE.test(raw) && raw !== "XX" ? raw : null;
 }
 
 export const clientIpStore = new AsyncLocalStorage<ClientIpStore>();
@@ -34,7 +53,7 @@ export const clientIpStore = new AsyncLocalStorage<ClientIpStore>();
  */
 export function runWithClientIp<T>(request: Request, next: () => T): T {
   const clientIp = request.headers.get("CF-Connecting-IP");
-  return clientIpStore.run({ clientIp }, next);
+  return clientIpStore.run({ clientIp, clientCountry: edgeCountry(request) }, next);
 }
 
 /**
@@ -60,5 +79,18 @@ export function applyClientIpHeader(headers: Headers, ip: string | null): void {
   headers.delete(CLIENT_IP_HEADER);
   if (ip !== null) {
     headers.set(CLIENT_IP_HEADER, ip);
+  }
+}
+
+/**
+ * Sets (or removes) `headers`' `CLIENT_COUNTRY_HEADER` to exactly `country`.
+ * The same delete-then-set discipline as `applyClientIpHeader`, and called
+ * beside it at every `API.fetch` call site (test/client-country.test.ts
+ * enumerates them), always as `clientIpStore.getStore()?.clientCountry ?? null`.
+ */
+export function applyClientCountryHeader(headers: Headers, country: string | null): void {
+  headers.delete(CLIENT_COUNTRY_HEADER);
+  if (country !== null) {
+    headers.set(CLIENT_COUNTRY_HEADER, country);
   }
 }
