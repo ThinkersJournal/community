@@ -10,8 +10,8 @@ agent work together to separate out image scanning into the new crate."*
 **Counterpart:** SafeImage `docs/DESIGN.md` (the crate boundary: layers 1-5, invariants I1-I9, §5 runtime, §6 order).
 This document answers it from the consumer's side and does not repeat it.
 
-**Vendor naming:** the hash-matching service is "HMS-A" / `HMS_A_*` in Community documents, and "PhotoDNA scan step" for
-the second layer (upload-scan §7). SafeImage's neutral word is "hash-match provider" / `provider`; they are the same
+**Vendor naming:** the hash-matching service is "HMS-A" / `HMS_A_*` in Community documents, and the second layer is
+the "second-layer scan step" (upload-scan §7). SafeImage's neutral word is "hash-match provider" / `provider`; they are the same
 thing, and neither repository names the vendor.
 
 ---
@@ -19,7 +19,7 @@ thing, and neither repository names the vendor.
 ## 1. Fact that shapes everything: nothing is built
 
 At `e5916a6` no scanning, matching, evidence or report code exists on `main`. The upload-scan design (rev 3 + rev-4
-amendments), the D7 decoder-service design, and the CSAM/NCMEC spec and plan are documents. `main` carries only the
+amendments), the D7 decoder-service design, and the CSAM reporting spec and plan are documents. `main` carries only the
 schema for original-upload hashes (US4, PR #161, held). So "moving" a module means **moving a design**, nothing in
 production can regress, and the choice is cheap now and expensive after US1-US3 ship. Community's US1 (TypeScript PDQ
 port) and US3 (provider client + mock) are therefore **not started** and stay unstarted until this settles.
@@ -42,7 +42,7 @@ Mapped to SafeImage's layers, with the Community design each one replaces:
 |---|---|
 | 1 media-key helper, 2 `applyAccountActionInTx`, 2a, 3 schema | stays (host) |
 | 4 XML layer + pinned parser | a destination **profile** (outside the crate, Q9) |
-| 5 NCMEC client | a destination profile for build/parse; the `fetch` stays in Community |
+| 5 report-destination client | a destination profile for build/parse; the `fetch` stays in Community |
 | 6 intake | pure decisions to layer 3; the transaction (hide content, hold account, insert case) stays |
 | 7 drain | `next_step`/`apply` to layer 4; the cron, the guarded `UPDATE` and the I/O stay |
 | 8 alarms | stays (host); the crate supplies the `Unavailable` reasons |
