@@ -2,7 +2,7 @@
 
 **Status:** PROPOSAL for the PM's gate. Docs only; no code moves in this PR. Written 2026-10-10 by the Community lane
 against `origin/main` `e5916a6` and SafeImage `docs/DESIGN.md` at PR #1, head `3103242` (private repo
-`ThinkersJournal/SafeImage`).
+`ThinkersJournal/SafeImage`). Revised after SafeImage head `5b61686` (the profile ruling, §2 and §7 Q9).
 
 **Ruling this serves (CireSnave, 2026-10-10, verbatim as relayed by the PM):** *"Have Community and the new SafeImage
 agent work together to separate out image scanning into the new crate."*
@@ -31,9 +31,9 @@ Mapped to SafeImage's layers, with the Community design each one replaces:
 | SafeImage layer | Community design it replaces | Notes from the Community side |
 |---|---|---|
 | 1 hash | upload-scan §3 and US1 (TS PDQ port) | The frame rule is native size when both sides are ≤ 512, else exactly 512x512, never upscaled, no `-auto-orient` (D7 PM rulings, vps design §2.3 a/b). `normalise_geometry(w, h)` replaces Community's `hasExpectedGeometry` (the fixed 786,432-byte check is withdrawn). Quality ≤ 49 is "unscannable" (§3.2). |
-| 2 matcher | upload-scan §5.4, §6.1, §9.3 and US3 | `MatchRequest` carries 1..=8 hashes: Community sends all eight dihedral variants in one call (§3.5). Whether the provider also matches rotations itself is still the US3 implementer check; the 1..=8 shape is right either way. |
+| 2 matcher | upload-scan §5.4, §6.1, §9.3 and US3 | The trait, request/response data types, `MockMatcher`, `strongest`, `RetryPolicy` and a conformance suite move. **The concrete provider protocol (endpoints, answer vocabulary) does not**: per CireSnave's 2026-10-10 ruling relayed by SafeImage, it is a *provider profile* outside the crate (§7 Q9). `MatchRequest` carries 1..=8 hashes: Community sends all eight dihedral variants in one call (§3.5). Whether the provider also matches rotations itself is still the US3 implementer check; the 1..=8 shape is right either way. |
 | 3 evidence (pure half) | upload-scan §5.7; CSAM spec §3.3-3.6, §5, §7 | See §6 below for the exact transitions and the operations that need two distinct people. LAST in order. |
-| 4 report | CSAM plan Tasks 4, 5 and the state-machine half of 7 | Request XML is built with an escaper and never parsed; the response is byte-capped, entities off, pinned parser. |
+| 4 report (generic half only) | the state-machine half of CSAM plan Task 7 | The crate holds the generic `ReportDestination` trait, the `Step` machine, the closed answer enum and backoff. **The destination's XML builder, response parser, codes and schema (plan Tasks 4, 5) are a destination profile**, not crate code (§7 Q9). The properties the Community spec requires of them still hold, whoever hosts the code: request XML built with an escaper and never parsed; response byte-capped, entities off, pinned parser. |
 | 5 classifier seam | CSAM spec §3.1 `classifier` kind | A type boundary only; nothing today. |
 
 **Plan-task mapping (`2026-10-01-csam-ncmec-pipeline.md`):**
@@ -41,8 +41,8 @@ Mapped to SafeImage's layers, with the Community design each one replaces:
 | Task | Goes to |
 |---|---|
 | 1 media-key helper, 2 `applyAccountActionInTx`, 2a, 3 schema | stays (host) |
-| 4 XML layer + pinned parser | crate layer 4 |
-| 5 NCMEC client | crate layer 4 (build/parse/step function); the `fetch` stays in Community |
+| 4 XML layer + pinned parser | a destination **profile** (outside the crate, Q9) |
+| 5 NCMEC client | a destination profile for build/parse; the `fetch` stays in Community |
 | 6 intake | pure decisions to layer 3; the transaction (hide content, hold account, insert case) stays |
 | 7 drain | `next_step`/`apply` to layer 4; the cron, the guarded `UPDATE` and the I/O stay |
 | 8 alarms | stays (host); the crate supplies the `Unavailable` reasons |
@@ -57,9 +57,11 @@ Mapped to SafeImage's layers, with the Community design each one replaces:
 
 - `pdq_dihedral(frame) -> [Pdq; 8]`, `Hash256`, `hamming`, `normalise_geometry`.
 - `ProviderProtocol::request()` / `interpret()`: the Worker's own `fetch` sits between them, with its own secrets.
+  The trait is the crate's; the implementation is a provider profile.
 - `strongest(outcomes)`, `RetryPolicy::decide`.
-- Layer 3 transition functions, `preserve_until`, `report_may_submit`, `report_file_disposition`.
-- Layer 4 `build_report_xml`, `parse_response`, `next_step`/`apply`.
+- Layer 3 transition functions, `preserve_until`, `report_may_submit`, `report_file_disposition`, the host's
+  `KindPolicy`.
+- Layer 4 `ReportDestination`, `next_step`/`apply`. The destination's build/parse comes from its profile.
 
 **Delivery: option B (a WASM build of the pure functions)**, which is SafeImage's lean as well. Reasons from Community's
 side:
@@ -108,8 +110,8 @@ Nothing ships from Community until the crate step it needs exists and has passed
 | 0 | docs/DESIGN.md merged | this document merged | PM |
 | 1 | types and traits of layers 1-2, behaviour-free, with invariant tests | none | PM |
 | 2 | PDQ in layer 1, generated-image vectors, provenance and `NOTICE` | WASM load proof (§3). US1 is **replaced by this step**; the §9.2 test vectors become the cross-check | PM |
-| 3 | layer 2: `MockMatcher`, `strongest`, provider protocol, `RetryPolicy` | US3 becomes a thin adapter plus the Worker's `fetch`, behind the existing §9.3/9.4 tests | PM |
-| 4 | layer 4 pure half | plan Tasks 4-5 become adapters; exttest run | PM |
+| 3 | layer 2: trait, `MockMatcher`, `strongest`, `RetryPolicy`, conformance suite | US3 becomes a thin adapter plus the Worker's `fetch`, behind the existing §9.3/9.4 tests. The provider protocol itself is a profile (Q9): until Q9 is answered it stays in Community as its own code behind the crate's trait | PM |
+| 4 | layer 4 generic half (`ReportDestination`, `Step`, answers, backoff) | plan Tasks 4-5 become the destination profile; exttest run | PM |
 | 5 | layer 3 pure half, LAST | intake/confirm/clear adopt the transition functions | PM |
 
 Rule for every adoption PR: Community's pre-existing contract tests pass unchanged; a test is never edited to follow the
@@ -146,6 +148,7 @@ version, because a crate upgrade can change hashes without a Worker deploy.
 | Q1 | B vs A for layer 1 | PM, after the §3 proof |
 | Q7 | The workerd proof (§3) | Community, when a pdq `.wasm` exists |
 | **Q8** | **How Community consumes the crate.** The crate is `publish = false` and the repo private, and Community's repo and CI are public. CireSnave's standing rule is that cross-repo dependencies are published versions (no path, no new `git =` dependency). A TypeScript consumer needs a published npm package built from the crate, and CI needs to install it. Which registry, public or private, and when, is open. **Until it is answered no adoption PR (§5 steps 3-5) can merge**; steps 0-2 are unaffected. | PM, CireSnave |
+| **Q9** | **Where profile code lives, and how Community obtains it.** SafeImage proposes a private `ThinkersJournal/SafeImage-profiles` crate depending on the core; the same "published versions only" rule as Q8 applies to it, and Community is public. Community's recommendation: until Q9 and Q8 are answered, the provider and destination profiles stay in Community as ordinary code behind the crate's traits (this repository already documents both openly; the ruling concerns SafeImage's files), and move to the profiles crate only once a registry exists. That keeps the order in §5 unblocked. | PM, CireSnave |
 | Q3, Q4 | near-match kind; the licence mix for derived files | CireSnave / PM (as in SafeImage §10) |
 
 ## 8. Stop rules held in this document
