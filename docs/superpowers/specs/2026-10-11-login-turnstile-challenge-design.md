@@ -260,7 +260,28 @@ is paired with the same assertion finding X in a positive case.
   either. Accept, or name a support route?
 - **ASK-4 — flag-gated rollout** (recommended, §7) versus unconditional.
 
-## 10. Non-goals
+## 10. What an AI-generated suggestion got wrong or left out
+
+CireSnave pasted an AI-generated suggestion on 2026-10-11 with three options. They are hypotheses, not
+sources, and each is checked below against this repo at e3b6fb6 and against Cloudflare's own pages,
+fetched 2026-10-11. **UNVERIFIED** marks what the fetched pages did not say.
+
+| # | Option | What it assumes | What is wrong or missing against OUR code and the docs | What it would have cost |
+|---|---|---|---|---|
+| 1 | The backend counts failures (Redis or a database), sets a flag or cookie, and the frontend renders the widget | A cookie or flag can carry the "challenge required" state; failures are counted per username; a Redis exists | **The flag/cookie is client-controlled:** an attacker drops it and is never challenged. The trigger must be server state (this note, §1-2). **"Per username" is an existence oracle:** only a real account would accumulate state, and `login.ts:324` and `:329` are the two paths that must look the same; the key must be the *attempted* email string. **There is no Redis.** The alternatives, each with its own cost: a Durable Object per bucket is exact and strongly consistent but one instance per attempted string is unbounded for made-up addresses, which is why `SecurityCounterDO` uses 33 fixed instances (`SecurityCounterDO.ts:4-5`) and has no read RPC; Postgres through Hyperdrive means a `FRESH` read and write on every attempt, and an unbounded table of strings that are not accounts, a DoS lever on the one route that already spends Argon2id; KV is eventually consistent and has a minimum TTL (**UNVERIFIED: not fetched**). **Right:** verify Turnstile *before* the Argon2id work. The design does (T8, §8). | A bypass (cookie), an oracle (username key), or a new store with a new failure mode on every login. |
+| 2 | An edge Worker in front calls the rate limiter before and after the origin | `limit()` can be read, then incremented only on a failure; the limiter is a precise global counter | **No peek.** The binding's documentation says "calls to limit() increment this" and documents no read-only method; our own header says the same (`ratelimit.ts:70`). A pre-check therefore counts every attempt, including good ones, and a second call after the origin counts a failure twice. **Not precise or global:** "permissive, eventually consistent, and intentionally designed to not be used as an accurate accounting system"; "for each unique key you pass … there is a unique limit per Cloudflare location". **Our topology differs:** there is no edge Worker in front; login is a server-side form POST through the web Worker over a service binding to the api (`login.astro:41`), and our field is `turnstileToken` set by `data-response-field-name` (`signup.astro:157`), not the documented default `cf-turnstile-response`. **Right:** the binding is the cheap local primitive, which is why §1 uses it, with the attempt-counting caveat stated. | A threshold effectively halved for every user, and a counter described as exact that is not. |
+| 3 | A WAF rate-limiting rule that counts origin responses and issues a Managed Challenge | The zone's plan can count by response; a challenge interstitial can be answered on a POST response; the edge can own the decision | **(a) Plan:** a custom counting expression with "Response code, Response headers" is listed "No" for Free and Pro and "Yes" for Business and Enterprise; **this zone's plan is UNKNOWN to this repo.** Response fields are counted "after the response is sent", and "the rule filter expression cannot contain HTTP response fields". **(b) POST:** the pages fetched do not say whether a form POST can be solved and replayed (**UNVERIFIED**). The only related statement is that the challenge-page mechanism "fails when the browser expects a non-HTML response, such as an AJAX or XHR (fetch) request", with Turnstile Pre-clearance named as the alternative for APIs. **(c) Our verification and logging are bypassed:** the solve happens at the edge, so the api sees no token and no verdict, cannot emit the `security:` line or feed the alerting counters (§2), and cannot honour the fail-closed rule (§5). **(d) Keying:** characteristics on Free, Pro and Business are IP (Business adds NAT support); email-bearing ones (Form input value, JSON field, Body) are Enterprise only, so below Enterprise the rule can see an IP and not the attempted address, which misses the distributed-botnet case that `email:<email>` exists for (`login.ts:246-253`). Challenge actions on Free, Pro and Business "cannot select a duration". | A plan upgrade or an IP-only trigger, an unverified POST flow, and a defence that is invisible to our own alerting. |
+
+**What this note keeps from them:** the instinct that Turnstile must be verified server-side on every
+challenged request (Cloudflare: "You must call the Siteverify API to complete your Turnstile
+implementation"; token "valid for 300 seconds" and "can only be validated once"; maximum length 2048,
+which §5 bounds in the schema), and that the trigger belongs to the server.
+
+**Sources fetched 2026-10-11:** Workers rate-limit binding, Turnstile server-side validation, WAF rate-limiting rules
+and parameters, Cloudflare Challenges (challenge pages), all under developers.cloudflare.com. Quotations are
+from the fetched text; re-read before relying on any of them.
+
+## 11. Non-goals
 
 No change to a hard cap. No lockout of any kind. No device-recognition input. No retention beyond the
 binding's window. No change to signup, forgot-password or dsa-notice. No CAPTCHA other than Turnstile.
