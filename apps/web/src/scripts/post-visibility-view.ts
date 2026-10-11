@@ -65,6 +65,9 @@ export function initPostVisibilityView(): void {
     // SSR-hidden so an anonymous reader never pays even its collapsed-margin
     // dead space, and whichever island fires first is what un-hides it.
     root.closest<HTMLElement>(".owner-actions")?.removeAttribute("hidden");
+    // #166 — the author's Edit link: a static SSR-hidden anchor in the same
+    // toolbar, revealed behind this one owner check so nothing can drift.
+    document.querySelector<HTMLElement>("[data-post-edit-link]")?.removeAttribute("hidden");
 
     const hideBtn = document.createElement("button");
     hideBtn.type = "button";

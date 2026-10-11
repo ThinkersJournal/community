@@ -308,6 +308,13 @@ if (post !== null) {
           becomes visible with it, so there is no third reveal to keep in
           sync as controls are added or removed. */}
       <div class="owner-actions" hidden>
+        {/* THE EDIT LINK (#166) — a published post's author had no Edit link
+            anywhere (drafts/hidden posts did). A STATIC `hidden` anchor, the
+            same for every viewer: the href carries only the post id, which is
+            already in this page. src/scripts/post-visibility-view.ts un-hides
+            it behind its owner check, together with the Hide control below. */}
+        <a class="btn btn-ghost" data-post-edit-link href={`/new-post?post=${encodeURIComponent(post.id)}`} hidden>Edit</a>
+
         {/* THE HIDE CONTROL (#74 audit finding, batch A-2) — SAME SSR-hidden +
             client-reveal pattern as the delete control just below, and for the
             same reason: this render is fully anonymous + edge-cached, so there
