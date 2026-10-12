@@ -6,7 +6,15 @@
 > holds, so "ASAP" is bounded by his availability for that one step, not by the
 > build. Everything up to the swap is the agent's; the swap is his.
 
-**Status:** Design **APPROVED by the PM 2026-09-02**. The two production steps
+**Status (2026-10-12): CUTOVER DONE — observed, date not recorded.** CireSnave ran `pg_stat_activity`
+on 2026-10-12 (~05:20Z): 9 live sessions, all `usename = app_runtime`, `application_name` "Cloudflare
+Hyperdrive", 0 `neondb_owner`; and both Hyperdrive configs (`0c47794783ec473bbbf7b4769fe0c98f` FRESH,
+`8e0f6c638c1941e880ecceb802041e60` CACHED) report user `app_runtime` via `wrangler hyperdrive get`.
+`neondb_owner` is now used only by `apps/api/scripts/migrate.mjs`, through a one-shell `DATABASE_URL`.
+The cutover date is not in git or this repo's records. Sections 1 and 5 below describe the situation
+**before** the cutover and the runbook as designed; they are kept as the record.
+
+**Original status:** Design **APPROVED by the PM 2026-09-02**. The two production steps
 (role creation, Hyperdrive rewiring) are **founder-executed** — they need Neon SQL
 access and the Cloudflare dashboard, neither of which the agent holds (token is
 `zone: read` only, and the rotated Neon password is deliberately never in agent
@@ -19,9 +27,10 @@ non-DNS-gated security work.
 
 ## 1. Problem
 
-The runtime Workers authenticate to Postgres as **`neondb_owner`**, via both
-Hyperdrive configs (`tj-hyperdrive-fresh` `0c47…c98f`, `tj-hyperdrive-cached`
-`8e0f…1e60`). `neondb_owner` is the database owner — effectively near-superuser:
+*(As of 2026-09-02, before the cutover — see the Status above.)* The runtime Workers authenticated
+to Postgres as **`neondb_owner`**, via both Hyperdrive configs (FRESH `0c47…c98f`, CACHED
+`8e0f…1e60`; the ids are authoritative, the dashboard names `tj-hyperdrive-fresh`/`-cached` and
+`tj-fresh`/`tj-cached` are only labels). `neondb_owner` is the database owner — effectively near-superuser:
 it can `DROP` any table, `TRUNCATE`, `ALTER` schema, `CREATE`/`DROP ROLE`, read
 and rewrite everything. A SQL-injection or logic bug in the request path executes
 with **all** of that authority.

@@ -241,6 +241,13 @@ wrangler hyperdrive create tj-fresh  --connection-string="postgres://…" --cach
 wrangler r2 bucket create tj-media                        # the MEDIA binding (M1)
 ```
 
+The connection string for both runtime configs is the **`app_runtime`** role's (DML only; observed
+in production 2026-10-12 — both configs authenticate as `app_runtime`, no `neondb_owner` session).
+`neondb_owner` is used only by `apps/api/scripts/migrate.mjs`, with a one-shell `DATABASE_URL`
+(`docs/superpowers/specs/2026-09-02-least-privilege-db-role-design.md`). The config **ids** in
+`apps/api/wrangler.jsonc` are authoritative; the dashboard name is only a label (older docs say
+`tj-cached`/`tj-fresh` or `tj-hyperdrive-*`).
+
 `HYPERDRIVE_FRESH` **must** be the `--caching-disabled` config: Hyperdrive never
 invalidates on write, so a cached auth/dup-email/verify read is a real security bug.
 `IMAGES` needs nothing provisioned (a per-Worker binding, no zone/subscription/base fee);

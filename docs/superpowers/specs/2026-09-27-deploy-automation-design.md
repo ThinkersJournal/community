@@ -159,7 +159,8 @@ it plainly rather than routing around it:
   TABLE`, `ALTER TABLE`, `DROP COLUMN`, `CREATE INDEX`, everything every
   migration file in `apps/api/migrations/` does. This is **not** something
   `app_runtime` (the least-privilege role from
-  `2026-09-02-least-privilege-db-role-design.md`, if it's ever cut over) can
+  `2026-09-02-least-privilege-db-role-design.md`; the runtime has connected as it
+  since at least 2026-10-12) can
   do — that design deliberately scopes `app_runtime` to DML only, and its own
   §2.5 explicitly notes migrations stay on `neondb_owner` *because* the
   runtime role must never hold schema-changing privileges. **A least-privilege
