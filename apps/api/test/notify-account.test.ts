@@ -86,3 +86,27 @@ describe("#113 plan B — the appeal and delete-request links", () => {
     }
   });
 });
+
+describe("#57 Q8 — redress sentence on adverse account notices", () => {
+  it("warn, suspend and ban carry it with and without the appeal link, before the appeal line", async () => {
+    const { REDRESS_SENTENCE } = await import("@thinkersjournal/shared");
+    for (const kind of ["warn", "suspend", "ban"] as const) {
+      for (const appealUrl of [undefined, "https://community.thinkersjournal.com/appeal?token=a"]) {
+        sent = [];
+        await sendAccountActionNotice(env, "u@example.test", { kind, reason: "r", suspendedUntil: new Date(), appealUrl });
+        const text = String(sent[0]!.TextBody);
+        expect(text, `${kind} ${String(appealUrl)}`).toContain(REDRESS_SENTENCE);
+        expect(String(sent[0]!.HtmlBody)).toContain(REDRESS_SENTENCE);
+        if (appealUrl !== undefined) expect(text.indexOf(REDRESS_SENTENCE)).toBeLessThan(text.indexOf(appealUrl));
+      }
+    }
+  });
+
+  it("onSent gets the exact strings, and a throwing hook leaves the result true", async () => {
+    let got: { subject: string; textBody: string } | undefined;
+    expect(await sendAccountActionNotice(env, "u@example.test", { kind: "ban", reason: "r" }, async (r) => { got = r; })).toBe(true);
+    expect(got!.subject).toBe(sent[0]!.Subject);
+    expect(got!.textBody).toBe(sent[0]!.TextBody);
+    expect(await sendAccountActionNotice(env, "u@example.test", { kind: "ban", reason: "r" }, async () => { throw new Error("x"); })).toBe(true);
+  });
+});

@@ -6,6 +6,7 @@ import { reapOrphanMedia } from "./media/reap-orphan-media";
 import { processPendingMoves } from "./media/moves";
 import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media";
 import { reapUnconfirmedDsaNotices } from "./moderation/dsa-notices";
+import { purgeExpiredNoticeRecords } from "./moderation/notice-records";
 import { runEmailDrain } from "./notifications/email-drain";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
@@ -74,6 +75,8 @@ export default {
          same daily tick as the account reaper (see src/moderation/dsa-notices.ts). */
       ctx.waitUntil(reapUnverifiedAccounts(env, ctx));
       ctx.waitUntil(reapUnconfirmedDsaNotices(env, ctx));
+      /* #57 Q9 — records of sent notices past their retain_until. */
+      ctx.waitUntil(purgeExpiredNoticeRecords(env, ctx));
       ctx.waitUntil(sweepForgottenAccounts(env, ctx));
       return;
     }
