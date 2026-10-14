@@ -124,7 +124,8 @@ export async function sendAutoHideNotice(
     notice.subject === "post"
       ? `This is about your post "${notice.postTitle}".`
       : `This is about your comment on "${notice.postTitle}".`;
-  const next = "A moderator will review it, and we will tell you the outcome.";
+  const next =
+    "A moderator will review it, and we will tell you the outcome. This is not a final decision, so there is nothing to appeal yet. If a moderator decides to keep it hidden, that message will tell you how to appeal.";
   return await postmarkSend(env, {
     from: "noreply@thinkersjournal.com",
     to,

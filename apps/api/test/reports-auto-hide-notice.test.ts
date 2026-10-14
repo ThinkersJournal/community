@@ -137,7 +137,7 @@ async function emailOf(userId: string): Promise<string> {
   return run(async (c) => (await c.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId])).rows[0]!.email);
 }
 
-/** A link of any shape: a scheme, an href, the appeal path, or its token parameter. */
+/** A link of any shape: a scheme, an href, the `/appeal` PATH, or its token parameter. The bare word "appeal" is copy, not a link. */
 const NO_LINK = /https?:\/\/|href=|\/appeal|token=/i;
 
 const REASONS = ["harassment", "hate", "spam", "harassment", "hate"] as const;
@@ -180,6 +180,11 @@ describe("auto-hide author notice (#56)", () => {
     // No appeal link: nothing has been decided, so there is nothing to appeal.
     expect(m.text).not.toMatch(NO_LINK);
     expect(m.html).not.toMatch(NO_LINK);
+    // In plain words: nothing to appeal yet, and where the appeal will come from.
+    for (const body of [m.text, m.html]) {
+      expect(body).toContain("nothing to appeal yet");
+      expect(body).toContain("how to appeal");
+    }
     // The post was already hidden, as seen from ANOTHER connection, when it went.
     expect(m.hiddenAtSeenAtSend).not.toBeNull();
     // ...and the cache purge came first.
@@ -204,6 +209,10 @@ describe("auto-hide author notice (#56)", () => {
     expect(sent[0]!.text).toContain("pending review");
     expect(sent[0]!.text).not.toMatch(NO_LINK);
     expect(sent[0]!.html).not.toMatch(NO_LINK);
+    for (const body of [sent[0]!.text, sent[0]!.html]) {
+      expect(body).toContain("nothing to appeal yet");
+      expect(body).toContain("how to appeal");
+    }
   });
 
   it("never carries a reporter's identity, a report reason, or the number of reports", async () => {
