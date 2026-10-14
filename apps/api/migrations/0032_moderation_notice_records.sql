@@ -1,3 +1,4 @@
+-- Up Migration
 -- #57 Q9 (DSA Art. 17), PR-D: keep the RENDERED text of every statement of
 -- reasons we actually sent, so "what exactly were they told?" is answerable
 -- long after the moderator's wording or our templates change.
@@ -40,3 +41,7 @@ CREATE TABLE moderation_notice_records (
 
 -- The purge's scan.
 CREATE INDEX moderation_notice_records_retain_until_idx ON moderation_notice_records (retain_until);
+
+-- Down Migration
+DROP INDEX IF EXISTS moderation_notice_records_retain_until_idx;
+DROP TABLE IF EXISTS moderation_notice_records;
