@@ -180,13 +180,25 @@ export async function notifyAutoHidden(env: Env, ctx: ExecutionContext, hidden: 
       return rows[0];
     });
 
-    const skip = (reason: string): void => {
+    const warnSkipped = (reason: string): void => {
       console.warn("moderation notice skipped", { reason, subject: hidden.subject });
     };
-    if (row === undefined) return skip("auto_hide_content_gone");
-    if (row.anonymised_at !== null) return skip("auto_hide_author_anonymised");
-    if (row.deleted_at !== null) return skip("auto_hide_comment_deleted");
-    if (row.hidden_at === null) return skip("auto_hide_no_longer_hidden");
+    if (row === undefined) {
+      warnSkipped("auto_hide_content_gone");
+      return;
+    }
+    const reason =
+      row.anonymised_at !== null
+        ? "auto_hide_author_anonymised"
+        : row.deleted_at !== null
+          ? "auto_hide_comment_deleted"
+          : row.hidden_at === null
+            ? "auto_hide_no_longer_hidden"
+            : null;
+    if (reason !== null) {
+      warnSkipped(reason);
+      return;
+    }
 
     const ok = await sendAutoHideNotice(env, row.email, { subject: hidden.subject, postTitle: row.title });
     if (!ok) console.error("auto-hide notice not sent", { subject: hidden.subject });
