@@ -1,3 +1,4 @@
+-- Up Migration
 -- #57 (DSA Art. 17), PR-C: the two GROUNDS a content decision may cite, as
 -- structured, optional columns on the append-only moderation audit log.
 --   legal_ground       - the decision rests on the content being illegal
