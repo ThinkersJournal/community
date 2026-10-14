@@ -6,19 +6,7 @@
  * provider with no cookie, and its only possible effect is master_enabled=false
  * for THIS userId — no escalation.
  */
-import { base64urlEncode } from "../auth/encoding";
-
-function b64urlToBytes(s: string): Uint8Array | null {
-  try {
-    const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
-    const bin = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-  } catch {
-    return null;
-  }
-}
+import { b64urlToBytes, base64urlEncode } from "../auth/encoding";
 
 async function hmac(env: Env, msg: string): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey(
