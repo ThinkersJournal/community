@@ -18,7 +18,6 @@ const b64urlJson = (o: unknown): string => b64url(new TextEncoder().encode(JSON.
 
 let keyPair: CryptoKeyPair;
 let sentEmails: Array<Record<string, unknown>> = [];
-let capturedPurges: string[][] = [];
 let createdUserIds: string[] = [];
 let adminEmail: string;
 
@@ -81,7 +80,7 @@ async function seedUser(): Promise<string> {
 }
 
 async function seedUserWithProfile(): Promise<{ userId: string; username: string }> {
-  const userId = await ctxRun(async (c) => {
+  const created = await ctxRun(async (c) => {
     const username = `u${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
     const { rows } = await c.query<{ id: string }>(
       `INSERT INTO users (email, password_hash, email_verified_at)
@@ -93,8 +92,8 @@ async function seedUserWithProfile(): Promise<{ userId: string; username: string
     await c.query(`INSERT INTO profiles (user_id, username) VALUES ($1, $2)`, [id, username]);
     return { id, username };
   });
-  createdUserIds.push(userId.id);
-  return { userId: userId.id, username: userId.username };
+  createdUserIds.push(created.id);
+  return { userId: created.id, username: created.username };
 }
 
 async function seedPost(userId: string, hiddenAt?: Date): Promise<{ id: string; slug: string }> {
@@ -217,7 +216,6 @@ async function decideRaw(opts: { headers?: Record<string, string>; body?: unknow
 
 beforeEach(async () => {
   sentEmails = [];
-  capturedPurges = [];
   createdUserIds = [];
   adminEmail = `mod-${crypto.randomUUID()}@example.test`;
   keyPair = (await crypto.subtle.generateKey(

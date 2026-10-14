@@ -74,6 +74,15 @@ async function act(postId: string, action: string): Promise<void> {
   );
 }
 
+// ⚠️ #59: the shared test database may hold any number of OTHER open items
+// (leaked by other suites), and `listOpenQueue`'s default first page is
+// QUEUE_PAGE_SIZE = 50. Reading only that page makes `toContain` flaky and
+// `not.toContain` vacuous (the item has simply fallen off the page). So every
+// read here asks for the WHOLE open set; the SQL's LIMIT is the only paging,
+// and a limit this large exceeds any possible population.
+const ALL_OPEN = 1_000_000;
+const openQueue = (): ReturnType<typeof listOpenQueue> => listOpenQueue(client, ALL_OPEN);
+
 const idsOf = (items: { targetId: string }[]): string[] => items.map((i) => i.targetId);
 
 describe("listOpenQueue", () => {
@@ -83,7 +92,7 @@ describe("listOpenQueue", () => {
     const post = await mkPost(author, "Reported");
     await report(r1, post, "spam");
 
-    const items = await listOpenQueue(client);
+    const items = await openQueue();
     const mine = items.find((i) => i.targetId === post);
     expect(mine).toBeDefined();
     expect(mine!.kind).toBe("post");
@@ -99,7 +108,10 @@ describe("listOpenQueue", () => {
     await report(r2, spammy, "spam", 20);
     await report(r3, severe, "sexual", 10);
 
-    const ids = idsOf(await listOpenQueue(client));
+    const ids = idsOf(await openQueue());
+    // Non-vacuous: indexOf is -1 for an absent item, which is < anything.
+    expect(ids).toContain(severe);
+    expect(ids).toContain(spammy);
     expect(ids.indexOf(severe)).toBeLessThan(ids.indexOf(spammy));
   });
 
@@ -108,10 +120,10 @@ describe("listOpenQueue", () => {
     const r1 = await mkUser();
     const post = await mkPost(author, "Decided");
     await report(r1, post, "spam", 10);
-    expect(idsOf(await listOpenQueue(client))).toContain(post);
+    expect(idsOf(await openQueue())).toContain(post);
 
     await act(post, "content_keep_hidden");
-    expect(idsOf(await listOpenQueue(client))).not.toContain(post);
+    expect(idsOf(await openQueue())).not.toContain(post);
   });
 
   it("⚠️ REOPENS when a DIFFERENT reporter reports after the decision", async () => {
@@ -122,11 +134,14 @@ describe("listOpenQueue", () => {
     const r2 = await mkUser();
     const post = await mkPost(author, "Reopened");
     await report(r1, post, "spam", 10);
+    // Control: it IS in the full open set before the ruling, so the absence
+    // after it is a real removal, not an artefact of paging.
+    expect(idsOf(await openQueue())).toContain(post);
     await act(post, "content_keep_hidden");
-    expect(idsOf(await listOpenQueue(client))).not.toContain(post);
+    expect(idsOf(await openQueue())).not.toContain(post);
 
     await report(r2, post, "hate");
-    const items = await listOpenQueue(client);
+    const items = await openQueue();
     expect(idsOf(items)).toContain(post);
     expect(items.find((i) => i.targetId === post)!.reportCount).toBe(2);
   });
@@ -137,7 +152,7 @@ describe("listOpenQueue", () => {
     const post = await mkPost(author, "Warned");
     await report(r1, post, "spam", 10);
     await act(post, "user_warn");
-    expect(idsOf(await listOpenQueue(client))).toContain(post);
+    expect(idsOf(await openQueue())).toContain(post);
   });
 });
 
@@ -172,7 +187,7 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     await act(post, "content_keep_hidden");
     await report(r2, post, "hate");
 
-    const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
+    const item = (await openQueue()).find((i) => i.targetId === post)!;
     expect(item.oldestReportAt.getTime()).toBe((await reportCreatedAt(r2, "post_id", post)).getTime());
     expect(item.oldestReportAt.getTime()).not.toBe((await reportCreatedAt(r1, "post_id", post)).getTime());
     expect(item.reportCount).toBe(2); // unchanged: still cumulative
@@ -194,7 +209,7 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     );
     await client.query(`INSERT INTO reports (reporter_id, comment_id, reason) VALUES ($1, $2, 'hate')`, [r2, comment]);
 
-    const item = (await listOpenQueue(client)).find((i) => i.targetId === comment)!;
+    const item = (await openQueue()).find((i) => i.targetId === comment)!;
     expect(item.oldestReportAt.getTime()).toBe((await reportCreatedAt(r2, "comment_id", comment)).getTime());
   });
 
@@ -214,7 +229,7 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     );
     await client.query(`INSERT INTO reports (reporter_id, post_id, reason, created_at) VALUES ($1, $2, 'hate', $3)`, [r2, post, tie]);
 
-    const item = (await listOpenQueue(client)).find((i) => i.targetId === post);
+    const item = (await openQueue()).find((i) => i.targetId === post);
     expect(item).toBeDefined();
     expect(item!.oldestReportAt?.getTime()).toBe(tie.getTime());
   });
@@ -227,7 +242,7 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     await report(r1, post, "spam", 60);
     await report(r2, post, "hate");
 
-    const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
+    const item = (await openQueue()).find((i) => i.targetId === post)!;
     expect(item.oldestReportAt.getTime()).toBe((await reportCreatedAt(r1, "post_id", post)).getTime());
   });
 
@@ -240,7 +255,7 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     await act(post, "user_warn");
     await report(r2, post, "hate");
 
-    const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
+    const item = (await openQueue()).find((i) => i.targetId === post)!;
     expect(item.oldestReportAt.getTime()).toBe((await reportCreatedAt(r1, "post_id", post)).getTime());
   });
 
@@ -251,7 +266,7 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     const r1 = await mkUser();
     const post = await mkPost(author, "Handled");
     await report(r1, post, "spam");
-    const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
+    const item = (await openQueue()).find((i) => i.targetId === post)!;
     expect(item.authorHandle).toBe(handle);
   });
 
@@ -267,7 +282,7 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     const r1 = await mkUser();
     const post = await mkPost(author, "Anon-authored");
     await report(r1, post, "spam");
-    const item = (await listOpenQueue(client)).find((i) => i.targetId === post)!;
+    const item = (await openQueue()).find((i) => i.targetId === post)!;
     expect(item.authorHandle).toBeNull();
   });
 
@@ -286,7 +301,7 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     );
     const r1 = await mkUser();
     await client.query(`INSERT INTO reports (reporter_id, comment_id, reason) VALUES ($1, $2, 'spam')`, [r1, comment]);
-    const item = (await listOpenQueue(client)).find((i) => i.targetId === comment)!;
+    const item = (await openQueue()).find((i) => i.targetId === comment)!;
     expect(item.authorHandle).toBeNull();
   });
 
@@ -315,7 +330,7 @@ describe("#119 — oldestReportAt is the oldest ACTIVE report, not one a moderat
     const r2 = await mkUser();
     await client.query(`INSERT INTO reports (reporter_id, comment_id, reason) VALUES ($1, $2, 'spam')`, [r2, comment]);
 
-    const items = await listOpenQueue(client);
+    const items = await openQueue();
     expect(items.find((i) => i.targetId === post)!.authorHandle).toBe(postHandle);
     expect(items.find((i) => i.targetId === comment)!.authorHandle).toBe(commentHandle);
   });
