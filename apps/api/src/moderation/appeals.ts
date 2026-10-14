@@ -4,6 +4,7 @@ import { releaseReservedEmail } from "../auth/reserved-email";
 import { BEGIN_BOUNDED_TX } from "../db/client";
 import { recordModerationAction } from "./actions";
 import { applyDecisionInTx, type DecisionResult } from "./decide";
+import { HUMAN_CONTENT_RULING_KINDS_SQL } from "./visibility-actions";
 
 import {
   APPEAL_WINDOW_DAYS,
@@ -166,7 +167,7 @@ export async function resolveAppeal(
             `SELECT 1 FROM moderation_actions n
                JOIN moderation_actions ma ON ma.id = $2
               WHERE n.${subject === "post" ? "post_id" : "comment_id"} = $1
-                AND n.action LIKE 'content\\_%'
+                AND n.action IN (${HUMAN_CONTENT_RULING_KINDS_SQL})
                 AND (n.created_at, n.id) > (ma.created_at, ma.id)
               LIMIT 1`,
             [targetId, ap.action_id],
