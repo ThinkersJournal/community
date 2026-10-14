@@ -40,15 +40,14 @@ export type ReportTarget = { postId: string } | { commentId: string };
  * makes the notice fire exactly once per hide event, and never on a later
  * report against content that is already hidden.
  *
- * ⚠️ It carries the content's id and the author's id, never the author's
- * address: the notice reads the recipient AT SEND TIME (notify-author.ts), so
- * content deleted or an account anonymised in the meantime is not mailed.
+ * ⚠️ It carries the content's id, never the author's id or address: the
+ * notice reads the recipient AT SEND TIME (notify-author.ts), so content
+ * deleted, restored or an account anonymised in the meantime is not mailed.
  */
 export interface AutoHideResult {
   readonly purge: PurgeTarget;
   readonly subject: "post" | "comment";
   readonly subjectId: string;
-  readonly authorId: string;
 }
 
 export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<AutoHideResult | null> {
@@ -81,11 +80,10 @@ export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<Au
       purge: { kind: "post", postId: row.id, authorId: row.author_id, tagSlugs },
       subject: "post",
       subjectId: row.id,
-      authorId: row.author_id,
     };
   } else {
-    const { rows: commentRows } = await c.query<{ id: string; post_id: string; author_id: string }>(
-      `UPDATE comments SET hidden_at = now() WHERE id = $1 AND hidden_at IS NULL RETURNING id, post_id, author_id`,
+    const { rows: commentRows } = await c.query<{ id: string; post_id: string }>(
+      `UPDATE comments SET hidden_at = now() WHERE id = $1 AND hidden_at IS NULL RETURNING id, post_id`,
       [id],
     );
     const row = commentRows[0];
@@ -94,7 +92,6 @@ export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<Au
       purge: { kind: "comment", postId: row.post_id },
       subject: "comment",
       subjectId: row.id,
-      authorId: row.author_id,
     };
   }
 }

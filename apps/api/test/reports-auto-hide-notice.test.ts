@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
+import { notifyAutoHidden } from "../src/moderation/notify-author";
 import { createPublished, createVerifiedActor, deleteCreatedUsers } from "./actor";
 
 import type { Actor } from "./actor";
@@ -136,6 +137,9 @@ async function emailOf(userId: string): Promise<string> {
   return run(async (c) => (await c.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId])).rows[0]!.email);
 }
 
+/** A link of any shape: a scheme, an href, the appeal path, or its token parameter. */
+const NO_LINK = /https?:\/\/|href=|\/appeal|token=/i;
+
 const REASONS = ["harassment", "hate", "spam", "harassment", "hate"] as const;
 const reporters: Actor[] = [];
 let author: Actor;
@@ -174,8 +178,8 @@ describe("auto-hide author notice (#56)", () => {
     expect(m.html).toContain("pending review");
     expect(m.text).toContain(await titleOf(postId));
     // No appeal link: nothing has been decided, so there is nothing to appeal.
-    expect(m.text).not.toMatch(/https?:\/\//);
-    expect(m.html).not.toMatch(/href=|https?:\/\//);
+    expect(m.text).not.toMatch(NO_LINK);
+    expect(m.html).not.toMatch(NO_LINK);
     // The post was already hidden, as seen from ANOTHER connection, when it went.
     expect(m.hiddenAtSeenAtSend).not.toBeNull();
     // ...and the cache purge came first.
@@ -198,7 +202,8 @@ describe("auto-hide author notice (#56)", () => {
     expect(sent[0]!.to).toBe(await emailOf(author.userId));
     expect(sent[0]!.text).toContain(`your comment on "${await titleOf(postId)}"`);
     expect(sent[0]!.text).toContain("pending review");
-    expect(sent[0]!.text).not.toMatch(/https?:\/\//);
+    expect(sent[0]!.text).not.toMatch(NO_LINK);
+    expect(sent[0]!.html).not.toMatch(NO_LINK);
   });
 
   it("never carries a reporter's identity, a report reason, or the number of reports", async () => {
@@ -219,14 +224,14 @@ describe("auto-hide author notice (#56)", () => {
     const postId = await createPublished(a);
     const email = `deleted-${a.userId}@invalid.thinkersjournal.local`;
     await run((c) => c.query(`UPDATE users SET email = $2, anonymised_at = now() WHERE id = $1`, [a.userId, email]));
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const info = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     await reportN({ postId }, 0, 3);
     expect(await hiddenAtOf("posts", postId)).not.toBeNull();
     expect(sent).toHaveLength(0);
     const skipped = info.mock.calls.filter((c) => c[0] === "moderation notice skipped");
     expect(skipped).toHaveLength(1);
-    expect(skipped[0]![1]).toEqual({ reason: "auto_hide_author_anonymised" });
+    expect(skipped[0]![1]).toEqual({ reason: "auto_hide_author_anonymised", subject: "post" });
     expect(JSON.stringify(info.mock.calls)).not.toContain(email);
   });
 
@@ -234,13 +239,13 @@ describe("auto-hide author notice (#56)", () => {
     const postId = await createPublished(author);
     const commentId = await createComment(author, postId);
     await run((c) => c.query(`UPDATE comments SET deleted_at = now(), body_markdown = '' WHERE id = $1`, [commentId]));
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const info = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     await reportN({ commentId }, 0, 3);
     expect(sent).toHaveLength(0);
     const skipped = info.mock.calls.filter((c) => c[0] === "moderation notice skipped");
     expect(skipped).toHaveLength(1);
-    expect(skipped[0]![1]).toEqual({ reason: "auto_hide_comment_deleted" });
+    expect(skipped[0]![1]).toEqual({ reason: "auto_hide_comment_deleted", subject: "comment" });
   });
 
   it("the recipient is read AT SEND TIME: a comment deleted between the hide and the send is not mailed", async () => {
@@ -251,9 +256,144 @@ describe("auto-hide author notice (#56)", () => {
     betweenHideAndSend = async () => {
       await run((c) => c.query(`UPDATE comments SET deleted_at = now(), body_markdown = '' WHERE id = $1`, [commentId]));
     };
-    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await reportN({ commentId }, 2, 1);
     expect(await hiddenAtOf("comments", commentId)).not.toBeNull();
+    expect(sent).toHaveLength(0);
+  });
+
+  it("HTML-escapes the author's own title in the notice (post and comment parent)", async () => {
+    const title = 'A <b>&"x"</b>';
+    const postId = await createPublished(author);
+    await run((c) => c.query(`UPDATE posts SET title = $2 WHERE id = $1`, [postId, title]));
+    // Before the post is hidden: a comment cannot be created on hidden content.
+    const commentId = await createComment(author, postId);
+    await reportN({ postId }, 0, 3);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.html).toContain("&lt;b&gt;");
+    expect(sent[0]!.html).toContain("&amp;");
+    expect(sent[0]!.html).not.toContain("<b>");
+
+    await reportN({ commentId }, 0, 3);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.html).toContain("&lt;b&gt;");
+    expect(sent[1]!.html).toContain("&amp;");
+    expect(sent[1]!.html).not.toContain("<b>");
+  });
+
+  it("an anonymised author's COMMENT: no send, skip line", async () => {
+    const a = await createVerifiedActor();
+    const postId = await createPublished(a);
+    const commentId = await createComment(a, postId);
+    await run((c) =>
+      c.query(`UPDATE users SET email = $2, anonymised_at = now() WHERE id = $1`, [
+        a.userId,
+        `deleted-${a.userId}@invalid.thinkersjournal.local`,
+      ]),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await reportN({ commentId }, 0, 3);
+    expect(await hiddenAtOf("comments", commentId)).not.toBeNull();
+    expect(sent).toHaveLength(0);
+    const skipped = warn.mock.calls.filter((c) => c[0] === "moderation notice skipped");
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]![1]).toEqual({ reason: "auto_hide_author_anonymised", subject: "comment" });
+  });
+
+  it("content restored between the hide and the send: no send (auto_hide_no_longer_hidden)", async () => {
+    const postId = await createPublished(author);
+    await reportN({ postId }, 0, 2);
+    betweenHideAndSend = async () => {
+      await run((c) => c.query(`UPDATE posts SET hidden_at = NULL WHERE id = $1`, [postId]));
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await reportN({ postId }, 2, 1);
+    expect(sent).toHaveLength(0);
+    const skipped = warn.mock.calls.filter((c) => c[0] === "moderation notice skipped");
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]![1]).toEqual({ reason: "auto_hide_no_longer_hidden", subject: "post" });
+  });
+
+  it("content hard-deleted between the hide and the send: no send (auto_hide_content_gone)", async () => {
+    const a = await createVerifiedActor();
+    const postId = await createPublished(a);
+    await reportN({ postId }, 0, 2);
+    betweenHideAndSend = async () => {
+      await run((c) => c.query(`DELETE FROM posts WHERE id = $1`, [postId]));
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await reportN({ postId }, 2, 1);
+    expect(sent).toHaveLength(0);
+    const skipped = warn.mock.calls.filter((c) => c[0] === "moderation notice skipped");
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]![1]).toEqual({ reason: "auto_hide_content_gone", subject: "post" });
+  });
+
+  it("a Postmark transport REJECTION (fetch throws) never fails the report", async () => {
+    const postId = await createPublished(author);
+    const inner = globalThis.fetch;
+    let threw = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "https://api.postmarkapp.com/email" && threw === 0) {
+        threw++;
+        throw new TypeError("network down");
+      }
+      return inner(input, init);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await reportN({ postId }, 0, 3);
+    expect(threw).toBe(1);
+    expect(await hiddenAtOf("posts", postId)).not.toBeNull();
+  });
+
+  it("the send is off the response path: the report resolves BEFORE a slow Postmark settles", async () => {
+    const postId = await createPublished(author);
+    await reportN({ postId }, 0, 2);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let settled = false;
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "https://api.postmarkapp.com/email") {
+        await gate;
+        settled = true;
+      }
+      return inner(input, init);
+    });
+    const web = { fetch: async () => new Response("{}", { status: 200 }) };
+    const ctx = createExecutionContext();
+    const pending = worker.fetch(
+      new Request("https://api.test/reports", {
+        method: "POST",
+        headers: {
+          Origin: ALLOWED_ORIGIN, Cookie: reporters[2]!.cookie, "X-CSRF-Token": reporters[2]!.csrfToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ postId, reason: "spam" }),
+      }),
+      { ...env, WEB: web } as never,
+      ctx,
+    );
+    const first = await Promise.race([
+      pending,
+      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 4000)),
+    ]);
+    const settledWhenResolved = settled;
+    release();
+    await waitOnExecutionContext(ctx);
+    expect(first).not.toBe("timeout");
+    expect((first as Response).status).toBe(201);
+    expect(settledWhenResolved).toBe(false);
+  });
+
+  it("a failing send-time read never throws out of the notice (it is a waitUntil)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const ctx = createExecutionContext();
+    const broken = { ...env, HYPERDRIVE_FRESH: { connectionString: "postgres://nobody:nope@127.0.0.1:1/none" } };
+    await expect(
+      notifyAutoHidden(broken as never, ctx, { purge: { kind: "comment", postId: crypto.randomUUID() }, subject: "comment", subjectId: crypto.randomUUID() }),
+    ).resolves.toBeUndefined();
+    await waitOnExecutionContext(ctx);
     expect(sent).toHaveLength(0);
   });
 

@@ -140,20 +140,24 @@ interface AutoHideRecipient {
   anonymised_at: Date | null;
   title: string;
   deleted_at: Date | null;
+  hidden_at: Date | null;
 }
 
 /**
  * The auto-hide notice, end to end: read the recipient NOW, decide, send.
  *
  * ⚠️ READ AT SEND TIME, ON `HYPERDRIVE_FRESH`, not carried through the report
- * request. A comment the author deleted or an account anonymised between the
- * hide and this send must not be mailed, and the sentinel address of an
- * anonymised account must never reach Postmark. One SELECT, one definition of
- * "gone": `anonymised_at` and `deleted_at`.
+ * request. A comment the author deleted, content a moderator restored, or an
+ * account anonymised between the hide and this send must not be mailed, and
+ * the sentinel address of an anonymised account must never reach Postmark.
+ * One SELECT, one definition of "gone": `anonymised_at`, `deleted_at`, and
+ * "still hidden" (`hidden_at`).
  *
  * ⚠️ NEVER THROWS, so `ctx.waitUntil(...)` cannot surface an error and a
  * report that was recorded is never undone by a mail or database failure. The
- * skip line carries the reason only: no address, title, or id.
+ * skip line carries the reason and the subject kind only: no address, title,
+ * or id. It is a `warn`, the level the codebase's other "refused" lines use
+ * (routes/media.ts), not `info`, which nothing else here emits.
  */
 export async function notifyAutoHidden(env: Env, ctx: ExecutionContext, hidden: AutoHideResult): Promise<void> {
   try {
@@ -161,13 +165,13 @@ export async function notifyAutoHidden(env: Env, ctx: ExecutionContext, hidden: 
       const { rows } =
         hidden.subject === "post"
           ? await c.query<AutoHideRecipient>(
-              `SELECT u.email, u.anonymised_at, p.title, NULL::timestamptz AS deleted_at
+              `SELECT u.email, u.anonymised_at, p.title, NULL::timestamptz AS deleted_at, p.hidden_at
                  FROM posts p JOIN users u ON u.id = p.author_id
                 WHERE p.id = $1`,
               [hidden.subjectId],
             )
           : await c.query<AutoHideRecipient>(
-              `SELECT u.email, u.anonymised_at, p.title, c.deleted_at
+              `SELECT u.email, u.anonymised_at, p.title, c.deleted_at, c.hidden_at
                  FROM comments c JOIN users u ON u.id = c.author_id JOIN posts p ON p.id = c.post_id
                 WHERE c.id = $1`,
               [hidden.subjectId],
@@ -175,18 +179,13 @@ export async function notifyAutoHidden(env: Env, ctx: ExecutionContext, hidden: 
       return rows[0];
     });
 
-    const reason =
-      row === undefined
-        ? "auto_hide_content_gone"
-        : row.anonymised_at !== null
-          ? "auto_hide_author_anonymised"
-          : row.deleted_at !== null
-            ? "auto_hide_comment_deleted"
-            : null;
-    if (row === undefined || reason !== null) {
-      console.info("moderation notice skipped", { reason });
-      return;
-    }
+    const skip = (reason: string): void => {
+      console.warn("moderation notice skipped", { reason, subject: hidden.subject });
+    };
+    if (row === undefined) return skip("auto_hide_content_gone");
+    if (row.anonymised_at !== null) return skip("auto_hide_author_anonymised");
+    if (row.deleted_at !== null) return skip("auto_hide_comment_deleted");
+    if (row.hidden_at === null) return skip("auto_hide_no_longer_hidden");
 
     const ok = await sendAutoHideNotice(env, row.email, { subject: hidden.subject, postTitle: row.title });
     if (!ok) console.error("auto-hide notice not sent", { subject: hidden.subject });

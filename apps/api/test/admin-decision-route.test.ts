@@ -1180,7 +1180,7 @@ describe("POST /admin/decision author-notice gate (#138, #135)", () => {
   it("a skipped notice logs one structured line with the action id and the reason, and no address", async () => {
     const { userId, email } = await seedAnonymisedUser();
     const post = await seedPost(userId);
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const info = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const { actionId } = await removeAndRead("post", post.id);
       const skipped = info.mock.calls.filter((a) => a[0] === "moderation notice skipped");
@@ -1189,6 +1189,34 @@ describe("POST /admin/decision author-notice gate (#138, #135)", () => {
       expect(JSON.stringify(info.mock.calls)).not.toContain(email);
     } finally {
       info.mockRestore();
+    }
+  });
+
+  it("a RESTORE of never-hidden content by an anonymised author is a dismissal: 200, 0 sends, NO skip line", async () => {
+    const { userId } = await seedAnonymisedUser();
+    const post = await seedPost(userId);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      sentEmails = [];
+      const res = await decide({ subject: "post", subjectId: post.id, decision: "restore", reason: "Mistaken." });
+      expect(res.status).toBe(200);
+      expect(sentEmails).toHaveLength(0);
+      expect(warn.mock.calls.filter((a) => a[0] === "moderation notice skipped")).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each(["keep_hidden", "remove"] as const)("%s on an anonymised author's post DOES log the skip", async (decision) => {
+    const { userId } = await seedAnonymisedUser();
+    const post = await seedPost(userId);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const res = await decide({ subject: "post", subjectId: post.id, decision, reason: "Violates." });
+      expect(res.status).toBe(200);
+      expect(warn.mock.calls.filter((a) => a[0] === "moderation notice skipped")).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
     }
   });
 });

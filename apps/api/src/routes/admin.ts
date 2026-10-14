@@ -168,11 +168,14 @@ export async function handleAdminDecision(
   // the action id and the reason and NOTHING else — no address (the sentinel,
   // or a real one), no title, no author id.
   if (result.noticeSkip !== null) {
-    console.info("moderation notice skipped", { actionId: result.actionId, reason: result.noticeSkip });
-    return new Response(JSON.stringify({ actionId: result.actionId }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    // ⚠️ Log only a notice that was ACTUALLY suppressed. A restore of
+    // never-hidden content is a dismissal that `sendModerationNotice` would
+    // have no-oped anyway, so "skipped" there would be a false report.
+    const dismissal = decision === "restore" && !result.wasHidden;
+    if (!dismissal) {
+      console.warn("moderation notice skipped", { actionId: result.actionId, reason: result.noticeSkip });
+    }
+    return decisionOk(result.actionId);
   }
 
   // #113 plan B — tokens are minted AFTER the action has committed, on a
@@ -211,7 +214,12 @@ export async function handleAdminDecision(
     }),
   );
 
-  return new Response(JSON.stringify({ actionId: result.actionId }), {
+  return decisionOk(result.actionId);
+}
+
+/** The decision route's one success body: `{ actionId }` with a 200. */
+function decisionOk(actionId: string): Response {
+  return new Response(JSON.stringify({ actionId }), {
     status: 200,
     headers: { "content-type": "application/json" },
   });
