@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -52,16 +53,6 @@ const REPO_ROOT = join(import.meta.dirname, "../../..");
 /** The one file allowed to carry it, repo-relative with forward slashes. */
 const ALLOWED = "docs/legal/dmca-policy.md";
 
-/**
- * Directories that are not ours to police, plus build output. Kept short and
- * explicit: a broad ignore list is how a scan quietly stops covering the tree it
- * claims to cover.
- */
-const SKIP_DIRS = new Set([
-  ".git", "node_modules", "dist", ".wrangler", ".vercel", "coverage",
-  ".superpowers", "playwright-report", "test-results",
-]);
-
 const TEXT_EXT = new Set([
   ".md", ".mdx", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".astro", ".json",
   ".jsonc", ".html", ".css", ".txt", ".yml", ".yaml", ".sql",
@@ -87,20 +78,26 @@ function agentPhoneDigits(): string {
   return line.replace(/\D/g, "");
 }
 
-function walk(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      walk(join(dir, entry.name), out);
-      continue;
-    }
-    const dot = entry.name.lastIndexOf(".");
-    if (dot !== -1 && TEXT_EXT.has(entry.name.slice(dot))) out.push(join(dir, entry.name));
-  }
-  return out;
+/**
+ * Enumerate from the INDEX (`git ls-files`), never by walking the disk: a disk
+ * walk is slow under parallel-suite load (it timed out at 5 s once) and sees
+ * untracked directories (`apps/web/.astro/`, other worktrees) that no skip-list
+ * can fully anticipate. `-z` keeps unusual file names intact.
+ */
+function trackedTextFiles(): string[] {
+  const out = execFileSync("git", ["ls-files", "-z"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return out
+    .split("\0")
+    .filter((f) => f !== "")
+    .filter((f) => {
+      const dot = f.lastIndexOf(".");
+      return dot !== -1 && TEXT_EXT.has(f.slice(dot));
+    });
 }
-
-const rel = (abs: string): string => abs.slice(REPO_ROOT.length + 1).replace(/\\/g, "/");
 
 describe("⚠️ the DMCA agent's phone number is published on the DMCA page only", () => {
   it("a real number is extractable from the policy — the non-vacuity control", () => {
@@ -116,11 +113,13 @@ describe("⚠️ the DMCA agent's phone number is published on the DMCA page onl
 
   it("appears in NO other file in the repository", () => {
     const digits = agentPhoneDigits();
-    const files = walk(REPO_ROOT);
-    expect(files.length, "the walk found no files — the scan is broken, not the tree").toBeGreaterThan(50);
+    const files = trackedTextFiles();
+    expect(files.length, "git ls-files found too few files — the scan is broken, not the tree").toBeGreaterThan(50);
+    // Positive control: the one file that SHOULD carry the number is in the
+    // enumerated list, so the scan demonstrably covers the tree it claims to.
+    expect(files, `${ALLOWED} must be in the enumerated list`).toContain(ALLOWED);
 
     const offenders = files
-      .map(rel)
       .filter((r) => r !== ALLOWED)
       .filter((r) => {
         try {
@@ -136,5 +135,7 @@ describe("⚠️ the DMCA agent's phone number is published on the DMCA page onl
         offenders.map((o) => `  • ${o}`).join("\n") +
         `\n\nThe founder authorised publishing it for DMCA notice-and-takedown ONLY, explicitly not as a general site contact number. If you need a contact number elsewhere, that is a DIFFERENT number and a different decision — not this one reused.`,
     ).toEqual([]);
-  });
+    // Explicit headroom: a cold first run (spawning git, then reading every
+    // tracked text file) was observed at ~17 s on this box, over the 5 s default.
+  }, 60_000);
 });
