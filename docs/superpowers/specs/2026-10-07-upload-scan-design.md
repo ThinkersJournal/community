@@ -1429,7 +1429,8 @@ its results are Match Data under the rev-3 spec §11.2. Nothing else about it is
 - **The settings** (all via `wrangler secret put`):
   - `UPLOAD_SCAN_ENABLED` (`"1"` or anything else);
   - `HMS_A_USERNAME`, `HMS_A_PASSWORD`;
-  - `HMS_A_BASE_URL`, which must be `https:` (M5);
+  - `HMS_A_BASE_URL`, which must be an **origin only**: `https://host` or `https://host:port`, no path, no
+    trailing slash (M5, and §8.3);
   - `UPLOAD_SCAN_BYTES_FALLBACK` (§6.3);
   - `SECOND_SCAN_STEP_ENABLED` (§7).
 - ⚠️ **`HMS_A_BASE_URL` as a secret.** As a committed var it would publish the provider's host in this public repo.
@@ -1451,18 +1452,30 @@ export type UploadScanConfig =
   | { readonly kind: "misconfigured"; readonly problems: readonly string[] }
   | { readonly kind: "on"; readonly baseUrl: string; readonly username: string; readonly password: string };
 
+/**
+ * True only for an `https:` origin written exactly as `URL.origin` prints it: `https://host` or `https://host:port`.
+ * Rejects a path (so a `/v1` base), a trailing slash, a query, a fragment, userinfo, an upper-case scheme or host,
+ * and an explicit default port (`:443`), because none of those equals `new URL(value).origin`.
+ */
+export function isHttpsOrigin(value: string): boolean {
+  if (!URL.canParse(value)) return false;
+  const url = new URL(value);
+  return url.protocol === "https:" && url.origin === value;
+}
+
 /** Pure. "off" and "misconfigured" BOTH refuse image uploads (§8.1): there is no unscanned mode. */
 export function uploadScanConfig(env: UploadScanEnv): UploadScanConfig {
   if (env.UPLOAD_SCAN_ENABLED !== "1") return { kind: "off" };
-  const baseUrl = (env.HMS_A_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  const baseUrl = (env.HMS_A_BASE_URL ?? "").trim();
   const username = (env.HMS_A_USERNAME ?? "").trim();
   const password = env.HMS_A_PASSWORD ?? "";
   const problems: string[] = [];
   if (baseUrl === "") {
     problems.push("HMS_A_BASE_URL missing");
-  } else if (!URL.canParse(baseUrl) || new URL(baseUrl).protocol !== "https:") {
-    // Basic credentials must never travel in clear text (M5).
-    problems.push("HMS_A_BASE_URL is not https");
+  } else if (!isHttpsOrigin(baseUrl)) {
+    // Basic credentials must never travel in clear text (M5), and the client appends `/v1/<endpoint>` itself
+    // (§8.3): a value that carries a path would otherwise become `/v1/v1/<endpoint>` at the first call.
+    problems.push("HMS_A_BASE_URL is not an https origin");
   }
   if (username === "") problems.push("HMS_A_USERNAME missing");
   if (password === "") problems.push("HMS_A_PASSWORD missing");
@@ -1472,6 +1485,44 @@ export function uploadScanConfig(env: UploadScanEnv): UploadScanConfig {
 ```
 
 The `problems` strings name keys only, never values.
+
+### 8.3 `HMS_A_BASE_URL` is an origin, and what validates it
+
+*(PM notice 2026-10-11. Docs only: `hms-a-client.ts` is unwritten, and this section is its contract.)*
+
+- **The value is an origin and nothing else:** `https` scheme, host, optional port. No path (so never `/v1`), no
+  trailing slash, no query, no fragment, no userinfo.
+- **The client appends the path itself:** `${baseUrl}/v1/<endpoint>`, one fixed, versioned path per call (the
+  hash-only lookup, the media lookup and the version probe). The literal endpoint names stay out of this public
+  document and live with the operator's provider notes (§8's rule for anything that would identify the provider).
+  Build the URL by string concatenation onto a validated origin, **never** `new URL(path, base)`, which silently
+  discards a path on the base and would hide the very mistake this section exists to catch.
+- **Why a strict origin and not a tolerant one:** a base that already ends in `/v1` produces `/v1/v1/<endpoint>`
+  at the first request. That is an HTTP 404 from the provider, which §6.1 reads as the scan being unavailable, so
+  every upload is refused with a plausible-looking provider error rather than a configuration error. Rejecting the
+  value at configuration time makes the fault name its key (`HMS_A_BASE_URL`) before the flag can take effect.
+  The earlier draft stripped trailing slashes silently; that is removed, because tolerating one path-shaped
+  mistake invites the next.
+- **Where it is validated:** `isHttpsOrigin` inside `uploadScanConfig` (§8). That function is pure and runs on
+  every request that needs the setting, in the `*/2` tick's state line, in `GET /admin/upload-scan/status`
+  (§8.2) and in the operator's positive-control script (§11.2 item 4). So a bad value surfaces as
+  `misconfiguredKeys: ["HMS_A_BASE_URL"]` and the banner "Image uploads are refused: scanning is off or
+  misconfigured", **before** `UPLOAD_SCAN_ENABLED` is relied on, and never as a runtime 404. There is no separate
+  "startup" step in a Worker; this is the equivalent, and it needs no new mechanism.
+- **Truth table** (run under Node, 2026-10-13, against the function above):
+
+  | value | accepted |
+  |---|---|
+  | `https://h.example` | yes |
+  | `https://h.example:8443` | yes |
+  | `https://h.example/`, `https://h.example//` | no (trailing slash) |
+  | `https://h.example/v1`, `https://h.example/v1/` | no (path) |
+  | `https://h.example?x=1`, `https://h.example#f` | no |
+  | `https://u:p@h.example` | no (userinfo; credentials belong in the `Basic` header) |
+  | `http://h.example` | no (M5) |
+  | `HTTPS://h.example`, `https://H.example` | no (write it lower case; `URL.origin` normalises) |
+  | `https://h.example:443` | no (omit the default port) |
+  | `h.example`, empty | no |
 
 ### 8.2 Reading back what is on (N5)
 
@@ -1882,6 +1933,10 @@ Steps:
     `unavailable` → the match. A `classifier` match and an `unavailable` → the match. `unavailable` and clean →
     `unavailable`. **Mutation:** rank `unavailable` above match, and N1's case fails;
   - `uploadScanConfig` with each secret blank in turn, and with an `http:` base URL, which gives `misconfigured`;
+  - **`HMS_A_BASE_URL` shape (§8.3):** every row of the truth table gives the stated result through
+    `uploadScanConfig`, `problems` names only the key, and a fixed fixture proves the client requests
+    `<origin>/v1/<endpoint>` exactly once per call. **Mutation:** restore the trailing-slash strip, or compare the
+    protocol only, and the `/v1` and trailing-slash rows fail;
   - the 64 KiB cap fires before the parser (**mutation:** remove the cap, and the oversized-body test fails);
   - the timeout fires at 8 s with a fake clock;
   - one retry, and only for transient reasons;
