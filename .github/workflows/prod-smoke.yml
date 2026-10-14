@@ -15,6 +15,11 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+# Least privilege (SUP-008 / zizmor excessive-permissions): checkout and a curl
+# against the public site need nothing beyond reading this repository.
+permissions:
+  contents: read
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
