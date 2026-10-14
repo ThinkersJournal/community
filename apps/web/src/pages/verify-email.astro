@@ -41,6 +41,7 @@ import BaseLayout from "../components/BaseLayout.astro";
 import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
+import { missingTokenView } from "../lib/verify-email-view";
 
 // ⚠️ Per-viewer: this page's own URL carries the verification token, and the
 // rendered login link + hidden CSRF input both carry per-request secrets.
@@ -164,6 +165,10 @@ const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
  * path+query rather than reassembled, so the token survives verbatim.
  */
 const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
+
+// What a token-less visit shows: resend form first for a signed-in visitor
+// (csrfToken is non-null only for a session holder), else a log-in prompt.
+const missingView = outcome === "missing" ? missingTokenView(csrfToken !== null, loginHref) : null;
 ---
 
 <BaseLayout title="Verify email" description="Verify your Thinker's Journal email address.">
@@ -192,7 +197,25 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
       )
     }
 
-    {outcome === "missing" && <p id="invalid">No verification token supplied.</p>}
+    {
+      missingView?.kind === "resend-first" && csrfToken !== null && (
+        <div id="missing-resend">
+          <p>{missingView.heading}</p>
+          <form method="POST" action="/verify-email" class="form">
+            <input type="hidden" name="csrfToken" value={csrfToken} />
+            <button type="submit" class="btn btn-primary">Resend verification email</button>
+          </form>
+          <p>{missingView.note}</p>
+        </div>
+      )
+    }
+    {
+      missingView?.kind === "log-in" && (
+        <p id="missing-login">
+          {missingView.text} <a class="link" href={missingView.href}>{missingView.linkLabel}</a>
+        </p>
+      )
+    }
 
     {resendOutcome === "sent" && <p id="resend-sent">We've sent another link.</p>}
     {
@@ -223,7 +246,7 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
         — offering "resend" to someone who just verified is confusing. It still
         shows for an expired/invalid link or a direct visit. */}
     {
-      csrfToken !== null && outcome !== "verified" && (
+      csrfToken !== null && outcome !== "verified" && outcome !== "missing" && (
         <form method="POST" action="/verify-email" class="form">
           {/*
             The api's per-session CSRF token. Promoted to the `X-CSRF-Token`

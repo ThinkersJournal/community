@@ -84,7 +84,7 @@ test.describe("resend verification, across both Workers", () => {
     await signUp(victimPage, email);
 
     // ---- 2. The resend form renders — S1 is live, so /auth/csrf issues -----
-    // No `?token=`: the page renders "no token supplied" AND the resend form,
+    // No `?token=`: the page leads with the resend form (missing-token view),
     // which is the real "my link never arrived, let me ask for another" flow.
     await victimPage.goto("/verify-email");
     await expect(
