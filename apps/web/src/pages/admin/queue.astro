@@ -43,6 +43,7 @@ import {
   ACCESS_JWT_HEADER,
   ADMIN_DECISIONS,
   LEGAL_HOLD_CATEGORIES,
+  REPORT_REASONS,
   type AdminDecisionKind,
   type AdminQueueResponse,
   type LegalHoldCategoryWire,
@@ -68,6 +69,13 @@ if (Astro.request.method === "POST") {
   const reason = form.get("reason");
   const legalHold = form.get("legalHold") === "on";
   const legalHoldCategory = form.get("legalHoldCategory");
+  // #57 gap 2 — optional, internal audit metadata. "" = "(none)": omitted, so
+  // the api records NULL. A restore never carries one (the api rejects it).
+  const violationCategoryRaw = form.get("violationCategory");
+  const violationCategory =
+    typeof violationCategoryRaw === "string" && violationCategoryRaw !== "" && decision !== "restore"
+      ? violationCategoryRaw
+      : undefined;
 
   const res = await adminApiFetch("/admin/decision", {
     method: "POST",
@@ -78,6 +86,7 @@ if (Astro.request.method === "POST") {
       subjectId,
       decision,
       reason,
+      ...(violationCategory !== undefined ? { violationCategory } : {}),
       ...(legalHold ? { legalHold: true, legalHoldCategory } : {}),
     },
   });
@@ -119,6 +128,15 @@ const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "
                 <label>
                   Statement of reasons (shown to the author and to anyone who filed a DSA notice about this content)
                   <textarea name="reason" required maxlength="2000" />
+                </label>
+                <label>
+                  Violation category (internal — audit log and transparency report only; not shown to the author)
+                  <select name="violationCategory">
+                    <option value="">(none)</option>
+                    {REPORT_REASONS.map((cat) => (
+                      <option value={cat}>{cat}</option>
+                    ))}
+                  </select>
                 </label>
                 <label class="legal-hold-row">
                   <input type="checkbox" name="legalHold" />

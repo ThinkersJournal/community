@@ -17,6 +17,8 @@ import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { listOpenQueue } from "../moderation/queue";
 import type { LegalHoldCategory } from "../media/legal-hold";
+import type { ViolationCategory } from "../moderation/actions";
+import { REPORT_REASONS } from "@thinkersjournal/shared";
 import {
   requestMediaAccess,
   approveMediaAccess,
@@ -117,6 +119,10 @@ export async function handleAdminDecision(
   // notice. Only meaningful alongside `keep_hidden`/`remove` — see below.
   const legalHold = b["legalHold"];
   const legalHoldCategory = b["legalHoldCategory"];
+  // #57 gap 2 — INTERNAL audit / DSA-transparency metadata, optional. Same
+  // validation as the account-action route (REPORT_REASONS, mirrored by the
+  // moderation_actions CHECK). Never shown to the author.
+  const violationCategory = b["violationCategory"];
 
   if (
     (subject !== "post" && subject !== "comment") ||
@@ -127,6 +133,9 @@ export async function handleAdminDecision(
     typeof reason !== "string" || reason.trim() === "" ||
     (legalHold !== undefined && typeof legalHold !== "boolean") ||
     (legalHold === true && decision === "restore") ||
+    (violationCategory !== undefined && !(REPORT_REASONS as readonly unknown[]).includes(violationCategory)) ||
+    // A restore clears a violation; a category on it is meaningless.
+    (violationCategory !== undefined && decision === "restore") ||
     (legalHold === true && !LEGAL_HOLD_CATEGORIES.includes(legalHoldCategory as LegalHoldCategory))
   ) {
     // The shape was wrong. ⚠️ `INVALID_BODY` is NOT in this codebase's error
@@ -144,6 +153,7 @@ export async function handleAdminDecision(
       decision: decision as DecisionKind,
       reason: reason.trim(),
       actorAdmin: admin.email,
+      violationCategory: violationCategory as ViolationCategory | undefined,
       accountHold: legalHold === true ? { category: legalHoldCategory as LegalHoldCategory } : undefined,
     }),
   );
