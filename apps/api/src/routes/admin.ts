@@ -158,6 +158,26 @@ export async function handleAdminDecision(
     legalHold: legalHold === true ? { category: legalHoldCategory as LegalHoldCategory, imposedBy: admin.email } : undefined,
   });
 
+  // ⚠️ #138 / #135 — NO ONE TO TELL. The decision above is applied, recorded
+  // and fully consequential (audit row, hold, purge, media, the DSA reporters'
+  // outcome emails): Art. 16(5)/17 owes the reporter an outcome whatever
+  // became of the content, and refusing here would make a legal hold on an
+  // anonymised account's content impossible to record. Only the AUTHOR's
+  // notice is skipped, and with it the appeal-link mint: a mint with no
+  // message to carry it is a credential nobody can use. ⚠️ The line carries
+  // the action id and the reason and NOTHING else — no address (the sentinel,
+  // or a real one), no title, no author id.
+  if (result.noticeSkip !== null) {
+    // ⚠️ Log only a notice that was ACTUALLY suppressed. A restore of
+    // never-hidden content is a dismissal that `sendModerationNotice` would
+    // have no-oped anyway, so "skipped" there would be a false report.
+    const dismissal = decision === "restore" && !result.wasHidden;
+    if (!dismissal) {
+      console.warn("moderation notice skipped", { actionId: result.actionId, reason: result.noticeSkip });
+    }
+    return decisionOk(result.actionId);
+  }
+
   // #113 plan B — tokens are minted AFTER the action has committed, on a
   // fresh connection, never inside decide.ts's transaction. A restore has
   // nothing left to appeal, so no mint runs for it. A mint failure must not
@@ -194,7 +214,12 @@ export async function handleAdminDecision(
     }),
   );
 
-  return new Response(JSON.stringify({ actionId: result.actionId }), {
+  return decisionOk(result.actionId);
+}
+
+/** The decision route's one success body: `{ actionId }` with a 200. */
+function decisionOk(actionId: string): Response {
+  return new Response(JSON.stringify({ actionId }), {
     status: 200,
     headers: { "content-type": "application/json" },
   });

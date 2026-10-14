@@ -34,7 +34,23 @@ export const AUTO_HIDE_REPORTER_THRESHOLD = 3;
 
 export type ReportTarget = { postId: string } | { commentId: string };
 
-export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<PurgeTarget | null> {
+/**
+ * What an auto-hide did, for the cache purge AND the author's notice (#56).
+ * `null` from `maybeAutoHide` still means NOTHING was hidden: that is what
+ * makes the notice fire exactly once per hide event, and never on a later
+ * report against content that is already hidden.
+ *
+ * ⚠️ It carries the content's id, never the author's id or address: the
+ * notice reads the recipient AT SEND TIME (notify-author.ts), so content
+ * deleted, restored or an account anonymised in the meantime is not mailed.
+ */
+export interface AutoHideResult {
+  readonly purge: PurgeTarget;
+  readonly subject: "post" | "comment";
+  readonly subjectId: string;
+}
+
+export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<AutoHideResult | null> {
   const isPost = "postId" in target;
   const column = isPost ? "post_id" : "comment_id";
   const table = isPost ? "posts" : "comments";
@@ -60,7 +76,11 @@ export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<Pu
     const row = postRows[0];
     if (row === undefined) return null; // already hidden
     const tagSlugs = await loadPostTagSlugs(c, row.id);
-    return { kind: "post", postId: row.id, authorId: row.author_id, tagSlugs };
+    return {
+      purge: { kind: "post", postId: row.id, authorId: row.author_id, tagSlugs },
+      subject: "post",
+      subjectId: row.id,
+    };
   } else {
     const { rows: commentRows } = await c.query<{ id: string; post_id: string }>(
       `UPDATE comments SET hidden_at = now() WHERE id = $1 AND hidden_at IS NULL RETURNING id, post_id`,
@@ -68,6 +88,10 @@ export async function maybeAutoHide(c: Client, target: ReportTarget): Promise<Pu
     );
     const row = commentRows[0];
     if (row === undefined) return null; // already hidden
-    return { kind: "comment", postId: row.post_id };
+    return {
+      purge: { kind: "comment", postId: row.post_id },
+      subject: "comment",
+      subjectId: row.id,
+    };
   }
 }

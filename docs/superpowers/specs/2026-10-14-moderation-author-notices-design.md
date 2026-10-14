@@ -57,15 +57,17 @@ carries no address, no title, no author id.
 
 ### D3 — An auto-hide sends one notice, with no appeal link (#56)
 
-- `maybeAutoHide` returns `{ purge, subject, subjectId, authorId } | null` instead of a bare `PurgeTarget`
+- `maybeAutoHide` returns `{ purge, subject, subjectId } | null` instead of a bare `PurgeTarget`
   (callers: `reports.ts:91` only). It still returns `null` when nothing was hidden (`auto-hide.ts:61, 70`), so
   **exactly one notice per hide event** and none on later reports against already-hidden content.
 - `reports.ts` sends it **after the commit and the purge**, through `ctx.waitUntil`, exactly like the decision
   notice (`admin.ts:182`): a mail outage must never fail a recorded report.
 - The recipient is read **at send time**, not carried through the report transaction: one `SELECT u.email,
-  u.anonymised_at, p.title [, c.deleted_at]` on `HYPERDRIVE_FRESH`. Anonymised or tombstoned → no send, same
-  `moderation notice skipped` line with reason `auto_hide_author_anonymised` / `auto_hide_comment_deleted`.
-  Reading at send time also means a notice for content the author deleted in the meantime is not sent.
+  u.anonymised_at, p.title, p.hidden_at [, c.deleted_at, c.hidden_at]` on `HYPERDRIVE_FRESH`. No send, with
+  one `moderation notice skipped` line (`console.warn`, `{ reason, subject }`, no address, title or id) for:
+  anonymised (`auto_hide_author_anonymised`), tombstoned comment (`auto_hide_comment_deleted`), content no
+  longer there (`auto_hide_content_gone`, the row was hard-deleted), or content a moderator restored in the
+  meantime (`auto_hide_no_longer_hidden`). Reading at send time is what makes each of these a skip.
 - **No appeal link.** There is no `moderation_actions` row yet, and an appeal attaches to a decision
   (`noticeLinks({ actionId, … })`, `admin.ts:170`). The copy says what is true: the content is hidden **pending
   review**, a moderator will review it, and the author will be told the outcome (which will carry the appeal
