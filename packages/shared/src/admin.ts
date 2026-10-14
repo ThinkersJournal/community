@@ -127,6 +127,29 @@ export const DEFAULT_SUSPENSION_HOURS: SuspensionHours = 168;
 export const DECISION_DURATION_HOURS = [24, 168, 720] as const;
 export type DecisionDurationHours = (typeof DECISION_DURATION_HOURS)[number];
 
+/**
+ * #57 Art. 17 Q5: the structured GROUNDS a content decision may cite. Two
+ * independent, optional fields. PROPOSED lists, pending attorney / CireSnave
+ * review (docs/superpowers/specs/2026-10-14-art17-ground-enums.md). Single
+ * source for the 0031 CHECKs, the route's validation and the admin form.
+ */
+export const LEGAL_GROUNDS = ["csam", "copyright_infringement", "illegal_content_other"] as const;
+export type LegalGround = (typeof LEGAL_GROUNDS)[number];
+
+/** Each value names the Community Guidelines clause (docs/legal/community-guidelines.md section 1) it maps to. */
+export const CONTRACTUAL_GROUNDS = [
+  "guidelines_threats_harassment", // clause 3
+  "guidelines_hate_speech", // clause 4
+  "guidelines_ncii", // clause 5
+  "guidelines_doxxing", // clause 6
+  "guidelines_spam", // clause 7
+  "guidelines_malware_phishing", // clause 8
+  "guidelines_impersonation", // clause 9
+  "guidelines_ip", // clause 10
+  "terms_other", // a Terms of Service breach not listed above
+] as const;
+export type ContractualGround = (typeof CONTRACTUAL_GROUNDS)[number];
+
 /** `POST /admin/decision`. */
 export interface AdminDecisionRequest {
   readonly subject: "post" | "comment";
@@ -138,6 +161,10 @@ export interface AdminDecisionRequest {
   readonly legalHoldCategory?: string;
   /** Only for `keep_hidden` / `remove`; one of DECISION_DURATION_HOURS. Omitted = no recorded end. 400 INVALID_INPUT on a restore. */
   readonly durationHours?: DecisionDurationHours;
+  /** #57 Q5. Only for `keep_hidden` / `remove`; 400 INVALID_INPUT on a restore. Shown to the author. */
+  readonly legalGround?: LegalGround;
+  /** #57 Q5. Only for `keep_hidden` / `remove`; 400 INVALID_INPUT on a restore. Shown to the author. */
+  readonly contractualGround?: ContractualGround;
 }
 
 /** Spec §5/§11.2, adopted: an action older than this no longer escalates the ladder (it stays in the log). */

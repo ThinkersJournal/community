@@ -17,6 +17,8 @@
 import type { Client } from "pg";
 
 import { BEGIN_BOUNDED_TX } from "../db/client";
+import type { ContractualGround, LegalGround } from "@thinkersjournal/shared";
+
 import type { LegalHoldCategory } from "../media/legal-hold";
 
 import { imposeAccountHoldInTx } from "./account-holds";
@@ -41,6 +43,9 @@ export interface DecisionInput {
    * moderator restores it. The route refuses it on a restore.
    */
   readonly actionExpiresAt?: Date;
+  /** #57 Q5: the grounds cited. The route refuses both on a restore. */
+  readonly legalGround?: LegalGround;
+  readonly contractualGround?: ContractualGround;
   /** Spec §3 T1: the author's account is held in THIS SAME transaction. */
   readonly accountHold?: { readonly category: LegalHoldCategory };
 }
@@ -197,6 +202,8 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
     violationCategory: input.violationCategory,
     internalNote: input.internalNote,
     actionExpiresAt: input.actionExpiresAt,
+    legalGround: input.legalGround,
+    contractualGround: input.contractualGround,
     source,
     // Several notices resolved by one ruling: the OLDEST (lowest created_at) is
     // the one stored; every one is still linked from its own side

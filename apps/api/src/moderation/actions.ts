@@ -11,6 +11,8 @@
  */
 import type { Client } from "pg";
 
+import type { ContractualGround, LegalGround } from "@thinkersjournal/shared";
+
 export type ModerationActionKind =
   | "content_restore" | "content_keep_hidden" | "content_remove"
   | "user_warn" | "user_suspend" | "user_ban" | "user_terminate"
@@ -52,6 +54,10 @@ export interface ModerationActionInput {
   readonly source?: ModerationSource;
   /** #57 — the DSA notice answered; only with `source: "dsa_notice"` (a CHECK enforces it). */
   readonly dsaNoticeId?: string;
+  /** #57 Q5 - the legal ground cited (migration 0031; a CHECK enforces the list). */
+  readonly legalGround?: LegalGround;
+  /** #57 Q5 - the contractual (Terms / Guidelines) ground cited (migration 0031). */
+  readonly contractualGround?: ContractualGround;
   /** Never shown to the user. */
   readonly internalNote?: string;
 }
@@ -64,8 +70,8 @@ export async function recordModerationAction(
     `INSERT INTO moderation_actions
        (actor_admin, action, post_id, comment_id, subject_user_id, subject_label,
         violation_category, action_expires_at, reason, internal_note,
-        source, dsa_notice_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        source, dsa_notice_id, legal_ground, contractual_ground)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      RETURNING id`,
     [
       input.actorAdmin,
@@ -80,6 +86,8 @@ export async function recordModerationAction(
       input.internalNote ?? null,
       input.source ?? null,
       input.dsaNoticeId ?? null,
+      input.legalGround ?? null,
+      input.contractualGround ?? null,
     ],
   );
   return rows[0]!.id;
