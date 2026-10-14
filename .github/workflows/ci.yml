@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege (SUP-008 / zizmor excessive-permissions): the token gets read
+# access to contents and nothing else. No job here writes to the repository, an
+# issue or a PR; raise it per job, never here, if one ever needs to.
+permissions:
+  contents: read
+
 # One in-flight run per ref; a newer push cancels the older run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,6 +44,10 @@ jobs:
       # healthy. The vitest/global-setup configs default their connection strings
       # to postgres://postgres:postgres@localhost:5432/..., which this provides,
       # so no database env vars are needed here.
+      #
+      # SUP-008 `unpinned-images` WAIVER (portfolio ruling 2026-10-14): the
+      # `postgres:` image in docker-compose.yml is a CI-only service container; no
+      # credential of ours reaches it, so it is not pinned by digest.
       - name: Start Postgres 18 (docker compose)
         run: docker compose up -d --wait db
 
