@@ -69,10 +69,13 @@ const tracked: string[] = execFileSync("git", ["ls-files", "-z"], {
 const trackedSet = new Set(tracked);
 
 function stripComments(src: string): string {
+  // HTML comments in .astro are deliberately NOT stripped: a regex sanitiser for them is
+  // incomplete by construction (CodeQL js/incomplete-multi-character-sanitization), and
+  // leaving them in can only ADD matches — a conservative false positive, never a missed
+  // parser import.
   return src
     .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "")
-    .replace(/<!--[\s\S]*?-->/g, "");
+    .replace(/^\s*\/\/.*$/gm, "");
 }
 
 /** Every import/require/dynamic-import specifier in the (comment-stripped) text. */
