@@ -1220,3 +1220,103 @@ describe("POST /admin/decision author-notice gate (#138, #135)", () => {
     }
   });
 });
+
+// #57 gap 2 — `violationCategory` on a content decision. Internal audit /
+// DSA-transparency metadata: recorded on the moderation_actions row, NEVER
+// shown to the author.
+describe("POST /admin/decision — violationCategory (#57 gap 2)", () => {
+  async function actionRow(subjectId: string): Promise<Record<string, unknown> | null> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<Record<string, unknown>>(
+        `SELECT action, actor_admin, reason, violation_category, action_expires_at, internal_note,
+                post_id, comment_id, subject_label
+           FROM moderation_actions WHERE post_id = $1 OR comment_id = $1
+          ORDER BY created_at DESC LIMIT 1`,
+        [subjectId],
+      );
+      return rows[0] ?? null;
+    });
+  }
+
+  it("CHARACTERISATION: a decision with NO category leaves it NULL and the other columns as before", async () => {
+    const { postId } = await seedHiddenPost();
+    const res = await decide({ subject: "post", subjectId: postId, decision: "remove", reason: "Because." });
+    expect(res.status).toBe(200);
+    expect(await actionRow(postId)).toEqual({
+      action: "content_remove", actor_admin: adminEmail, reason: "Because.",
+      violation_category: null, action_expires_at: null, internal_note: null,
+      post_id: postId, comment_id: null, subject_label: expect.stringContaining("@example.com"),
+    });
+  });
+
+  it.each(["keep_hidden", "remove"] as const)("%s records the category on the action row", async (decision) => {
+    const { postId } = await seedReportedButVisiblePost();
+    const res = await decide({ subject: "post", subjectId: postId, decision, reason: "x", violationCategory: "harassment" });
+    expect(res.status).toBe(200);
+    expect(await actionRow(postId)).toMatchObject({ violation_category: "harassment" });
+  });
+
+  it("records the category for a COMMENT decision", async () => {
+    const { commentId } = await seedHiddenComment();
+    const res = await decide({ subject: "comment", subjectId: commentId, decision: "remove", reason: "x", violationCategory: "spam" });
+    expect(res.status).toBe(200);
+    expect(await actionRow(commentId)).toMatchObject({ violation_category: "spam" });
+  });
+
+  it.each(["spam", "harassment", "hate", "sexual", "violence", "ip_infringement", "other"] as const)(
+    "accepts %s", async (cat) => {
+      const { postId } = await seedHiddenPost();
+      expect((await decide({ subject: "post", subjectId: postId, decision: "remove", reason: "x", violationCategory: cat })).status).toBe(200);
+      expect(await actionRow(postId)).toMatchObject({ violation_category: cat });
+    });
+
+  it.each(["banana", "", 7, null, "SPAM"] as const)("400s an invalid category %j BEFORE any write", async (bad) => {
+    const { postId } = await seedHiddenPost();
+    const before = await actionCount();
+    const res = await decide({ subject: "post", subjectId: postId, decision: "remove", reason: "x", violationCategory: bad as never });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error?: { code?: string } | string })).toMatchObject({});
+    expect(await actionCount()).toBe(before);
+    expect(await hiddenAtOf("posts", postId)).not.toBeNull();
+    expect(await lastActionFor(postId)).toBeNull();
+    expect(sentEmails).toHaveLength(0);
+  });
+
+  it("400s a category on a restore (meaningless; same shape as legalHold + restore) and writes nothing", async () => {
+    const { postId, hiddenAt } = await seedHiddenPost();
+    const before = await actionCount();
+    const res = await decide({ subject: "post", subjectId: postId, decision: "restore", reason: "x", violationCategory: "spam" });
+    expect(res.status).toBe(400);
+    expect(await actionCount()).toBe(before);
+    expect(await hiddenAtOf("posts", postId)).toEqual(hiddenAt);
+  });
+
+  it("works together with a legal hold", async () => {
+    const { postId } = await seedHiddenPost();
+    const res = await call("/admin/decision", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+      body: JSON.stringify({
+        subject: "post", subjectId: postId, decision: "remove", reason: "x",
+        violationCategory: "sexual", legalHold: true, legalHoldCategory: "csam",
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await actionRow(postId)).toMatchObject({ violation_category: "sexual" });
+    const holds = await ctxRun(async (c) => {
+      const { rows } = await c.query(`SELECT 1 FROM account_legal_holds WHERE category = 'csam' AND user_id = (SELECT author_id FROM posts WHERE id = $1)`, [postId]);
+      return rows.length;
+    });
+    expect(holds).toBe(1);
+  });
+
+  it("the category is NOT in the author's notice", async () => {
+    const { postId } = await seedHiddenPost();
+    await decide({ subject: "post", subjectId: postId, decision: "remove", reason: "Plain reason.", violationCategory: "ip_infringement" });
+    expect(sentEmails).toHaveLength(1);
+    const text = JSON.stringify(sentEmails[0]);
+    expect(text).toContain("Plain reason.");
+    expect(text).not.toContain("ip_infringement");
+    expect(text).not.toMatch(/violation/i);
+  });
+});

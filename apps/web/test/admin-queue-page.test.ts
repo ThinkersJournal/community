@@ -91,3 +91,17 @@ describe("#113 — the queue LINKS to the account page and offers no account act
     expect(source).not.toMatch(/\b(suspend|ban|warn)\b/i);
   });
 });
+
+describe("#57 gap 2 — the decision form carries an optional violationCategory", () => {
+  it("has a select named violationCategory with an empty (none) default and the seven values", () => {
+    const m = /<select name="violationCategory"[\s\S]*?<\/select>/.exec(source);
+    expect(m, "no violationCategory select").not.toBeNull();
+    expect(m![0]).toMatch(/<option value="">\(none\)<\/option>/);
+    expect(m![0]).toContain("REPORT_REASONS.map");
+  });
+  it("forwards it only when set and never on a restore", () => {
+    expect(source).toContain('form.get("violationCategory")');
+    expect(source).toMatch(/violationCategory/);
+    expect(source).toMatch(/decision !== "restore"/);
+  });
+});
