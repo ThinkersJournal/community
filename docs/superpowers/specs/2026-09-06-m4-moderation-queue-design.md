@@ -330,7 +330,7 @@ disappeared." Two changes:
 
 - `handleGetPost` (`routes/posts.ts:512-517`, the author's own read) selects `hidden_at` and the
   editor shows a **"Hidden pending review"** banner with the appeal link.
-- On auto-hide, the author is emailed (§7).
+- On auto-hide, the author is emailed (§7). **Built** with the moderation author-notices work (issue #56; design `2026-10-14-moderation-author-notices-design.md`): one fixed-copy notice per hide event, sent after the hide and the cache purge, to a recipient read at send time. **It carries no appeal link**: an auto-hide has no `moderation_actions` row yet, and an appeal attaches to a decision, so the link arrives with the later decision notice. It never names a reporter, a reason or a count.
 
 ⚠️ This read is **already allowlisted** in the structural guard
 (`test/hidden-at-read-guard.node.test.ts:70-78`) as the author's own post, so surfacing
