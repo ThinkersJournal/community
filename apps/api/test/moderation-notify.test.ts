@@ -106,17 +106,20 @@ describe("sendModerationNotice", () => {
       });
     }));
 
-    const result = await sendModerationNotice(env, "a@b.test", {
-      decision: "restore",
-      wasHidden: false,
-      subject: "post",
-      postTitle: "Test Post",
-      reason: "Mistaken.",
-    });
+    try {
+      const result = await sendModerationNotice(env, "a@b.test", {
+        decision: "restore",
+        wasHidden: false,
+        subject: "post",
+        postTitle: "Test Post",
+        reason: "Mistaken.",
+      });
 
-    expect(result).toBe(true);
-    expect(fetchWasCalled).toBe(false);
-    vi.unstubAllGlobals();
+      expect(result).toBe(true);
+      expect(fetchWasCalled).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keep_hidden with wasHidden: true has subject 'Your content remains hidden after review'", async () => {
@@ -156,6 +159,22 @@ describe("sendModerationNotice", () => {
       }),
     );
     expect(sent.Subject).toBe("Your content has been removed");
+  });
+
+  it("remove with wasHidden: false has subject 'Your content has been removed'", async () => {
+    // Not hidden beforehand: a different COPY entry (`remove:false`) from the
+    // wasHidden: true case above, so it needs its own assertion.
+    const sent = await captureSendFull(() =>
+      sendModerationNotice(env, "a@b.test", {
+        decision: "remove",
+        wasHidden: false,
+        subject: "post",
+        postTitle: "Test Post",
+        reason: "Repeat infringement.",
+      }),
+    );
+    expect(sent.Subject).toBe("Your content has been removed");
+    expect(String(sent.TextBody)).toContain("We reviewed your content and removed it");
   });
 
   it("includes post title and type in the body", async () => {
@@ -228,7 +247,7 @@ describe("sendModerationNotice", () => {
           reason: "x",
         }),
       ),
-    ).resolves.not.toThrow();
+    ).resolves.toBe(false);
   });
 });
 
