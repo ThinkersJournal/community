@@ -1,3 +1,4 @@
+-- Up Migration
 -- #57 (DSA Art. 17 statement of reasons), PR-A: three columns on the append-only
 -- moderation audit log, so each content decision records WHAT prompted it and
 -- WHERE it applies. All additive and nullable (or defaulted).
