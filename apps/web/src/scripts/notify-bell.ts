@@ -247,21 +247,12 @@ async function loadList(panel: HTMLElement, csrfForClick: string | null): Promis
 }
 
 /**
- * Loads the list (wiring each rendered group's click-through mark-read with the
- * CSRF token), shows the panel, then advances the SEEN watermark (M2.3c) which
- * clears the badge WITHOUT marking any row read. Skips the seen POST — panel
- * still renders — if no CSRF token is available, per the brief's degraded-mode
- * note. The token is fetched BEFORE render so it can be threaded into the click
- * handlers.
+ * Advances the SEEN watermark (M2.3c) — clears the badge WITHOUT marking any
+ * row read. NEVER rejects (callers run it fire-and-forget). Deliberately NOT
+ * awaited by `openPanel`: the toggle's open latch must be released as soon as
+ * the panel is revealed, not held until this POST settles (#85).
  */
-async function openPanel(panel: HTMLElement, badge: HTMLElement): Promise<void> {
-  const token = await getCsrfToken();
-  const loaded = await loadList(panel, token);
-  if (!loaded) return;
-  panel.hidden = false;
-
-  if (token === null) return; // degraded/logged-out: panel stays read-optimistic, no write
-
+async function advanceSeen(token: string, badge: HTMLElement): Promise<void> {
   try {
     const seenResp = await fetch("/api/notifications-seen", {
       method: "POST",
@@ -274,8 +265,27 @@ async function openPanel(panel: HTMLElement, badge: HTMLElement): Promise<void> 
     }
   } catch {
     // Network error advancing the seen watermark — leave the badge; the poll reconciles.
-    // openPanel is invoked fire-and-forget, so this must not reject.
   }
+}
+
+/**
+ * Loads the list (wiring each rendered group's click-through mark-read with the
+ * CSRF token), shows the panel, then STARTS the SEEN-watermark advance without
+ * awaiting it. Resolves as soon as the open attempt is decided (revealed, or
+ * failed) so the caller's latch/aria sync never waits on the seen POST. Skips
+ * the seen POST — panel still renders — if no CSRF token is available, per the
+ * brief's degraded-mode note. The token is fetched BEFORE render so it can be
+ * threaded into the click handlers.
+ */
+async function openPanel(panel: HTMLElement, badge: HTMLElement): Promise<void> {
+  const token = await getCsrfToken();
+  const loaded = await loadList(panel, token);
+  if (!loaded) return;
+  panel.hidden = false;
+
+  if (token === null) return; // degraded/logged-out: panel stays read-optimistic, no write
+
+  void advanceSeen(token, badge); // fire-and-forget; advanceSeen never rejects
 }
 
 export function initNotifyBell(): void {
