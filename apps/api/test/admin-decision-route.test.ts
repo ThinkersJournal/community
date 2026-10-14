@@ -1048,3 +1048,147 @@ describe("POST /admin/decision — T1 account legal hold", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// The author notice is sent when, and only when, there is an author who can
+// receive it (#138 anonymised author, #135 tombstoned comment). Everything
+// ELSE a decision does is unchanged — that is half of what these pin.
+// ---------------------------------------------------------------------------
+describe("POST /admin/decision author-notice gate (#138, #135)", () => {
+  async function seedAnonymisedUser(): Promise<{ userId: string; email: string }> {
+    const userId = await seedUser();
+    const email = `deleted-${userId}@invalid.thinkersjournal.local`;
+    await ctxRun(async (c) => {
+      await c.query(`UPDATE users SET email = $2, anonymised_at = now() WHERE id = $1`, [userId, email]);
+    });
+    return { userId, email };
+  }
+
+  async function seedTombstone(userId: string, postId: string): Promise<string> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `WITH ids AS (SELECT uuidv7() AS id)
+         INSERT INTO comments (id, post_id, author_id, parent_id, path, depth, body_markdown, deleted_at)
+         SELECT ids.id, $1, $2, NULL, ids.id::text, 0, '', now() FROM ids
+         RETURNING id`,
+        [postId, userId],
+      );
+      return rows[0]!.id;
+    });
+  }
+
+  async function seedConfirmedPostNotice(postId: string, reporterEmail: string): Promise<void> {
+    await ctxRun(async (c) => {
+      await c.query(
+        `INSERT INTO dsa_notices
+           (reporter_email, reporter_name, good_faith, verify_token_hash, target_kind, target_label, post_id, reason, statement, email_verified_at)
+         VALUES ($1, 'A Reporter', true, $2, 'post', 'a post', $3, 'spam', 'This violates the rules.', now())`,
+        [reporterEmail, `hash-${crypto.randomUUID()}`, postId],
+      );
+    });
+  }
+
+  async function tokenCount(actionId: string): Promise<number> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ n: string }>(
+        `SELECT count(*) AS n FROM moderation_action_tokens WHERE action_id = $1`,
+        [actionId],
+      );
+      return Number(rows[0]!.n);
+    });
+  }
+
+  async function authorEmailOf(userId: string): Promise<string> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId]);
+      return rows[0]!.email;
+    });
+  }
+
+  async function removeAndRead(subject: "post" | "comment", subjectId: string): Promise<{ status: number; actionId: string }> {
+    const res = await decide({ subject, subjectId, decision: "remove", reason: "Confirmed violation." });
+    const body = res.status === 200 ? ((await res.json()) as { actionId: string }) : { actionId: "" };
+    return { status: res.status, actionId: body.actionId };
+  }
+
+  // CHARACTERISATION: written first and green on main before any change.
+  it("a live author still gets exactly one notice, with an appeal link, and the token is minted", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    await seedConfirmedPostNotice(post.id, "reporter@example.test");
+
+    sentEmails = [];
+    const { status, actionId } = await removeAndRead("post", post.id);
+    expect(status).toBe(200);
+
+    const toAuthor = sentEmails.filter((e) => e["To"] !== "reporter@example.test");
+    expect(toAuthor).toHaveLength(1);
+    expect(toAuthor[0]!["To"]).toBe(await authorEmailOf(userId));
+    expect(String(toAuthor[0]!["TextBody"])).toContain("/appeal?token=");
+    expect(await tokenCount(actionId)).toBe(1);
+    // ...and the DSA reporter is told too.
+    expect(sentEmails.filter((e) => e["To"] === "reporter@example.test")).toHaveLength(1);
+  });
+
+  it("an anonymised author: 200, the action is recorded and the content hidden, NO author send, the DSA reporter is still told", async () => {
+    const { userId, email } = await seedAnonymisedUser();
+    const post = await seedPost(userId);
+    await seedConfirmedPostNotice(post.id, "reporter@example.test");
+
+    sentEmails = [];
+    const { status, actionId } = await removeAndRead("post", post.id);
+    expect(status).toBe(200);
+
+    expect(await lastActionFor(post.id)).toMatchObject({ action: "content_remove" });
+    expect(await hiddenAtOf("posts", post.id)).not.toBeNull();
+    expect(sentEmails.filter((e) => e["To"] === email)).toHaveLength(0);
+    expect(sentEmails.filter((e) => String(e["To"]).endsWith("@invalid.thinkersjournal.local"))).toHaveLength(0);
+    expect(await tokenCount(actionId)).toBe(0);
+    // The reporter is owed an outcome whatever happened to the author's account (Art. 16(5)).
+    expect(sentEmails.filter((e) => e["To"] === "reporter@example.test")).toHaveLength(1);
+    expect(sentEmails).toHaveLength(1);
+  });
+
+  it("an anonymised author's comment: same", async () => {
+    const { userId, email } = await seedAnonymisedUser();
+    const post = await seedPost(userId);
+    const commentId = await seedComment(userId, post.id);
+
+    sentEmails = [];
+    const { status } = await removeAndRead("comment", commentId);
+    expect(status).toBe(200);
+    expect(await lastActionFor(commentId)).toMatchObject({ action: "content_remove" });
+    expect(sentEmails.filter((e) => e["To"] === email)).toHaveLength(0);
+    expect(sentEmails).toHaveLength(0);
+  });
+
+  it("a tombstoned comment by a LIVE author: 200, action recorded, NO author send and NO appeal token minted", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    const commentId = await seedTombstone(userId, post.id);
+
+    sentEmails = [];
+    const { status, actionId } = await removeAndRead("comment", commentId);
+    expect(status).toBe(200);
+    expect(await lastActionFor(commentId)).toMatchObject({ action: "content_remove" });
+    expect(sentEmails).toHaveLength(0);
+    // The live author means the mint WOULD have succeeded: this is what proves
+    // the mint is gated, not just the send.
+    expect(await tokenCount(actionId)).toBe(0);
+  });
+
+  it("a skipped notice logs one structured line with the action id and the reason, and no address", async () => {
+    const { userId, email } = await seedAnonymisedUser();
+    const post = await seedPost(userId);
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      const { actionId } = await removeAndRead("post", post.id);
+      const skipped = info.mock.calls.filter((a) => a[0] === "moderation notice skipped");
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]![1]).toEqual({ actionId, reason: "author_anonymised" });
+      expect(JSON.stringify(info.mock.calls)).not.toContain(email);
+    } finally {
+      info.mockRestore();
+    }
+  });
+});
