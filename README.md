@@ -195,7 +195,9 @@ the authoritative table):
 | types | `pnpm typecheck` | exit 0 |
 
 `pnpm test:e2e` starts everything it needs (build → api on :8788 → web on :8787) and
-requires only Docker Postgres to be up. It writes real users to the **dev** database via
+requires only Docker Postgres to be up. (A third, single-process api+web server on :8789 serves
+only `e2e/security-ledger.spec.ts`, because the web-to-ledger Durable Object call only resolves
+in one `wrangler dev` process; see the header of `playwright.config.ts`.) It writes real users to the **dev** database via
 the real signup path and does not clean up, so every run uses a fresh random email.
 
 **The E2E runs the api on its own port (:8788) — a deliberate deviation from production.**

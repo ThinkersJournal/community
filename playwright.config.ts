@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 import { defineConfig, devices } from "@playwright/test";
 
 /**
@@ -41,6 +43,44 @@ import { defineConfig, devices } from "@playwright/test";
  * does, and stop testing the two-Worker spine, which nothing else does.
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * ⚠️ THE SECOND SHAPE — the `ledger` project is SINGLE-process, on purpose (#156).
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Exactly one spec (e2e/security-ledger.spec.ts) runs against a THIRD server:
+ *
+ *     wrangler dev -c apps/api/wrangler.jsonc -c apps/web/dist/server/wrangler.json --port 8789
+ *
+ * WHY: web counts a failed `/internal/purge` through a cross-script Durable
+ * Object binding (`SECURITY_COUNTER`, `script_name: thinkersjournal-api`). Across
+ * the TWO processes above that call fails with "Network connection lost"; inside
+ * ONE `wrangler dev` process it resolves. The security ledger path is therefore
+ * only observable in a single process.
+ *
+ * HOW, given that the first `-c` is primary and owns the port: the api is
+ * PRIMARY here and web is AUXILIARY (no address). The spec cannot reach web, and
+ * web gets NO test route (PM ruling): the api's TEST_ROUTES-gated
+ * `POST /__test/web-purge-bad-secret` makes web record a failed purge over the
+ * existing WEB service binding, and `GET /__test/security-ledger` reads the
+ * result. Everything else (the two processes above, every other spec) is
+ * unchanged, and `chromium` ignores the ledger spec.
+ *
+ * ⚠️ `--var` / `--persist-to` / `--env-file` APPLY TO THE PRIMARY ONLY. Verified
+ * in wrangler 4.146.0 (`startDev`, wrangler-dist/cli.js): an auxiliary config is
+ * set up with just `{env, disableDevRegistry, multiworkerPrimary}`. So web's
+ * dummy PURGE_SECRET travels as `apps/web/dist/server/.dev.vars`, which an
+ * auxiliary worker DOES load from its own config's directory;
+ * scripts/e2e-ledger-web-vars.mjs writes it. dist/ is build output and was just
+ * rebuilt by the first webServer command, so the file is written AFTER the build.
+ *
+ * ⚠️ ISOLATION from the two-process pair, which is running at the same time:
+ *   • `--persist-to` a separate dir, so DO/SQLite state is not shared;
+ *   • `WRANGLER_REGISTRY_PATH` a separate dir, so this process's workers named
+ *     `thinkersjournal-api` / `-web` do not replace the pair's entries in the dev
+ *     registry (which would silently re-point the pair's service bindings);
+ *   • distinct port (8789).
+ * The persist dir is NOT wiped between local runs; the spec asserts "contains",
+ * so a stale onset can only make it pass early locally. CI starts clean.
+ *
+  * ─────────────────────────────────────────────────────────────────────────────
  * ⚠️ ORDER IS LOAD-BEARING: api FIRST, then web.
  * ─────────────────────────────────────────────────────────────────────────────
  * Playwright sets webServers up in array order, each waiting for its `url`
@@ -69,6 +109,12 @@ const API_PORT = 8788;
 
 export const WEB_URL = `http://127.0.0.1:${WEB_PORT}`;
 export const API_URL = `http://127.0.0.1:${API_PORT}`;
+
+/** The single-process `ledger` server's port: the api is its PRIMARY (see header). */
+const LEDGER_PORT = 8789;
+export const LEDGER_API_URL = `http://127.0.0.1:${LEDGER_PORT}`;
+/** An origin on csrf.ts's DEV_ORIGINS, for the api's inline `checkOrigin`. */
+export const LEDGER_ORIGIN = WEB_URL;
 
 /**
  * The local Postgres both Hyperdrive bindings resolve to. This is the DEV
@@ -154,6 +200,11 @@ const apiVars = [
 /** The `web` Worker's vars — same reasoning as `apiVars`, same dummy secret. */
 const webVars = ["--var", `PURGE_SECRET:${PURGE_SECRET}`].join(" ");
 
+/** Scratch state for the single-process `ledger` server (gitignored .wrangler/, relative to the repo root where playwright runs). */
+const LEDGER_STATE_ROOT = resolve(".wrangler", "e2e-ledger").replaceAll("\\", "/");
+const LEDGER_STATE_DIR = `${LEDGER_STATE_ROOT}/state`;
+const LEDGER_REGISTRY_DIR = `${LEDGER_STATE_ROOT}/registry`;
+
 export default defineConfig({
   testDir: "./e2e",
   // The spec's two cases share one dev server and one database, and each signs
@@ -194,7 +245,20 @@ export default defineConfig({
   },
 
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      // Runs against the single-process server in the `ledger` project below.
+      testIgnore: /security-ledger\.spec\.ts$/,
+    },
+    {
+      // #156 — api-only, no browser: talks to the single-process server's primary
+      // (the api) on LEDGER_PORT. See the header's "THE SECOND SHAPE".
+      name: "ledger",
+      testMatch: /security-ledger\.spec\.ts$/,
+      timeout: 90_000,
+      use: { baseURL: LEDGER_API_URL },
+    },
   ],
 
   webServer: [
@@ -253,6 +317,26 @@ export default defineConfig({
       timeout: 180_000,
       stdout: "pipe",
       stderr: "pipe",
+    },
+    {
+      // #156 — the SINGLE-process api(primary)+web(auxiliary) server for the
+      // `ledger` project only. Starts after both entries above, so the web build
+      // it needs (`apps/web/dist/server/wrangler.json`) already exists. See the
+      // header's "THE SECOND SHAPE" for why every flag below is here.
+      //
+      // Paths after `-c` are relative to apps/api (what `pnpm --filter exec`
+      // runs in). The api's `apiVars` reach the PRIMARY only; web's PURGE_SECRET
+      // comes from the `.dev.vars` the first command writes.
+      command: [
+        `node scripts/e2e-ledger-web-vars.mjs ${PURGE_SECRET}`,
+        `pnpm --filter @thinkersjournal/api exec wrangler dev -c wrangler.jsonc -c ../web/dist/server/wrangler.json --port ${LEDGER_PORT} ${apiVars} --persist-to "${LEDGER_STATE_DIR}"`,
+      ].join(" && "),
+      url: `${LEDGER_API_URL}/health`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 180_000,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...hyperdriveEnv, WRANGLER_REGISTRY_PATH: LEDGER_REGISTRY_DIR },
     },
   ],
 });

@@ -41,7 +41,12 @@
  * access — but it gets the same gate as every other test-only token route
  * on principle: there is no reason for this to be the one exception.
  *
- * Three layers keep all five from reaching production:
+ * `POST /__test/web-purge-bad-secret` and `GET /__test/security-ledger` (#156)
+ * are the seams for e2e/security-ledger.spec.ts: the first makes the web Worker
+ * record ONE failed purge attempt, the second reads the ledger's signal onsets
+ * (names/classes/counts only).
+ *
+ * Three layers keep all of these from reaching production:
  *   1. `TEST_ROUTES` is set ONLY in the gitignored `.dev.vars` (local dev) and
  *      in `miniflare.bindings` in vitest.config.ts (tests). It is deliberately
  *      NOT in wrangler.jsonc's `vars`, so a deploy cannot carry it along.
@@ -216,6 +221,43 @@ export async function handleTestRoute(
     });
     if (minted === null) return notFoundResponse();
     return new Response(JSON.stringify(minted), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  // #156 — drives the web Worker's FAILED purge attempt over the existing WEB
+  // service binding with a deliberately WRONG secret, so web's purge_secret_failure
+  // counting path (web -> SECURITY_COUNTER -> SecurityLedgerDO) runs end to end
+  // WITHOUT any route on web. The header name is the real one
+  // (apps/api/src/cache/purge.ts, apps/web/src/lib/purge.ts SECRET_HEADER). It
+  // sends a value that cannot equal any configured secret and returns only the
+  // status; the response body is never forwarded.
+  if (request.method === "POST" && pathname === "/__test/web-purge-bad-secret") {
+    if (!checkOrigin(env, request)) {
+      return errorResponse("FORBIDDEN", 403);
+    }
+    const response = await env.WEB.fetch("https://web.internal/internal/purge", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Purge-Secret": `wrong-${crypto.randomUUID()}`,
+      },
+      body: JSON.stringify({ tags: ["e2e-ledger-probe"] }),
+    });
+    return new Response(JSON.stringify({ status: response.status }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  // #156 — read-only view of the security ledger for e2e/security-ledger.spec.ts:
+  // signal names, classes, UTC days and sent counts ONLY (SecurityLedgerDO.
+  // signalOnsets). No member, IP or message data. This seam is the only caller of
+  // that RPC; neither DO is reachable from any ordinary route.
+  if (request.method === "GET" && pathname === "/__test/security-ledger") {
+    const rows = await env.SECURITY_LEDGER.getByName("ledger").signalOnsets();
+    return new Response(JSON.stringify({ rows }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
