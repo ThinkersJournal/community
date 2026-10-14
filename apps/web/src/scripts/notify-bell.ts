@@ -148,6 +148,15 @@ async function refreshCount(bell: HTMLElement, badge: HTMLElement): Promise<bool
   return true;
 }
 
+/** F2: the bell panel's way to the full-history page (/notifications). */
+function buildSeeAllLink(): HTMLElement {
+  const link = document.createElement("a");
+  link.className = "notify-all";
+  link.href = "/notifications";
+  link.textContent = "See all notifications";
+  return link;
+}
+
 /**
  * Renders collapsed groups into the panel via createElement/textContent only.
  * `csrfForClick` is the token attached to each linked group's click-through
@@ -164,6 +173,7 @@ function renderPanel(panel: HTMLElement, page: NotificationsPage, csrfForClick: 
     empty.className = "notify-empty";
     empty.textContent = "No notifications yet.";
     panel.appendChild(empty);
+    panel.appendChild(buildSeeAllLink());
     return;
   }
 
@@ -213,6 +223,7 @@ function renderPanel(panel: HTMLElement, page: NotificationsPage, csrfForClick: 
     // any arity. appendChild is unaffected (see nav-auth.ts:46-50).
     panel.appendChild(row);
   }
+  panel.appendChild(buildSeeAllLink());
 }
 
 /**

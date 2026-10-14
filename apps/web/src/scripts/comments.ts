@@ -37,7 +37,11 @@ async function loadMe(): Promise<MeResponse> {
   }
 }
 
-function showError(container: HTMLElement, message: string): void {
+function showError(
+  container: HTMLElement,
+  message: string,
+  link?: { href: string; label: string },
+): void {
   let note = container.querySelector<HTMLElement>("[data-error]");
   if (note === null) {
     note = document.createElement("p");
@@ -46,6 +50,15 @@ function showError(container: HTMLElement, message: string): void {
     container.appendChild(note);
   }
   note.textContent = message;
+  if (link !== undefined) {
+    // createElement/textContent only (no markup parsing). A space separates the
+    // message text from the anchor (textContent above cleared any prior link).
+    note.appendChild(document.createTextNode(" "));
+    const anchor = document.createElement("a");
+    anchor.href = link.href;
+    anchor.textContent = link.label;
+    note.appendChild(anchor);
+  }
 }
 
 function buildForm(opts: {
@@ -79,14 +92,20 @@ function buildForm(opts: {
         }
         const body = (await resp.json().catch(() => null)) as { code?: string } | null;
         button.disabled = false;
-        showError(
-          form,
-          body?.code === "EMAIL_NOT_VERIFIED"
-            ? "Verify your email to comment."
-            : body?.code === "RATE_LIMITED"
+        if (body?.code === "EMAIL_NOT_VERIFIED") {
+          // F1: the resend form lives on /verify-email and nothing else linked there.
+          showError(form, "Verify your email to comment.", {
+            href: "/verify-email",
+            label: "Resend the verification email",
+          });
+        } else {
+          showError(
+            form,
+            body?.code === "RATE_LIMITED"
               ? "Slow down a moment, then try again."
               : "Something went wrong — try again.",
-        );
+          );
+        }
       })
       .catch(() => {
         button.disabled = false;

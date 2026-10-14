@@ -363,7 +363,7 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
 
     {outcome === "saved" && <p id="saved">Draft saved.</p>}
     {outcome === "published" && <p id="published">Published.</p>}
-    {outcome === "unverified" && <p id="unverified">Please verify your email address before posting.</p>}
+    {outcome === "unverified" && <p id="unverified">Please verify your email address before posting. <a class="link" href="/verify-email">Resend the verification email</a></p>}
     {outcome === "unauthenticated" && <p id="session-expired">Your session has expired. Please log in again.</p>}
     {outcome === "error" && <p id="error">{message}</p>}
 
