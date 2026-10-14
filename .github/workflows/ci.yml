@@ -164,7 +164,9 @@ jobs:
         run: pnpm exec playwright install-deps chromium
 
       # Playwright's own webServer config builds web and starts BOTH wrangler dev
-      # processes (api on 8788, web on 8787). GitHub sets CI=true automatically,
+      # processes (api on 8788, web on 8787) plus a third, single-process api+web
+      # server on 8789 for the one `ledger` spec (#156; see playwright.config.ts).
+      # GitHub sets CI=true automatically,
       # which the config reads (forbidOnly + fresh servers, no reuse).
       - name: Run Playwright E2E
         run: pnpm run test:e2e
