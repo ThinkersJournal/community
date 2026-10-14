@@ -37,16 +37,13 @@ one, delete it. Re-read `git log origin/main` and `gh pr list` before relying on
 
 These are open issues that nothing above holds. Each one is small enough for one reviewed PR.
 
-1. **#138, #135, #56** moderation notices: an anonymised author is emailed at the undeliverable sentinel (Postmark
-   bounce); a tombstoned comment's author is emailed; an auto-hide sends no notice at all. One area, one fix
-   shape, and the first two cost sender reputation today.
-2. **#57** durable delivery, violation category and full DSA Art. 17 contents for moderation notices (after 1).
-3. **#78** own-profile Follow button and the hidden-post path back, a user-visible defect that needs runtime data.
-4. **#148** media holds not enforced on queued `to_public` moves (sequence after #161 and the ownership work;
+1. **#57** durable delivery, violation category and full DSA Art. 17 contents for moderation notices (#138, #135 and #56 shipped in #174).
+2. **#78** own-profile Follow button and the hidden-post path back, a user-visible defect that needs runtime data.
+3. **#148** media holds not enforced on queued `to_public` moves (sequence after #161 and the ownership work;
    they touch the same tables).
-5. **Test and harness debt:** #60 (render an Astro page in a unit test), #59, #65, #84 and #85 (local e2e hangs,
+4. **Test and harness debt:** #60 (render an Astro page in a unit test), #59, #65, #84 and #85 (local e2e hangs,
    a flaky bell test), #156 (e2e cannot cross the web-to-api ledger path), #39 and #40.
-6. **#74** endpoint-to-UI reachability audit.
+5. **#74** endpoint-to-UI reachability audit.
 
 ## 4. Held, by design
 
