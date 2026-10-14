@@ -36,6 +36,37 @@ export function base64urlEncode(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/**
+ * Decode base64url (RFC 4648 section 5) to raw bytes; padding optional. Returns
+ * `null` -- never throws -- on malformed input (invalid characters, length % 4 === 1).
+ *
+ * AUTHENTICATION BOUNDARY: the Access JWT verifier and the unsubscribe-token
+ * verifier both rely on null-on-garbage. Standard-base64 `+` `/` and already
+ * padded input are ACCEPTED (pinned by test/auth-encoding.test.ts).
+ */
+export function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> | null {
+  try {
+    const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+    const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** Decode a base64url JSON document; `null` on bad base64 OR bad JSON. */
+export function b64urlToJson<T>(s: string): T | null {
+  const bytes = b64urlToBytes(s);
+  if (bytes === null) return null;
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** Hex-encode (lowercase) the SHA-256 digest of `value`. */
 export async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
