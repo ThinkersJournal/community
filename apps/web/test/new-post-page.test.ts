@@ -3,15 +3,19 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import NewPost from "../src/pages/new-post.astro";
+import { json, renderPage } from "./helpers/render-page";
+
 /**
  * THE EDITOR — src/pages/new-post.astro (Task 17).
  *
- * ⚠️ SOURCE/STRUCTURE TEST, NOT A RENDER — same reasoning as
- * test/post-page.test.ts and test/profile-page.test.ts. This app's vitest is
- * plain Node; the page imports `cloudflare:workers` (via src/lib/api.ts),
- * which does not resolve outside workerd. The page's RUNTIME behaviour is
- * proven on the wire under `wrangler dev` (captured in the task report) and by
- * the E2E spine (e2e/signup.spec.ts).
+ * ⚠️ MOSTLY A SOURCE/STRUCTURE TEST — same reasoning as
+ * test/post-page.test.ts and test/profile-page.test.ts — EXCEPT the
+ * "hidden-pending-review banner" block at the bottom, which RENDERS the page
+ * through Astro's container (test/helpers/render-page.ts, #60) against a fake
+ * `API` binding. The page's real runtime behaviour (workerd, the real api) is
+ * proven on the wire under `wrangler dev` and by the E2E spine
+ * (e2e/signup.spec.ts).
  *
  * What THIS file pins is the set of load-bearing invariants that are
  * otherwise enforced only by code review and are INVISIBLE to every other
@@ -391,68 +395,96 @@ describe("⚠️ tags — no-JS, comma-separated (Task 6)", () => {
   });
 });
 
-describe("⚠️ hidden-pending-review banner — M4 author-facing hidden state (Task 3) — lexical check: proves the banner is conditional and wired, not that it renders", () => {
-  it("(a) declares hiddenAt with a null default", () => {
-    expect(code).toMatch(/let\s+hiddenAt\s*:\s*string\s*\|\s*null\s*=\s*null/);
-  });
-
-  it("(b) assigns hiddenAt from existing.data.hiddenAt on GET", () => {
-    expect(code).toContain("hiddenAt = existing.data.hiddenAt");
-  });
-
+describe("⚠️ hidden-pending-review banner — M4 author-facing hidden state (Task 3) — RENDERED through Astro's container (#60)", () => {
   /**
-   * ⚠️ #113 plan B, Task 7's appeal link (apps/web/src/pages/appeal.astro's
-   * banner addition) broke the old regex-based version of this pin: that
-   * regex forbade any `{`/`}` between the guard and the closing `)`, which a
-   * nested `{postId !== null && hiddenReason === "moderation" && (...)}`
-   * conditional — legitimately INSIDE the banner — necessarily contains. A
-   * PAREN-BALANCED scan is the correct tool here (JSX can nest braces
-   * arbitrarily; it cannot have unbalanced parens), so this extracts the
-   * banner's full `{hiddenAt && ( ... )}` block regardless of what's nested
-   * inside it, then asserts facts ABOUT that extracted block — still unable
-   * to be satisfied by prose, and now able to tell "inside the banner" apart
-   * from "merely present somewhere in the file".
+   * ⚠️ WHAT THIS PROVES: new-post.astro is compiled by Astro and rendered to
+   * HTML in plain Node vitest, with `cloudflare:workers`' `env.API` replaced
+   * by the fake binding below. So the banner/appeal-link ASSERTIONS are on
+   * real output, not source text: moving the banner out of its `hiddenAt`
+   * guard, or un-gating the appeal link, fails these.
+   *
+   * ⚠️ WHAT IT DOES NOT PROVE: the fake binding answers with a hand-written
+   * `AuthoredPost`, so the real api's `GET /posts/:id` shape/authorisation is
+   * NOT exercised (the api suite and E2E own that); nor workerd, the
+   * Cloudflare adapter, middleware, or CSP/cache headers on a real response.
    */
-  function extractHiddenBanner(source: string): string {
-    const guardAt = source.indexOf("{hiddenAt && (");
-    expect(guardAt, "the {hiddenAt && ( guard was not found at all").toBeGreaterThan(-1);
-    const openParenAt = source.indexOf("(", guardAt);
-    let depth = 0;
-    let i = openParenAt;
-    for (; i < source.length; i++) {
-      if (source[i] === "(") depth++;
-      else if (source[i] === ")") {
-        depth--;
-        if (depth === 0) break;
-      }
-    }
-    expect(i, "the guard's opening ( was never balanced by a closing )").toBeLessThan(source.length);
-    return source.slice(guardAt, i + 1);
+  function authoredPost(over: { hiddenAt: string | null; hiddenReason: "moderation" | "author" | null }) {
+    return {
+      id: "p1",
+      title: "T",
+      markdownSource: "body",
+      status: "published",
+      tags: [],
+      ...over,
+    };
   }
 
-  it("(c) shows the hidden-pending-review banner when hiddenAt is set — guarded by hiddenAt && condition, AND the id is reachable before any later closing of that same guard", () => {
-    const banner = extractHiddenBanner(code);
-    expect(banner).toMatch(/id=["']hidden-pending-review["']/);
+  async function renderEditor(
+    post: ReturnType<typeof authoredPost>,
+    init: { method?: string; body?: string } = {},
+  ): Promise<string> {
+    const res = await renderPage(NewPost, {
+      url: "http://localhost/new-post?post=p1",
+      method: init.method,
+      body: init.body,
+      api: (url) => {
+        const path = new URL(url).pathname;
+        if (path === "/auth/csrf") return json(200, { csrfToken: "tok" });
+        if (path === "/posts/p1") return json(200, post);
+        return json(500, { code: "UNEXPECTED_TEST_PATH", message: path });
+      },
+    });
+    expect(res.status).toBe(200);
+    return res.text();
+  }
+
+  const BANNER_TEXT = /<strong[^>]*>This post is hidden\.<\/strong>\s+It is not visible to others following a moderation\s+review or a report about it\./;
+
+  it("(c) renders the banner with its sentence when hiddenAt is set", async () => {
+    const html = await renderEditor(authoredPost({ hiddenAt: "2026-10-01T00:00:00Z", hiddenReason: "moderation" }));
+    expect(html).toMatch(/<p id="hidden-pending-review" role="status"/);
+    expect(html).toMatch(BANNER_TEXT);
   });
 
-  it("(c2) ⚠️ the appeal link sits INSIDE the hiddenAt banner, not merely somewhere in the file (#113 plan B, Task 7)", () => {
-    const banner = extractHiddenBanner(code);
-    expect(banner).toContain("/appeal?post=");
-    expect(banner).toMatch(/hiddenReason === "moderation"/);
-    // And the link must not ALSO exist outside the banner block (e.g. a
-    // second, unguarded copy) — the whole file's only occurrence is the one
-    // just found inside `banner`.
-    const occurrencesInFile = (code.match(/\/appeal\?post=/g) ?? []).length;
-    const occurrencesInBanner = (banner.match(/\/appeal\?post=/g) ?? []).length;
-    expect(occurrencesInFile).toBe(occurrencesInBanner);
+  it("(c2) renders the appeal link INSIDE the banner for a moderation-hidden post", async () => {
+    const html = await renderEditor(authoredPost({ hiddenAt: "2026-10-01T00:00:00Z", hiddenReason: "moderation" }));
+    const banner = html.match(/<p id="hidden-pending-review"[\s\S]*?<\/p>/)?.[0] ?? "";
+    expect(banner, "banner not rendered").not.toBe("");
+    expect(banner).toMatch(/<a [^>]*href="\/appeal\?post=p1"[^>]*>Appeal this decision<\/a>/);
+    // Only one appeal link on the page, and it is the one in the banner.
+    expect(html.match(/\/appeal\?post=/g)).toHaveLength(1);
   });
 
-  it("(d) includes the banner text with updated wording", () => {
-    // The whole sentence, whitespace-tolerant (the source wraps it). "moderation"
-    // alone would match elsewhere in the page and could not fail.
-    expect(code).toMatch(
-      /<strong>This post is hidden\.<\/strong>\s+It is not visible to others following a moderation\s+review or a report about it\./,
-    );
+  it("(c3) author-hidden post: banner but NO appeal link", async () => {
+    const html = await renderEditor(authoredPost({ hiddenAt: "2026-10-01T00:00:00Z", hiddenReason: "author" }));
+    expect(html).toContain('id="hidden-pending-review"');
+    expect(html).not.toContain("/appeal?post=");
+  });
+
+  it("(a/b) visible post: no banner, no appeal link, but the editor DID render (anti-vacuity)", async () => {
+    const html = await renderEditor(authoredPost({ hiddenAt: null, hiddenReason: null }));
+    // Positive control: this is the real editor with the post loaded.
+    expect(html).toContain('id="editor-form"');
+    expect(html).toContain("<h1");
+    expect(html).not.toContain("hidden-pending-review");
+    expect(html).not.toContain("This post is hidden.");
+    expect(html).not.toContain("/appeal?post=");
+  });
+
+  it("(e') POST re-render (Preview) of a still-hidden post keeps the banner", async () => {
+    const html = await renderEditor(authoredPost({ hiddenAt: "2026-10-01T00:00:00Z", hiddenReason: "moderation" }), {
+      method: "POST",
+      body: new URLSearchParams({
+        intent: "preview",
+        postId: "p1",
+        title: "edited",
+        markdownSource: "unsaved edit",
+        csrfToken: "tok",
+      }).toString(),
+    });
+    expect(html).toContain('id="hidden-pending-review"');
+    // The author's unsaved text survives (not reloaded from the stub's "body").
+    expect(html).toContain("unsaved edit");
   });
 
   it("(e) ⚠️ preserves hiddenAt on POST re-render (Preview/failed save) — the POST block exists and assigns only hiddenAt", () => {
