@@ -289,3 +289,16 @@ describe("#53 — the appeal link", () => {
     expect(String(sent.HtmlBody)).not.toContain("/appeal?token=");
   });
 });
+
+// #57 Q2 — the AUTHOR must never be told that a report or a notice prompted the
+// decision, nor by whom. Reads every copy key, so a new key is covered too.
+describe("author-facing copy (#57 Q2)", () => {
+  it("no copy key mentions a report, a notice or a reporter", async () => {
+    const { COPY } = await import("../src/moderation/notify-author");
+    const keys = Object.keys(COPY);
+    expect(keys.length).toBeGreaterThan(0);
+    for (const [key, copy] of Object.entries(COPY)) {
+      expect(`${copy.subject} ${copy.lead}`, key).not.toMatch(/report|notice|notif|complain|flag/i);
+    }
+  });
+});

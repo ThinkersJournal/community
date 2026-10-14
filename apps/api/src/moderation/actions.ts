@@ -28,6 +28,9 @@ export type ModerationActionKind =
 export type ViolationCategory =
   | "spam" | "harassment" | "hate" | "sexual" | "violence" | "ip_infringement" | "other";
 
+/** What prompted a content decision (#57 Art. 17; migration 0029). Never sent to the author. */
+export type ModerationSource = "dsa_notice" | "member_report" | "own_initiative";
+
 export interface ModerationActionInput {
   /** Access identity (email) of the acting human, or "system" for automation. */
   readonly actorAdmin: string;
@@ -40,7 +43,15 @@ export interface ModerationActionInput {
   /** Denormalized identity captured at action time; the log must stay readable after deletion. */
   readonly subjectLabel?: string;
   readonly violationCategory?: ViolationCategory;
+  /**
+   * The intended end of the action. ⚠️ For a CONTENT decision this only RECORDS
+   * the expiry: no job un-hides at that time (#57). user_suspend uses it as before.
+   */
   readonly actionExpiresAt?: Date;
+  /** #57 — what prompted a content decision. Omit for every other kind of row. */
+  readonly source?: ModerationSource;
+  /** #57 — the DSA notice answered; only with `source: "dsa_notice"` (a CHECK enforces it). */
+  readonly dsaNoticeId?: string;
   /** Never shown to the user. */
   readonly internalNote?: string;
 }
@@ -52,8 +63,9 @@ export async function recordModerationAction(
   const { rows } = await c.query<{ id: string }>(
     `INSERT INTO moderation_actions
        (actor_admin, action, post_id, comment_id, subject_user_id, subject_label,
-        violation_category, action_expires_at, reason, internal_note)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        violation_category, action_expires_at, reason, internal_note,
+        source, dsa_notice_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      RETURNING id`,
     [
       input.actorAdmin,
@@ -66,6 +78,8 @@ export async function recordModerationAction(
       input.actionExpiresAt ?? null,
       input.reason,
       input.internalNote ?? null,
+      input.source ?? null,
+      input.dsaNoticeId ?? null,
     ],
   );
   return rows[0]!.id;

@@ -97,3 +97,24 @@ describe("moderation_actions (0013)", () => {
     });
   });
 });
+
+describe("moderation_actions Art. 17 columns (0029)", () => {
+  it("defaults territorial_scope to 'global' and leaves source / dsa_notice_id NULL", async () => {
+    const id = await insertOne();
+    const { rows } = await client.query<{ source: string | null; dsa_notice_id: string | null; territorial_scope: string }>(
+      `SELECT source, dsa_notice_id, territorial_scope FROM moderation_actions WHERE id = $1`, [id],
+    );
+    expect(rows[0]).toEqual({ source: null, dsa_notice_id: null, territorial_scope: "global" });
+  });
+
+  it("rejects an unknown source, an unknown scope, and a notice id without source 'dsa_notice'", async () => {
+    const ins = (cols: string, vals: string): Promise<unknown> =>
+      client.query(`INSERT INTO moderation_actions (actor_admin, action, reason, ${cols})
+                    VALUES ('p@example.com', 'content_restore', 'r', ${vals})`);
+    await expect(ins("source", "'gossip'")).rejects.toThrow(/moderation_actions_source_valid/);
+    await expect(ins("territorial_scope", "'mars'")).rejects.toThrow(/moderation_actions_territorial_scope_valid/);
+    await expect(ins("dsa_notice_id", `'${crypto.randomUUID()}'`)).rejects.toThrow(/moderation_actions_notice_needs_source/);
+    await expect(ins("source, dsa_notice_id", `'member_report', '${crypto.randomUUID()}'`)).rejects.toThrow(/moderation_actions_notice_needs_source/);
+    await expect(ins("source, dsa_notice_id", `'dsa_notice', '${crypto.randomUUID()}'`)).resolves.toBeDefined();
+  });
+});

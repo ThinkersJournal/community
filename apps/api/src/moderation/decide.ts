@@ -20,7 +20,7 @@ import { BEGIN_BOUNDED_TX } from "../db/client";
 import type { LegalHoldCategory } from "../media/legal-hold";
 
 import { imposeAccountHoldInTx } from "./account-holds";
-import { recordModerationAction, type ModerationActionKind, type ViolationCategory } from "./actions";
+import { recordModerationAction, type ModerationActionKind, type ModerationSource, type ViolationCategory } from "./actions";
 import { loadPostTagSlugs, type PurgeTarget } from "./purge-target";
 
 export type DecisionKind = "restore" | "keep_hidden" | "remove";
@@ -35,6 +35,12 @@ export interface DecisionInput {
   readonly actorAdmin: string;
   readonly violationCategory?: ViolationCategory;
   readonly internalNote?: string;
+  /**
+   * #57 Q3: the intended end of a TEMPORARY keep_hidden / remove. ⚠️ RECORDED
+   * ONLY — no job un-hides at this time; the content stays hidden until a
+   * moderator restores it. The route refuses it on a restore.
+   */
+  readonly actionExpiresAt?: Date;
   /** Spec §3 T1: the author's account is held in THIS SAME transaction. */
   readonly accountHold?: { readonly category: LegalHoldCategory };
 }
@@ -145,6 +151,41 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
   // transaction, so its later writes would autocommit outside it.
   if (row === undefined) return null;
 
+  // #57 Q1 — WHAT PROMPTED THIS DECISION, derived BEFORE the action row is
+  // appended (the new row would otherwise be its own "latest ruling") and
+  // stored on that row. The confirmed notices are locked here and resolved by
+  // id below, so the set that decides `source` is exactly the set resolved,
+  // in the same transaction. (One statement cannot both resolve the notices
+  // and be the source of the action id they must point at.)
+  const targetCol = input.subject === "post" ? "post_id" : "comment_id";
+  const { rows: noticeRows } = await c.query<{ id: string }>(
+    `SELECT id FROM dsa_notices
+      WHERE ${targetCol} = $1 AND email_verified_at IS NOT NULL AND resolved_at IS NULL
+      ORDER BY created_at, id
+        FOR UPDATE`,
+    [row.id],
+  );
+  // ⚠️ "Unhandled member report" is queue.ts's own definition, not a new one: a
+  // report is open when no content_* decision on the target is newer than it
+  // (the queue's `ma.created_at > newest_report_at` test, applied per report).
+  let source: ModerationSource;
+  if (noticeRows.length > 0) {
+    source = "dsa_notice";
+  } else {
+    const { rows } = await c.query<{ unhandled: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM reports r
+          WHERE r.${targetCol} = $1
+            AND NOT EXISTS (SELECT 1 FROM moderation_actions ma
+                             WHERE ma.${targetCol} = r.${targetCol}
+                               AND ma.action LIKE 'content\\_%'
+                               AND ma.created_at > r.created_at)
+       ) AS unhandled`,
+      [row.id],
+    );
+    source = rows[0]!.unhandled ? "member_report" : "own_initiative";
+  }
+
   const actionId = await recordModerationAction(c, {
     actorAdmin: input.actorAdmin,
     action: ACTION_FOR[input.decision],
@@ -155,6 +196,12 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
     subjectLabel: row.email,
     violationCategory: input.violationCategory,
     internalNote: input.internalNote,
+    actionExpiresAt: input.actionExpiresAt,
+    source,
+    // Several notices resolved by one ruling: the OLDEST (lowest created_at) is
+    // the one stored; every one is still linked from its own side
+    // (`dsa_notices.resolution_action_id`).
+    dsaNoticeId: noticeRows[0]?.id,
   });
 
   // DSA (spec §8): a ruling on this content answers every CONFIRMED, open
@@ -163,10 +210,9 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
   // notices are inert and stay so (they are reaped, never resolved).
   const { rows: dsaRows } = await c.query<{ id: string; reporter_email: string }>(
     `UPDATE dsa_notices SET resolved_at = now(), resolution_action_id = $2
-      WHERE ${input.subject === "post" ? "post_id" : "comment_id"} = $1
-        AND email_verified_at IS NOT NULL AND resolved_at IS NULL
+      WHERE id = ANY($1::uuid[]) AND resolved_at IS NULL
       RETURNING id, reporter_email`,
-    [row.id, actionId],
+    [noticeRows.map((n) => n.id), actionId],
   );
 
   if (input.accountHold !== undefined) {

@@ -44,7 +44,8 @@ interface Copy {
  */
 type NoticeKey = Exclude<`${DecisionKind}:${boolean}`, "restore:false">;
 
-const COPY: Readonly<Record<NoticeKey, Copy>> = {
+/** Exported for the regression test that no author-facing copy names a report, notice or reporter (#57 Q2). */
+export const COPY: Readonly<Record<NoticeKey, Copy>> = {
   "restore:true": {
     subject: "Your content has been restored",
     lead: "We reviewed your content and restored it. It is visible again.",
@@ -55,7 +56,9 @@ const COPY: Readonly<Record<NoticeKey, Copy>> = {
   },
   "keep_hidden:false": {
     subject: "Your content has been hidden after review",
-    lead: "We reviewed a report about your content and have hidden it because it does not meet our Community Guidelines.",
+    // ⚠️ #57 Q2: never says what prompted the review (a report, a notice) or by
+    // whom. Same plain wording as the other leads.
+    lead: "We reviewed your content and have hidden it because it does not meet our Community Guidelines.",
   },
   "remove:true": {
     subject: "Your content has been removed",
