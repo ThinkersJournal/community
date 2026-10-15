@@ -1,6 +1,6 @@
 # Thinker's Journal Community — roadmap
 
-**As of:** `origin/main` 91bbc93 (package version 0.1.46), 2026-10-15. This is the project's own view of order and
+**As of:** `origin/main` eaa9bff (package version 0.1.48), 2026-10-15. This is the project's own view of order and
 state. The portfolio roadmap sits above it and wins on priority; CireSnave's decisions win on everything. It is a
 plan, not a promise: items are in the order the lane intends to take them, and anything marked **held** waits on a
 person, not on code.
