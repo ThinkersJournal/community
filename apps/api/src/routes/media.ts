@@ -16,12 +16,24 @@
  *   5. IMAGES.info() cross-check   -> 415. FREE; catches LYING signatures.
  *      + pixel-bomb bound          -> 413.
  *   6. quota (FRESH)               -> 403. BEFORE paying for a transform.
+ *   6b. MD5/SHA-1/SHA-256 of the ORIGINAL bytes (#114 Task 12). Done after the
+ *      validity and quota checks above. Steps 7 and 8b can still refuse (the
+ *      transform yields nothing; the key is legally held) and discard the
+ *      hashes: nothing is stored on any refusal path.
  *   7. transform -> WebP           THE POLYGLOT DEFENSE (EXIF auto-stripped).
  *   8. SHA-256 the OUTPUT
  *      + legal hold on that key   -> 415 (generic). Re-checked by step 10.
  *   9. R2 put, content-addressed on that hash
  *  10. media row (FRESH)
  *  11. 201 + the CDN URL. THE ORIGINAL IS DISCARDED — never persisted.
+ *
+ * ⚠️ THE ORIGINAL'S HASHES ARE KEPT, THE ORIGINAL IS NOT (#114 Task 12; CireSnave
+ * 2026-10-08: "Yes, the site should store the hashes permanently."). Step 7
+ * re-encodes every upload, so the stored file's hash can never equal the hash of
+ * what the user sent — and exact-hash lists (MD5/SHA-1/SHA-256) are lists of
+ * ORIGINAL files. Step 6b therefore records `original_md5/sha1/sha256` on the
+ * media row (migration 0027). These are HASHES ONLY: the bytes themselves are
+ * still discarded exactly as below.
  *
  * ⚠️ THE ORIGINAL UPLOADED BYTES ARE NEVER PERSISTED, LOGGED, OR SERVED — on
  * ANY path, including every rejection above. They live only in the `bytes` local
@@ -92,6 +104,30 @@ function unsupportedMediaType(): Response {
  */
 function mediaKey(hash: string): string {
   return `media/post/${hash}.webp`;
+}
+
+/**
+ * MD5, SHA-1 and SHA-256 (lowercase hex) of the uploaded bytes. ⚠️ MD5 and SHA-1
+ * are for matching published hash lists only. `"MD5"` is accepted by Workers'
+ * `crypto.subtle.digest` as a Cloudflare extension; if the runtime ever stopped
+ * accepting it the digest rejects. That rejection is not caught here: the upload
+ * fails closed with nothing stored (never a row with a missing hash) and surfaces
+ * as an uncaught/platform error, not as the app's JSON error body.
+ *
+ * SEQUENTIAL ON PURPOSE: each digest may copy the (up to 15MiB) buffer, so running
+ * them concurrently would hold up to three copies at once.
+ */
+async function originalHashes(
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<{ md5: string; sha1: string; sha256: string }> {
+  const hex = (d: ArrayBuffer): string =>
+    Array.from(new Uint8Array(d))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  const md5 = await crypto.subtle.digest("MD5", bytes);
+  const sha1 = await crypto.subtle.digest("SHA-1", bytes);
+  const sha256 = await crypto.subtle.digest("SHA-256", bytes);
+  return { md5: hex(md5), sha1: hex(sha1), sha256: hex(sha256) };
 }
 
 export async function handleUploadMedia(
@@ -181,6 +217,14 @@ export async function handleUploadMedia(
     });
   }
 
+  // ---- 6b. Hash the ORIGINAL — hashes only, the bytes are still discarded --
+  // After every validity check (a refused upload stores nothing) and BEFORE the
+  // re-encode that makes the original unrecoverable. MD5 is a Cloudflare
+  // extension to crypto.subtle.digest (not in the WebCrypto standard); it is
+  // here only because hash lists are published as MD5 — never as a security
+  // primitive.
+  const original = await originalHashes(bytes);
+
   // ---- 7. Transform — THE POLYGLOT DEFENSE (EXIF stripped automatically) ---
   // ⚠️ MANDATORY AND UNCONDITIONAL. There is deliberately NO fast path here for
   // input that is "already WebP": skipping the re-encode would store bytes we
@@ -259,8 +303,10 @@ export async function handleUploadMedia(
          SELECT EXISTS (SELECT 1 FROM media_legal_holds WHERE r2_key = $2::text) AS held
        ),
        ins AS (
-         INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height)
-         SELECT $1::uuid, $2::text, $3::text, $4::bigint, $5::integer, $6::integer
+         INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height,
+                            original_md5, original_sha1, original_sha256)
+         SELECT $1::uuid, $2::text, $3::text, $4::bigint, $5::integer, $6::integer,
+                $7::text, $8::text, $9::text
            FROM h WHERE NOT held
          RETURNING id
        ),
@@ -270,7 +316,17 @@ export async function handleUploadMedia(
          RETURNING id
        )
        SELECT (SELECT id FROM ins) AS id, (SELECT id FROM mv) AS move_id`,
-      [userId, key, hash, webp.byteLength, stored.width, stored.height],
+      [
+        userId,
+        key,
+        hash,
+        webp.byteLength,
+        stored.width,
+        stored.height,
+        original.md5,
+        original.sha1,
+        original.sha256,
+      ],
     );
     return rows[0]!;
   });
