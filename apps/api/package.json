@@ -1,6 +1,6 @@
 {
   "name": "@thinkersjournal/api",
-  "version": "0.1.33",
+  "version": "0.1.40",
   "private": true,
   "license": "MIT OR Apache-2.0",
   "type": "module",
