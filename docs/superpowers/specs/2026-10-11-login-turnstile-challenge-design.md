@@ -1,6 +1,7 @@
 # Turnstile challenge after repeated login failures — design note
 
-**Status:** DESIGN ONLY. No code, no threshold change. Written 2026-10-11 against `origin/main` e3b6fb6
+**Status:** DECIDED and BUILT behind the `LOGIN_CHALLENGE` flag (off), same change as the rulings in §9.
+Originally design only, with no threshold change. Written 2026-10-11 against `origin/main` e3b6fb6
 (package version 0.1.12). Every `file:line` below is at that ref; re-read before building.
 
 **Founder:** CireSnave 2026-10-11 (relayed by the PM, verbatim): *"There's nothing stopping us and it seems
@@ -17,7 +18,7 @@ like a good idea."* The widget's hostnames already include `community.thinkersjo
 | siteverify down | Fail closed for the challenged attempt only (503), log a `security:` line, unchallenged logins never call it. (§5) |
 | Ships | Behind an api env flag, **off**, so web and api can deploy in either order. (§7) |
 
-The one decision that is CireSnave's: the soft thresholds (§9, ASK-1).
+The decisions that were CireSnave's are recorded as DECIDED in §9 (2026-10-11).
 
 ## 1. What state can the design read?
 
@@ -60,8 +61,11 @@ already bound that case, and (b) is the follow-up if CireSnave wants a longer wi
 either way: Postgres (an auth-path write per attempt for strings that are not accounts is an unbounded
 table and a DoS lever), or the alerting counter.
 
-**Shape of (a).** One new binding, `LOGIN_CHALLENGE_LIMITER`, three soft keys consumed after the hard
-caps, mirroring them exactly:
+**Shape of (a).** Three soft keys consumed after the hard caps, mirroring them exactly. ⚠️ **Two
+bindings, not one** (found while building it): a binding has ONE `limit`, and the thresholds differ
+(3 and 15), which is exactly why `LOGIN_IP_LIMITER` is its own binding beside `LOGIN_LIMITER`. So
+`LOGIN_CHALLENGE_LIMITER` (namespace 1017, 3/60s) carries `<ip>:<email>` and `email:<email>`, and
+`LOGIN_CHALLENGE_IP_LIMITER` (namespace 1018, 15/60s) carries `ip:<limiterIpKey>`:
 
 | soft key | mirrors | purpose |
 |---|---|---|
@@ -144,7 +148,9 @@ omission is deliberate.
 
 - **Challenged attempt, siteverify throws** → `503 SERVICE_UNAVAILABLE` (an existing code,
   `errors.ts:82`), `console.error("turnstile verification errored", err)` as today, plus one
-  `security: auth_failure` line with `reason: "challenge_unavailable"` so an outage is countable. The
+  `security: alerting_fault` line with `reason: "challenge_unavailable"` (greppable, and deliberately NOT an
+  `auth_failure`, so a Cloudflare outage cannot feed `login_ip_burst`, `login_failure_storm` or
+  `credential_stuffing`; `challenge_required` stays a counted `auth_failure`). The
   attempt is **not** evaluated against the password.
 - **Challenged attempt, siteverify says `success:false`** → the same `CHALLENGE_REQUIRED` as a missing
   token (a re-challenge). The log keeps `error-codes` (`turnstile.ts:92`).
@@ -177,10 +183,15 @@ without calling the api, and must not become a state probe, so:
 5. The `error` text is a new message ("Please complete the check below, then log in again.") in the
    existing `role="alert"` `<p id="error">` (`login.astro:90`). It is announced on load.
 
-**Build guard.** `dummy-token` is today expected in exactly two chunks (signup, forgot-password;
-`turnstile-build-guard.mjs:57-59`). The login page adds a third. The implementation PR updates
-`test/turnstile-build-guard.node.test.ts` and keeps the property: no `dummy-token` under `dist/` in a
-build that has `PUBLIC_TURNSTILE_SITE_KEY` set. `assertTurnstileKeySetOnDeploy` needs no change.
+**Build guard.** `dummy-token` was documented as expected in exactly two chunks (signup,
+forgot-password; `turnstile-build-guard.mjs:57-59`). The login page adds one more. The guard itself is a
+scan of `dist/` for the literal and enumerates no chunk, so its code needed no change; its header comment
+and `test/turnstile-build-guard.node.test.ts` were updated, and the property is kept: no `dummy-token`
+under `dist/` in a build that has `PUBLIC_TURNSTILE_SITE_KEY` set. `assertTurnstileKeySetOnDeploy` needs
+no change. (The "two chunks" count was already stale at the design's ref. Measured by a real `astro build` at the
+implementing change, 2026-10-11: a key-less build has `dummy-token` in FIVE chunks, `dsa-notice`,
+`forgot-password`, `login`, `resend` and `signup`; a build with `PUBLIC_TURNSTILE_SITE_KEY` set has it
+in none, and the widget markup in the same five.)
 
 **Accessibility.** Managed mode, no mode change and no `data-size`/`data-appearance` trick
 (`turnstile-error.ts:14-19` forbids it). The widget is a labelled iframe operable by keyboard; the page
@@ -189,7 +200,7 @@ than assert here: that Cloudflare's widget meets WCAG 2.2 SC 3.3.8 for the chall
 present, and that the retry control is reachable by keyboard in the re-rendered page. **There is no
 non-Turnstile path:** password reset also requires a token (`forgot-password.ts:101-111`), so a user
 who cannot use the widget has no self-service route. That is already true of signup; it is new for
-login. Flagged for CireSnave (ASK-3).
+login. Flagged for CireSnave and accepted (DECIDED 3, §9).
 
 **Privacy policy.** Already covered in kind: `privacy-policy.md:20-21` ("bot detection (Cloudflare
 Turnstile / WAF)"), `:44`, and `:61` (Cloudflare listed for "bot detection (Turnstile)"). The data is
@@ -246,19 +257,24 @@ shape build has no `dummy-token`; the `login.astro` source tests stay (`login-pa
 Controls: each mutant is checked to **apply** (assert the anchor matched once), and each "no X" assertion
 is paired with the same assertion finding X in a positive case.
 
-## 9. Decisions that are CireSnave's
+## 9. Decisions that were CireSnave's — DECIDED 2026-10-11
 
-- **ASK-1 — soft thresholds** (new numbers; the existing 30/10/10 are not touched). Proposed, per 60 s
-  per location: `email` 3, `ip:email` 3, `ip` 15, so the 4th attempt on an address or the 16th from a
-  host is challenged. Alternative: 5/5/20 (fewer challenges for a fat-fingering user, more guesses
-  before the first one).
-- **ASK-2 — outage behaviour.** Recommend fail closed for the challenged attempt only (above). The
-  alternative is to fall back to the hard caps alone — today's behaviour — so a Turnstile outage never
-  stops a challenged user, at the price of the challenge being skippable by anything that can make
-  siteverify fail.
-- **ASK-3 — no non-widget path.** A user who cannot operate the widget cannot reset their password
-  either. Accept, or name a support route?
-- **ASK-4 — flag-gated rollout** (recommended, §7) versus unconditional.
+CireSnave, 2026-10-11, answering the four asks of the previous draft of this section, verbatim:
+*"1) A 2) Fail closed 3) Accept 4) flag-gated so we have the option to turn it off in emergency situations."*
+
+- **DECIDED 1 — soft thresholds: option A.** Per 60 s per location: `email` 3, `ip:email` 3, `ip` 15, so
+  the 4th attempt on an address or the 16th from a host is challenged. (The alternative, 5/5/20, was
+  not chosen.) The existing 30/10/10 hard caps are not touched. Built as `LOGIN_CHALLENGE_LIMITER`
+  (3) and `LOGIN_CHALLENGE_IP_LIMITER` (15); see the note under §1.
+- **DECIDED 2 — outage behaviour: fail closed** for the challenged attempt only: a 503
+  `SERVICE_UNAVAILABLE`, the password is not evaluated, one `alerting_fault` line with reason
+  `challenge_unavailable`, not counted as a login failure. (The alternative, falling back to the hard caps, was not chosen.)
+- **DECIDED 3 — no non-widget path: accept.** A user who cannot operate the widget has no
+  self-service route to log in or to reset a password. No support route was named.
+- **DECIDED 4 — flag-gated, so the option to turn it off in an emergency exists.** The api var
+  `LOGIN_CHALLENGE` (`"1"` is on, anything else off), shipped `"0"`. Off is today's route byte for byte,
+  and switching it is an api-only change with no web deploy; the one-line procedure and the exact
+  commands are in `docs/runbooks/deploy.md`, "The login challenge flag".
 
 ## 10. What an AI-generated suggestion got wrong or left out
 

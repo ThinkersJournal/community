@@ -22,7 +22,10 @@
  */
 /**
  * `alerting_fault` is the alerting pipeline reporting on itself (an unreachable
- * ledger, a missing key, §2.4 and §4.1), so a query for `security:` finds it.
+ * ledger, a missing key, §2.4 and §4.1), so a query for `security:` finds it. It
+ * is also how a dependency outage that is NOT an attack is logged without being
+ * counted as one: login's Turnstile siteverify being unreachable
+ * (`/auth/login challenge_unavailable`), which no login rule may count.
  * The `security:` lines are therefore not all attacks: a query that counts
  * attacks filters on `auth_failure` and `rate_limited`. The observer may see an
  * `alerting_fault` (the missing-key line is logged inside a request's

@@ -91,6 +91,30 @@ describe('email normalization (rate-limiter key / citext agreement)', () => {
   });
 });
 
+// The login challenge (docs/superpowers/specs/2026-10-11-login-turnstile-challenge-design.md
+// section 5): an OPTIONAL token, bounded at Cloudflare's documented 2048-character maximum so a
+// caller cannot hand siteverify an oversized string and manufacture a throw.
+describe('LoginInput turnstileToken', () => {
+  const base = { email: 'reader@example.com', password: 'x' };
+
+  it('is optional: the body of every login before the challenge existed still parses, with no token key', () => {
+    const result = LoginInput.safeParse(base);
+    expect(result.success).toBe(true);
+    expect(result.success && 'turnstileToken' in result.data).toBe(false);
+  });
+
+  it('carries a token through, up to exactly 2048 characters', () => {
+    const ok = LoginInput.safeParse({ ...base, turnstileToken: 'a'.repeat(2048) });
+    expect(ok.success && ok.data.turnstileToken).toBe('a'.repeat(2048));
+    expect(LoginInput.safeParse({ ...base, turnstileToken: 'a'.repeat(2049) }).success).toBe(false);
+  });
+
+  it('rejects a token that is not a string (an absent form field is for the web page to omit, never to send as null)', () => {
+    expect(LoginInput.safeParse({ ...base, turnstileToken: null }).success).toBe(false);
+    expect(LoginInput.safeParse({ ...base, turnstileToken: 7 }).success).toBe(false);
+  });
+});
+
 /**
  * account-legal-hold spec §4a (Task 2): `normalizeEmail` is THE normaliser,
  * and `SignupInput`'s parsed email must equal its output exactly, so the

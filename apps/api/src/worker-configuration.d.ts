@@ -39,6 +39,12 @@ interface __BaseEnv_Env {
 	LOGIN_IP_LIMITER: RateLimit;
 	RESET_REDEEM_LIMITER: RateLimit;
 	PROFILE_LIMITER: RateLimit;
+	// The login Turnstile challenge's soft limiters and its flag — added by hand,
+	// same established pattern and reason as LOGIN_IP_LIMITER above. `LOGIN_CHALLENGE`
+	// is a wrangler.jsonc `vars` entry: "1" is on, anything else (or absent) is off.
+	LOGIN_CHALLENGE_LIMITER: RateLimit;
+	LOGIN_CHALLENGE_IP_LIMITER: RateLimit;
+	LOGIN_CHALLENGE: string;
 	IMAGES: ImagesBinding;
 	TURNSTILE_SECRET_KEY: string;
 	POSTMARK_SERVER_TOKEN: string;
