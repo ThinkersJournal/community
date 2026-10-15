@@ -171,6 +171,7 @@ const EXPECTED_DISPATCHER_BODY =
   'import { processPendingMoves } from "./media/moves"; ' +
   'import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media"; ' +
   'import { reapUnconfirmedDsaNotices } from "./moderation/dsa-notices"; ' +
+  'import { purgeExpiredNoticeRecords } from "./moderation/notice-records"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
@@ -203,6 +204,7 @@ const EXPECTED_DISPATCHER_BODY =
   'if (controller.cron === "30 3 * * *") { ' +
   "ctx.waitUntil(reapUnverifiedAccounts(env, ctx)); " +
   "ctx.waitUntil(reapUnconfirmedDsaNotices(env, ctx)); " +
+  "ctx.waitUntil(purgeExpiredNoticeRecords(env, ctx)); " +
   // Security alerting (PM ruling R2-1): the nightly N7 sweep rides the reaper's tick.
   "ctx.waitUntil(sweepForgottenAccounts(env, ctx)); " +
   "return; " +
