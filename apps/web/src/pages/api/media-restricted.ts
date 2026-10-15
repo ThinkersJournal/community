@@ -23,7 +23,7 @@
 import { env } from "cloudflare:workers";
 
 import { markPrivate } from "../../lib/cache";
-import { applyClientIpHeader, clientIpStore } from "../../lib/client-ip-store";
+import { applyClientCountryHeader, applyClientIpHeader, clientIpStore } from "../../lib/client-ip-store";
 
 import type { APIRoute } from "astro";
 
@@ -52,6 +52,7 @@ export const GET: APIRoute = async (context) => {
   // applied anyway for consistency with every other Service-Binding call
   // site (see client-ip-store.test.ts's enumeration test).
   applyClientIpHeader(forwardHeaders, clientIpStore.getStore()?.clientIp ?? null);
+  applyClientCountryHeader(forwardHeaders, clientIpStore.getStore()?.clientCountry ?? null);
 
   const upstream = await env.API.fetch(
     `https://api.internal/media/restricted/${sha256}?subject=post&subjectId=${encodeURIComponent(postId)}`,

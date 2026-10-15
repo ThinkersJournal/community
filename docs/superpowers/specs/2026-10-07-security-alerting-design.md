@@ -1751,6 +1751,8 @@ forwards the edge's country as `X-TJ-Client-Country`, with the same delete-then-
 header reaches `middleware.ts` under the Astro adapter, and that `Intl.DisplayNames` works in workerd (the code falls
 back to the bare code if it throws). A value not matching `^[A-Z]{2}$` omits the phrase.
 
+**Amended in implementation (PR 2, final review M-3/M-4):** the web side reads only `request.cf.country`. The `CF-IPCountry` header fallback is removed, so nothing client-supplied can feed the country. An absent country, or Cloudflare's unknown code `XX`, reads "from an unknown location" instead of naming no place; the `where()` block below predates this.
+
 ```ts
 export interface NoticeInput {
   readonly at: Date;

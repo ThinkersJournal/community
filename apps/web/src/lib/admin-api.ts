@@ -24,7 +24,7 @@ import { env } from "cloudflare:workers";
 
 import { ACCESS_JWT_HEADER, isApiErrorBody, type ApiErrorCode } from "@thinkersjournal/shared";
 
-import { applyClientIpHeader, clientIpStore } from "./client-ip-store";
+import { applyClientCountryHeader, applyClientIpHeader, clientIpStore } from "./client-ip-store";
 import { resolveOutgoingBody } from "./outgoing-body";
 
 import type { ApiResponse } from "./api";
@@ -63,6 +63,7 @@ export async function adminApiFetch<T = unknown>(
   // with every other Service-Binding call site (see client-ip-store.test.ts's
   // enumeration test, which checks all of them).
   applyClientIpHeader(headers, clientIpStore.getStore()?.clientIp ?? null);
+  applyClientCountryHeader(headers, clientIpStore.getStore()?.clientCountry ?? null);
 
   const outgoingBody = resolveOutgoingBody(body, undefined);
 
