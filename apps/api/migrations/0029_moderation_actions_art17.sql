@@ -32,8 +32,11 @@ ALTER TABLE moderation_actions
     CONSTRAINT moderation_actions_territorial_scope_valid
     CHECK (territorial_scope IN ('global')),
   -- A notice id only makes sense when the source says a notice prompted it.
+  -- ⚠️ IS NOT DISTINCT FROM, not `= 'dsa_notice'`: with source NULL the equality
+  -- is NULL and a CHECK treats NULL as PASS, which would admit a notice id with
+  -- no source.
   ADD CONSTRAINT moderation_actions_notice_needs_source
-    CHECK (dsa_notice_id IS NULL OR source = 'dsa_notice');
+    CHECK (dsa_notice_id IS NULL OR source IS NOT DISTINCT FROM 'dsa_notice');
 
 -- Down Migration
 ALTER TABLE moderation_actions
