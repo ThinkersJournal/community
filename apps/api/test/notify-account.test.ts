@@ -97,6 +97,7 @@ describe("#57 Q8 — redress sentence on adverse account notices", () => {
         const text = String(sent[0]!.TextBody);
         expect(text, `${kind} ${String(appealUrl)}`).toContain(REDRESS_SENTENCE);
         expect(String(sent[0]!.HtmlBody)).toContain(REDRESS_SENTENCE);
+        expect(text).toContain("dispute@thinkersjournal.com");
         if (appealUrl !== undefined) expect(text.indexOf(REDRESS_SENTENCE)).toBeLessThan(text.indexOf(appealUrl));
       }
     }

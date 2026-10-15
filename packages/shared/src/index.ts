@@ -23,3 +23,4 @@ export * from './security-ledger-policy';
 export * from './security-ledger-types';
 export * from './security-signals';
 export * from './guidelines';
+export * from './contact';

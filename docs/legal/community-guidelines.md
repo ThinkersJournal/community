@@ -122,3 +122,7 @@ experience, and reporting is how content is reviewed.
 We may update these Guidelines. The version and effective date at the top change
 whenever the text does, and the emails we send about moderation decisions name the
 version and link to this page.
+
+## Contact
+
+Questions about these Guidelines: contact@thinkersjournal.com.
