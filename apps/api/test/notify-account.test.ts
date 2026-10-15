@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { sendAccountActionNotice } from "../src/moderation/notify-account";
+import { renderTerminationNotice, sendAccountActionNotice, sendTerminationNotice } from "../src/moderation/notify-account";
 
 let sent: Array<Record<string, unknown>> = [];
 
@@ -97,6 +97,7 @@ describe("#57 Q8 — redress sentence on adverse account notices", () => {
         const text = String(sent[0]!.TextBody);
         expect(text, `${kind} ${String(appealUrl)}`).toContain(REDRESS_SENTENCE);
         expect(String(sent[0]!.HtmlBody)).toContain(REDRESS_SENTENCE);
+        expect(text).toContain("dispute@thinkersjournal.com");
         if (appealUrl !== undefined) expect(text.indexOf(REDRESS_SENTENCE)).toBeLessThan(text.indexOf(appealUrl));
       }
     }
@@ -122,5 +123,39 @@ describe("Community Guidelines link", () => {
       );
       expect(String(sent[0]!.HtmlBody)).toContain('href="https://community.thinkersjournal.com/guidelines"');
     }
+  });
+});
+
+describe("#114 — termination notice (regression pins)", () => {
+  const FORBIDDEN = /ncmec|law enforcement|report|police|authorit|csam|hash|evidence/i;
+
+  it("says terminated, carries the dispute address and the generic redress, and nothing else", () => {
+    const r = renderTerminationNotice();
+    const all = `${r.subject}
+${r.textBody}
+${r.htmlBody}`;
+    expect(r.subject).toBe("Your account has been terminated");
+    expect(r.textBody).toContain("Your account has been terminated for violating community guidelines.");
+    expect(all).toContain("dispute@thinkersjournal.com");
+    expect(all).toMatch(/out-of-court dispute body or a court/);
+    expect(all).not.toMatch(FORBIDDEN);
+    expect(all).not.toMatch(/https?:\/\//); // no appeal, delete-request or any other link
+    expect(all).not.toMatch(/appeal|reason/i);
+  });
+
+  it("sends on the outbound stream and hands the exact strings to onSent", async () => {
+    const seen: Array<{ subject: string; textBody: string }> = [];
+    expect(await sendTerminationNotice(env, "u@example.test", async (r) => { seen.push(r); })).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.MessageStream).toBe("outbound");
+    expect(String(sent[0]!.TextBody)).toBe(seen[0]!.textBody);
+    expect(sent[0]!.Subject).toBe(seen[0]!.subject);
+  });
+
+  it("never throws: Postmark down returns false and onSent is not called", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network"); }));
+    let called = false;
+    await expect(sendTerminationNotice(env, "u@example.test", async () => { called = true; })).resolves.toBe(false);
+    expect(called).toBe(false);
   });
 });
