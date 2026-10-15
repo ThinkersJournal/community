@@ -14,7 +14,11 @@
 import { postmarkSend } from "../auth/postmark";
 import { escapeHtml } from "../auth/email-verify";
 
+<<<<<<< HEAD
 import { APPEAL_WINDOW_DAYS, DISPUTE_EMAIL, GUIDELINES_VERSION, REDRESS_SENTENCE } from "@thinkersjournal/shared";
+=======
+import { APPEAL_WINDOW_DAYS, GUIDELINES_VERSION, REDRESS_SENTENCE } from "@thinkersjournal/shared";
+>>>>>>> origin/main
 import { guidelinesLine, type RenderedNotice } from "./notify-author";
 
 /** #50 Q4 — what a barred account's deletion request does. Also used verbatim by routes/delete-request.ts's resend email. */

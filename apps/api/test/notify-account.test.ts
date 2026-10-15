@@ -125,6 +125,7 @@ describe("Community Guidelines link", () => {
     }
   });
 });
+<<<<<<< HEAD
 
 describe("#114 — termination notice (regression pins)", () => {
   const FORBIDDEN = /ncmec|law enforcement|report|police|authorit|csam|hash|evidence/i;
@@ -159,3 +160,5 @@ ${r.htmlBody}`;
     expect(called).toBe(false);
   });
 });
+=======
+>>>>>>> origin/main
