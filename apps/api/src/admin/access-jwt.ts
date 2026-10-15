@@ -1,3 +1,5 @@
+import { b64urlToBytes, b64urlToJson } from "../auth/encoding";
+
 /**
  * Cloudflare Access JWT verification — the ONLY source of admin authority.
  *
@@ -27,28 +29,6 @@ let cache: { teamDomain: string; fetchedAt: number; keys: Map<string, CryptoKey>
 /** Test seam — the module-level cache would otherwise leak between test cases. */
 export function __resetJwksCacheForTests(): void {
   cache = null;
-}
-
-function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> | null {
-  try {
-    const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
-    const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-  } catch {
-    return null;
-  }
-}
-
-function b64urlToJson<T>(s: string): T | null {
-  const bytes = b64urlToBytes(s);
-  if (bytes === null) return null;
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as T;
-  } catch {
-    return null;
-  }
 }
 
 async function loadKeys(teamDomain: string): Promise<Map<string, CryptoKey>> {

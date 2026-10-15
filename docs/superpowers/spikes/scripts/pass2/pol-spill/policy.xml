@@ -1,0 +1,33 @@
+<!--
+  PROVES: Task 2 negative controls neg_spill and belt_spill (write-up section 2 table): the 'spill policy' with disk 1 GiB and memory/map 64 MiB so that ImageMagick may
+    spill to disk if given a temp path.
+  INPUTS: installed by lib.sh sync_files to /opt/tj/magick-spill/policy.xml; selected through POLDIR=/opt/tj/magick-spill in t2.sh drop-ins.
+  EFFECTS: none by itself (data); when selected together with IMTMP=/tmp, magick may write /tmp/magick-* files, which is what those controls expect to detect.
+  BENIGN: it issues no docker, wsl or host-level kill/stop/prune command; run only inside a throwaway environment you created yourself (pass 2: a throwaway WSL2 distro;
+    c8.py: a container named tjspike2-pdq or similar tjspike* name). (This file is configuration only.)
+  ARCHIVED: preserved verbatim from the spike session, path variables parameterised only.
+-->
+<policymap>
+  <policy domain="resource" name="disk" value="1GiB"/>
+  <policy domain="resource" name="memory" value="64MiB"/>
+  <policy domain="resource" name="map" value="64MiB"/>
+  <policy domain="resource" name="area"   value="128MP"/>
+  <policy domain="resource" name="width"  value="16KP"/>
+  <policy domain="resource" name="height" value="16KP"/>
+  <policy domain="resource" name="time"   value="10"/>
+  <policy domain="resource" name="thread" value="2"/>
+  <policy domain="resource" name="list-length" value="64"/>
+  <policy domain="resource" name="file"   value="64"/>
+  <policy domain="cache"  name="memory-map" value="anonymous"/>
+  <policy domain="cache"  name="synchronize" value="false"/>
+  <policy domain="system" name="shred"    value="0"/>
+  <policy domain="coder"    rights="none"       pattern="*"/>
+  <policy domain="coder"    rights="read|write" pattern="{JPEG,PNG,GIF,WEBP,RGB}"/>
+  <policy domain="delegate" rights="none" pattern="*"/>
+  <policy domain="filter"   rights="none" pattern="*"/>
+  <policy domain="module"   rights="none" pattern="*"/>
+  <policy domain="module"   rights="read|write" pattern="{JPEG,PNG,GIF,WEBP,RGB}"/>
+  <policy domain="path"     rights="none" pattern="@*"/>
+  <policy domain="path"     rights="none" pattern="*"/>
+  <policy domain="path"     rights="read|write" pattern="fd:*"/>
+</policymap>

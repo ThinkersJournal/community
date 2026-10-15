@@ -1,0 +1,31 @@
+<!--
+PROVES: Stage B2, section 5 negative control for 'Proof step 2, read-only root': a deliberate spill policy (disk 1GiB, memory 64MiB, map 64MiB, otherwise as prod2.xml) under which a 50 MP decode must write a temp file and so fail on a read-only root.
+INPUTS: used by stageb3.sh with RO=1 via /s/pol/spilldir (with TMPDIR=/tmp) inside the container.
+EFFECTS: none by itself; when selected, it ALLOWS ImageMagick to spill to disk (the opposite of the production policy).
+BENIGN: it issues no docker, wsl or host-level kill/stop/prune command; run only inside a throwaway container you created yourself with a unique name such as tjspike1-* (never touch other containers). (This is a configuration file; it executes nothing itself.)
+ARCHIVED: preserved verbatim from the spike session.
+-->
+<policymap>
+  <policy domain="resource" name="disk" value="1GiB"/>
+  <policy domain="resource" name="memory" value="64MiB"/>
+  <policy domain="resource" name="map" value="64MiB"/>
+  <policy domain="resource" name="area"   value="128MP"/>
+  <policy domain="resource" name="width"  value="16KP"/>
+  <policy domain="resource" name="height" value="16KP"/>
+  <policy domain="resource" name="time"   value="10"/>
+  <policy domain="resource" name="thread" value="2"/>
+  <policy domain="resource" name="list-length" value="64"/>
+  <policy domain="resource" name="file"   value="64"/>
+  <policy domain="cache"  name="memory-map" value="anonymous"/>
+  <policy domain="cache"  name="synchronize" value="false"/>
+  <policy domain="system" name="shred"    value="0"/>
+  <policy domain="coder"    rights="none"       pattern="*"/>
+  <policy domain="coder"    rights="read|write" pattern="{JPEG,PNG,GIF,WEBP,RGB}"/>
+  <policy domain="delegate" rights="none" pattern="*"/>
+  <policy domain="filter"   rights="none" pattern="*"/>
+  <policy domain="module"   rights="none" pattern="*"/>
+  <policy domain="module"   rights="read|write" pattern="{JPEG,PNG,GIF,WEBP,RGB}"/>
+  <policy domain="path"     rights="none" pattern="@*"/>
+  <policy domain="path"     rights="none" pattern="*"/>
+  <policy domain="path"     rights="read|write" pattern="fd:*"/>
+</policymap>

@@ -17,6 +17,8 @@ import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { listOpenQueue } from "../moderation/queue";
 import type { LegalHoldCategory } from "../media/legal-hold";
+import type { ViolationCategory } from "../moderation/actions";
+import { REPORT_REASONS } from "@thinkersjournal/shared";
 import {
   requestMediaAccess,
   approveMediaAccess,
@@ -117,6 +119,10 @@ export async function handleAdminDecision(
   // notice. Only meaningful alongside `keep_hidden`/`remove` — see below.
   const legalHold = b["legalHold"];
   const legalHoldCategory = b["legalHoldCategory"];
+  // #57 gap 2 — INTERNAL audit / DSA-transparency metadata, optional. Same
+  // validation as the account-action route (REPORT_REASONS, mirrored by the
+  // moderation_actions CHECK). Never shown to the author.
+  const violationCategory = b["violationCategory"];
 
   if (
     (subject !== "post" && subject !== "comment") ||
@@ -127,6 +133,9 @@ export async function handleAdminDecision(
     typeof reason !== "string" || reason.trim() === "" ||
     (legalHold !== undefined && typeof legalHold !== "boolean") ||
     (legalHold === true && decision === "restore") ||
+    (violationCategory !== undefined && !(REPORT_REASONS as readonly unknown[]).includes(violationCategory)) ||
+    // A restore clears a violation; a category on it is meaningless.
+    (violationCategory !== undefined && decision === "restore") ||
     (legalHold === true && !LEGAL_HOLD_CATEGORIES.includes(legalHoldCategory as LegalHoldCategory))
   ) {
     // The shape was wrong. ⚠️ `INVALID_BODY` is NOT in this codebase's error
@@ -144,6 +153,7 @@ export async function handleAdminDecision(
       decision: decision as DecisionKind,
       reason: reason.trim(),
       actorAdmin: admin.email,
+      violationCategory: violationCategory as ViolationCategory | undefined,
       accountHold: legalHold === true ? { category: legalHoldCategory as LegalHoldCategory } : undefined,
     }),
   );
@@ -157,6 +167,26 @@ export async function handleAdminDecision(
     result,
     legalHold: legalHold === true ? { category: legalHoldCategory as LegalHoldCategory, imposedBy: admin.email } : undefined,
   });
+
+  // ⚠️ #138 / #135 — NO ONE TO TELL. The decision above is applied, recorded
+  // and fully consequential (audit row, hold, purge, media, the DSA reporters'
+  // outcome emails): Art. 16(5)/17 owes the reporter an outcome whatever
+  // became of the content, and refusing here would make a legal hold on an
+  // anonymised account's content impossible to record. Only the AUTHOR's
+  // notice is skipped, and with it the appeal-link mint: a mint with no
+  // message to carry it is a credential nobody can use. ⚠️ The line carries
+  // the action id and the reason and NOTHING else — no address (the sentinel,
+  // or a real one), no title, no author id.
+  if (result.noticeSkip !== null) {
+    // ⚠️ Log only a notice that was ACTUALLY suppressed. A restore of
+    // never-hidden content is a dismissal that `sendModerationNotice` would
+    // have no-oped anyway, so "skipped" there would be a false report.
+    const dismissal = decision === "restore" && !result.wasHidden;
+    if (!dismissal) {
+      console.warn("moderation notice skipped", { actionId: result.actionId, reason: result.noticeSkip });
+    }
+    return decisionOk(result.actionId);
+  }
 
   // #113 plan B — tokens are minted AFTER the action has committed, on a
   // fresh connection, never inside decide.ts's transaction. A restore has
@@ -194,7 +224,12 @@ export async function handleAdminDecision(
     }),
   );
 
-  return new Response(JSON.stringify({ actionId: result.actionId }), {
+  return decisionOk(result.actionId);
+}
+
+/** The decision route's one success body: `{ actionId }` with a 200. */
+function decisionOk(actionId: string): Response {
+  return new Response(JSON.stringify({ actionId }), {
     status: 200,
     headers: { "content-type": "application/json" },
   });

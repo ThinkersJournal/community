@@ -15,8 +15,11 @@
   //     read is a real security bug.
   //   HYPERDRIVE_CACHED = 60s cache — ONLY public feeds/listings.
   // The `id`s below are the LIVE Hyperdrive configs, created at first deploy
-  // (2026-08-08): `tj-hyperdrive-cached` and `tj-hyperdrive-fresh`
-  // (`--caching-disabled`), both over the same Neon Postgres.
+  // (2026-08-08), both over the same Neon Postgres; the FRESH one is
+  // `--caching-disabled`. The ids are authoritative: the dashboard NAME is only
+  // a label (docs have said `tj-cached`/`tj-fresh` and `tj-hyperdrive-*`).
+  // Both configs authenticate as the `app_runtime` role (DML only), observed
+  // 2026-10-12; `neondb_owner` is used only by scripts/migrate.mjs.
   // Local tests resolve both bindings to the test DB via `miniflare.hyperdrives`
   // in vitest.config.ts, so these ids are never dereferenced in tests.
   "hyperdrive": [

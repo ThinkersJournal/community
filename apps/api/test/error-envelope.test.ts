@@ -644,6 +644,22 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
         'async function handleUnsub(request, env, ctx) { const token = new URL(request.url).searchParams.get("token"); const ok = () => new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } }); const userId = token === null ? null : await (0,__vite_ssr_import_1__.verifyUnsubToken)(env, token); if (userId === null) return ok(); try { await (0,__vite_ssr_import_0__.withClient)(env.HYPERDRIVE_FRESH, ctx, (c) => c.query(`INSERT INTO notification_prefs (user_id, master_enabled, updated_at) VALUES ($1, false, now()) ON CONFLICT (user_id) DO UPDATE SET master_enabled = false, updated_at = now()`, [userId])); } catch (err) { // Never logs the token. A valid token for a since-deleted user (FK // violation) or any transient DB failure must still answer neutrally. console.error("unsub write failed", err); }; return ok(); }',
     },
   ],
+  // GET /__test/security-ledger (#156) — TEST_ROUTES-gated read-only seam. Its
+  // gate-closed 404 is the ordinary notFoundResponse(), covered per-value
+  // (unset / "0" / "true") by test/security-ledger-seam.test.ts; with the gate
+  // open (this suite runs TEST_ROUTES="1") it has exactly one branch, a 200.
+  [
+    "GET /__test/security-ledger",
+    {
+      reason:
+        "TEST_ROUTES-gated read-only seam (#156): with the gate open it answers one 200 {rows} (SecurityLedgerDO.signalOnsets, no input to validate, no lookup that can miss); gate closed it is the ordinary 404, probed per TEST_ROUTES value in test/security-ledger-seam.test.ts. See src/routes/__test.ts.",
+      // Pins only the routes.ts wrapper (the __vite_ssr_import_N__ refs are
+      // handleTestRoute=2, notFoundResponse=0 in routes.ts's import order); the
+      // branch itself lives in handleTestRoute, covered by security-ledger-seam.test.ts.
+      handlerSource:
+        "async (request, env, ctx) => await (0,__vite_ssr_import_2__.handleTestRoute)(request, env, ctx) ?? (0,__vite_ssr_import_0__.notFoundResponse)()",
+    },
+  ],
   // GET /public/tags (M2.4c) has no params to validate and no lookup that can
   // miss — it is a bounded GROUP BY listing with a single query and a single
   // 200 branch, same "no client-error path" shape as GET /health above. See

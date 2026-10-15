@@ -534,4 +534,20 @@ export const ROUTES: readonly RouteDef[] = [
     handler: async (request, env, ctx) =>
       (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },
+
+  // TEST-ONLY (#156, e2e/security-ledger.spec.ts). Same null-means-404 contract
+  // and same handler as above. The POST is a mutating seam with an inline
+  // checkOrigin (PIPELINE_EXEMPT); the GET is read-only.
+  {
+    method: "POST",
+    pattern: "/__test/web-purge-bad-secret",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
+  {
+    method: "GET",
+    pattern: "/__test/security-ledger",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
 ];

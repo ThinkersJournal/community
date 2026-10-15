@@ -16,8 +16,9 @@ import { withClient } from "../db/client";
 import { isForeignKeyViolation } from "../db/errors";
 import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
-import { maybeAutoHide } from "../moderation/auto-hide";
-import { purgeTagsFor, type PurgeTarget } from "../moderation/purge-target";
+import { maybeAutoHide, type AutoHideResult } from "../moderation/auto-hide";
+import { notifyAutoHidden } from "../moderation/notify-author";
+import { purgeTagsFor } from "../moderation/purge-target";
 
 import { ReportInput } from "@thinkersjournal/shared";
 
@@ -62,7 +63,7 @@ export async function handleCreateReport(
   const { postId, commentId, reason } = parsed.data;
 
   let error: Response | null = null;
-  let hidden: PurgeTarget | null | undefined;
+  let hidden: AutoHideResult | null | undefined;
   try {
     error = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
       // Verify the target exists before writing — mirrors reactions.ts's
@@ -105,7 +106,15 @@ export async function handleCreateReport(
   // cache for up to 25 hours. Awaited, and purgeTags never throws — a failed
   // invalidation must not turn a recorded report into an error.
   if (hidden !== undefined && hidden !== null) {
-    await purgeTags(env, purgeTagsFor(hidden));
+    await purgeTags(env, purgeTagsFor(hidden.purge));
+
+    // #56 — tell the author, ONCE, that their content is hidden pending review.
+    // ⚠️ AFTER the hide has been written and the purge awaited, and outside the
+    // response path: a mail outage must never fail a recorded report, exactly
+    // as for a moderator's decision notice (routes/admin.ts). `hidden` is
+    // non-null only when THIS report hid the content, so a later report on
+    // already-hidden content sends nothing. The recipient is read at send time.
+    ctx.waitUntil(notifyAutoHidden(env, ctx, hidden));
   }
 
   return new Response(null, { status: 201 });

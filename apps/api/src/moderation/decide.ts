@@ -57,6 +57,18 @@ export interface DecisionResult {
   readonly purge: PurgeTarget;
   /** Every CONFIRMED, open DSA notice this ruling resolved — Task 4 emails each reporter. */
   readonly dsaReporters: readonly { email: string; noticeId: string }[];
+  /**
+   * Why the AUTHOR's notice must not be sent, or `null` when it should be
+   * (#138, #135). Computed from the row THIS statement wrote, so it cannot
+   * disagree with the decision it describes. The decision itself, its audit
+   * row, the hold, the purge, the media move and the DSA reporters' outcome
+   * emails are all unaffected: only the notice to the author is skipped.
+   *
+   * ⚠️ `author_anonymised` wins when both facts hold: `anonymised_at` is the
+   * column the notification email drain already gates on, so there is one
+   * definition of "this account is gone" — never the address's shape.
+   */
+  readonly noticeSkip: "author_anonymised" | "comment_deleted" | null;
 }
 
 const ACTION_FOR: Readonly<Record<DecisionKind, ModerationActionKind>> = {
@@ -89,30 +101,39 @@ const HIDDEN_AT_SQL: Readonly<Record<DecisionKind, string>> = {
  */
 export async function applyDecisionInTx(c: Client, input: DecisionInput): Promise<DecisionResult | null> {
   let row:
-    | { id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean; post_id?: string }
+    | {
+        id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean;
+        author_anonymised: boolean; tombstoned?: boolean; post_id?: string;
+      }
     | undefined;
 
   if (input.subject === "post") {
-    const { rows } = await c.query<{ id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean }>(
+    const { rows } = await c.query<{ id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean; author_anonymised: boolean }>(
       `UPDATE posts AS t
           SET hidden_at = ${HIDDEN_AT_SQL[input.decision]}
         FROM users u
        WHERE t.id = $1 AND u.id = t.author_id
        RETURNING t.id, t.author_id, u.email, t.title,
                  (old.hidden_at IS NOT NULL) AS was_hidden,
-                 (t.hidden_at IS NOT NULL) AS hidden`,
+                 (t.hidden_at IS NOT NULL) AS hidden,
+                 (u.anonymised_at IS NOT NULL) AS author_anonymised`,
       [input.subjectId],
     );
     row = rows[0];
   } else {
-    const { rows } = await c.query<{ id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean; post_id: string }>(
+    const { rows } = await c.query<{
+      id: string; author_id: string; email: string; title: string; was_hidden: boolean; hidden: boolean;
+      author_anonymised: boolean; tombstoned: boolean; post_id: string;
+    }>(
       `UPDATE comments AS t
           SET hidden_at = ${HIDDEN_AT_SQL[input.decision]}
         FROM users u, posts p
        WHERE t.id = $1 AND u.id = t.author_id AND p.id = t.post_id
        RETURNING t.id, t.author_id, t.post_id, u.email, p.title,
                  (old.hidden_at IS NOT NULL) AS was_hidden,
-                 (t.hidden_at IS NOT NULL) AS hidden`,
+                 (t.hidden_at IS NOT NULL) AS hidden,
+                 (u.anonymised_at IS NOT NULL) AS author_anonymised,
+                 (t.deleted_at IS NOT NULL) AS tombstoned`,
       [input.subjectId],
     );
     row = rows[0];
@@ -175,6 +196,7 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
     postTitle: row.title,
     purge,
     dsaReporters: dsaRows.map((r) => ({ email: r.reporter_email, noticeId: r.id })),
+    noticeSkip: row.author_anonymised ? "author_anonymised" : row.tombstoned === true ? "comment_deleted" : null,
   };
 }
 

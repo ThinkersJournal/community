@@ -2,7 +2,7 @@
 
 Companion to `docs/superpowers/specs/2026-09-27-deploy-automation-design.md`
 (the design) and `docs/superpowers/specs/2026-09-02-least-privilege-db-role-design.md`
-(the `app_runtime` cutover, if it ever happens — see its own dated note on
+(the `app_runtime` cutover, which is observed done in production on 2026-10-12 (the cutover date was not recorded); see its own dated note on
 `pgmigrations`). This document is the operational half: what actually runs,
 what CireSnave does by hand, and in what order.
 
@@ -262,7 +262,8 @@ makes `GET /health/schema` unable to answer `200 {"applied":true}` blocks
 **every** deploy to **both** Workers, including the deploy that would fix the
 underlying problem. This can happen without any migration actually being
 missing — for example: the `api`/`web` Worker or the database is down, a
-future `app_runtime` cutover removes `SELECT` on `pgmigrations` (see the dated
+runtime role (`app_runtime`, which both Hyperdrive configs authenticate as) loses
+`SELECT` on `pgmigrations` (the gate depends on that grant; see the dated
 note in `docs/superpowers/specs/2026-09-02-least-privilege-db-role-design.md`
 §4), or `HYPERDRIVE_FRESH` itself is misconfigured.
 

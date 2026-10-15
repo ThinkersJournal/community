@@ -499,6 +499,32 @@ export class SecurityLedgerDO extends DurableObject<Env> {
     });
   }
 
+  /**
+   * READ-ONLY RPC for the TEST_ROUTES-gated `GET /__test/security-ledger` seam
+   * (#156) and for nothing else: which signals have had an ONSET recorded, per
+   * class per UTC day. Reads `class_day` only, which holds signal names, class
+   * names and counts. No subject, member id, IP or message text is ever
+   * selected, so there is nothing here to leak. It writes nothing.
+   *
+   * ⚠️ A summary-class signal (`purge_secret_failure` is class `purge`) leaves
+   * no held row, and its outbox row is deleted once delivered; its onset in
+   * `class_day.onset_signals` is the one durable trace of a first crossing.
+   */
+  signalOnsets(): Promise<{ signal: string; signalClass: string; day: string; sent: number }[]> {
+    const rows = this.ctx.storage.sql
+      .exec<{ class: string; day: string; sent: number; onset_signals: string }>(
+        "SELECT class, day, sent, onset_signals FROM class_day ORDER BY day DESC, class",
+      )
+      .toArray();
+    const out: { signal: string; signalClass: string; day: string; sent: number }[] = [];
+    for (const r of rows) {
+      for (const signal of JSON.parse(r.onset_signals) as string[]) {
+        out.push({ signal, signalClass: r.class, day: r.day, sent: r.sent });
+      }
+    }
+    return Promise.resolve(out);
+  }
+
   private isForgotten(userId: string, nowMs: number): boolean {
     return this.store.count("SELECT COUNT(*) AS n FROM forgotten WHERE user_id = ? AND until_ms > ?", userId, nowMs) > 0;
   }

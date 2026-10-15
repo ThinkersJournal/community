@@ -415,19 +415,16 @@ describe("POST /admin/decision resolves DSA notices", () => {
   });
 
   /**
-   * Round 2 item 2 — DOCUMENTATION, not a fix: `decide.ts`'s comment UPDATE
-   * (`WHERE t.id = $1 AND u.id = t.author_id AND p.id = t.post_id`) carries NO
-   * `deleted_at` predicate, so it matches a TOMBSTONED comment exactly like a
-   * live one, and `handleAdminDecision` unconditionally `ctx.waitUntil`s
-   * `sendModerationNotice` for any non-dismissal outcome. CURRENT BEHAVIOUR,
-   * confirmed here: deciding on a tombstoned comment DOES email its author
-   * "your content has been removed/hidden", about content that is already a
-   * tombstone with an emptied body. Per the brief, this is ruled out at the
-   * UI instead (dsa-notices.astro no longer offers the decision form for a
-   * `contentDeleted` row — see `listOpenDsaNotices`'s tombstone predicate,
-   * this round) rather than by changing `decide.ts`'s semantics.
+   * REGRESSION TEST for #135 (was Round 2 item 2's DOCUMENTATION test, which
+   * asserted the opposite). `decide.ts`'s comment UPDATE has no `deleted_at`
+   * predicate, so a decision still APPLIES to a tombstoned comment (the audit
+   * row and any DSA outcome are owed whatever happened to the content), but the
+   * author notice used to go out unconditionally: "your content has been
+   * removed" about a comment the author had already deleted and whose body is
+   * empty. `decide.ts` now reports `noticeSkip: "comment_deleted"` and
+   * `handleAdminDecision` sends nothing to the author.
    */
-  it("CURRENT BEHAVIOUR: a decision on a tombstoned comment still emails its author (decide.ts has no deleted_at guard)", async () => {
+  it("a decision on a tombstoned comment is applied and recorded but does NOT email its author (#135)", async () => {
     const author = await createVerifiedActor();
     createdUserIds.push(author.userId);
     const postId = await createPublished(author);
@@ -442,10 +439,11 @@ describe("POST /admin/decision resolves DSA notices", () => {
       body: JSON.stringify({ subject: "comment", subjectId: commentId, decision: "remove", reason: "x" }),
     });
     expect(res.status).toBe(200);
+    const { actionId } = (await res.json()) as { actionId: string };
+    expect(actionId).toMatch(/^[0-9a-f-]{36}$/);
 
-    const authorEmails = sentEmails.filter((e) => e["To"] !== undefined);
-    expect(authorEmails.length).toBeGreaterThan(0);
-    expect(String(authorEmails[0]!["TextBody"])).toContain("removed");
+    // The decision was recorded (the 200 and a real action id) yet nothing was sent.
+    expect(sentEmails).toHaveLength(0);
   });
 
   it("a restore of never-hidden content (a dismissal) still resolves the notices and tells each reporter 'no action was taken'; the author gets nothing", async () => {

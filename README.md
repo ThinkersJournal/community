@@ -195,7 +195,9 @@ the authoritative table):
 | types | `pnpm typecheck` | exit 0 |
 
 `pnpm test:e2e` starts everything it needs (build → api on :8788 → web on :8787) and
-requires only Docker Postgres to be up. It writes real users to the **dev** database via
+requires only Docker Postgres to be up. (A third, single-process api+web server on :8789 serves
+only `e2e/security-ledger.spec.ts`, because the web-to-ledger Durable Object call only resolves
+in one `wrangler dev` process; see the header of `playwright.config.ts`.) It writes real users to the **dev** database via
 the real signup path and does not clean up, so every run uses a fresh random email.
 
 **The E2E runs the api on its own port (:8788) — a deliberate deviation from production.**
@@ -240,6 +242,13 @@ wrangler hyperdrive create tj-cached --connection-string="postgres://…"
 wrangler hyperdrive create tj-fresh  --connection-string="postgres://…" --caching-disabled
 wrangler r2 bucket create tj-media                        # the MEDIA binding (M1)
 ```
+
+The connection string for both runtime configs is the **`app_runtime`** role's (DML only; observed
+in production 2026-10-12 — both configs authenticate as `app_runtime`, no `neondb_owner` session).
+`neondb_owner` is used only by `apps/api/scripts/migrate.mjs`, with a one-shell `DATABASE_URL`
+(`docs/superpowers/specs/2026-09-02-least-privilege-db-role-design.md`). The config **ids** in
+`apps/api/wrangler.jsonc` are authoritative; the dashboard name is only a label (older docs say
+`tj-cached`/`tj-fresh` or `tj-hyperdrive-*`).
 
 `HYPERDRIVE_FRESH` **must** be the `--caching-disabled` config: Hyperdrive never
 invalidates on write, so a cached auth/dup-email/verify read is a real security bug.

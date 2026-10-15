@@ -1,0 +1,34 @@
+<!--
+  PROVES: nothing by itself; ImageMagick policy data (Task 1 context, write-up section 1: resource disk 0, coder allow-list JPEG,PNG,GIF,WEBP,RGB, path allow only
+    fd:*). No script in pass2/ references this file (setup.sh installs pass1/pol/prod2.xml instead); it differs from pol-spill/policy.xml only in the disk, memory and
+    map resource lines.
+  INPUTS: configuration file read by magick via MAGICK_CONFIGURE_PATH when copied into a policy directory.
+  EFFECTS: none by itself (data).
+  BENIGN: it issues no docker, wsl or host-level kill/stop/prune command; run only inside a throwaway environment you created yourself (pass 2: a throwaway WSL2 distro;
+    c8.py: a container named tjspike2-pdq or similar tjspike* name). (This file is configuration only.)
+  ARCHIVED: preserved verbatim from the spike session, path variables parameterised only.
+-->
+<policymap>
+  <policy domain="resource" name="disk"   value="0"/>
+  <policy domain="resource" name="memory" value="512MiB"/>
+  <policy domain="resource" name="map"    value="0"/>
+  <policy domain="resource" name="area"   value="128MP"/>
+  <policy domain="resource" name="width"  value="16KP"/>
+  <policy domain="resource" name="height" value="16KP"/>
+  <policy domain="resource" name="time"   value="10"/>
+  <policy domain="resource" name="thread" value="2"/>
+  <policy domain="resource" name="list-length" value="64"/>
+  <policy domain="resource" name="file"   value="64"/>
+  <policy domain="cache"  name="memory-map" value="anonymous"/>
+  <policy domain="cache"  name="synchronize" value="false"/>
+  <policy domain="system" name="shred"    value="0"/>
+  <policy domain="coder"    rights="none"       pattern="*"/>
+  <policy domain="coder"    rights="read|write" pattern="{JPEG,PNG,GIF,WEBP,RGB}"/>
+  <policy domain="delegate" rights="none" pattern="*"/>
+  <policy domain="filter"   rights="none" pattern="*"/>
+  <policy domain="module"   rights="none" pattern="*"/>
+  <policy domain="module"   rights="read|write" pattern="{JPEG,PNG,GIF,WEBP,RGB}"/>
+  <policy domain="path"     rights="none" pattern="@*"/>
+  <policy domain="path"     rights="none" pattern="*"/>
+  <policy domain="path"     rights="read|write" pattern="fd:*"/>
+</policymap>

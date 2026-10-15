@@ -1,6 +1,6 @@
 # Scanning every image at upload — Design and plan
 
-**Status:** Revision 3 (2026-10-07), for PM review. Docs only. Part of #114.
+**Status:** Revision 3 (2026-10-07), for PM review. Docs only. Part of #114. **Amended 2026-10-08 (revision 4 material, PROPOSAL):** the decoder moves to a stateless VPS service per `2026-10-08-vps-image-service-design.md` (the "VPS design"); U11 and `decoder_credentials_refused` are added. The C3/C6 spike has not been run. The binding-based text below is kept and marked superseded where it applies.
 **Author:** Community upload-scan agent, 2026-10-07.
 **Revision 1** answered the design audit of `192cb2c` (3 Critical, 12 Important, 14 Minor). **Revision 2** answers the
 re-audit of `edcb522` (6 Important, 9 Minor). **Revision 3** answers the third audit of `9684a1a` (3 Important, 2
@@ -64,7 +64,7 @@ That document designed scanning **after** publication, from a cron. For **new up
 |---|---|
 | §3.1 "Where it runs" (lines 239–264): a cron Worker reading unscanned objects from R2 | **Superseded.** Scanning runs inline in `POST /media` (§1, §2). A cron survives only as the one-off backfill of media stored before this ships (§4.4). |
 | §3.2 "Computing PDQ inside a Worker" (lines 266–303), steps 1–4: decode the **stored WebP** read from R2 | **Superseded.** We decode the **original upload**, before any conversion (§3.3). Its animation analysis (lines 289–303) stands for new uploads, and §4.1 adopts its option (c) as the default. Its option (b) for stored animated objects (lines 301–302) is replaced by review (§4.4, I6). |
-| §3.3 "Periodically scan all new images" (lines 305–370): the `media_scans` table, the `*/2` cadence, the 2–4 minute delay, retries by backoff, alarms S1–S5, "block until scanned" | **Superseded.** Results go on the `media` row (§4.2). Nothing is published before its scan, so there is no "unscanned for 30 min" state to alarm on. Alarms U1–U10 (§11) replace S1–S5. The fail-closed ruling it records (lines 365–370) stands, and §6 implements it. |
+| §3.3 "Periodically scan all new images" (lines 305–370): the `media_scans` table, the `*/2` cadence, the 2–4 minute delay, retries by backoff, alarms S1–S5, "block until scanned" | **Superseded.** Results go on the `media` row (§4.2). Nothing is published before its scan, so there is no "unscanned for 30 min" state to alarm on. Alarms U1–U11 (§11) replace S1–S5. The fail-closed ruling it records (lines 365–370) stands, and §6 implements it. |
 | §3.5 "Feeding the quarantine and review pipeline" (lines 417–453) | **Amended.** The result mapping stands: known CSAM → `known_hash`; the harmful-or-abusive category → review-first; the test value → never a case. Intake at upload has its own variant (§5.3). The re-scan-on-list-update policy (lines 448–453) is **not** carried forward. It is a check of already-published media, and is listed as an open decision (§14, D11). |
 | §5 "Recommendation", the line *"sent to HMS-A's hash-only PDQ endpoint from the existing `*/2` cron"* (lines 472–473), and the phased table's "Now" and "At launch" rows (lines 485–486) | **Superseded** by §13's tasks and §11's launch blockers. |
 | §1, §2, §3.4, §4, §6–§9 | Stand. §10 here refines §6's privacy wording. |
@@ -199,6 +199,8 @@ That is **under 20 MB**. The CPU work is:
 
 ### 2.3 Recommendation: **inline**
 
+> **Amended 2026-10-08.** The decoder this section and §3.3 assume (the Images binding) is superseded by the stateless VPS service in the VPS design. Inline scanning is unchanged. One more availability dependency is added: a VPS outage is a 503 on image uploads, the same fail-closed answer as a scanner outage (§6.1).
+
 - **It matches the product.** The editor needs the URL at once (`media-upload.ts:44-56`). A queue needs a polling
   editor, a `processing` state on `media`, and a sweeper for items stuck in it.
 - **It keeps the original unpersisted.** Inline, the original bytes are written nowhere unless they match (§5). A
@@ -319,6 +321,8 @@ raw RGB buffer. At 512 × 512 the work is light (§2.2), so WASM buys nothing.
 "unscannable" (§6.1).
 
 ### 3.3 Decoding: behind an `ImageDecoder` seam, before any conversion
+
+> **Superseded 2026-10-08 (the production implementation only).** The seam stays. Its production implementation is the VPS service, not the Images binding: header inspection, the 512x512 raw scan frame and `toWebp` become one request, and the seam folds into a `MediaProcessor` (VPS design §1). There is no fallback decoder. **Frame size changes too:** the scan frame is 512x512 only when a side is larger than 512, and otherwise native size (no upscale), with explicit dimensions in the signed response, so every fixed-512 statement below (`PDQ_DECODE_EDGE`, `hasExpectedGeometry`, the §3.5 geometry check, the §3.6 self-test fixtures) is superseded by VPS design §2.3, and the self-test must include a fixture of at most 512 and one larger. The `ImagesBindingDecoder` text below is kept for history. Nothing in it is built, and the binding-specific risks it lists (the allowance error, no frame selector, an unreadable resampler) move to the VPS spike (VPS design §5).
 
 We decode the **original upload's bytes**, never the WebP that step 7 produces. All decoding goes through one
 interface, so our code is testable and the binding's behaviour is evidenced only where it can be:
@@ -978,7 +982,7 @@ For a file whose `r2_key` begins `evidence/`:
 - `originalFileHash` is that file's `sha256`, which is now truly the original's;
 - the upload is the object's own bytes, with its `content_type`.
 
-**Task 8 (alarms).** U1–U10 (§11.1), `csam_condition_marks` for the condition-level ones, and the two new item
+**Task 8 (alarms).** U1–U11 (§11.1), `csam_condition_marks` for the condition-level ones, and the two new item
 conditions in `csam_alarm_marks`.
 
 **Task 9b (destruction).** The `csam_evidence_destroyed` audit row it writes (rev-3 §5 P7 step 3) also sets
@@ -1179,7 +1183,10 @@ its response headers (`apps/web/src/pages/media-upload.ts:37`, `:62`), so US6 ha
 | a body over the 64 KiB cap, or one that doesn't parse to a documented shape | cap, then parse | no | 503 | U1 |
 | HMS-A's test value | classification | no | 503 | U4, immediate |
 | **decode failure, any kind** (the seam's `decode_error`, or a geometry mismatch, §3.5) | `hasExpectedGeometry` | no | **503**: unscannable, fail closed | U1 |
-| the allowance error, as C3 records it | the mapped `ImagesError` | no | 503 | U7, immediate |
+| the allowance error, as C3 records it (**superseded 2026-10-08:** with the binding removed this row goes dead, and so does U7) | the mapped `ImagesError` | no | 503 | U7, immediate |
+| the VPS decoder is unreachable, times out, answers 5xx, or its response signature fails (VPS design §2.6) | `fetch`, `AbortSignal`, status, signature check | no | 503 | U1; U11 as well for a signature failure |
+| the VPS decoder refuses our credentials (401) | status | no | 503, reason `decoder_credentials_refused` | its own reason, not U2: U2 is HMS-A's credentials. Counted into U1 as `unavailable` |
+| the VPS decoder's `build_id` or `policy_sha256` is not on the allowlist | allowlist check | no | 503 | U11, immediate |
 | PDQ quality ≤ 49 (a flat or near-flat image) | PDQ | no | **422 `IMAGE_UNSCANNABLE`**, "That image can't be checked, so it can't be uploaded. Try a different image." (D13); or the bytes fallback **only if its flag is on** (§6.3) | counted; U8 on each fallback use |
 | no fresh decoder self-test (§3.6): the current version's newest run is missing, **failed**, or stale | `selfTestIsFresh` over the current version's newest run | no | 503 | U9, immediate |
 | the match's intake transaction fails (§5.3) | the database error | no | 503 (M4) | log line only: the database is what failed |
@@ -1336,7 +1343,7 @@ than being decided clean on the others. An empty answer list is unavailable.
 Both mechanisms are designs:
 - **The CSAM alarm mechanism** (rev-3 spec §6.1–§6.3; #114 plan Task 8). Conditions are computed from tables on the
   `*/2` tick and shown as the `/admin/*` banner. Email goes to `CSAM_ALARM_EMAIL`, immediately on first raise, then
-  daily, and a log line is written every tick. **The scanner's alarms are added to it** as U1–U10 (§11.1). An outage of
+  daily, and a log line is written every tick. **The scanner's alarms are added to it** as U1–U11 (§11.1). An outage of
   child-safety scanning is a child-safety control failure, and `CSAM_ALARM_EMAIL` is the urgent inbox CireSnave named
   (rev-3 spec §0).
 - **The security-alert seam** (`2026-10-07-security-alerting-design.md` §3.2–§3.3 at `f3da62d`):
@@ -1378,7 +1385,7 @@ CREATE TABLE upload_scan_outcomes (
   id          uuid PRIMARY KEY DEFAULT uuidv7(),
   at          timestamptz NOT NULL DEFAULT now(),
   outcome     text NOT NULL CHECK (outcome IN ('scanned', 'unavailable')),
-  reason      text,             -- an UnavailableReason; NULL unless 'unavailable'
+  reason      text,             -- an UnavailableReason; NULL unless 'unavailable'. Amended 2026-10-08: gains the value 'decoder_credentials_refused' (VPS design §2.6). A new reason value only, so the outcome CHECK above does not change.
   scan_path   text CHECK (scan_path IN ('hash', 'media')),
   latency_ms  integer,
   case_id     uuid              -- bare; set only when the scan opened or joined a case. Nothing else about it.
@@ -1422,7 +1429,8 @@ its results are Match Data under the rev-3 spec §11.2. Nothing else about it is
 - **The settings** (all via `wrangler secret put`):
   - `UPLOAD_SCAN_ENABLED` (`"1"` or anything else);
   - `HMS_A_USERNAME`, `HMS_A_PASSWORD`;
-  - `HMS_A_BASE_URL`, which must be `https:` (M5);
+  - `HMS_A_BASE_URL`, which must be an **origin only**: `https://host` or `https://host:port`, no path, no
+    trailing slash (M5, and §8.3);
   - `UPLOAD_SCAN_BYTES_FALLBACK` (§6.3);
   - `SECOND_SCAN_STEP_ENABLED` (§7).
 - ⚠️ **`HMS_A_BASE_URL` as a secret.** As a committed var it would publish the provider's host in this public repo.
@@ -1444,18 +1452,30 @@ export type UploadScanConfig =
   | { readonly kind: "misconfigured"; readonly problems: readonly string[] }
   | { readonly kind: "on"; readonly baseUrl: string; readonly username: string; readonly password: string };
 
+/**
+ * True only for an `https:` origin written exactly as `URL.origin` prints it: `https://host` or `https://host:port`.
+ * Rejects a path (so a `/v1` base), a trailing slash, a query, a fragment, userinfo, an upper-case scheme or host,
+ * and an explicit default port (`:443`), because none of those equals `new URL(value).origin`.
+ */
+export function isHttpsOrigin(value: string): boolean {
+  if (!URL.canParse(value)) return false;
+  const url = new URL(value);
+  return url.protocol === "https:" && url.origin === value;
+}
+
 /** Pure. "off" and "misconfigured" BOTH refuse image uploads (§8.1): there is no unscanned mode. */
 export function uploadScanConfig(env: UploadScanEnv): UploadScanConfig {
   if (env.UPLOAD_SCAN_ENABLED !== "1") return { kind: "off" };
-  const baseUrl = (env.HMS_A_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  const baseUrl = (env.HMS_A_BASE_URL ?? "").trim();
   const username = (env.HMS_A_USERNAME ?? "").trim();
   const password = env.HMS_A_PASSWORD ?? "";
   const problems: string[] = [];
   if (baseUrl === "") {
     problems.push("HMS_A_BASE_URL missing");
-  } else if (!URL.canParse(baseUrl) || new URL(baseUrl).protocol !== "https:") {
-    // Basic credentials must never travel in clear text (M5).
-    problems.push("HMS_A_BASE_URL is not https");
+  } else if (!isHttpsOrigin(baseUrl)) {
+    // Basic credentials must never travel in clear text (M5), and the client appends `/v1/<endpoint>` itself
+    // (§8.3): a value that carries a path would otherwise become `/v1/v1/<endpoint>` at the first call.
+    problems.push("HMS_A_BASE_URL is not an https origin");
   }
   if (username === "") problems.push("HMS_A_USERNAME missing");
   if (password === "") problems.push("HMS_A_PASSWORD missing");
@@ -1465,6 +1485,44 @@ export function uploadScanConfig(env: UploadScanEnv): UploadScanConfig {
 ```
 
 The `problems` strings name keys only, never values.
+
+### 8.3 `HMS_A_BASE_URL` is an origin, and what validates it
+
+*(PM notice 2026-10-11. Docs only: `hms-a-client.ts` is unwritten, and this section is its contract.)*
+
+- **The value is an origin and nothing else:** `https` scheme, host, optional port. No path (so never `/v1`), no
+  trailing slash, no query, no fragment, no userinfo.
+- **The client appends the path itself:** `${baseUrl}/v1/<endpoint>`, one fixed, versioned path per call (the
+  hash-only lookup, the media lookup and the version probe). The literal endpoint names stay out of this public
+  document and live with the operator's provider notes (§8's rule for anything that would identify the provider).
+  Build the URL by string concatenation onto a validated origin, **never** `new URL(path, base)`, which silently
+  discards a path on the base and would hide the very mistake this section exists to catch.
+- **Why a strict origin and not a tolerant one:** a base that already ends in `/v1` produces `/v1/v1/<endpoint>`
+  at the first request. That is an HTTP 404 from the provider, which §6.1 reads as the scan being unavailable, so
+  every upload is refused with a plausible-looking provider error rather than a configuration error. Rejecting the
+  value at configuration time makes the fault name its key (`HMS_A_BASE_URL`) before the flag can take effect.
+  The earlier draft stripped trailing slashes silently; that is removed, because tolerating one path-shaped
+  mistake invites the next.
+- **Where it is validated:** `isHttpsOrigin` inside `uploadScanConfig` (§8). That function is pure and runs on
+  every request that needs the setting, in the `*/2` tick's state line, in `GET /admin/upload-scan/status`
+  (§8.2) and in the operator's positive-control script (§11.2 item 4). So a bad value surfaces as
+  `misconfiguredKeys: ["HMS_A_BASE_URL"]` and the banner "Image uploads are refused: scanning is off or
+  misconfigured", **before** `UPLOAD_SCAN_ENABLED` is relied on, and never as a runtime 404. There is no separate
+  "startup" step in a Worker; this is the equivalent, and it needs no new mechanism.
+- **Truth table** (run under Node, 2026-10-13, against the function above):
+
+  | value | accepted |
+  |---|---|
+  | `https://h.example` | yes |
+  | `https://h.example:8443` | yes |
+  | `https://h.example/`, `https://h.example//` | no (trailing slash) |
+  | `https://h.example/v1`, `https://h.example/v1/` | no (path) |
+  | `https://h.example?x=1`, `https://h.example#f` | no |
+  | `https://u:p@h.example` | no (userinfo; credentials belong in the `Basic` header) |
+  | `http://h.example` | no (M5) |
+  | `HTTPS://h.example`, `https://H.example` | no (write it lower case; `URL.origin` normalises) |
+  | `https://h.example:443` | no (omit the default port) |
+  | `h.example`, empty | no |
 
 ### 8.2 Reading back what is on (N5)
 
@@ -1659,7 +1717,7 @@ backfill write their own facts (`upload_scan_selftests`, `csam_case_files.eviden
 `media_scan_backfill`), and the tick computes every condition from those facts. "First raise" means:
 - **per item** in `csam_alarm_marks`, under the numbered conditions §5.6 Task 3 adds: 105 for U5, keyed by the case
   file's `id`; 106 for U6, keyed by the `media_scan_backfill` row's `id` (M2);
-- **per condition** in the new `csam_condition_marks` (`'U1'`, `'U3'`, `'U7'`, `'U9'`, `'U10'`). A condition is first
+- **per condition** in the new `csam_condition_marks` (`'U1'`, `'U3'`, `'U7'`, `'U9'`, `'U10'`, and, from 2026-10-08, `'U11'`). A condition is first
   raised when its row has no `raised_at`, or has a `cleared_at`. The tick that finds it raised sets `raised_at` and
   clears `cleared_at`, and the tick that finds it clear sets `cleared_at`.
 
@@ -1682,6 +1740,7 @@ events, never from a guess about which deployment this is (M14).
 | U8 | the bytes fallback was used (§6.3): the count since the last tick | banner and log every tick it holds, plus one email per such tick |
 | U9 | no fresh passing self-test for the current deployment (§3.6), or the newest run failed | immediate |
 | U10 | a case with `serving_lookup_incomplete = true` and `serving_lookup_ack_at IS NULL` (§5.3 step 1). It clears only when an admin acknowledges it through `POST /admin/csam/:caseId/serving-lookup/ack`, which writes an audit row (§5.6, Task 9) | immediate on first raise, then daily |
+| U11 | (added 2026-10-08, VPS design §2.6) decoder identity drift: a VPS response whose `build_id` or `policy_sha256` is not on the allowlist, or whose response signature fails. It replaces U7, which goes dead once the Images binding is removed. Computed from recorded events like the others | immediate |
 
 Every case a match opens also takes the rev-3 spec's conditions 1–6: URGENT at match, every 4 h, and OVERDUE after
 24 h. A report held for missing evidence (§5.7) also reaches condition 3 after 6 h.
@@ -1704,7 +1763,7 @@ Every case a match opens also takes the rev-3 spec's conditions 1–6: URGENT at
      its first self-test passes.
 5. The backfill is complete: `completed_at` is set, and no key is `failed`, `unscannable` or `needs_review` without
    review (U6 clear).
-6. Each of U1–U10 is shown to fire, and shown **not** to fire when its condition is removed. For U10, removing the
+6. Each of U1–U11 is shown to fire, and shown **not** to fire when its condition is removed. For U10, removing the
    condition **is** the acknowledgement: the alarm fires for a case with the flag, and clears after the ack route
    records it, with its audit row.
 7. The privacy-policy and terms edits (§10.3) are merged, with the mandated sentence inserted, and `[[LEGAL_ENTITY]]`
@@ -1793,7 +1852,7 @@ Plan style as in the #114 plan: red-first tests, files named, mutations recorded
 | US4 schema | #114 Task 12's gate (D12) |
 | US5 #114 amendments | #114 Tasks 3, 6, 7, 8, 9 (folded in, ideally) |
 | US6 route integration | US1–US5, #114 Task 6 |
-| US7 alarms U1–U10 | #114 Task 8, US4 |
+| US7 alarms U1–U11 | #114 Task 8, US4 |
 | US8 backfill | US1–US4, #114 Task 6 |
 | US9 rollout | everything above, the registration, and the rulings |
 
@@ -1874,6 +1933,10 @@ Steps:
     `unavailable` → the match. A `classifier` match and an `unavailable` → the match. `unavailable` and clean →
     `unavailable`. **Mutation:** rank `unavailable` above match, and N1's case fails;
   - `uploadScanConfig` with each secret blank in turn, and with an `http:` base URL, which gives `misconfigured`;
+  - **`HMS_A_BASE_URL` shape (§8.3):** every row of the truth table gives the stated result through
+    `uploadScanConfig`, `problems` names only the key, and a fixed fixture proves the client requests
+    `<origin>/v1/<endpoint>` exactly once per call. **Mutation:** restore the trailing-slash strip, or compare the
+    protocol only, and the `/v1` and trailing-slash rows fail;
   - the 64 KiB cap fires before the parser (**mutation:** remove the cap, and the oversized-body test fails);
   - the timeout fires at 8 s with a fake clock;
   - one retry, and only for transient reasons;
@@ -1972,7 +2035,7 @@ Tests are appended to `apps/api/test/media.test.ts`.
 - [ ] Existing tests keep passing, with the fake decoder registered for their fixtures and the mock answering clean.
 - [ ] **Merge timing is the PM's:** merging blocks image uploads until the flag and secrets are set (§8.1).
 
-### US7: Alarms U1–U10
+### US7: Alarms U1–U11
 
 **Files:** `apps/api/src/csam/alarms.ts` (#114 Task 8), and `csam_condition_marks`; test `csam-alarms.test.ts`.
 - Each condition fires, and does not fire with its condition removed, with a clock passed to the tick (AC-C4's
@@ -2000,7 +2063,7 @@ Tests are appended to `apps/api/test/media.test.ts`.
 2. §11.2 item 4's positive controls, with their evidence in the PR.
 3. The `docs/legal` edits of §10.3, with the mandated sentence inserted from the private copy.
 4. The runbook (`docs/runbooks/csam.md`, created by #114 Task 11) gains:
-   - what U1–U10 mean, and who acts on each;
+   - what U1–U11 mean, and who acts on each;
    - how to rotate the `HMS_A_*` secrets, and triggering the self-test after every secret change (§3.6);
    - the post-deploy self-test step, and the broken-self-test recovery: rollback or fix-forward, never a bypass
      (§3.6);
@@ -2125,3 +2188,11 @@ Tests are appended to `apps/api/test/media.test.ts`.
 | (c)1 how the request sends U5 without writing marks | — | §5.3 step 4 and §11.1 (`evidence_alarm_sent_at`; the tick skips a sent email) |
 | (c)2 identical bytes arriving after `file_without_evidence` were dropped | — | §5.3 (a); §5.7 (`file_without_evidence` → `present`, preservation only); US5 test |
 | (c)3 the commit message matched the vendor pattern | — | the commit message now describes the check without spelling the pattern |
+
+**Revision 4 material (2026-10-08, PROPOSAL; not an audit):** PM rulings recorded in `2026-10-08-vps-image-service-design.md`.
+
+| Change | PM ruling | Applied in |
+|---|---|---|
+| the decoder is a stateless VPS service, not the Images binding; no fallback decoder | all three transforms move to one endpoint, fail closed | Status line; §2.3 and §3.3 notes; §6.1 rows |
+| alarm for decoder build/policy drift or a bad response signature | U11 approved | §11.1 (U11 and its mark), §11.2 item 6, US7 |
+| a VPS credential refusal has its own record | `decoder_credentials_refused` approved, as a `reason` value, no CHECK change | §6.1, §6.6 |

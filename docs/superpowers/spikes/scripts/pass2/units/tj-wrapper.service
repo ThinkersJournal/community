@@ -1,0 +1,69 @@
+# PROVES: Task 1 (write-up section 1): the hardened unit under test (DynamicUser, ProtectSystem=strict, PrivateNetwork, MemoryDenyWriteExecute, MemorySwapMax=0,
+#   LimitCORE=0, LimitFSIZE=32 MiB, etc.). The comment about LimitFSIZE=0 below is original.
+# INPUTS: unit file; copied to /etc/systemd/system by setup.sh, lib.sh sync_files and t1b.sh; expects /opt/tj/wrapper.py and a policy under /opt/tj/magick. Needs tj-
+#   wrapper.socket (Requires=).
+# EFFECTS: when started it runs /usr/bin/python3 -I -B /opt/tj/wrapper.py as a transient DynamicUser inside the distro; it has no listener of its own (the socket unit
+#   passes the fd in). Nothing here stops or kills anything.
+# BENIGN: it issues no docker, wsl or host-level kill/stop/prune command; run only inside a throwaway environment you created yourself (pass 2: a throwaway WSL2 distro;
+#   c8.py: a container named tjspike2-pdq or similar tjspike* name). (This file is configuration only.)
+# ARCHIVED: preserved verbatim from the spike session, path variables parameterised only.
+[Unit]
+Description=TJ stateless image decoder (spike harness)
+Requires=tj-wrapper.socket
+After=tj-wrapper.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I -B /opt/tj/wrapper.py
+Environment=WRAP_MODE=memfd
+
+# identity and privileges
+DynamicUser=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+UMask=0077
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+
+# filesystem: nothing writable
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadOnlyPaths=/opt/tj
+InaccessiblePaths=/mnt /root /home /boot /srv /media
+TemporaryFileSystem=/var:ro
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+# network: the listening socket is passed in by tj-wrapper.socket, so the service needs no network at all
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+
+# syscalls and memory
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount
+SystemCallArchitectures=native
+LimitCORE=0
+# LimitFSIZE=0 on the unit was TESTED and breaks the wrapper (EFBIG writing the request body into the memfd);
+# the wrapper instead sets RLIMIT_FSIZE=0 on the ImageMagick child only.
+LimitFSIZE=33554432
+MemoryMax=2G
+MemorySwapMax=0
+TasksMax=64
+CPUQuota=200%
+
+# logging: the wrapper writes only fixed-format lines
+LogLevelMax=notice
+StandardOutput=journal
+StandardError=journal

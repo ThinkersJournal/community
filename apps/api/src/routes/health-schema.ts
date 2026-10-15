@@ -17,10 +17,11 @@
  * `pgmigrations` table stores the file name WITHOUT its `.sql` extension (see
  * apps/api/scripts/migrate.mjs), so that is what this compares against.
  *
- * ⚠️ IF THE LEAST-PRIVILEGE `app_runtime` ROLE (docs/superpowers/specs/
- * 2026-09-02-least-privilege-db-role-design.md) EVER CUTS OVER, IT MUST BE
- * GRANTED `SELECT` ON `pgmigrations` OR THIS ROUTE — AND THEREFORE THE DEPLOY
- * GATE — SILENTLY STARTS ANSWERING 503 FOREVER. That design predates this one
+ * ⚠️ THE RUNTIME NOW CONNECTS AS THE LEAST-PRIVILEGE `app_runtime` ROLE
+ * (docs/superpowers/specs/2026-09-02-least-privilege-db-role-design.md;
+ * observed 2026-10-12), SO IT MUST KEEP `SELECT` ON `pgmigrations` OR THIS ROUTE
+ * — AND THEREFORE THE DEPLOY GATE — SILENTLY STARTS ANSWERING 503 FOREVER.
+ * That design predates this one
  * and only enumerates the request-path's DML tables; `pgmigrations` is not
  * among them because nothing in the request path touched it until now. See
  * that design doc's dated note.

@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege (SUP-008 / zizmor excessive-permissions): the token gets read
+# access to contents and nothing else. No job here writes to the repository, an
+# issue or a PR; raise it per job, never here, if one ever needs to.
+permissions:
+  contents: read
+
 # One in-flight run per ref; a newer push cancels the older run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,7 +26,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Activate the pnpm version pinned in package.json (packageManager:
       # pnpm@9.15.9). Must run BEFORE setup-node so its pnpm cache can find pnpm.
@@ -28,7 +34,7 @@ jobs:
         run: corepack enable
 
       - name: Set up Node (from .nvmrc)
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -38,6 +44,10 @@ jobs:
       # healthy. The vitest/global-setup configs default their connection strings
       # to postgres://postgres:postgres@localhost:5432/..., which this provides,
       # so no database env vars are needed here.
+      #
+      # SUP-008 `unpinned-images` WAIVER (portfolio ruling 2026-10-14): the
+      # `postgres:` image in docker-compose.yml is a CI-only service container; no
+      # credential of ours reaches it, so it is not pinned by digest.
       - name: Start Postgres 18 (docker compose)
         run: docker compose up -d --wait db
 
@@ -78,7 +88,7 @@ jobs:
       # `install-deps` (apt-only, no download) — a fresh runner's OS-level
       # libraries are not part of this cache path and are needed either way.
       - name: Cache Playwright browsers
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
@@ -110,13 +120,13 @@ jobs:
       WRANGLER_SEND_METRICS: "false"
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Enable corepack (activates pinned pnpm)
         run: corepack enable
 
       - name: Set up Node (from .nvmrc)
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -147,7 +157,7 @@ jobs:
       # lands first (GitHub dedupes concurrent saves of the same key) is
       # what every LATER run, in either job, then hits.
       - name: Cache Playwright browsers
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
@@ -164,14 +174,16 @@ jobs:
         run: pnpm exec playwright install-deps chromium
 
       # Playwright's own webServer config builds web and starts BOTH wrangler dev
-      # processes (api on 8788, web on 8787). GitHub sets CI=true automatically,
+      # processes (api on 8788, web on 8787) plus a third, single-process api+web
+      # server on 8789 for the one `ledger` spec (#156; see playwright.config.ts).
+      # GitHub sets CI=true automatically,
       # which the config reads (forbidOnly + fresh servers, no reuse).
       - name: Run Playwright E2E
         run: pnpm run test:e2e
 
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
           path: |
