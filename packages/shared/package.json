@@ -1,6 +1,6 @@
 {
   "name": "@thinkersjournal/shared",
-  "version": "0.1.43",
+  "version": "0.1.48",
   "private": true,
   "type": "module",
   "sideEffects": false,
