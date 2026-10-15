@@ -1,6 +1,6 @@
 # Thinker's Journal Community — roadmap
 
-**As of:** `origin/main` 7caf172 (package version 0.1.14), 2026-10-13. This is the project's own view of order and
+**As of:** `origin/main` 2f58a32 (package version 0.1.33), 2026-10-15. This is the project's own view of order and
 state. The portfolio roadmap sits above it and wins on priority; CireSnave's decisions win on everything. It is a
 plan, not a promise: items are in the order the lane intends to take them, and anything marked **held** waits on a
 person, not on code.
@@ -32,18 +32,34 @@ one, delete it. Re-read `git log origin/main` and `gh pr list` before relying on
 | **Media ownership records** (clear `media.owner_id` on anonymisation, keep hashes, hold-aware) | plan approved, nothing written | #161 merged |
 | **Idempotency key on `POST /posts`** (for the CodeRipper "post results" flow) | design note next | a version from the PM, then a migration CireSnave applies before merge |
 | **HMS_A_BASE_URL origin-only** (upload-scan design §8.3) | #170 open, docs only | gate |
+| **#57 DSA Art. 17 series**: #189 (source link, recorded expiry, scope; migration 0029), #191 (auto-hide row; 0030), #192 (legal/contractual grounds; 0031, stacked on #189), #193 (redress sentence, stored notices, 730-day purge; 0032, stacked on #189) | open, in CI | the PM's gate, then CireSnave applies each migration first; #192/#193 retarget to `main` after #189 |
+| **#190** guidelines vs `violation_category` audit | open, docs only | gate |
 
 ## 3. Unblocked, in the order I would take them
 
 These are open issues that nothing above holds. Each one is small enough for one reviewed PR.
 
-1. **#57** durable delivery, violation category and full DSA Art. 17 contents for moderation notices (#138, #135 and #56 shipped in #174).
+1. **#57** durable delivery (the outbox, board 194) and the notice contents: Art. 17 contents are in the series above (#138, #135 and #56 shipped in #174).
 2. **#78** own-profile Follow button and the hidden-post path back, a user-visible defect that needs runtime data.
 3. **#148** media holds not enforced on queued `to_public` moves (sequence after #161 and the ownership work;
    they touch the same tables).
 4. **Test and harness debt:** #60 (render an Astro page in a unit test), #59, #65, #84 and #85 (local e2e hangs,
    a flaky bell test), #156 (e2e cannot cross the web-to-api ledger path), #39 and #40.
 5. **#74** endpoint-to-UI reachability audit.
+
+## 3b. Guideline and reality gaps (CireSnave asked, 2026-10-15)
+
+Where the published rules and the platform differ. Source for every row: the audit
+`docs/superpowers/specs/2026-10-14-guidelines-match-audit.md` (#190), re-verified in code by the lane.
+
+| # | Gap | Decision | Source |
+|---|---|---|---|
+| 1 | **Terminate path for the CSAM/severe case**: `user_terminate` exists as a primitive (`apps/api/src/moderation/account-actions.ts`) but no admin route reaches it, so "immediate termination" is not something a moderator can do | build after #114's legal question (what a terminated user may be told) | audit §3.2; `admin-accounts.ts:114`; issue #114 |
+| 2 | **NCMEC reporting and CSAM detection** are not live | already the launch gate; plan `plans/2026-10-01-csam-ncmec-pipeline.md`; upload scan D7/US2 designed and **held** | upload-scan design §11.2; this file §4 |
+| 3 | **Public legal pages**: only `/dsa-notice` exists. `/guidelines` is in flight (publishable-guidelines PR); `/terms`, `/privacy` and `/dmca` have no route and the footer links the external marketing URL for Privacy | build `/terms`, `/privacy`, `/dmca` and footer links after their texts are decided | `apps/web/src/components/Footer.astro:26`; `docs/legal/README.md` |
+| 4 | **Notices carry the clause and ground** | in the Art. 17 series: #192 (grounds recorded; rendering them in notices is a follow-up) and #193 (redress sentence, stored copy) | #192, #193 |
+| 5 | **`other` has no clause; doxxing, impersonation and malware wording**; one `sexual` bucket holds CSAM and NCII | wording goes into the publishable guidelines text; splitting the bucket is not planned | audit §1 |
+| 6 | **Bad-faith-report detection and handle reclaim** are NOT being built | the published text says only what is true today: moderators may warn, suspend or ban by hand | audit §3.2 |
 
 ## 4. Held, by design
 
