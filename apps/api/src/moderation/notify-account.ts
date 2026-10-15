@@ -12,8 +12,8 @@
 import { postmarkSend } from "../auth/postmark";
 import { escapeHtml } from "../auth/email-verify";
 
-import { APPEAL_WINDOW_DAYS, REDRESS_SENTENCE } from "@thinkersjournal/shared";
-import type { RenderedNotice } from "./notify-author";
+import { APPEAL_WINDOW_DAYS, GUIDELINES_VERSION, REDRESS_SENTENCE } from "@thinkersjournal/shared";
+import { guidelinesLine, type RenderedNotice } from "./notify-author";
 
 /** #50 Q4 — what a barred account's deletion request does. Also used verbatim by routes/delete-request.ts's resend email. */
 export const DELETE_REQUEST_SENTENCE_AFTER =
@@ -75,6 +75,10 @@ export async function sendAccountActionNotice(
 
     // #57 Q8=A: every kind here (warn/suspend/ban) is adverse. Positioned
     // before the appeal line so it appears when the appeal link is absent.
+    // Every lead above names the Community Guidelines, so every kind links to them.
+    const guidelines = guidelinesLine();
+    const guidelinesHtml = `<p>You can read our Community Guidelines (version ${escapeHtml(GUIDELINES_VERSION)}): <a href="${escapeHtml(guidelines.url)}">${escapeHtml(guidelines.url)}</a></p>`;
+
     const rendered: RenderedNotice = {
       subject: SUBJECT[notice.kind],
       textBody: `${text}
@@ -83,9 +87,11 @@ Reason given by the moderator:
 
 ${notice.reason}
 
+${guidelines.text}
+
 ${REDRESS_SENTENCE}
 ${appealTextLine}${deleteRequestTextLine}`,
-      htmlBody: `<p>${escapeHtml(text)}</p><p><strong>Reason given by the moderator:</strong></p><p>${escapeHtml(notice.reason)}</p><p>${escapeHtml(REDRESS_SENTENCE)}</p>${appealHtmlLine}${deleteRequestHtmlLine}`,
+      htmlBody: `<p>${escapeHtml(text)}</p><p><strong>Reason given by the moderator:</strong></p><p>${escapeHtml(notice.reason)}</p>${guidelinesHtml}<p>${escapeHtml(REDRESS_SENTENCE)}</p>${appealHtmlLine}${deleteRequestHtmlLine}`,
     };
     const sent = await postmarkSend(env, { from: "noreply@thinkersjournal.com", to, ...rendered, stream: "outbound" });
     if (sent && onSent !== undefined) {

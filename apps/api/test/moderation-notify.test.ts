@@ -379,3 +379,31 @@ describe("onSent record hook (#57 Q9)", () => {
     expect(ok.Subject).toBe("Your content has been removed");
   });
 });
+
+// Guidelines link — copy only: names the version in force and links the public page.
+describe("Community Guidelines link", () => {
+  const base = { wasHidden: true, subject: "post", postTitle: "T", reason: "r" } as const;
+  const URL_ = "https://community.thinkersjournal.com/guidelines";
+
+  it("keep_hidden and remove name the version and link the page, in text and html", async () => {
+    const { GUIDELINES_VERSION } = await import("@thinkersjournal/shared");
+    for (const decision of ["keep_hidden", "remove"] as const) {
+      for (const wasHidden of [true, false]) {
+        const sent = await captureSendFull(() => sendModerationNotice(env, "a@b.test", { ...base, wasHidden, decision }));
+        expect(String(sent.TextBody), `${decision}:${String(wasHidden)}`).toContain(`Community Guidelines (version ${GUIDELINES_VERSION}): ${URL_}`);
+        expect(String(sent.HtmlBody)).toContain(`href="${URL_}"`);
+        expect(String(sent.HtmlBody)).toContain(`(version ${GUIDELINES_VERSION})`);
+      }
+    }
+  });
+
+  it("restore, whose lead does not name the Guidelines, carries no link", async () => {
+    const sent = await captureSendFull(() => sendModerationNotice(env, "a@b.test", { ...base, decision: "restore" }));
+    expect(String(sent.TextBody)).not.toContain("/guidelines");
+  });
+
+  it("the added line mentions no report, notice, reporter (#57 Q2)", async () => {
+    const { guidelinesLine } = await import("../src/moderation/notify-author");
+    expect(guidelinesLine().text).not.toMatch(/report|notice|notif|complain|flag/i);
+  });
+});
