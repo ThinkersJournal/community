@@ -79,6 +79,12 @@ interface __BaseEnv_Env {
 	ACCOUNT_NOTICES_ENABLED: string;
 	SECURITY_ALERT_EMAIL?: string;
 	SECURITY_ALERT_RELAY_TOKEN?: string;
+	// Security alerting PR 2 (spec §4.1, N5): the device-list HMAC keys. Optional
+	// on purpose: a missing or empty DEVICE_HASH_KEY DISABLES device notices
+	// (resolveDeviceKeys returns null). Rotate ONLY with _PREV set
+	// (docs/runbooks/deploy.md).
+	DEVICE_HASH_KEY?: string;
+	DEVICE_HASH_KEY_PREV?: string;
 	// Build-identity (2026-09-24) — added by hand, same reason as CF_ACCESS_*
 	// above: a full `wrangler types` regeneration in this checkout drops
 	// several hand-added bindings and pulls in an unrelated diff. See

@@ -178,6 +178,64 @@ Deploy order for the first deploy: the api (which creates the two Durable
 Object classes, migration `v4`) before the web Worker (which binds the api's
 counter class cross-script).
 
+## Security alerting: `DEVICE_HASH_KEY` (set BEFORE the PR that records browsers merges)
+
+`DEVICE_HASH_KEY` is the `api` Worker secret that keys each account's list of
+known browsers (HMAC-SHA-256, `deviceHash` in
+`packages/shared/src/account-notices.ts`; security-alerting spec §4.1).
+
+⚠️ **Set it in production BEFORE the PR that records browsers (security
+alerting PR 2) merges.** Device recording runs from the first deploy, whatever
+`ACCOUNT_NOTICES_ENABLED` says; without the key it silently stops.
+
+⚠️ **A Worker secret cannot be read back.** Keep the current value in your
+password manager: rotation (below) and restoring a lost key both need it.
+
+### Set it (once)
+
+1. In your password manager, generate a random value of at least 32
+   characters (its own generator; letters and digits are fine) and save it as
+   "thinkersjournal-api DEVICE_HASH_KEY — current".
+2. Run `npx wrangler secret put DEVICE_HASH_KEY --name thinkersjournal-api` and
+   paste the value at the masked prompt (wrangler 4.146.0, the version
+   `apps/api/package.json` pins, asks with `prompt("Enter a secret value:",
+   { isSecret: true })`, so the value is not echoed). Never pass it as an
+   argument, never pipe it from a command, and never paste it into a chat, an
+   issue or a log: a command line lands in shell history.
+3. Confirm it exists without revealing it:
+   `npx wrangler secret list --name thinkersjournal-api` lists the NAME only.
+
+Without it, device notices are DISABLED (no browser is recorded, no sign-in
+notice is sent) with no log line per sign-in; the ledger sends one
+`config_fault` a day while it is missing, whatever `ACCOUNT_NOTICES_ENABLED`
+says. Reset notices do not depend on it.
+
+### ⚠️ ALWAYS rotate `DEVICE_HASH_KEY` with `_PREV`
+
+That is the PM's ruling, verbatim: **"ALWAYS rotate DEVICE_HASH_KEY with
+_PREV".**
+
+1. In the password manager, rename the current entry to "… DEVICE_HASH_KEY —
+   previous", and generate a new "… — current".
+2. `npx wrangler secret put DEVICE_HASH_KEY_PREV --name thinkersjournal-api`:
+   paste the PREVIOUS value.
+3. `npx wrangler secret put DEVICE_HASH_KEY --name thinkersjournal-api`: paste
+   the NEW value. (Between steps 2 and 3 both secrets hold the old value, which
+   is harmless.) Browsers that sign in are rewritten to the new key.
+4. After 90 days, `npx wrangler secret delete DEVICE_HASH_KEY_PREV --name
+   thinkersjournal-api`, and delete the "previous" entry. A browser unused for
+   those 90 days then counts as new at its next sign-in and mails, like an
+   expiry.
+
+Replacing the key WITHOUT `_PREV` makes every account's next sign-in "new": a
+wave of notices (spread over 6 hours, never dropped, but a wave). If the key is
+ever lost from the Worker, restore the SAME value from the password manager:
+that causes no wave.
+
+PR 2 adds no cross-script binding (`DEVICE_HASH_KEY` and `_PREV` are `api`
+secrets, and the web Worker's new `X-TJ-Client-Country` header rides the
+existing `API` Service Binding), so it adds no deploy-order constraint.
+
 ## Security alerting: turning it off and rolling it back
 
 ⚠️ **Do not use `wrangler rollback` (or the dashboard's Deployments view) to
@@ -227,6 +285,14 @@ Use these steps instead, in order, stopping at the first one that is enough:
    Migration tags are unique names, each applied once, in order (same legacy
    page), so `v5` can never be reused: bringing the classes back later needs a
    new tag (`v6`) with `new_sqlite_classes`.
+
+**Reverting PR 2 (browsers and notices) follows step 2's pattern: revert behaviour, keep the class.**
+PR 2 adds no Durable Object class or migration, but every `UserSecurityDO` that recorded a browser
+holds a stored alarm (up to 400 days out), and a class without an `alarm()` handler turns each one into
+a failing, retried invocation. So keep `UserSecurityDO` and its `alarm()` as they are, and revert only the
+wiring: the `afterSignIn`/`afterPasswordReset` calls in login, signup and reset, and the web Worker's
+`deviceCookieFrom` and `applyClientCountryHeader` lines. (If the class must change, leave it a no-op
+`async alarm() { await this.ctx.storage.deleteAlarm(); }`.)
 
 ## Destructive migrations
 

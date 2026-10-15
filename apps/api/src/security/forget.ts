@@ -1,32 +1,50 @@
 /**
- * The reapers' security clean-up for one account (security-alerting spec §2.6
- * N7, m-e): forget it in the ledger, leaving a 30-day tombstone. PR 2 adds the
- * device-list and pending-notice steps beside this one.
+ * The reapers' security clean-up for one account (security-alerting spec §4.5,
+ * §2.6 N7, m-e): forget its browsers, end its pending notices as
+ * `dropped_account_gone`, and forget it in the ledger (leaving a 30-day
+ * tombstone).
  *
- * Each call is logged and continued on failure. The backstop is the nightly
- * sweep (src/security/forget-sweep.ts), which finds the account itself and
- * re-forgets it; held rows have no TTL of their own.
+ * Three independent calls, each logged and continued on failure. The backstop
+ * is the nightly sweep (src/security/forget-sweep.ts), which finds the account
+ * itself and re-runs all three; held rows have no TTL of their own, and the
+ * device alarm's 400-day pruning bounds a browser list the sweep never reaches.
  *
  * ⚠️ NO USER ID IN THE LOG (final review I-2). This path exists to erase the
  * account from the security system, and Workers Logs' retention is not ours to
  * scrub: a failure logs the source, the step and the error's NAME only (an
  * RPC error's message could carry anything).
  */
+import type { SecurityLedgerDO } from "../durable-objects/SecurityLedgerDO";
+
+/** The ledger slice the clean-up uses (the nightly sweep passes its own instance). */
+export type ForgetLedger = Pick<SecurityLedgerDO, "forgetAccount">;
+
+/**
+ * Returns true when every step succeeded (the sweep counts the others). Each
+ * stub is looked up inside its own step, so a failed lookup is that step's
+ * failure, never the whole call's.
+ */
 export async function forgetAccountEverywhere(
-  env: Pick<Env, "SECURITY_LEDGER">,
+  env: Pick<Env, "USER_SECURITY" | "SECURITY_LEDGER">,
   userId: string,
   source: string,
-): Promise<void> {
+  ledger?: ForgetLedger,
+): Promise<boolean> {
   const steps: readonly (readonly [string, () => Promise<void>])[] = [
-    ["forgetAccount", () => env.SECURITY_LEDGER.getByName("ledger").forgetAccount(userId)],
+    ["forgetDevices", () => env.USER_SECURITY.getByName(userId).forgetDevices()],
+    ["dropPendingNotices", () => env.USER_SECURITY.getByName(userId).dropPendingNotices()],
+    ["forgetAccount", () => (ledger ?? env.SECURITY_LEDGER.getByName("ledger")).forgetAccount(userId)],
   ];
+  let ok = true;
   for (const [name, run] of steps) {
     try {
       await run();
     } catch (err) {
+      ok = false;
       logForgetFailure(source, name, err);
     }
   }
+  return ok;
 }
 
 /** A clean-up that failed: the source, the step and the error's NAME only (I-2: never the account id). */

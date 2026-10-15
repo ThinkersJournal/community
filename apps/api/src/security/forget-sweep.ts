@@ -13,12 +13,19 @@
  *      anonymised or DELETED — a deleted row leaves nothing to query, so the
  *      ledger's own ids are reconciled against Postgres instead.
  *
- * Idempotent (`forgetAccount` only deletes and refreshes a tombstone), bounded
- * per run (SWEEP_BATCH ids each; the ledger's page cursor wraps), never throws,
- * and logs each run's counts.
+ * Each id gets the WHOLE clean-up (`forgetAccountEverywhere`: browsers,
+ * pending notices, ledger), so a lost reaper forget is recovered in full
+ * (carry-item 1 from PR 1's final review M-5).
+ *
+ * Idempotent (every step only deletes, and `forgetAccount` refreshes a
+ * tombstone), bounded per run (SWEEP_BATCH ids each; the ledger's page cursor
+ * wraps), never throws, and logs each run's counts. `failed` counts ACCOUNTS
+ * with at least one failed step (each step's failure is logged, without the id).
  */
 import { withClient } from "../db/client";
 import type { SecurityLedgerDO } from "../durable-objects/SecurityLedgerDO";
+
+import { forgetAccountEverywhere } from "./forget";
 
 export const SWEEP_BATCH = 200;
 export const SWEEP_RECENT_DAYS = 3;
@@ -36,17 +43,20 @@ export interface SweepCounts {
 /** Forgets in flight at once: bounds the run's concurrent RPCs (and its length). */
 export const SWEEP_CONCURRENCY = 50;
 
-async function forgetEach(ledger: ForgetSweepLedger, ids: readonly string[]): Promise<number> {
+type SweepEnv = Pick<Env, "HYPERDRIVE_FRESH" | "USER_SECURITY" | "SECURITY_LEDGER">;
+
+async function forgetEach(env: SweepEnv, ledger: ForgetSweepLedger, ids: readonly string[]): Promise<number> {
   let failed = 0;
   for (let i = 0; i < ids.length; i += SWEEP_CONCURRENCY) {
-    const results = await Promise.allSettled(ids.slice(i, i + SWEEP_CONCURRENCY).map((id) => ledger.forgetAccount(id)));
-    failed += results.filter((r) => r.status === "rejected").length;
+    const batch = ids.slice(i, i + SWEEP_CONCURRENCY);
+    const results = await Promise.all(batch.map((id) => forgetAccountEverywhere(env, id, "security-forget-sweep", ledger)));
+    failed += results.filter((ok) => !ok).length;
   }
   return failed;
 }
 
 /** The given ids that still belong to a live (not anonymised, not deleted) account. */
-async function liveIds(env: Pick<Env, "HYPERDRIVE_FRESH">, ctx: ExecutionContext, ids: readonly string[]) {
+function liveIds(env: Pick<Env, "HYPERDRIVE_FRESH">, ctx: ExecutionContext, ids: readonly string[]): Promise<Set<string>> {
   return withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<{ id: string }>(
       "SELECT id::text AS id FROM users WHERE id::text = ANY($1::text[]) AND anonymised_at IS NULL",
@@ -57,7 +67,7 @@ async function liveIds(env: Pick<Env, "HYPERDRIVE_FRESH">, ctx: ExecutionContext
 }
 
 export async function sweepForgottenAccounts(
-  env: Pick<Env, "HYPERDRIVE_FRESH" | "SECURITY_LEDGER">,
+  env: SweepEnv,
   ctx: ExecutionContext,
   ledger: ForgetSweepLedger = env.SECURITY_LEDGER.getByName("ledger"),
 ): Promise<SweepCounts | null> {
@@ -70,11 +80,11 @@ export async function sweepForgottenAccounts(
       );
       return rows.map((r) => r.id);
     });
-    let failed = await forgetEach(ledger, recent);
+    let failed = await forgetEach(env, ledger, recent);
     const page = await ledger.accountIdsPage(SWEEP_BATCH);
     const live = page.length === 0 ? new Set<string>() : await liveIds(env, ctx, page);
     const gone = page.filter((id) => !live.has(id));
-    failed += await forgetEach(ledger, gone);
+    failed += await forgetEach(env, ledger, gone);
     const counts = { recentAnonymised: recent.length, ledgerChecked: page.length, ledgerForgotten: gone.length, failed };
     console.log("security-forget-sweep", counts);
     return counts;

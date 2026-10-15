@@ -142,3 +142,64 @@ describe("forgetAccountEverywhere — a failure logs no user id", () => {
     expect(text.filter((t) => t.includes(userId))).toEqual([]);
   });
 });
+
+/** An account's browsers and pending notices: [known_devices, pending_notice]. */
+function devicesAndPending(id: string): Promise<number[]> {
+  return runInDurableObject(env.USER_SECURITY.getByName(id), (_u, s) => [
+    s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM known_devices").one().n,
+    s.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM pending_notice").one().n,
+  ]);
+}
+
+/**
+ * Carry-item 1 (PR 1 final review M-5; plan Task 21): the sweep re-runs the
+ * WHOLE clean-up (`forgetAccountEverywhere`), so a lost forget's browsers and
+ * pending notices are recovered too, not only its ledger rows.
+ */
+describe("sweepForgottenAccounts — browsers and pending notices too (carry-item 1)", () => {
+  it("anonymised and deleted accounts lose their browsers and pending notices; a live account keeps its own (control)", { timeout: 60_000 }, async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const ledger = env.SECURITY_LEDGER.getByName(`sweep-${crypto.randomUUID()}`);
+    const [anonymised, deleted, live] = [await newUser(), await newUser(), await newUser()];
+    const now = Date.now();
+    for (const id of [anonymised, deleted, live]) {
+      await runInDurableObject(env.USER_SECURITY.getByName(id), async (u) => {
+        quiet(u);
+        await u.recordDevice({ current: "c".repeat(64), currentKid: "kid00000", prev: null, prevKid: null }, now, "login");
+        await u.claimNotice("new_sign_in", { atMs: now, country: null, listWasEmpty: false }, now, now + 3_600_000);
+      });
+      await runInDurableObject(ledger, async (l) => {
+        quiet(l);
+        await l.reportAt({ reports: [crossing(id, now)], countedOverflow: {} }, now);
+      });
+    }
+    await sql("UPDATE users SET anonymised_at = now() WHERE id = $1", [anonymised]);
+    await sql("DELETE FROM users WHERE id = $1", [deleted]);
+    expect([await devicesAndPending(anonymised), await devicesAndPending(deleted)]).toEqual([[1, 1], [1, 1]]); // positive control
+    const counts = await sweepForgottenAccounts(env, createExecutionContext(), ledger);
+    expect(counts?.failed).toBe(0);
+    expect([await devicesAndPending(anonymised), await devicesAndPending(deleted), await devicesAndPending(live)]).toEqual([
+      [0, 0],
+      [0, 0],
+      [1, 1],
+    ]);
+  });
+
+  it("an account whose clean-up fails is counted in `failed`, and the run still ends (control: the test above reads 0)", { timeout: 60_000 }, async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const ledger = env.SECURITY_LEDGER.getByName(`sweep-${crypto.randomUUID()}`);
+    const gone = await newUser();
+    const now = Date.now();
+    await runInDurableObject(ledger, async (l) => {
+      quiet(l);
+      await l.reportAt({ reports: [crossing(gone, now)], countedOverflow: {} }, now);
+    });
+    await sql("DELETE FROM users WHERE id = $1", [gone]);
+    const broken = { ...env, USER_SECURITY: { getByName: () => ({ forgetDevices: () => Promise.reject(new Error("down")) }) } };
+    const counts = await sweepForgottenAccounts(broken as unknown as Env, createExecutionContext(), ledger);
+    expect(counts?.ledgerForgotten).toBe(1);
+    expect(counts?.failed).toBeGreaterThanOrEqual(1);
+  });
+});
