@@ -28,7 +28,10 @@ export type ModerationActionKind =
   // author's own email here rather than an Access identity.
   | "author_hide" | "author_unhide"
   // Account legal holds (account-legal-hold spec §3 T3, migration 0022).
-  | "account_hold" | "account_hold_release";
+  | "account_hold" | "account_hold_release"
+  // Security alerting (spec §2.6 R4, migration 0033): an admin resolved an alert's
+  // account ref. The row carries the ref and the admin, NEVER subject_user_id.
+  | "security_ref_resolved";
 
 export type ViolationCategory =
   | "spam" | "harassment" | "hate" | "sexual" | "violence" | "ip_infringement" | "other";

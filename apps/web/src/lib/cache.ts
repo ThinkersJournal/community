@@ -234,6 +234,27 @@ export function markFeedCacheable(context: CacheContext): boolean {
   return true;
 }
 
+/**
+ * `/health/security-ledger` ONLY (security-alerting spec §2.6 R2): a cached
+ * `ok` is held for 60 s at the edge with NO stale-while-revalidate, so a dead
+ * ledger shows within about a minute, once the cached `ok` expires.
+ * Cloudflare does not cache 5xx responses by default, so a `stale` 503 is NOT
+ * held at the edge: every request for it reaches the api and costs one KV
+ * read. That single cheap read (no DB, no Durable Object call) is what bounds
+ * the cost of the public route, not the cache.
+ * Unlike `/health/db` (markPrivate), this answer carries nothing but ok/stale.
+ */
+export const HEALTH_EDGE_MAX_AGE = 60;
+
+export function markHealthCacheable(context: CacheContext): boolean {
+  if (isViewerSpecific(context)) {
+    refuse(context);
+    return false;
+  }
+  context.cache.set({ maxAge: HEALTH_EDGE_MAX_AGE, swr: 0, tags: [] });
+  return true;
+}
+
 /** Declare a page per-viewer and uncacheable. Every authed page calls this. */
 export function markPrivate(context: CacheContext): void {
   refuse(context);

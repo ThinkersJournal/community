@@ -88,6 +88,14 @@ async function indexExists(client: Client, indexName: string): Promise<boolean> 
   return Number(rows[0]!.n) > 0;
 }
 
+/** The live `moderation_actions_action_check` definition, or "" when absent. */
+async function actionCheck(client: Client): Promise<string> {
+  const { rows } = await client.query<{ def: string }>(
+    "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'moderation_actions_action_check'",
+  );
+  return rows[0]?.def ?? "";
+}
+
 // globalSetup migrates the SHARED DB; this one is ours to set up. Idempotent
 // (node-pg-migrate's `pgmigrations` table), so this is a no-op after run 1.
 beforeAll(async () => {
@@ -195,6 +203,8 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "upload_scan_outcomes")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill_progress")).toBe(true);
+      // 0033 — moderation_actions accepts security_ref_resolved (security alerting).
+      expect(await actionCheck(client)).toContain("'security_ref_resolved'::text");
     });
 
     await migrate("down");
@@ -270,6 +280,8 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "upload_scan_outcomes")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill_progress")).toBe(true);
+      // 0033 — re-applied by the round-trip.
+      expect(await actionCheck(client)).toContain("'security_ref_resolved'::text");
     });
     // Intentionally left in the migrated (up) state.
   });

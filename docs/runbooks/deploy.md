@@ -236,6 +236,67 @@ PR 2 adds no cross-script binding (`DEVICE_HASH_KEY` and `_PREV` are `api`
 secrets, and the web Worker's new `X-TJ-Client-Country` header rides the
 existing `API` Service Binding), so it adds no deploy-order constraint.
 
+## Security alerting: PR 3 (admin page, health check; migration 0033 BEFORE the deploy)
+
+PR 3 adds migration `0033_security_ref_resolved`, which adds
+`security_ref_resolved` to the `moderation_actions` action CHECK constraint.
+It is additive and carries no `-- deploy: after-code` marker. Ship it with
+[Shipping a PR with an additive migration](#shipping-a-pr-with-an-additive-migration),
+in this order:
+
+1. **Apply migration 0033 to production BEFORE the deploy.** The new admin
+   route (`GET /admin/security/account-ref/:ref`) inserts a `moderation_actions`
+   row whose `action` is `security_ref_resolved`, which the old CHECK constraint
+   rejects: deployed first, every ref lookup would fail at the insert. Use the
+   command from step 2 of that section (`TJ_PROD_DATABASE_URL`, never
+   `DATABASE_URL`).
+2. **Merge.** The gate on each Worker fails the build until step 1 has landed
+   (expected, as above), so with 0033 already applied the first build passes.
+3. **Retry the build** of both Workers if either failed at the gate.
+
+PR 3 adds no cross-script binding, so it adds no deploy-order constraint
+between the api and the web Worker.
+
+### Post-deploy check list (run once in production; nothing user-facing changes)
+
+After the PR 3 deploy has finished on both Workers:
+
+1. **`/admin/security` lists every class.** Open `/admin/security` behind the
+   Cloudflare Access login. The class links `account`, `stuffing`, `ip_burst`
+   and `infra` are all present, and each one loads (an empty class reads
+   "Nothing held in <class>.").
+2. **`GET /health/security-ledger` answers `{"status":"ok"}` (200) after the
+   ledger's first alarm.** Until the ledger's alarm has run once, the liveness
+   key it writes does not exist and the route answers `{"status":"stale"}`
+   (503): that is expected right after the deploy, not a fault. A fresh `ok`
+   can lag by up to 60 s, the edge cache time for an `ok`.
+3. **The wrong-secret purge check.** Send a purge request with a WRONG
+   secret to the production purge endpoint, `POST
+   https://community.thinkersjournal.com/internal/purge`, with the header
+   `X-Purge-Secret: not-the-real-secret-wrong-on-purpose` and a JSON body
+   such as `{"tags":["x"]}`. Never use the real `PURGE_SECRET`. Confirm:
+   - it answers **403** (`{"code":"FORBIDDEN"}`); a 429 instead means your IP
+     has already spent its failure limit, so wait and retry;
+   - Workers Logs for the web Worker show a `security:` line for it:
+     `security: auth_failure /internal/purge bad_purge_secret` (the submitted
+     value is never logged);
+   - there is **NO** `security: alerting_fault security-counter
+     counter_unreachable` line. That line means the counting call to the
+     security ledger failed; the 403 is unchanged either way, so the status
+     alone does not prove counting works.
+
+   Unverified: the log search itself (Workers Logs query syntax) is not
+   scripted here, and whether this request raises a purge alert depends on
+   whether alerting is switched on in production (the spec's purge rule has
+   threshold 1, severity critical), so expect one if it is.
+
+### Health
+
+`GET /health/security-ledger` answers `{"status":"ok"}` (200) while the ledger's
+alarm has run within 2 hours, else `{"status":"stale"}` (503). It is cached at
+the edge for 60 s and makes no Durable Object call. The admin page that every
+held-subject report links to is `/admin/security` (Cloudflare Access).
+
 ## Security alerting: turning it off and rolling it back
 
 ⚠️ **Do not use `wrangler rollback` (or the dashboard's Deployments view) to
@@ -369,10 +430,12 @@ any rollback automation.
 
 ## Current order constraint
 
-Production migrations apply in this order: **0020 → 0021 → 0022 → 0023**
-(plan C → #126 → the account-legal-hold work → the keyed email reservation,
-whose secret must be set first; see above). Do not apply a later one before an
-earlier one in this list has landed.
+Production migrations apply in numeric order. **0001-0025, 0027 and 0029-0032 are
+already applied** (0026 and 0028 are unused numbers: PR 3's migration was
+renumbered from 0026 to 0033 after 0027 and 0029-0032 landed). **0033
+(`security_ref_resolved`) is the only one still to apply, and it goes before
+the PR 3 deploy.** Do not apply a later migration before an earlier one has
+landed.
 
 ## Adding a cross-script binding (web → an api Durable Object)
 
