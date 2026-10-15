@@ -161,7 +161,7 @@ later deleted, the notice and that captured title or excerpt are kept.
   required to activate an account.
 - Depending on where you live (e.g. EEA/UK, California), you may have additional
   rights to access, port, correct, or delete personal data, and to object to
-  certain processing. To exercise them, contact [[CONTACT_EMAIL]].
+  certain processing. To exercise them, contact contact@thinkersjournal.com.
 
 ## 7. Children
 
@@ -197,4 +197,4 @@ decision.
 We may update this policy; material changes will be announced with a new effective
 date.
 
-**Contact:** [[CONTACT_EMAIL]] · [[CONTACT_ADDRESS]]
+**Contact:** contact@thinkersjournal.com · [[CONTACT_ADDRESS]]

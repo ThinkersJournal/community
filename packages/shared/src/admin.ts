@@ -1,3 +1,4 @@
+import { DISPUTE_EMAIL } from "./contact";
 /**
  * Wire types + the one cross-Worker constant for the Cloudflare Access-gated
  * admin surface (M4 2b). A DIFFERENT trust domain from member sessions —
@@ -273,7 +274,7 @@ export const APPEAL_WINDOW_DAYS = 30;
  * advice. Shared by notify-author.ts and notify-account.ts so they cannot drift.
  */
 export const REDRESS_SENTENCE =
-  "Besides an internal complaint (an appeal to us), you may be able to use an out-of-court dispute settlement process or seek judicial redress. This is general information, not legal advice.";
+  `If you disagree with this decision, you can contest it by emailing ${DISPUTE_EMAIL}. Besides an internal complaint (an appeal to us), you may also be able to use an out-of-court dispute settlement process or seek judicial redress. This is general information, not legal advice.`;
 
 /**
  * #57 Q9: how long the rendered text of a sent moderation notice is kept, in
