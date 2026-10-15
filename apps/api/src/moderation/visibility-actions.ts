@@ -17,5 +17,27 @@ export const VISIBILITY_ACTION_KINDS: readonly ModerationActionKind[] = [
   "content_remove",
 ];
 
+/**
+ * The `content_*` kinds that are a HUMAN RULING on a post/comment: the ONE list
+ * every "has a moderator handled / decided this?" reader filters to. Replaces
+ * the former `action LIKE 'content\_%'` pattern, which would have swept in
+ * `content_auto_hide` (#57, Q4=B).
+ *
+ * ⚠️ `content_auto_hide` is deliberately NOT here, nor in VISIBILITY_ACTION_KINDS.
+ * It records that automation hid the content, and decides nothing: it must not
+ * close the item in the moderation queue, reset auto-hide's own report cut-off,
+ * supersede an appealed decision, or become what /appeals/for-post offers.
+ * Auto-hide only fires on content with `hidden_at IS NULL`, so any earlier
+ * human ruling that hid it was reversed by a `content_restore` first.
+ */
+export const HUMAN_CONTENT_RULING_KINDS: readonly ModerationActionKind[] = [
+  "content_restore",
+  "content_keep_hidden",
+  "content_remove",
+];
+
+/** The same list, as a SQL `IN (...)` literal — for embedding in a query string. */
+export const HUMAN_CONTENT_RULING_KINDS_SQL = HUMAN_CONTENT_RULING_KINDS.map((k) => `'${k}'`).join(",");
+
 /** The same list, as a SQL `IN (...)` literal — for embedding in a query string. */
 export const VISIBILITY_ACTION_KINDS_SQL = VISIBILITY_ACTION_KINDS.map((k) => `'${k}'`).join(",");

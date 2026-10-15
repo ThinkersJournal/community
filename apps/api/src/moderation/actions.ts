@@ -15,6 +15,9 @@ import type { ContractualGround, LegalGround } from "@thinkersjournal/shared";
 
 export type ModerationActionKind =
   | "content_restore" | "content_keep_hidden" | "content_remove"
+  // Art. 17 / #57 — the AUTOMATED hide (auto-hide.ts), written with actor
+  // "system". An audit fact, NOT a ruling: see visibility-actions.ts.
+  | "content_auto_hide"
   | "user_warn" | "user_suspend" | "user_ban" | "user_terminate"
   | "appeal_granted" | "appeal_denied"
   // #61 — every privileged fetch of restricted/legally-held media, logged to
