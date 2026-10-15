@@ -188,6 +188,12 @@ export default defineConfig({
                 // api.cloudflare.com; this only keeps the binding present.
                 CACHE_PURGE_TOKEN: "test-cache-purge-token",
                 CACHE_PURGE_ZONE_ID: "test-zone-id",
+                // A SECRET (security alerting PR 2, src/security/account-notices-flow.ts):
+                // the device-list HMAC key. A fixed dummy, never the production key.
+                // DEVICE_HASH_KEY_PREV is deliberately absent: tests that rotate pass
+                // their own env. The three alerting FLAGS come from wrangler.jsonc's
+                // `vars`, which the pool reads through `configPath` above.
+                DEVICE_HASH_KEY: "test-device-hash-key",
               },
             },
           }),

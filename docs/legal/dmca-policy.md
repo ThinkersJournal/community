@@ -78,7 +78,7 @@ record.
 ## 5. Trademark and other complaints
 
 For non-copyright intellectual-property concerns (e.g. trademark, impersonation),
-contact [[CONTACT_EMAIL]]; these are handled under the
+contact contact@thinkersjournal.com; these are handled under the
 [Community Guidelines](community-guidelines.md).
 
 *This policy is procedural and does not constitute legal advice.*
