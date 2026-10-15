@@ -1,9 +1,9 @@
-# DSA Art. 17: structured grounds on a content decision (PROPOSED)
+# DSA Art. 17: structured grounds on a content decision (ACCEPTED)
 
-**Status:** proposal for attorney / CireSnave review. Part of #57 (PR-C).
+**Status:** ACCEPTED as proposed by CireSnave, board 206 call 1, quoted by the PM: "On decision 206, Call 1, accept." Part of #57 (PR-C). Not attorney-reviewed.
 **Ruling honoured:** CireSnave (board 197, via PM), Q5: two structured fields, `legal_ground` and
 `contractual_ground`, each an enum. Q6: `violation_category` stays internal and unchanged.
-**Every value below is PROPOSED.** None is in force until reviewed. No statute is named beyond what
+**The values below are the accepted lists.** The attorney questions at the end stay open. No statute is named beyond what
 the repo's legal drafts already cite (17 U.S.C. §512 in `dmca-policy.md`).
 
 ## 1. Fields
