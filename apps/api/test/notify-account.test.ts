@@ -110,3 +110,17 @@ describe("#57 Q8 — redress sentence on adverse account notices", () => {
     expect(await sendAccountActionNotice(env, "u@example.test", { kind: "ban", reason: "r" }, async () => { throw new Error("x"); })).toBe(true);
   });
 });
+
+describe("Community Guidelines link", () => {
+  it("warn, suspend and ban each name the version and link the page, in text and html", async () => {
+    const { GUIDELINES_VERSION } = await import("@thinkersjournal/shared");
+    for (const kind of ["warn", "suspend", "ban"] as const) {
+      sent = [];
+      await sendAccountActionNotice(env, "u@example.test", { kind, reason: "r", suspendedUntil: new Date() });
+      expect(String(sent[0]!.TextBody), kind).toContain(
+        `Community Guidelines (version ${GUIDELINES_VERSION}): https://community.thinkersjournal.com/guidelines`,
+      );
+      expect(String(sent[0]!.HtmlBody)).toContain('href="https://community.thinkersjournal.com/guidelines"');
+    }
+  });
+});

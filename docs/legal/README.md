@@ -1,6 +1,6 @@
-# Legal policy DRAFTS (not in force; not reviewed by an attorney)
+# Legal policy documents (Guidelines published; the rest DRAFTS, not in force; none reviewed by an attorney)
 
-> ⚠️ **THESE ARE DRAFTS, NOT LEGAL ADVICE, AND NOT IN FORCE.** They were prepared
+> ⚠️ **NONE OF THIS IS LEGAL ADVICE. Only `community-guidelines.md` is published; the other three are DRAFTS and NOT IN FORCE.** They were prepared
 > by the Community controller agent. Design decision #21 planned a legal review
 > before launch; CireSnave's 2026-10-02 ruling (quoted below) replaced it with
 > best safe guesses. Whether and when they are published is CireSnave's decision.
@@ -10,7 +10,7 @@
 | File | Purpose |
 |---|---|
 | `terms-of-service.md` | The master user agreement. |
-| `community-guidelines.md` | The behavioral rules + how moderation works (encodes design decision #14). |
+| `community-guidelines.md` | The behavioral rules + how moderation works (encodes design decision #14). **PUBLISHED** (served at `/guidelines`; version in `packages/shared/src/guidelines.ts`). Not reviewed by an attorney. States only what the code does today; what it dropped is in `docs/superpowers/specs/2026-10-15-guidelines-intentions.md`. |
 | `privacy-policy.md` | What data is collected, why, who processes it, retention, user rights. |
 | `dmca-policy.md` | §512 takedown / counter-notice process + repeat-infringer policy. |
 
@@ -67,7 +67,7 @@ legal decision:
   - ⚠️ **This does NOT settle `[[LEGAL_ENTITY]]`.** "Thinker's Journal" is the *service
     provider name on the DMCA registration*, which is not the same thing as the
     operating entity's legal name; that still waits on the 501(c)(3) question below.
-- `[[EFFECTIVE_DATE]]` — set at finalization.
+- `[[EFFECTIVE_DATE]]` — set at finalization. (Not for the Guidelines: its version and effective date are constants in `packages/shared/src/guidelines.ts` and a test keeps the file equal to them. The published Guidelines carry no legal-entity or contact line.)
 
 ## Grounding
 
