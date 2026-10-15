@@ -4,6 +4,7 @@ export const RESERVED_USERNAMES: ReadonlySet<string> = new Set([
   "moderator", "mod", "root", "system", "security", "abuse", "billing",
   "thinkersjournal", "thinkers_journal", "tj", "api", "www", "mail",
   "about", "login", "logout", "signup", "settings", "me", "feed", "authors",
+  "guidelines",
 ]);
 
 /**

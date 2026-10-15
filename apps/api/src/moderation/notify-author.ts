@@ -15,12 +15,12 @@
  * because Postmark was unreachable; `postmarkSend` logs the status.
  */
 import { postmarkSend } from "../auth/postmark";
-import { escapeHtml } from "../auth/email-verify";
+import { CANONICAL_ORIGIN, escapeHtml } from "../auth/email-verify";
 import { withClient } from "../db/client";
 import type { AutoHideResult } from "./auto-hide";
 import type { DecisionKind } from "./decide";
 
-import { APPEAL_WINDOW_DAYS, REDRESS_SENTENCE } from "@thinkersjournal/shared";
+import { APPEAL_WINDOW_DAYS, GUIDELINES_PATH, GUIDELINES_VERSION, REDRESS_SENTENCE } from "@thinkersjournal/shared";
 
 export interface ModerationNotice {
   readonly decision: DecisionKind;
@@ -70,6 +70,18 @@ export const COPY: Readonly<Record<NoticeKey, Copy>> = {
   },
 };
 
+/**
+ * The line that points an actioned member at the published Guidelines, naming
+ * the version in force when the notice is sent. Shared with notify-account.ts.
+ * ⚠️ #57 Q2: says nothing about what prompted a review. The URL is built on
+ * `CANONICAL_ORIGIN`, never a request-derived host (see email-verify.ts).
+ * Used only where the lead itself names the Community Guidelines.
+ */
+export function guidelinesLine(): { readonly text: string; readonly url: string } {
+  const url = `${CANONICAL_ORIGIN}${GUIDELINES_PATH}`;
+  return { text: `You can read our Community Guidelines (version ${GUIDELINES_VERSION}): ${url}`, url };
+}
+
 /** The strings actually handed to Postmark, for the #57 Q9 record. */
 export interface RenderedNotice {
   readonly subject: string;
@@ -115,6 +127,16 @@ ${REDRESS_SENTENCE}
 ` : "";
   const redressHtml = adverse ? `<p>${escapeHtml(REDRESS_SENTENCE)}</p>` : "";
 
+  // Only a lead that names the Guidelines (keep_hidden / remove) links to them.
+  const guidelines = guidelinesLine();
+  const namesGuidelines = lead.includes("Community Guidelines");
+  const guidelinesText = namesGuidelines ? `
+${guidelines.text}
+` : "";
+  const guidelinesHtml = namesGuidelines
+    ? `<p>You can read our Community Guidelines (version ${escapeHtml(GUIDELINES_VERSION)}): <a href="${escapeHtml(guidelines.url)}">${escapeHtml(guidelines.url)}</a></p>`
+    : "";
+
   const rendered: RenderedNotice = {
     subject,
     textBody: `${lead}
@@ -124,8 +146,8 @@ ${contentLine}
 Reason given by the reviewer:
 
 ${notice.reason}
-${redressText}${appealTextLine}`,
-    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>${redressHtml}${appealHtmlLine}`,
+${guidelinesText}${redressText}${appealTextLine}`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>${guidelinesHtml}${redressHtml}${appealHtmlLine}`,
   };
   const sent = await postmarkSend(env, { from: "noreply@thinkersjournal.com", to, ...rendered, stream: "outbound" });
   if (sent && onSent !== undefined) {
