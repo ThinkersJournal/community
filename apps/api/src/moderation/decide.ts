@@ -188,7 +188,7 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
        ) AS unhandled`,
       [row.id],
     );
-    source = rows[0]!.unhandled ? "member_report" : "own_initiative";
+    source = rows[0]?.unhandled === true ? "member_report" : "own_initiative";
   }
 
   const actionId = await recordModerationAction(c, {
