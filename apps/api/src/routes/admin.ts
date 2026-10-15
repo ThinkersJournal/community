@@ -18,7 +18,7 @@ import { withClient } from "../db/client";
 import { listOpenQueue } from "../moderation/queue";
 import type { LegalHoldCategory } from "../media/legal-hold";
 import type { ViolationCategory } from "../moderation/actions";
-import { REPORT_REASONS } from "@thinkersjournal/shared";
+import { DECISION_DURATION_HOURS, REPORT_REASONS } from "@thinkersjournal/shared";
 import {
   requestMediaAccess,
   approveMediaAccess,
@@ -123,6 +123,11 @@ export async function handleAdminDecision(
   // validation as the account-action route (REPORT_REASONS, mirrored by the
   // moderation_actions CHECK). Never shown to the author.
   const violationCategory = b["violationCategory"];
+  // #57 Q3 — a TEMPORARY keep_hidden / remove: the intended end, as hours from
+  // now. ⚠️ RECORDED on the audit row only (`action_expires_at`); NO job
+  // un-hides the content when it passes. Account-level results never read a
+  // content row's expiry (every reader filters on a user_* action kind).
+  const durationHours = b["durationHours"];
 
   if (
     (subject !== "post" && subject !== "comment") ||
@@ -136,6 +141,9 @@ export async function handleAdminDecision(
     (violationCategory !== undefined && !(REPORT_REASONS as readonly unknown[]).includes(violationCategory)) ||
     // A restore clears a violation; a category on it is meaningless.
     (violationCategory !== undefined && decision === "restore") ||
+    // A restore ends a restriction; an expiry on it is meaningless.
+    (durationHours !== undefined &&
+      (!(DECISION_DURATION_HOURS as readonly unknown[]).includes(durationHours) || decision === "restore")) ||
     (legalHold === true && !LEGAL_HOLD_CATEGORIES.includes(legalHoldCategory as LegalHoldCategory))
   ) {
     // The shape was wrong. ⚠️ `INVALID_BODY` is NOT in this codebase's error
@@ -154,6 +162,8 @@ export async function handleAdminDecision(
       reason: reason.trim(),
       actorAdmin: admin.email,
       violationCategory: violationCategory as ViolationCategory | undefined,
+      actionExpiresAt:
+        durationHours === undefined ? undefined : new Date(Date.now() + (durationHours as number) * 3_600_000),
       accountHold: legalHold === true ? { category: legalHoldCategory as LegalHoldCategory } : undefined,
     }),
   );

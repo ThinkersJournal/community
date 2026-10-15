@@ -119,6 +119,27 @@ export const SUSPENSION_HOURS = [24, 168, 720] as const;
 export type SuspensionHours = (typeof SUSPENSION_HOURS)[number];
 export const DEFAULT_SUSPENSION_HOURS: SuspensionHours = 168;
 
+/**
+ * #57 Q3: the durations a moderator may attach to a TEMPORARY content decision
+ * (`keep_hidden` / `remove`). Same ladder as a suspension. ⚠️ It RECORDS the
+ * intended end on the audit row only; nothing un-hides content at that time.
+ */
+export const DECISION_DURATION_HOURS = [24, 168, 720] as const;
+export type DecisionDurationHours = (typeof DECISION_DURATION_HOURS)[number];
+
+/** `POST /admin/decision`. */
+export interface AdminDecisionRequest {
+  readonly subject: "post" | "comment";
+  readonly subjectId: string;
+  readonly decision: AdminDecisionKind;
+  readonly reason: string;
+  readonly violationCategory?: string;
+  readonly legalHold?: boolean;
+  readonly legalHoldCategory?: string;
+  /** Only for `keep_hidden` / `remove`; one of DECISION_DURATION_HOURS. Omitted = no recorded end. 400 INVALID_INPUT on a restore. */
+  readonly durationHours?: DecisionDurationHours;
+}
+
 /** Spec §5/§11.2, adopted: an action older than this no longer escalates the ladder (it stays in the log). */
 export const ESCALATION_WINDOW_MONTHS = 12;
 

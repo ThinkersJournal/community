@@ -1318,3 +1318,114 @@ describe("POST /admin/decision — violationCategory (#57 gap 2)", () => {
     expect(text).not.toMatch(/violation/i);
   });
 });
+
+// #57 Art. 17 PR-A — what prompted a decision, and its recorded duration/scope.
+describe("POST /admin/decision — #57 source, expiry and scope", () => {
+  async function post(body: Record<string, unknown>): Promise<Response> {
+    return call("/admin/decision", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function row(subjectId: string): Promise<{
+    source: string | null; dsa_notice_id: string | null; action_expires_at: Date | null; territorial_scope: string;
+  }> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query(
+        `SELECT source, dsa_notice_id, action_expires_at, territorial_scope FROM moderation_actions
+          WHERE post_id = $1 OR comment_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [subjectId],
+      );
+      return rows[0];
+    });
+  }
+
+  async function seedNotice(postId: string, createdAt: string): Promise<string> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO dsa_notices
+           (reporter_email, reporter_name, good_faith, verify_token_hash, target_kind, target_label, post_id,
+            reason, statement, email_verified_at, created_at)
+         VALUES ($1, 'A Reporter', true, $2, 'post', 'label', $3, 'spam', 'This violates the rules.', now(), $4)
+         RETURNING id`,
+        [`rep-${crypto.randomUUID()}@example.test`, `hash-${crypto.randomUUID()}`, postId, createdAt],
+      );
+      return rows[0]!.id;
+    });
+  }
+
+  it("a decision with no notice and no report is own_initiative, global, no expiry", async () => {
+    const postId = (await seedPost(await seedUser())).id;
+    expect((await post({ subject: "post", subjectId: postId, decision: "keep_hidden", reason: "r" })).status).toBe(200);
+    expect(await row(postId)).toMatchObject({
+      source: "own_initiative", dsa_notice_id: null, action_expires_at: null, territorial_scope: "global",
+    });
+  });
+
+  it("an unhandled member report makes the source member_report", async () => {
+    const { postId } = await seedReportedButVisiblePost();
+    await post({ subject: "post", subjectId: postId, decision: "keep_hidden", reason: "r" });
+    expect(await row(postId)).toMatchObject({ source: "member_report", dsa_notice_id: null });
+  });
+
+  it("a report that an earlier ruling already handled does not count", async () => {
+    const { postId } = await seedReportedButVisiblePost();
+    await post({ subject: "post", subjectId: postId, decision: "keep_hidden", reason: "first" });
+    await post({ subject: "post", subjectId: postId, decision: "remove", reason: "second" });
+    expect(await row(postId)).toMatchObject({ source: "own_initiative" });
+  });
+
+  it("a confirmed notice makes the source dsa_notice and stores the OLDEST notice's id", async () => {
+    const { postId } = await seedReportedButVisiblePost();
+    const older = await seedNotice(postId, "2026-01-01T00:00:00Z");
+    const newer = await seedNotice(postId, "2026-02-01T00:00:00Z");
+    await post({ subject: "post", subjectId: postId, decision: "remove", reason: "r" });
+    const r = await row(postId);
+    expect(r).toMatchObject({ source: "dsa_notice", dsa_notice_id: older });
+    const resolved = await ctxRun(async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `SELECT id FROM dsa_notices WHERE id = ANY($1::uuid[]) AND resolved_at IS NOT NULL AND resolution_action_id IS NOT NULL`,
+        [[older, newer]],
+      );
+      return rows.length;
+    });
+    expect(resolved).toBe(2);
+  });
+
+  it("durationHours records action_expires_at on a keep_hidden", async () => {
+    const postId = (await seedPost(await seedUser())).id;
+    const before = Date.now();
+    const res = await post({ subject: "post", subjectId: postId, decision: "keep_hidden", reason: "r", durationHours: 24 });
+    expect(res.status).toBe(200);
+    const exp = (await row(postId)).action_expires_at!.getTime();
+    expect(exp).toBeGreaterThanOrEqual(before + 24 * 3_600_000 - 1000);
+    expect(exp).toBeLessThanOrEqual(Date.now() + 24 * 3_600_000 + 1000);
+  });
+
+  it("400s durationHours on a restore, and a value outside the allowed list", async () => {
+    const { postId } = await seedHiddenPost();
+    const before = await actionCount();
+    expect((await post({ subject: "post", subjectId: postId, decision: "restore", reason: "r", durationHours: 24 })).status).toBe(400);
+    expect((await post({ subject: "post", subjectId: postId, decision: "remove", reason: "r", durationHours: 5 })).status).toBe(400);
+    expect(await actionCount()).toBe(before);
+  });
+
+  it("⚠️ a content row with an expiry cannot change an account-level result", async () => {
+    // appeals.ts recomputes suspended_until from user_suspend rows only.
+    const userId = await seedUser();
+    const postId = (await seedPost(userId)).id;
+    await post({ subject: "post", subjectId: postId, decision: "remove", reason: "r", durationHours: 720 });
+    const leaked = await ctxRun(async (c) => {
+      const { rows } = await c.query<{ n: string }>(
+        `SELECT count(*) AS n FROM moderation_actions
+          WHERE subject_user_id = $1 AND action_expires_at IS NOT NULL
+            AND action IN ('user_warn','user_suspend','user_ban','user_terminate')`,
+        [userId],
+      );
+      return Number(rows[0]!.n);
+    });
+    expect(leaked).toBe(0);
+  });
+});
