@@ -42,8 +42,8 @@ You may not post, upload or link to content that:
 
 ## 3. What happens next
 
-**Automatic hide.** When one post or comment has been reported by **three different
-members within 24 hours**, it is hidden from public view automatically, without a
+**Automatic hide.** When one post or comment has been reported by **several different
+members within a short time**, it is hidden from public view automatically, without a
 moderator having looked at it yet. Its author is emailed that it is hidden pending
 review. Hidden is not removed: a moderator then reviews it and either keeps it
 hidden, removes it, or restores it. Reports made before a moderator's ruling on that

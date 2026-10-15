@@ -41,7 +41,7 @@ describe("/guidelines page", () => {
     // A known clause from each half of the document.
     expect(html).toContain("What is not allowed");
     expect(html).toContain("Doxxes");
-    expect(html).toContain("three different");
+    expect(html).toContain("several different");
     expect(html).toContain("within 30 days");
     // Positive control for the guards below: the page really contains the body.
     expect(html.length).toBeGreaterThan(4000);
