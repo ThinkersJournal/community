@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isBarred } from "../src/auth/account-status";
+import { isBarred, loadBarReason } from "../src/auth/account-status";
 
 /**
  * Unit coverage for `isBarred` (src/auth/account-status.ts), issue #35.
@@ -63,5 +63,21 @@ describe("isBarred", () => {
     expect(
       isBarred({ suspended_until: PAST, disabled_at: NOW }, NOW),
     ).toBe(true);
+  });
+});
+
+describe("loadBarReason: a terminated account's reason stays withheld (#114)", () => {
+  it("returns null WITHOUT querying when the row says terminate", async () => {
+    let queries = 0;
+    const c = { query: async () => { queries++; return { rows: [{ reason: "must not be shown" }] }; } };
+    const row = { disabled_at: new Date(), disabled_reason: "terminate", suspended_until: null };
+    expect(await loadBarReason(c as never, "u", row as never)).toBeNull();
+    expect(queries).toBe(0);
+  });
+
+  it("control: a banned row does query and returns the reason", async () => {
+    const c = { query: async () => ({ rows: [{ reason: "spam" }] }) };
+    const row = { disabled_at: new Date(), disabled_reason: "ban", suspended_until: null };
+    expect(await loadBarReason(c as never, "u", row as never)).toBe("spam");
   });
 });
