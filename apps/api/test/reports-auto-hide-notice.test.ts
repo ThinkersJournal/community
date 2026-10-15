@@ -6,7 +6,7 @@
  * a reporter's identity, a report reason, or the number of reports. The
  * threshold is not disclosed either: disclosing it hands an attacker the number.
  *
- * ⚠️ NO APPEAL LINK. There is no `moderation_actions` row yet, and an appeal
+ * ⚠️ NO APPEAL LINK. The auto-hide row (#57) is not a decision and is not appealable, and an appeal
  * attaches to a decision; the later decision notice carries the link.
  */
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";

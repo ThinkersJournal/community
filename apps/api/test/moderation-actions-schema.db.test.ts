@@ -118,3 +118,22 @@ describe("moderation_actions Art. 17 columns (0029)", () => {
     await expect(ins("source, dsa_notice_id", `'dsa_notice', '${crypto.randomUUID()}'`)).resolves.toBeDefined();
   });
 });
+
+describe("moderation_actions grounds columns (0031)", () => {
+  it("leaves legal_ground and contractual_ground NULL when omitted", async () => {
+    const id = await insertOne();
+    const { rows } = await client.query<{ legal_ground: string | null; contractual_ground: string | null }>(
+      `SELECT legal_ground, contractual_ground FROM moderation_actions WHERE id = $1`, [id],
+    );
+    expect(rows[0]).toEqual({ legal_ground: null, contractual_ground: null });
+  });
+
+  it("rejects an unknown value in either column, and accepts a listed one", async () => {
+    const ins = (cols: string, vals: string): Promise<unknown> =>
+      client.query(`INSERT INTO moderation_actions (actor_admin, action, reason, ${cols})
+                    VALUES ('p@example.com', 'content_remove', 'r', ${vals})`);
+    await expect(ins("legal_ground", "'treason'")).rejects.toThrow(/moderation_actions_legal_ground_valid/);
+    await expect(ins("contractual_ground", "'vibes'")).rejects.toThrow(/moderation_actions_contractual_ground_valid/);
+    await expect(ins("legal_ground, contractual_ground", "'csam', 'guidelines_spam'")).resolves.toBeDefined();
+  });
+});

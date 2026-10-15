@@ -42,7 +42,9 @@ import { setPublicPageCsp } from "../../lib/csp";
 import {
   ACCESS_JWT_HEADER,
   ADMIN_DECISIONS,
+  CONTRACTUAL_GROUNDS,
   DECISION_DURATION_HOURS,
+  LEGAL_GROUNDS,
   LEGAL_HOLD_CATEGORIES,
   REPORT_REASONS,
   type AdminDecisionKind,
@@ -86,6 +88,15 @@ if (Astro.request.method === "POST") {
       ? Number(durationRaw)
       : undefined;
 
+  // #57 Q5 - optional structured grounds, shown to the author. "" = none;
+  // never sent for a restore (the api rejects it).
+  const groundField = (name: string): string | undefined => {
+    const v = form.get(name);
+    return typeof v === "string" && v !== "" && decision !== "restore" ? v : undefined;
+  };
+  const legalGround = groundField("legalGround");
+  const contractualGround = groundField("contractualGround");
+
   const res = await adminApiFetch("/admin/decision", {
     method: "POST",
     accessJwt,
@@ -97,6 +108,8 @@ if (Astro.request.method === "POST") {
       reason,
       ...(violationCategory !== undefined ? { violationCategory } : {}),
       ...(durationHours !== undefined ? { durationHours } : {}),
+      ...(legalGround !== undefined ? { legalGround } : {}),
+      ...(contractualGround !== undefined ? { contractualGround } : {}),
       ...(legalHold ? { legalHold: true, legalHoldCategory } : {}),
     },
   });
@@ -154,6 +167,24 @@ const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "
                     <option value="">(none)</option>
                     {DECISION_DURATION_HOURS.map((h) => (
                       <option value={h}>{h} hours</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Legal ground (shown to the author; hide / remove only; optional)
+                  <select name="legalGround">
+                    <option value="">(none)</option>
+                    {LEGAL_GROUNDS.map((g) => (
+                      <option value={g}>{g}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Contractual ground: Terms / Community Guidelines clause (shown to the author; hide / remove only; optional)
+                  <select name="contractualGround">
+                    <option value="">(none)</option>
+                    {CONTRACTUAL_GROUNDS.map((g) => (
+                      <option value={g}>{g}</option>
                     ))}
                   </select>
                 </label>

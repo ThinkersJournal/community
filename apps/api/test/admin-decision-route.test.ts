@@ -1429,3 +1429,59 @@ describe("POST /admin/decision — #57 source, expiry and scope", () => {
     expect(leaked).toBe(0);
   });
 });
+
+// #57 Art. 17 PR-C — the structured grounds (legal_ground / contractual_ground).
+describe("POST /admin/decision — #57 grounds", () => {
+  async function post(body: Record<string, unknown>): Promise<Response> {
+    return call("/admin/decision", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...await adminHeaders(), Origin: ALLOWED_ORIGIN },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function grounds(subjectId: string): Promise<{ legal_ground: string | null; contractual_ground: string | null }> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query(
+        `SELECT legal_ground, contractual_ground FROM moderation_actions
+          WHERE post_id = $1 OR comment_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [subjectId],
+      );
+      return rows[0];
+    });
+  }
+
+  it("stores both grounds independently on a remove", async () => {
+    const postId = (await seedPost(await seedUser())).id;
+    const res = await post({
+      subject: "post", subjectId: postId, decision: "remove", reason: "r",
+      legalGround: "copyright_infringement", contractualGround: "guidelines_ip",
+    });
+    expect(res.status).toBe(200);
+    expect(await grounds(postId)).toEqual({ legal_ground: "copyright_infringement", contractual_ground: "guidelines_ip" });
+  });
+
+  it("stores one ground alone, leaving the other NULL", async () => {
+    const postId = (await seedPost(await seedUser())).id;
+    expect((await post({ subject: "post", subjectId: postId, decision: "keep_hidden", reason: "r", contractualGround: "guidelines_spam" })).status).toBe(200);
+    expect(await grounds(postId)).toEqual({ legal_ground: null, contractual_ground: "guidelines_spam" });
+  });
+
+  it("an old-style request (neither field) still succeeds and stores NULLs", async () => {
+    const postId = (await seedPost(await seedUser())).id;
+    expect((await post({ subject: "post", subjectId: postId, decision: "remove", reason: "r" })).status).toBe(200);
+    expect(await grounds(postId)).toEqual({ legal_ground: null, contractual_ground: null });
+  });
+
+  it("400s an unknown value, a wrong type, and either ground on a restore, writing nothing", async () => {
+    const { postId } = await seedHiddenPost();
+    const before = await actionCount();
+    const base = { subject: "post", subjectId: postId, reason: "r" };
+    expect((await post({ ...base, decision: "remove", legalGround: "treason" })).status).toBe(400);
+    expect((await post({ ...base, decision: "remove", contractualGround: "vibes" })).status).toBe(400);
+    expect((await post({ ...base, decision: "remove", legalGround: 7 })).status).toBe(400);
+    expect((await post({ ...base, decision: "restore", legalGround: "csam" })).status).toBe(400);
+    expect((await post({ ...base, decision: "restore", contractualGround: "guidelines_spam" })).status).toBe(400);
+    expect(await actionCount()).toBe(before);
+  });
+});

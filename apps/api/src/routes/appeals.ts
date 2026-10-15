@@ -5,6 +5,7 @@ import { isInvalidTextRepresentation } from "../db/errors";
 import { errorResponse } from "../http/errors";
 import { consumeActionToken, peekActionToken } from "../moderation/action-tokens";
 import { describeAppealTarget, fileAppeal, type FileAppealOutcome } from "../moderation/appeals";
+import { HUMAN_CONTENT_RULING_KINDS_SQL } from "../moderation/visibility-actions";
 
 import type { RouteParams } from "../routing";
 
@@ -137,15 +138,17 @@ export async function handleAppealForPost(request: Request, env: Env, ctx: Execu
         [params.postId, session.userId],
       );
       if (own.length === 0) return errorResponse("NOT_FOUND", 404);
-      // ⚠️ The decision GOVERNING visibility now: the latest content_* row of
-      // ANY kind, restore included. A keep_hidden/remove that a later restore
+      // ⚠️ The decision GOVERNING visibility now: the latest HUMAN content_*
+      // ruling of ANY kind, restore included. A `content_auto_hide` row is
+      // not a ruling and is not in the list (#57), so an auto-hide after a
+      // restore leaves the restore as latest: nothing to appeal. A keep_hidden/remove that a later restore
       // reversed is not appealable, and neither is anything on a visible post.
       // A post hidden only by auto-hide has no decision yet: nothing to appeal.
       // `id DESC` is a deterministic tie-break for two decisions landing in
       // the same instant (minor 7) — `created_at` alone cannot order them.
       const { rows } = await c.query<{ id: string; action: string }>(
         `SELECT id, action FROM moderation_actions
-          WHERE post_id = $1 AND action LIKE 'content\\_%'
+          WHERE post_id = $1 AND action IN (${HUMAN_CONTENT_RULING_KINDS_SQL})
           ORDER BY created_at DESC, id DESC LIMIT 1`,
         [params.postId],
       );

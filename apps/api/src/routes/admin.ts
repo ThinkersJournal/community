@@ -19,7 +19,14 @@ import { withClient } from "../db/client";
 import { listOpenQueue } from "../moderation/queue";
 import type { LegalHoldCategory } from "../media/legal-hold";
 import type { ViolationCategory } from "../moderation/actions";
-import { DECISION_DURATION_HOURS, REPORT_REASONS } from "@thinkersjournal/shared";
+import {
+  CONTRACTUAL_GROUNDS,
+  DECISION_DURATION_HOURS,
+  LEGAL_GROUNDS,
+  REPORT_REASONS,
+  type ContractualGround,
+  type LegalGround,
+} from "@thinkersjournal/shared";
 import {
   requestMediaAccess,
   approveMediaAccess,
@@ -71,7 +78,7 @@ const DECISIONS: readonly DecisionKind[] = ["restore", "keep_hidden", "remove"];
  * POST /admin/decision — the three content outcomes (spec §4.3).
  *
  * ⚠️ Account actions are NOT available here (decision #3); they are module 2c.
- * ⚠️ Only a human writes a `content_*` action — automation never decides.
+ * ⚠️ Only a human RULES (`content_restore`/`keep_hidden`/`remove`) — automation never decides; its hide leaves a `content_auto_hide` audit row (#57), which rules on nothing.
  */
 export async function handleAdminDecision(
   request: Request,
@@ -129,6 +136,12 @@ export async function handleAdminDecision(
   // un-hides the content when it passes. Account-level results never read a
   // content row's expiry (every reader filters on a user_* action kind).
   const durationHours = b["durationHours"];
+  // #57 Q5 - the structured grounds, each optional and independent (a decision
+  // can be both illegal and a terms violation; neither is required). PROPOSED
+  // lists; see the 0031 migration. Shown to the author once notice rendering
+  // reads them. Neither means anything on a restore.
+  const legalGround = b["legalGround"];
+  const contractualGround = b["contractualGround"];
 
   if (
     (subject !== "post" && subject !== "comment") ||
@@ -145,6 +158,10 @@ export async function handleAdminDecision(
     // A restore ends a restriction; an expiry on it is meaningless.
     (durationHours !== undefined &&
       (!(DECISION_DURATION_HOURS as readonly unknown[]).includes(durationHours) || decision === "restore")) ||
+    (legalGround !== undefined &&
+      (!(LEGAL_GROUNDS as readonly unknown[]).includes(legalGround) || decision === "restore")) ||
+    (contractualGround !== undefined &&
+      (!(CONTRACTUAL_GROUNDS as readonly unknown[]).includes(contractualGround) || decision === "restore")) ||
     (legalHold === true && !LEGAL_HOLD_CATEGORIES.includes(legalHoldCategory as LegalHoldCategory))
   ) {
     // The shape was wrong. ⚠️ `INVALID_BODY` is NOT in this codebase's error
@@ -165,6 +182,8 @@ export async function handleAdminDecision(
       violationCategory: violationCategory as ViolationCategory | undefined,
       actionExpiresAt:
         durationHours === undefined ? undefined : new Date(Date.now() + (durationHours as number) * 3_600_000),
+      legalGround: legalGround as LegalGround | undefined,
+      contractualGround: contractualGround as ContractualGround | undefined,
       accountHold: legalHold === true ? { category: legalHoldCategory as LegalHoldCategory } : undefined,
     }),
   );
