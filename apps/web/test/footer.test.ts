@@ -23,3 +23,9 @@ describe("Footer", () => {
     expect(s).not.toMatch(/<h[1-6][\s>]/i);
   });
 });
+
+describe("Footer: Community Guidelines link", () => {
+  it("links the published guidelines page", () => {
+    expect(src()).toContain('href="/guidelines"');
+  });
+});

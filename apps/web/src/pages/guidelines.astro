@@ -1,0 +1,38 @@
+---
+/**
+ * `/guidelines` — the published Community Guidelines.
+ *
+ * Source: docs/legal/community-guidelines.md (repo file, trusted), rendered
+ * through the sanitizing `renderMarkdown` pipeline. Anonymous + edge-cached
+ * under its own static tag; the text only changes with a deploy, and a deploy
+ * changes the Worker version, which is part of the cache key.
+ * The version and effective date come from packages/shared constants.
+ */
+import PageLayout from "../components/PageLayout.astro";
+import { guidelinesBody } from "../lib/guidelines";
+import { markPublicCacheable } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+import { renderMarkdown } from "@thinkersjournal/markdown";
+import { GUIDELINES_EFFECTIVE_DATE, GUIDELINES_VERSION } from "@thinkersjournal/shared";
+
+const html = await renderMarkdown(guidelinesBody());
+
+markPublicCacheable(Astro, ["guidelines"]);
+setPublicPageCsp(Astro);
+---
+<PageLayout
+  title="Community Guidelines — Thinker's Journal"
+  eyebrow="Community"
+  heading="Community Guidelines"
+  intro={`Version ${GUIDELINES_VERSION} · Effective ${GUIDELINES_EFFECTIVE_DATE}`}
+  canonical="https://community.thinkersjournal.com/guidelines"
+>
+  <article class="guidelines" set:html={html} />
+</PageLayout>
+<style>
+  .guidelines{max-width:70ch;line-height:1.65}
+  .guidelines :global(h2){margin:2em 0 .6em;font-size:1.35rem}
+  .guidelines :global(ol),.guidelines :global(ul){padding-left:1.4em}
+  .guidelines :global(li){margin:.4em 0}
+  .guidelines :global(a){text-decoration:underline}
+</style>
