@@ -267,6 +267,25 @@ export interface AdminAccountHold {
 export const APPEAL_WINDOW_DAYS = 30;
 
 /**
+ * #57 Q8=A: the ONE generic redress sentence appended to every ADVERSE decision
+ * email (author keep_hidden/remove, account warn/suspend/ban). Names the three
+ * routes generically: no body, no statute number. Plain language, not legal
+ * advice. Shared by notify-author.ts and notify-account.ts so they cannot drift.
+ */
+export const REDRESS_SENTENCE =
+  "Besides an internal complaint (an appeal to us), you may be able to use an out-of-court dispute settlement process or seek judicial redress. This is general information, not legal advice.";
+
+/**
+ * #57 Q9: how long the rendered text of a sent moderation notice is kept, in
+ * days, counted from the DECISION's created_at. ⚠️ PROVISIONAL: CireSnave's
+ * 2026-10-14 guess was "one to two years" and he has yet to determine the real
+ * period; change this one number (and nothing else) when he does. The purge
+ * (src/moderation/notice-records.ts) deletes rows past `retain_until`, which is
+ * fixed at write time, so a changed constant applies to NEW records only.
+ */
+export const MODERATION_NOTICE_RETENTION_DAYS = 730;
+
+/**
  * #50 Q4 — a re-requested delete link (the "email me a new link" route) lives
  * this long. Short on purpose: the PM ruled against long-lived bearer tokens
  * sitting in old inboxes, and asking again is cheap.

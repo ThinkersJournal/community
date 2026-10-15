@@ -13,6 +13,7 @@ import { errorResponse } from "../http/errors";
 import { applyAccountAction, loadAccountHistory } from "../moderation/account-actions";
 import { imposeManualAccountHold, listAccountHolds, releaseAccountHold } from "../moderation/account-holds";
 import { sendAccountActionNotice } from "../moderation/notify-account";
+import { recordNotice } from "../moderation/notice-records";
 import { noticeLinks, type NoticeLinks } from "../moderation/notice-links";
 
 import {
@@ -188,7 +189,7 @@ export async function handleAdminAccountAction(
         suspendedUntil: outcome.suspendedUntil ?? undefined,
         appealUrl: links.appealUrl,
         deleteRequestUrl: links.deleteRequestUrl,
-      }).then((sent) => {
+      }, (rendered) => recordNotice(env, ctx, outcome.actionId, "account", rendered)).then((sent) => {
         if (!sent) console.error("account notice not sent", { actionId: outcome.actionId });
       }),
     );

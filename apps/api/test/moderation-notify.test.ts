@@ -302,3 +302,80 @@ describe("author-facing copy (#57 Q2)", () => {
     }
   });
 });
+
+// #57 Q8=A — one generic redress sentence on ADVERSE notices only.
+describe("redress sentence (#57 Q8)", () => {
+  const base = { wasHidden: true, subject: "post", postTitle: "T", reason: "r" } as const;
+
+  it("keep_hidden and remove carry it, in text and html, with and without the appeal link", async () => {
+    const { REDRESS_SENTENCE } = await import("@thinkersjournal/shared");
+    for (const decision of ["keep_hidden", "remove"] as const) {
+      for (const appealUrl of [undefined, "https://community.thinkersjournal.com/appeal?token=a"]) {
+        const sent = await captureSendFull(() => sendModerationNotice(env, "a@b.test", { ...base, decision, appealUrl }));
+        expect(String(sent.TextBody), `${decision} ${String(appealUrl)}`).toContain(REDRESS_SENTENCE);
+        expect(String(sent.HtmlBody)).toContain(REDRESS_SENTENCE);
+        // Control: the appeal link is present exactly when given.
+        expect(String(sent.TextBody).includes("/appeal?token=")).toBe(appealUrl !== undefined);
+      }
+    }
+  });
+
+  it("restore does not carry it", async () => {
+    const sent = await captureSendFull(() => sendModerationNotice(env, "a@b.test", { ...base, decision: "restore" }));
+    expect(sent.Subject).toBe("Your content has been restored");
+    expect(String(sent.TextBody)).not.toContain("redress");
+  });
+
+  it("auto-hide pending-review notice does not carry it", async () => {
+    const { sendAutoHideNotice } = await import("../src/moderation/notify-author");
+    const sent = await captureSendFull(() => sendAutoHideNotice(env, "a@b.test", { subject: "post", postTitle: "T" }));
+    expect(String(sent.TextBody)).not.toContain("redress");
+  });
+
+  it("names no statute or body, and is not a copy key (so the Q2 regexp is untouched)", async () => {
+    const { REDRESS_SENTENCE } = await import("@thinkersjournal/shared");
+    expect(REDRESS_SENTENCE).not.toMatch(/(DSA|Article|Art\.|Regulation|\d{4}\/\d+)/i);
+    expect(REDRESS_SENTENCE).toMatch(/internal complaint/);
+    expect(REDRESS_SENTENCE).toMatch(/out-of-court/);
+    expect(REDRESS_SENTENCE).toMatch(/judicial redress/);
+  });
+});
+
+// #57 Q9 — onSent receives exactly what was sent, only on success, and a throw
+// in it never changes the result.
+describe("onSent record hook (#57 Q9)", () => {
+  const n = { decision: "remove", wasHidden: true, subject: "post", postTitle: "T", reason: "r" } as const;
+
+  it("is called with the same subject/text/html that Postmark received", async () => {
+    let got: { subject: string; textBody: string; htmlBody: string } | undefined;
+    const sent = await captureSendFull(() =>
+      sendModerationNotice(env, "a@b.test", n, async (r) => {
+        got = r;
+      }),
+    );
+    expect(got).toBeDefined();
+    expect(got!.subject).toBe(sent.Subject);
+    expect(got!.textBody).toBe(sent.TextBody);
+    expect(got!.htmlBody).toBe(sent.HtmlBody);
+  });
+
+  it("is NOT called when the send fails", async () => {
+    let called = false;
+    const ok = await withFailingPostmark(() =>
+      sendModerationNotice(env, "a@b.test", n, async () => {
+        called = true;
+      }),
+    );
+    expect(ok).toBe(false);
+    expect(called).toBe(false);
+  });
+
+  it("a throwing hook does not fail the notice", async () => {
+    const ok = await captureSendFull(() =>
+      sendModerationNotice(env, "a@b.test", n, async () => {
+        throw new Error("db down");
+      }),
+    );
+    expect(ok.Subject).toBe("Your content has been removed");
+  });
+});

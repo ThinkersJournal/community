@@ -10,6 +10,7 @@ import { errorResponse } from "../http/errors";
 import { applyDecision, type DecisionKind } from "../moderation/decide";
 import { afterContentDecision } from "../moderation/after-content-decision";
 import { sendModerationNotice } from "../moderation/notify-author";
+import { recordNotice } from "../moderation/notice-records";
 import { noticeLinks, type NoticeLinks } from "../moderation/notice-links";
 import { sendDsaOrphanedOutcome } from "../moderation/notify-reporter";
 import { closeOrphanedDsaNotice, listOpenDsaNotices, orphanedDsaNoticeCandidate } from "../moderation/dsa-notices";
@@ -245,7 +246,7 @@ export async function handleAdminDecision(
       postTitle: result.postTitle,
       reason: reason.trim(),
       appealUrl: links.appealUrl,
-    }).then((sent) => {
+    }, (rendered) => recordNotice(env, ctx, result.actionId, "author", rendered)).then((sent) => {
       if (!sent) {
         // A lost notice must be findable and re-sendable (R5).
         console.error("moderation notice not sent", { actionId: result.actionId });

@@ -20,7 +20,7 @@ import { withClient } from "../db/client";
 import type { AutoHideResult } from "./auto-hide";
 import type { DecisionKind } from "./decide";
 
-import { APPEAL_WINDOW_DAYS } from "@thinkersjournal/shared";
+import { APPEAL_WINDOW_DAYS, REDRESS_SENTENCE } from "@thinkersjournal/shared";
 
 export interface ModerationNotice {
   readonly decision: DecisionKind;
@@ -70,10 +70,23 @@ export const COPY: Readonly<Record<NoticeKey, Copy>> = {
   },
 };
 
+/** The strings actually handed to Postmark, for the #57 Q9 record. */
+export interface RenderedNotice {
+  readonly subject: string;
+  readonly textBody: string;
+  readonly htmlBody: string;
+}
+
+/**
+ * @param onSent #57 Q9 — called with the EXACT strings sent, only when Postmark
+ *   accepted them. Best-effort: a throw or rejection is swallowed here, so
+ *   storing the record can never fail or block the notice.
+ */
 export async function sendModerationNotice(
   env: Env,
   to: string,
   notice: ModerationNotice,
+  onSent?: (rendered: RenderedNotice) => Promise<void>,
 ): Promise<boolean> {
   // ⚠️ A Restore of content that was never hidden is a DISMISSAL: nothing was
   // done to the author, so nothing is sent. This is the ONLY place the rule
@@ -94,14 +107,35 @@ export async function sendModerationNotice(
   const appealTextLine = url === undefined ? "" : `\nYou can appeal this decision within ${APPEAL_WINDOW_DAYS} days: ${url}`;
   const appealHtmlLine = url === undefined ? "" : `<p>You can appeal this decision within ${APPEAL_WINDOW_DAYS} days: <a href="${escapeHtml(url)}">${escapeHtml(url)}</a></p>`;
 
-  return await postmarkSend(env, {
-    from: "noreply@thinkersjournal.com",
-    to,
+  // #57 Q8=A: the redress sentence rides every ADVERSE notice (never a restore),
+  // BEFORE the appeal line so it still appears when the appeal link is absent.
+  const adverse = notice.decision !== "restore";
+  const redressText = adverse ? `
+${REDRESS_SENTENCE}
+` : "";
+  const redressHtml = adverse ? `<p>${escapeHtml(REDRESS_SENTENCE)}</p>` : "";
+
+  const rendered: RenderedNotice = {
     subject,
-    textBody: `${lead}\n\n${contentLine}\n\nReason given by the reviewer:\n\n${notice.reason}\n${appealTextLine}`,
-    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>${appealHtmlLine}`,
-    stream: "outbound",
-  });
+    textBody: `${lead}
+
+${contentLine}
+
+Reason given by the reviewer:
+
+${notice.reason}
+${redressText}${appealTextLine}`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>${redressHtml}${appealHtmlLine}`,
+  };
+  const sent = await postmarkSend(env, { from: "noreply@thinkersjournal.com", to, ...rendered, stream: "outbound" });
+  if (sent && onSent !== undefined) {
+    try {
+      await onSent(rendered);
+    } catch {
+      // Best-effort by contract; the caller logs with the action id.
+    }
+  }
+  return sent;
 }
 
 /**

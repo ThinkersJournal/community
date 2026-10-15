@@ -12,7 +12,8 @@
 import { postmarkSend } from "../auth/postmark";
 import { escapeHtml } from "../auth/email-verify";
 
-import { APPEAL_WINDOW_DAYS } from "@thinkersjournal/shared";
+import { APPEAL_WINDOW_DAYS, REDRESS_SENTENCE } from "@thinkersjournal/shared";
+import type { RenderedNotice } from "./notify-author";
 
 /** #50 Q4 — what a barred account's deletion request does. Also used verbatim by routes/delete-request.ts's resend email. */
 export const DELETE_REQUEST_SENTENCE_AFTER =
@@ -46,7 +47,13 @@ function lead(notice: AccountNotice): string {
   }
 }
 
-export async function sendAccountActionNotice(env: Env, to: string, notice: AccountNotice): Promise<boolean> {
+/** @param onSent #57 Q9 — the exact strings sent, only on acceptance; best-effort (see sendModerationNotice). */
+export async function sendAccountActionNotice(
+  env: Env,
+  to: string,
+  notice: AccountNotice,
+  onSent?: (rendered: RenderedNotice) => Promise<void>,
+): Promise<boolean> {
   try {
     const text = lead(notice);
 
@@ -66,14 +73,29 @@ export async function sendAccountActionNotice(env: Env, to: string, notice: Acco
         ? ""
         : `<p>You can also ask for your account to be deleted: <a href="${escapeHtml(notice.deleteRequestUrl)}">${escapeHtml(notice.deleteRequestUrl)}</a>. ${escapeHtml(DELETE_REQUEST_SENTENCE_AFTER)}</p>`;
 
-    return await postmarkSend(env, {
-      from: "noreply@thinkersjournal.com",
-      to,
+    // #57 Q8=A: every kind here (warn/suspend/ban) is adverse. Positioned
+    // before the appeal line so it appears when the appeal link is absent.
+    const rendered: RenderedNotice = {
       subject: SUBJECT[notice.kind],
-      textBody: `${text}\n\nReason given by the moderator:\n\n${notice.reason}\n${appealTextLine}${deleteRequestTextLine}`,
-      htmlBody: `<p>${escapeHtml(text)}</p><p><strong>Reason given by the moderator:</strong></p><p>${escapeHtml(notice.reason)}</p>${appealHtmlLine}${deleteRequestHtmlLine}`,
-      stream: "outbound",
-    });
+      textBody: `${text}
+
+Reason given by the moderator:
+
+${notice.reason}
+
+${REDRESS_SENTENCE}
+${appealTextLine}${deleteRequestTextLine}`,
+      htmlBody: `<p>${escapeHtml(text)}</p><p><strong>Reason given by the moderator:</strong></p><p>${escapeHtml(notice.reason)}</p><p>${escapeHtml(REDRESS_SENTENCE)}</p>${appealHtmlLine}${deleteRequestHtmlLine}`,
+    };
+    const sent = await postmarkSend(env, { from: "noreply@thinkersjournal.com", to, ...rendered, stream: "outbound" });
+    if (sent && onSent !== undefined) {
+      try {
+        await onSent(rendered);
+      } catch {
+        // Best-effort by contract; the caller logs with the action id.
+      }
+    }
+    return sent;
   } catch (err) {
     console.error("account notice threw", err);
     return false;
