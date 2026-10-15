@@ -15,7 +15,8 @@
  *   - `null`         — not hidden.
  *   - `"author"`      — hidden, and the author may unhide it (POST /posts/:id/unhide will succeed).
  *   - `"moderation"`  — hidden for a reason the author cannot lift: an
- *     unresolved auto-hide (no visibility row at all yet) OR a moderator's
+ *     unresolved auto-hide (no visibility row yet; its `content_auto_hide`
+ *     audit row, #57, is deliberately NOT a visibility action) OR a moderator's
  *     `content_keep_hidden`/`content_remove`.
  *
  * ⚠️ A UI GATE, NOT AN AUTHORIZATION CHECK. `POST /posts/:id/unhide` still
