@@ -42,6 +42,7 @@ import { setPublicPageCsp } from "../../lib/csp";
 import {
   ACCESS_JWT_HEADER,
   ADMIN_DECISIONS,
+  DECISION_DURATION_HOURS,
   LEGAL_HOLD_CATEGORIES,
   REPORT_REASONS,
   type AdminDecisionKind,
@@ -77,6 +78,14 @@ if (Astro.request.method === "POST") {
       ? violationCategoryRaw
       : undefined;
 
+  // #57 Q3 — optional "hidden for" duration. "" = no recorded end. Recorded
+  // only: nothing un-hides at expiry. A restore never carries one.
+  const durationRaw = form.get("durationHours");
+  const durationHours =
+    typeof durationRaw === "string" && durationRaw !== "" && decision !== "restore"
+      ? Number(durationRaw)
+      : undefined;
+
   const res = await adminApiFetch("/admin/decision", {
     method: "POST",
     accessJwt,
@@ -87,6 +96,7 @@ if (Astro.request.method === "POST") {
       decision,
       reason,
       ...(violationCategory !== undefined ? { violationCategory } : {}),
+      ...(durationHours !== undefined ? { durationHours } : {}),
       ...(legalHold ? { legalHold: true, legalHoldCategory } : {}),
     },
   });
@@ -135,6 +145,15 @@ const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "
                     <option value="">(none)</option>
                     {REPORT_REASONS.map((cat) => (
                       <option value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Recorded end (internal — hide / remove only. Recorded, NOT enforced: the content is not un-hidden at that time)
+                  <select name="durationHours">
+                    <option value="">(none)</option>
+                    {DECISION_DURATION_HOURS.map((h) => (
+                      <option value={h}>{h} hours</option>
                     ))}
                   </select>
                 </label>
