@@ -338,6 +338,8 @@ describe("redress sentence (#57 Q8)", () => {
     expect(REDRESS_SENTENCE).toMatch(/internal complaint/);
     expect(REDRESS_SENTENCE).toMatch(/out-of-court/);
     expect(REDRESS_SENTENCE).toMatch(/judicial redress/);
+    expect(REDRESS_SENTENCE).toContain("dispute@thinkersjournal.com");
+    expect(REDRESS_SENTENCE).toMatch(/not legal advice/);
   });
 });
 

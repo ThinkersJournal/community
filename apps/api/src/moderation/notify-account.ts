@@ -6,13 +6,15 @@
  * preferences, because a user cannot opt out of being told they were actioned.
  * NEVER THROWS.
  *
- * ⚠️ NO `terminate` NOTICE. Whether a CSAM-terminated user may be told why is
- * an open legal question (#114), so the type does not admit it.
+ * `terminate` has its OWN entry point, `sendTerminationNotice`, and
+ * deliberately NOT a kind of `AccountNotice`: that type carries a reason and
+ * appeal/delete links, and a termination carries none of them (#114 ruling).
+ * The text names no report, evidence or reason. No route calls it yet.
  */
 import { postmarkSend } from "../auth/postmark";
 import { escapeHtml } from "../auth/email-verify";
 
-import { APPEAL_WINDOW_DAYS, GUIDELINES_VERSION, REDRESS_SENTENCE } from "@thinkersjournal/shared";
+import { APPEAL_WINDOW_DAYS, DISPUTE_EMAIL, GUIDELINES_VERSION, REDRESS_SENTENCE } from "@thinkersjournal/shared";
 import { guidelinesLine, type RenderedNotice } from "./notify-author";
 
 /** #50 Q4 — what a barred account's deletion request does. Also used verbatim by routes/delete-request.ts's resend email. */
@@ -44,6 +46,57 @@ function lead(notice: AccountNotice): string {
       return `Your account has been suspended for breaking our Community Guidelines. You will not be able to sign in until ${notice.suspendedUntil?.toUTCString() ?? "the suspension ends"}.`;
     case "ban":
       return "Your account has been permanently banned for breaking our Community Guidelines. You will not be able to sign in again.";
+  }
+}
+
+async function deliver(
+  env: Env,
+  to: string,
+  rendered: RenderedNotice,
+  onSent?: (rendered: RenderedNotice) => Promise<void>,
+): Promise<boolean> {
+  const sent = await postmarkSend(env, { from: "noreply@thinkersjournal.com", to, ...rendered, stream: "outbound" });
+  if (sent && onSent !== undefined) {
+    try {
+      await onSent(rendered);
+    } catch {
+      // Best-effort by contract; the caller logs with the action id.
+    }
+  }
+  return sent;
+}
+
+/** #114 ruling: the ONE generic redress line of a termination notice. */
+export const TERMINATION_REDRESS_SENTENCE = `You may contest this by contacting ${DISPUTE_EMAIL}. You keep the right to take this to an out-of-court dispute body or a court.`;
+
+const TERMINATION_LEAD = "Your account has been terminated for violating community guidelines.";
+
+/**
+ * #114: the termination notice. Takes NO reason, evidence, title, hash or link:
+ * there is nothing to leak because nothing is accepted. Never mentions a report
+ * to anyone.
+ */
+export function renderTerminationNotice(): RenderedNotice {
+  return {
+    subject: "Your account has been terminated",
+    textBody: `${TERMINATION_LEAD}
+
+${TERMINATION_REDRESS_SENTENCE}`,
+    htmlBody: `<p>${escapeHtml(TERMINATION_LEAD)}</p><p>${escapeHtml(TERMINATION_REDRESS_SENTENCE)}</p>`,
+  };
+}
+
+/** NEVER THROWS. @param onSent same contract as sendAccountActionNotice. */
+export async function sendTerminationNotice(
+  env: Env,
+  to: string,
+  onSent?: (rendered: RenderedNotice) => Promise<void>,
+): Promise<boolean> {
+  try {
+    return await deliver(env, to, renderTerminationNotice(), onSent);
+  } catch (err) {
+    console.error("termination notice threw", err);
+    return false;
   }
 }
 
@@ -93,15 +146,7 @@ ${REDRESS_SENTENCE}
 ${appealTextLine}${deleteRequestTextLine}`,
       htmlBody: `<p>${escapeHtml(text)}</p><p><strong>Reason given by the moderator:</strong></p><p>${escapeHtml(notice.reason)}</p>${guidelinesHtml}<p>${escapeHtml(REDRESS_SENTENCE)}</p>${appealHtmlLine}${deleteRequestHtmlLine}`,
     };
-    const sent = await postmarkSend(env, { from: "noreply@thinkersjournal.com", to, ...rendered, stream: "outbound" });
-    if (sent && onSent !== undefined) {
-      try {
-        await onSent(rendered);
-      } catch {
-        // Best-effort by contract; the caller logs with the action id.
-      }
-    }
-    return sent;
+    return await deliver(env, to, rendered, onSent);
   } catch (err) {
     console.error("account notice threw", err);
     return false;

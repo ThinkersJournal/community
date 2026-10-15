@@ -35,7 +35,13 @@ legal decision:
   design flags a 501(c)(3) + taxable-subsidiary structure; CireSnave decides it,
   with best safe guesses. The policies cannot be finalized before this is.
 - `[[JURISDICTION]]` — governing law / venue (US state).
-- `[[CONTACT_ADDRESS]]`, `[[CONTACT_EMAIL]]` — service + general contact.
+- `[[CONTACT_ADDRESS]]` — postal contact address. **Still a placeholder.**
+- ✅ Contact email — **FILLED 2026-10-14** (CireSnave: "All *@thinkersjournal.com is forwarded to my
+  ciresnave@gmail.com by Cloudflare."): `contact@thinkersjournal.com` is the general contact in the
+  Terms, Privacy Policy, DMCA trademark line and Community Guidelines; `dispute@thinkersjournal.com`
+  is where members contest a moderation decision (notice emails only). Both live in
+  `packages/shared/src/contact.ts`; `apps/web/test/contact-docs.test.ts` fails if these docs drift.
+  The DMCA designated agent's registered email is a separate record and was not touched.
 - ✅ `[[DMCA_AGENT_*]]` — **FILLED, and corrected 2026-09-08 against the actual
   registration record.** The U.S. Copyright Office registration is **active**:
   **DMCA-1079944**, service provider *Thinker's Journal*, designated agent Eric Evans.

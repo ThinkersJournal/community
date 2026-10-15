@@ -108,4 +108,4 @@ claim in your own local courts, these Terms do not take that right away.
 We may update these Terms. Material changes will be announced, and continued use
 after the effective date means you accept them.
 
-**Contact:** [[CONTACT_EMAIL]] · [[CONTACT_ADDRESS]]
+**Contact:** contact@thinkersjournal.com · [[CONTACT_ADDRESS]]
