@@ -70,7 +70,7 @@ const DECISIONS: readonly DecisionKind[] = ["restore", "keep_hidden", "remove"];
  * POST /admin/decision — the three content outcomes (spec §4.3).
  *
  * ⚠️ Account actions are NOT available here (decision #3); they are module 2c.
- * ⚠️ Only a human writes a `content_*` action — automation never decides.
+ * ⚠️ Only a human RULES (`content_restore`/`keep_hidden`/`remove`) — automation never decides; its hide leaves a `content_auto_hide` audit row (#57), which rules on nothing.
  */
 export async function handleAdminDecision(
   request: Request,

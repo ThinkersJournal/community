@@ -1,8 +1,9 @@
 /**
  * THE MODERATION REVIEW QUEUE — a derived query, never a table.
  *
- * ⚠️ A target is OPEN if it has at least one report and NO `content_*` action
- * recorded after its newest report. That definition lives here and nowhere
+ * ⚠️ A target is OPEN if it has at least one report and NO human content ruling
+ * (`content_restore`/`content_keep_hidden`/`content_remove`; NOT the system's
+ * `content_auto_hide` row, #57) recorded after its newest report. That definition lives here and nowhere
  * else: `moderation_actions` is the single source of truth for "handled".
  *
  * ⚠️ DO NOT ADD A `status` COLUMN. The spec forbids it by name. A status column
@@ -35,6 +36,8 @@
  * too and gate the handle on it.
  */
 import type { Client } from "pg";
+
+import { HUMAN_CONTENT_RULING_KINDS_SQL } from "./visibility-actions";
 
 export const QUEUE_PAGE_SIZE = 50;
 
@@ -85,13 +88,13 @@ const SELECT_OPEN_QUEUE = `
 WITH post_ruled AS (
   SELECT ma.post_id AS target_id, max(ma.created_at) AS ruled_at
     FROM moderation_actions ma
-   WHERE ma.post_id IS NOT NULL AND ma.action LIKE 'content\\_%'
+   WHERE ma.post_id IS NOT NULL AND ma.action IN (${HUMAN_CONTENT_RULING_KINDS_SQL})
    GROUP BY ma.post_id
 ),
 comment_ruled AS (
   SELECT ma.comment_id AS target_id, max(ma.created_at) AS ruled_at
     FROM moderation_actions ma
-   WHERE ma.comment_id IS NOT NULL AND ma.action LIKE 'content\\_%'
+   WHERE ma.comment_id IS NOT NULL AND ma.action IN (${HUMAN_CONTENT_RULING_KINDS_SQL})
    GROUP BY ma.comment_id
 ),
 post_reports AS (
@@ -118,7 +121,7 @@ SELECT 'post' AS kind, pr.target_id, p.title AS excerpt, p.hidden_at,
   LEFT JOIN users au ON au.id = p.author_id
  WHERE NOT EXISTS (SELECT 1 FROM moderation_actions ma
                     WHERE ma.post_id = pr.target_id
-                      AND ma.action LIKE 'content\\_%'
+                      AND ma.action IN (${HUMAN_CONTENT_RULING_KINDS_SQL})
                       AND ma.created_at > pr.newest_report_at)
 UNION ALL
 SELECT 'comment' AS kind, cr.target_id, left(c.body_markdown, 120) AS excerpt, c.hidden_at,
@@ -129,7 +132,7 @@ SELECT 'comment' AS kind, cr.target_id, left(c.body_markdown, 120) AS excerpt, c
   LEFT JOIN users au ON au.id = c.author_id
  WHERE NOT EXISTS (SELECT 1 FROM moderation_actions ma
                     WHERE ma.comment_id = cr.target_id
-                      AND ma.action LIKE 'content\\_%'
+                      AND ma.action IN (${HUMAN_CONTENT_RULING_KINDS_SQL})
                       AND ma.created_at > cr.newest_report_at)
  ORDER BY severity_rank DESC, report_count DESC, oldest_report_at ASC
  LIMIT $1`;
