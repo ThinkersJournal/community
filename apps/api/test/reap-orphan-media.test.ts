@@ -114,6 +114,27 @@ async function holdKey(key: string): Promise<void> {
   );
 }
 
+describe("reapOrphanMedia and NULL-owner rows (0035)", () => {
+  it("reaps an unreferenced orphan whose owner was cleared on anonymisation, like any other orphan", async () => {
+    const actor = await createVerifiedActor();
+    const orphan = await seedMedia(actor.userId, { ageHours: 25 });
+    const control = await seedMedia(actor.userId, { ageHours: 25 });
+    // The anonymisation clears the link; the row stays, with every hash.
+    await ctxRun((c) =>
+      c.query(`UPDATE media SET owner_id = NULL, owner_cleared_at = now() WHERE id = $1`, [orphan.id]),
+    );
+    // The orphan SELECT never reads owner_id, so a NULL owner must not exempt a
+    // row. CONTROL: the owned orphan beside it is reaped in the same run.
+
+    const ctx = createExecutionContext();
+    await reapOrphanMedia(env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(await mediaExists(control.id)).toBe(false);
+    expect(await mediaExists(orphan.id)).toBe(false);
+  });
+});
+
 /**
  * #61 gap — a legally held upload is evidence: its `media` row records who
  * uploaded it and when, and its object may still sit in MEDIA while the

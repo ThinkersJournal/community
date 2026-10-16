@@ -293,6 +293,30 @@ describe("quota", () => {
     const fresh = await createVerifiedActor();
     expect((await fetchWorker(upload(PNG_1X1, fresh))).status).toBe(201);
   });
+
+  it("a NULL-owner row (an anonymised account's cleared upload, 0035) counts against nobody", async () => {
+    // The quota sum is `WHERE owner_id = $1`: a NULL never equals a user id. A
+    // quota-sized cleared row must not lock out the fresh actor below, and it
+    // is deleted by id because the users' cascade can no longer reach it.
+    const fresh = await createVerifiedActor();
+    const ctx = createExecutionContext();
+    const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height, owner_cleared_at)
+         VALUES (NULL, 'seed-null-owner', 'seed-null-owner', $1, 1, 1, now()) RETURNING id`,
+        [MEDIA_QUOTA_BYTES],
+      );
+      return rows[0]!.id;
+    });
+    await waitOnExecutionContext(ctx);
+    try {
+      expect((await fetchWorker(upload(PNG_1X1, fresh))).status).toBe(201);
+    } finally {
+      const cleanup = createExecutionContext();
+      await withClient(env.HYPERDRIVE_FRESH, cleanup, (c) => c.query("DELETE FROM media WHERE id = $1", [id]));
+      await waitOnExecutionContext(cleanup);
+    }
+  });
 });
 
 /**
