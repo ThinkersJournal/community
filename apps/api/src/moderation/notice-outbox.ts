@@ -107,7 +107,7 @@ const LEASE_SQL = `
          leased_until = now() + make_interval(secs => $2::double precision),
          leased_by = $3,
          -- A lease that EXPIRED means the previous pass died mid-send: count it as a failed
-         -- attempt, so a row that kills the worker every pass still reaches `undeliverable`.
+         -- attempt, so a row that kills the worker every pass still reaches undeliverable.
          attempts = attempts + CASE WHEN state = 'sending' THEN 1 ELSE 0 END
    WHERE id IN (
      SELECT id FROM moderation_notice_outbox
