@@ -55,7 +55,7 @@ export function noticeRetryDelayMs(failures: number): number | null {
 
 // The html body carries the link twice: as the href and as the anchor text.
 const ANCHOR_WITH_LINK_RE = /<a href="[^"]*\/(?:appeal|account\/delete-request)\?token=[^"]*">[^<]*<\/a>/g;
-const BARE_LINK_RE = /[^\s"'<>]*\/(?:appeal|account\/delete-request)\?token=[A-Za-z0-9_%.~-]*/g;
+const BARE_LINK_RE = /[^\s"'<>]*\/(?:appeal|account\/delete-request)\?token=[A-Za-z0-9_%~-]*/g;
 
 /**
  * Replace every live appeal / delete-request link in a stored body (text or
@@ -80,6 +80,7 @@ export interface DrainOptions {
    * Restrict the lease to these actions. ⚠️ A TEST SEAM: the test database is
    * shared between test files running in parallel, and an unrestricted drain
    * would send another file's rows. Production never passes it.
+   * @internal
    */
   readonly onlyActionIds?: readonly string[];
 }
@@ -104,7 +105,10 @@ const LEASE_SQL = `
   UPDATE moderation_notice_outbox
      SET state = 'sending',
          leased_until = now() + make_interval(secs => $2::double precision),
-         leased_by = $3
+         leased_by = $3,
+         -- A lease that EXPIRED means the previous pass died mid-send: count it as a failed
+         -- attempt, so a row that kills the worker every pass still reaches `undeliverable`.
+         attempts = attempts + CASE WHEN state = 'sending' THEN 1 ELSE 0 END
    WHERE id IN (
      SELECT id FROM moderation_notice_outbox
       WHERE ((state = 'pending' AND next_attempt_at <= now())
@@ -173,7 +177,9 @@ async function attempt(env: Env, ctx: ExecutionContext, row: LeasedRow): Promise
   if (outcome.ok) {
     return { kind: "delivered", bodyText: stripLiveLinks(row.body_text), bodyHtml: stripLiveLinks(row.body_html) };
   }
-  // Postmark's per-recipient refusals (ErrorCode 300 / 406) no retry can fix;
+  // Postmark's per-recipient refusals (ErrorCode 300 / 406) no retry can fix. Design §6 says
+  // "4xx recipient errors are permanent"; this is deliberately narrower: other 4xx codes
+  // (401, 412) are ACCOUNT-level and a retry after the account is fixed succeeds;
   // everything else (timeouts, 429, 5xx, account-level codes) is transient.
   if (classifyPostmark(outcome) === "permanent") {
     return { kind: "undeliverable", attempts: row.attempts + 1, error: "recipient_refused" };
@@ -221,6 +227,15 @@ export async function drainNoticeOutbox(env: Env, ctx: ExecutionContext, opts: D
   let leasedAny = false;
   try {
     const rows = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c: Client) => {
+      // A row whose lease expired after its final allowed attempt is finished, not re-leased.
+      await c.query(
+        `UPDATE moderation_notice_outbox
+            SET state = 'undeliverable', last_error = 'retries_exhausted:lease_expired',
+                recipient_email = NULL, leased_until = NULL, leased_by = NULL
+          WHERE state = 'sending' AND leased_until < now() AND attempts >= $1
+            AND ($2::uuid[] IS NULL OR action_id = ANY($2::uuid[]))`,
+        [NOTICE_BACKOFF_MS.length, opts.onlyActionIds ?? null],
+      );
       const res = await c.query<LeasedRow>(LEASE_SQL, [
         NOTICE_OUTBOX_BATCH,
         NOTICE_LEASE_SECONDS,

@@ -1,7 +1,6 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
-import worker from "../src";
 import { withClient } from "../src/db/client";
 import {
   LINK_REMOVED_MARKER,
@@ -204,6 +203,21 @@ describe("drainNoticeOutbox — delivery", () => {
       expect(stored).toContain(row.marker); // the rest of the record is intact
     }
     expect(after.body_html).not.toContain("<a href");
+  });
+
+  it("counts an expired lease as a failed attempt, and finishes a row whose final attempt expired", async () => {
+    const user = await seedUser();
+    const retried = await seedRow({ userId: user.id, state: "sending", attempts: 2, leasedInSecs: -60 });
+    const finished = await seedRow({ userId: user.id, state: "sending", attempts: 6, leasedInSecs: -60 });
+
+    await drain();
+
+    const a = await readRow(retried.id);
+    expect(a?.state).toBe("delivered");
+    expect(sent).toHaveLength(1); // the exhausted row was never sent
+    const b = await readRow(finished.id);
+    expect(b?.state).toBe("undeliverable");
+    expect(b?.last_error).toBe("retries_exhausted:lease_expired");
   });
 
   it("re-reads the address from users at send time (an address changed after the decision is honoured)", async () => {
@@ -441,12 +455,6 @@ describe("purgeExpiredNoticeOutbox", () => {
     expect(await readRow(future.id)).toBeDefined();
   });
 
-  it('is run by the scheduled dispatcher on cron "30 3 * * *"', async () => {
-    const user = await seedUser();
-    const expired = await seedRow({ userId: user.id, retainDays: -1 });
-    const ctx = createExecutionContext();
-    await worker.scheduled({ cron: "30 3 * * *", scheduledTime: Date.now(), noRetry: () => {} }, env, ctx);
-    await waitOnExecutionContext(ctx);
-    expect(await readRow(expired.id)).toBeUndefined();
-  });
+  // The "30 3 * * *" dispatch is pinned as source in route-protection.test.ts: running the whole
+  // nightly tick here would reap other test files' fixtures in the shared test database.
 });
