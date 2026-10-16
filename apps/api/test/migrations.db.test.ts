@@ -195,6 +195,10 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "upload_scan_outcomes")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill_progress")).toBe(true);
+      // 0034_moderation_notice_outbox.sql — the notice outbox and its two indexes.
+      expect(await tableExists(client, "moderation_notice_outbox")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_due_idx")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_retain_until_idx")).toBe(true);
     });
 
     await migrate("down");
@@ -225,6 +229,10 @@ describe("0001 users + profiles migration", () => {
       expect(await indexExists(client, "users_reserved_email_hmac_idx")).toBe(false);
       expect(await tableExists(client, "appeals")).toBe(false);
       expect(await tableExists(client, "moderation_action_tokens")).toBe(false);
+      // 0034 — the outbox and its indexes are gone.
+      expect(await tableExists(client, "moderation_notice_outbox")).toBe(false);
+      expect(await indexExists(client, "moderation_notice_outbox_due_idx")).toBe(false);
+      expect(await indexExists(client, "moderation_notice_outbox_retain_until_idx")).toBe(false);
     });
 
     // THE ISOLATION PROPERTY, pinned. The stack is torn down above — in OUR
@@ -270,6 +278,10 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "upload_scan_outcomes")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill_progress")).toBe(true);
+      // 0034 — re-applied by the round-trip.
+      expect(await tableExists(client, "moderation_notice_outbox")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_due_idx")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_retain_until_idx")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });
