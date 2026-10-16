@@ -58,9 +58,22 @@ export const SignupInput = z.object({
   turnstileToken: z.string().min(1),
 });
 
+/**
+ * `POST /auth/login`. `turnstileToken` is OPTIONAL: it exists only to answer a
+ * `CHALLENGE_REQUIRED` (apps/api/src/routes/login.ts, step 3b), so a login that
+ * was never challenged carries none, and a body without it is exactly what every
+ * client sent before the challenge existed.
+ *
+ * ⚠️ BOUNDED AT 2048, Cloudflare's documented maximum token length. Without a
+ * bound a caller could hand `siteverify` an arbitrarily large string and, by
+ * making that call throw, turn the route's fail-closed 503 into a lever. There
+ * is deliberately NO `.min(1)`: an empty token is "no token" and the route
+ * answers it with the same `CHALLENGE_REQUIRED` as a missing one.
+ */
 export const LoginInput = z.object({
   email: NormalizedEmail,
   password: z.string().min(1),
+  turnstileToken: z.string().max(2048).optional(),
 });
 
 /**

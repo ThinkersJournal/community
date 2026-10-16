@@ -34,6 +34,14 @@ export type ApiErrorCode =
   // --- authorization -------------------------------------------------------
   | "ADMIN_REQUIRED"         // 401 — no valid Cloudflare Access identity (M4 2a)
   | "FORBIDDEN"              // 403 — origin/CSRF/Turnstile rejection
+  // 403 — login only, and only with the api's LOGIN_CHALLENGE flag on: this
+  // address or this host has made several attempts in the last minute, so THIS
+  // attempt needs a solved Turnstile token (`turnstileToken`) before the password
+  // is looked at. The one deliberately DISTINGUISHABLE answer on that route, safe
+  // because it is a function of (the attempted address string, the client IP,
+  // the soft counters) and never of whether an account exists. Also answers a
+  // token that failed siteverify, so the page can simply re-render the widget.
+  | "CHALLENGE_REQUIRED"
   // 403 — #50 Q2: the account is banned or currently suspended. Said ONLY to
   // someone who already proved they hold the account (a correct password at
   // login, or the account's own live session in the pipeline) — a wrong

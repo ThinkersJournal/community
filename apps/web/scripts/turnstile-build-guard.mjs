@@ -56,9 +56,12 @@
  * true branch once the condition is a build-time-inlined non-empty string
  * constant — `dummy-token` does not appear anywhere under `dist/` in that
  * build. Built WITHOUT the key (the normal dev/CI path), it appears in
- * exactly the two expected compiled chunks (signup, forgot-password). Both
- * observed directly, which is also the SECONDARY check's own positive/
- * negative control — see test/turnstile-build-guard.node.test.ts.
+ * exactly the five compiled chunks of the pages that render the fallback
+ * (dsa-notice, forgot-password, login, resend, signup; login's is its
+ * challenge render, 2026-10-11 — this line used to say "the two expected
+ * compiled chunks (signup, forgot-password)", already stale). Both observed
+ * directly, which is also the SECONDARY check's own positive/negative
+ * control — see test/turnstile-build-guard.node.test.ts.
  *
  * ⚠️✅ `WORKERS_CI` CONFIRMED REAL, 2026-09-24, Workers Builds ID
  * `8cb3ff12-16fd-4cb4-a0eb-536dd1722a15` — this stopped being a doc citation

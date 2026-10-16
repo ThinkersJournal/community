@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { barredMessage } from "../src/lib/barred-message";
+import { loginFailureView } from "../src/lib/login-challenge";
 
 /**
  * #50 Q2 — a barred user is told so at login, not "Invalid email or password."
@@ -45,12 +46,21 @@ describe("#113 — the reason", () => {
   });
 });
 
-describe("login.astro uses it", () => {
+describe("the login page uses it", () => {
+  // The failure text is decided by src/lib/login-challenge.ts (the page cannot be
+  // rendered in plain Node); the page hands it the api's body.
   const source = readFileSync(join(import.meta.dirname, "../src/pages/login.astro"), "utf8");
 
-  it("imports barredMessage and consults it before the generic failure text", () => {
-    expect(source).toMatch(/import\s*\{\s*barredMessage\s*\}\s*from\s*"\.\.\/lib\/barred-message"/);
-    expect(source).toMatch(/barredMessage\(response\.data\)/);
-    expect(source.indexOf("barredMessage(response.data)")).toBeLessThan(source.indexOf('"Invalid email or password."'));
+  it("passes the api's body to the decision, and a barred body wins over the generic text", () => {
+    expect(source).toContain("data: response.data");
+    const view = loginFailureView({
+      status: 403,
+      code: "ACCOUNT_BARRED",
+      data: { code: "ACCOUNT_BARRED", barred: { kind: "banned" } },
+      sentToken: false,
+      email: "a@example.com",
+    });
+    expect(view.error).toBe("This account has been banned.");
+    expect(view.challenged).toBe(false);
   });
 });

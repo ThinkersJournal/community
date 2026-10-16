@@ -40,10 +40,11 @@ import {
  * The REAL end-to-end proof that the underlying DCE claim is true — that a
  * genuine `PUBLIC_TURNSTILE_SITE_KEY`-set build's `dist/` contains ZERO
  * occurrences of "dummy-token", and that a normal key-unset build contains
- * it in EXACTLY `dist/server/chunks/forgot-password_*.mjs` and
- * `dist/server/chunks/signup_*.mjs` and nowhere else — was run manually
- * against this exact commit and is recorded in the PR description, not
- * re-asserted here as an automated test.
+ * it in EXACTLY the chunks of the pages that render the fallback
+ * (`dist/server/chunks/{dsa-notice,forgot-password,login,resend,signup}_*.mjs`,
+ * measured 2026-10-11 with the login challenge added, and nowhere else — was
+ * run manually against this exact commit and is recorded in the PR
+ * description, not re-asserted here as an automated test.
  */
 
 let dir: string;
@@ -65,6 +66,23 @@ describe("findDummyTokenLeak", () => {
   it("finds nothing in a clean tree", () => {
     writeFileSync(join(dir, "chunk.mjs"), 'const x = "real-token-abc123";');
     expect(findDummyTokenLeak(dir)).toEqual([]);
+  });
+
+  it("finds the login page's chunk too: the challenge adds a page that ships the fallback in a key-less build", () => {
+    // login.astro renders the same `turnstileSiteKey ? widget : dummy-token`
+    // ternary as signup and forgot-password, in its challenge render, so a
+    // key-less build has it in the login chunk as well, and a keyed build in
+    // none of them (the SECONDARY check below). A real key-less build lists
+    // five such chunks: dsa-notice, forgot-password, login, resend and signup
+    // (measured 2026-10-11); a keyed build lists none of them and has the
+    // widget in the same five.
+    const chunks = join(dir, "server", "chunks");
+    mkdirSync(chunks, { recursive: true });
+    const pages = ["dsa-notice", "forgot-password", "login", "resend", "signup"];
+    for (const page of pages) {
+      writeFileSync(join(chunks, `${page}_ABC123.mjs`), 'value="dummy-token"');
+    }
+    expect(findDummyTokenLeak(dir).sort()).toEqual(pages.map((p) => `server/chunks/${p}_ABC123.mjs`));
   });
 
   it("walks nested directories, same as a real dist/ tree", () => {

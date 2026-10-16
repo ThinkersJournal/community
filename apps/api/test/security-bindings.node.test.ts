@@ -44,7 +44,14 @@ describe("api wrangler.jsonc", () => {
   });
 
   it("ships every flag off but counting (spec §6 phase 1), and never TEST_ROUTES", () => {
-    expect(api.vars).toEqual({ SECURITY_COUNTING: "on", SECURITY_ALERTS_ENABLED: "0", ACCOUNT_NOTICES_ENABLED: "0" });
+    // LOGIN_CHALLENGE (the login Turnstile challenge) is the fourth flag, off too;
+    // its own pin is test/login-challenge-config.node.test.ts.
+    expect(api.vars).toEqual({
+      SECURITY_COUNTING: "on",
+      SECURITY_ALERTS_ENABLED: "0",
+      ACCOUNT_NOTICES_ENABLED: "0",
+      LOGIN_CHALLENGE: "0",
+    });
   });
 });
 
