@@ -170,13 +170,60 @@ today.
 
 `SECURITY_COUNTING` (api and web; "off" is the counting kill switch),
 `SECURITY_ALERTS_ENABLED` and `ACCOUNT_NOTICES_ENABLED` (api) live in each
-Worker's `wrangler.jsonc` `vars`. Flipping one is a one-line PR plus a deploy.
+Worker's `wrangler.jsonc` `vars` (so does `LOGIN_CHALLENGE`, which has its own
+section below). Flipping one is a one-line PR plus a deploy.
 A dashboard edit works as an emergency stop, but **the next `wrangler deploy`
 resets it to the file's value.**
 
 Deploy order for the first deploy: the api (which creates the two Durable
 Object classes, migration `v4`) before the web Worker (which binds the api's
 counter class cross-script).
+
+## The login challenge flag (`LOGIN_CHALLENGE`)
+
+Past a soft threshold (3 attempts a minute on one address, 3 from one IP on one
+address, 15 from one IP; per Cloudflare location) the api asks a login for a
+solved Turnstile token before it looks at the password
+(`docs/superpowers/specs/2026-10-11-login-turnstile-challenge-design.md`).
+`LOGIN_CHALLENGE` in `apps/api/wrangler.jsonc` `vars` is its switch: `"1"` is on,
+anything else is off, and off means the soft limiters are not even consumed, so
+the route is exactly what it was before the challenge. **It ships `"0"`.** It is
+an **api-only** change in both directions: the web Worker (which renders the
+widget) is never redeployed to flip it, and a web that is live before the api
+flag is on is harmless.
+
+- **Order to turn it on:** the web Worker with the challenge page is live
+  **first** (an api that challenges a web that cannot render the widget leaves a
+  user at "Invalid email or password." with no way forward), then the flag.
+- **On** (reviewed): change `"LOGIN_CHALLENGE": "0"` to `"1"` in
+  `apps/api/wrangler.jsonc`, merge, and let Workers Builds deploy the api.
+- **Off in an emergency** (a Turnstile outage that is locking challenged users
+  out, a widget that will not render). ⚠️ **Break-glass only: this path skips the
+  migration gate**, because it is a manual `wrangler deploy` and not Workers
+  Builds. It deploys whatever is checked out, so first make sure that is what is
+  live:
+  1. Read the live build: `GET /health/build` on the production api answers
+     `version.id` and `version.timestamp` (Cloudflare's own registry; it carries
+     no git SHA). Match it to a commit through the Workers Builds log for that
+     version, or by comparing `version.timestamp` with `git log origin/main`
+     commit times.
+  2. If `origin/main` is **ahead** of what is deployed, or has a migration not yet
+     applied to production, do **not** deploy `origin/main`: check out the
+     **deployed** commit in a clean worktree instead. Or run `wrangler rollback`
+     to the last api version from before the flag was flipped (it has
+     `LOGIN_CHALLENGE` = `"0"`), which touches no other code.
+  3. From that clean checkout:
+     `pnpm --filter @thinkersjournal/api exec wrangler deploy --var LOGIN_CHALLENGE:0`
+     (the same manual api deploy the break-glass section below names).
+  4. **The next normal deploy resets the var to the file's value**, so land the
+     one-line `"1"` to `"0"` PR the same day, or the flag comes back on.
+  - UNVERIFIED: a dashboard edit (thinkersjournal-api, Settings, Variables and
+    Secrets, `LOGIN_CHALLENGE` = `0`) may be read-only for a config-managed var.
+    Nobody has tried it. Verify once, with the flag already `"0"`, before relying
+    on it in an emergency.
+- **Verify it took:** the next login attempt past the threshold logs
+  `security: auth_failure /auth/login challenge_required` when on, and never when
+  off; read the property back, not the exit code of the deploy.
 
 ## Security alerting: `DEVICE_HASH_KEY` (set BEFORE the PR that records browsers merges)
 

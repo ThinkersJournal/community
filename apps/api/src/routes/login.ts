@@ -9,6 +9,10 @@
  *   3. rate limit          — bounds every step below, including the Argon2id
  *                            verify, which is deliberately expensive and
  *                            therefore a DoS lever if unbounded.
+ *   3b. challenge          — ONLY with `LOGIN_CHALLENGE` on: past a soft
+ *                            threshold the attempt must carry a solved
+ *                            Turnstile token, checked BEFORE the lookup and so
+ *                            before any Argon2id. See "THE CHALLENGE" below.
  *   4. lookup (FRESH)      — `SELECT id, password_hash, suspended_until,
  *                            disabled_at`.
  *   5. verify              — generic 401 on ANY failure (see below).
@@ -57,12 +61,49 @@
  * lost by moving it up, and both orders satisfy the binding constraint that
  * `checkOrigin` run before the DB is touched.
  *
- * ⚠️ NO TURNSTILE: unlike signup, login has no Turnstile step in either the
- * brief or the REUSE list — `enforceRateLimit` is the only bot/brute-force
- * defense here, matching the reuse contract exactly (YAGNI: do not invent a
- * step the task did not ask for). That makes the limiter's keying (step 3)
- * load-bearing rather than merely defensive: it is the WHOLE brute-force
- * defense on this route.
+ * ⚠️ NO TURNSTILE ON AN ORDINARY ATTEMPT: unlike signup, a login that has not
+ * crossed a soft threshold never meets Turnstile, and with `LOGIN_CHALLENGE` off
+ * (the shipped default) NO login does. The three hard caps of step 3 therefore
+ * remain the WHOLE brute-force defense and their keying is load-bearing, not
+ * merely defensive: the challenge is added friction on top of them and never
+ * replaces or loosens one.
+ *
+ * ⚠️ THE CHALLENGE (step 3b; docs/superpowers/specs/2026-10-11-login-turnstile-
+ * challenge-design.md; CireSnave 2026-10-11, rulings 1-4):
+ *
+ *   • THE TRIGGER is a pure function of (the attempted address STRING, the
+ *     client IP, three soft counters), evaluated BEFORE the lookup, so it is
+ *     identical for an account that exists and one that does not. A counter keyed
+ *     on the user id would be an existence oracle; none is read or written here.
+ *   • THE SOFT KEYS mirror the hard ones (`ip:<limiterIpKey>`, `<ip>:<email>`,
+ *     `email:<email>`) at 15 / 3 / 3 per 60 s per location, on their own
+ *     bindings, and are consumed AFTER the hard caps, so a request a hard cap
+ *     refuses never reaches them or the token check, and a solved token buys no
+ *     extra attempt. All three are always consumed (no short-circuit), so the
+ *     counters do not depend on which one answered first.
+ *   • THE CHALLENGE ONLY EVER ADDS A REQUIREMENT. It never refuses a request that
+ *     carries a valid single-use token and the right password (except the
+ *     fail-closed 503 when siteverify itself throws), never shrinks a
+ *     budget, never extends a window, and expires by itself within one window.
+ *     Anyone can raise it for any address; the cost to that address's holder is
+ *     one solve. (The `email` HARD cap already lets an attacker deny a victim for
+ *     up to a window per location; this neither adds to that nor removes it.)
+ *   • A REJECTED CHALLENGE STILL REACHES THE ALERTING COUNTERS: one `auth_failure`
+ *     with reason `challenge_required` and counting `{ email }` ONLY, the same
+ *     shape as the no-such-user path, so it cannot discriminate either. Without
+ *     it a bot that never solves the challenge would stop emitting failures and
+ *     `credential_stuffing` would go quiet BECAUSE the defence worked.
+ *   • FAIL CLOSED FOR THE CHALLENGED ATTEMPT ONLY: when siteverify throws, that
+ *     attempt is a 503 `SERVICE_UNAVAILABLE` and the password is not evaluated.
+ *     An unchallenged attempt never calls siteverify, so an outage changes
+ *     nothing for a user below the threshold. Not attacker-inducible: the token
+ *     is bounded at 2048 characters in `LoginInput`.
+ *   • NO NON-WIDGET PATH, and NO "RECOGNISED DEVICE" INPUT: the device cookie
+ *     (step 10) is never read here; using it to skip the challenge is a separate
+ *     decision with its own forgery analysis.
+ *   • FLAG OFF IS TODAY'S ROUTE, byte for byte: the soft keys are not even
+ *     consumed and siteverify is never called, whatever the body carries
+ *     (test/login-challenge.test.ts, T6).
  *
  * ⚠️ Every DB access goes through `HYPERDRIVE_FRESH` (cache-disabled) for the
  * same reason as signup: this is an auth read/write, and Hyperdrive never
@@ -92,8 +133,9 @@ import { accountBarredResponse, isBarred, loadBarReason } from "../auth/account-
 import { checkOrigin } from "../auth/csrf";
 import { base64urlEncode } from "../auth/encoding";
 import { hashPassword, needsRehash, verifyPassword } from "../auth/password";
-import { enforceRateLimit } from "../auth/ratelimit";
+import { consumeSoftLimit, enforceRateLimit } from "../auth/ratelimit";
 import { createSession } from "../auth/session";
+import { verifyTurnstile } from "../auth/turnstile";
 import { withClient } from "../db/client";
 import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
@@ -167,6 +209,17 @@ function unauthorized(ip: string | null, counting: SecurityEventCounting): Respo
 }
 
 /**
+ * The 403 that asks for a solved Turnstile token (step 3b). Logged and counted
+ * as ONE `auth_failure` — see the file header's "THE CHALLENGE" for why the
+ * rejection must stay visible to the alerting counters, and why the counting is
+ * `{ email }` and never a user id. Never the email in the line, never a token.
+ */
+function challengeRequired(ip: string | null, email: string): Response {
+  logSecurityEvent({ kind: "auth_failure", route: ROUTE, reason: "challenge_required", ip }, { email });
+  return errorResponse("CHALLENGE_REQUIRED", 403);
+}
+
+/**
  * Handle `POST /auth/login`. See the file header for the (load-bearing) order.
  */
 export async function handleLogin(
@@ -191,7 +244,7 @@ export async function handleLogin(
       fields: parsed.error.issues.map((issue) => issue.path.map(String).join(".")),
     });
   }
-  const { email, password } = parsed.data;
+  const { email, password, turnstileToken } = parsed.data;
 
   // ---- 2. Origin (CSRF) — before the limiter, and before any I/O -------------
   // See the file header's CHECKORIGIN RECONCILIATION and ORIGIN BEFORE THE
@@ -243,7 +296,7 @@ export async function handleLogin(
   // ⚠️ (b) IS NOT REDUNDANT, and (a) DOES NOT IMPLY IT. Putting the IP IN the
   // key gives every IP its own private bucket, so N IPs against one address get
   // N × 10 attempts per window — a botnet trivially defeats (a) alone, and with
-  // NO Turnstile on this route (see above) the limiter is the only thing
+  // no Turnstile on an ordinary attempt (see above) the limiter is the only thing
   // standing between an attacker and unlimited password guesses. Only a key
   // WITHOUT the IP in it can bound the total against a single address. (This
   // file used to claim the single `ip:email` key gave both properties; it never
@@ -300,6 +353,72 @@ export async function handleLogin(
   });
   if (emailLimited !== null) {
     return emailLimited;
+  }
+
+  // ---- 3b. Turnstile challenge (LOGIN_CHALLENGE) -----------------------------
+  // See the file header's "THE CHALLENGE". Everything here sits BEFORE the lookup
+  // on purpose: the answer must be a function of (email string, IP, counters)
+  // only, and a challenged attempt must cost us a binding call, not an Argon2id.
+  //
+  // ⚠️ `=== "1"`, not truthiness and not `!== "0"`: a missing var, an empty one or
+  // a typo is OFF, the safe side for a flag whose off state is today's behaviour
+  // (same convention as ACCOUNT_NOTICES_ENABLED and TEST_ROUTES).
+  if (env.LOGIN_CHALLENGE === "1") {
+    // ⚠️ Same keys as the hard caps, built from the SAME parsed, lowercased
+    // `email` (a case-sensitive key would multiply the ceiling) and with the same
+    // unknown-IP rule: no IP skips the per-IP key rather than pooling every
+    // IP-less request into one shared bucket that one attacker could spend to
+    // challenge everybody.
+    const softKeys: [RateLimit, string][] = [
+      [env.LOGIN_CHALLENGE_LIMITER, `${ip ?? "unknown"}:${email}`],
+      [env.LOGIN_CHALLENGE_LIMITER, `email:${email}`],
+    ];
+    if (ip !== null) {
+      softKeys.unshift([env.LOGIN_CHALLENGE_IP_LIMITER, `ip:${limiterIpKey(ip)}`]);
+    }
+    let overThreshold = false;
+    for (const [limiter, key] of softKeys) {
+      // No short-circuit: every unit is consumed whichever key answers first.
+      if (await consumeSoftLimit(limiter, key)) {
+        overThreshold = true;
+      }
+    }
+
+    if (overThreshold) {
+      // An empty string is "no token" (see LoginInput).
+      if (turnstileToken === undefined || turnstileToken === "") {
+        return challengeRequired(ip, email);
+      }
+      let tokenOk: boolean;
+      try {
+        tokenOk = await verifyTurnstile(env, turnstileToken, ip ?? undefined);
+      } catch (err) {
+        // verifyTurnstile REJECTS on a network/non-JSON failure. Fail closed for
+        // THIS attempt: not a re-challenge (the user cannot fix an outage by
+        // solving again) and not a pass, and never a password evaluation.
+        //
+        // ⚠️ ONE GREPPABLE LINE, NEVER COUNTED AS A LOGIN FAILURE. An outage of
+        // Cloudflare is not an attack, and every attempt past a threshold during
+        // one would otherwise feed login_ip_burst, login_failure_storm and
+        // credential_stuffing (security-signals.ts: every login rule matches
+        // `kind === "auth_failure"`). So this is an `alerting_fault`, the kind the
+        // rules do not match (and missing_client_ip excludes), with NO counting
+        // argument: `security: alerting_fault /auth/login challenge_unavailable`.
+        // The rejection above (`challenge_required`) stays an `auth_failure` and
+        // stays counted: that is the anti-blinding fix.
+        console.error("turnstile verification errored", err);
+        logSecurityEvent({ kind: "alerting_fault", route: ROUTE, reason: "challenge_unavailable", ip });
+        return errorResponse("SERVICE_UNAVAILABLE", 503);
+      }
+      if (!tokenOk) {
+        // success:false (a replay, an expired or forged token): the same answer
+        // as no token, so the page simply shows the widget again. `error-codes`
+        // went to the server log inside verifyTurnstile.
+        return challengeRequired(ip, email);
+      }
+      // A valid, single-use token: this attempt proceeds EXACTLY as an
+      // unchallenged one would, having already spent its hard-cap slots above.
+    }
   }
 
   // ---- 4. Lookup (FRESH) ------------------------------------------------------

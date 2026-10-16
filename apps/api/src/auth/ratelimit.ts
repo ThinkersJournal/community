@@ -72,3 +72,21 @@ export async function enforceRateLimit(
   logSecurityEvent({ kind: "rate_limited", route: log.route, reason: log.bucket, ip: log.ip });
   return errorResponse("RATE_LIMITED", 429);
 }
+
+/**
+ * Consume one unit of a SOFT limiter's quota for `key` and say whether it was
+ * over: `true` means "past the threshold". Unlike `enforceRateLimit` this never
+ * builds a response and never writes a `rate_limited` line: a soft denial is not
+ * a refusal, it is the caller's cue to ask for something more (login's Turnstile
+ * challenge). What happens next, and what is logged, is the caller's decision.
+ *
+ * ⚠️ THE UNIT IS ALWAYS CONSUMED, over or not, because the binding has no
+ * read-only call (the header above): "is this key past its threshold?" and "count
+ * this attempt" are one operation. A caller that wants a question without a
+ * consequence has no way to ask it, which is why the soft keys are only ever
+ * touched on a request that has already passed every hard cap.
+ */
+export async function consumeSoftLimit(limiter: RateLimit, key: string): Promise<boolean> {
+  const { success } = await limiter.limit({ key });
+  return !success;
+}

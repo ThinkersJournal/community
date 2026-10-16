@@ -7,10 +7,10 @@
  * that page's LOGIN_REQUIRED handling).
  */
 import BaseLayout from "../components/BaseLayout.astro";
-import { apiFetch, applyCookies } from "../lib/api";
-import { barredMessage } from "../lib/barred-message";
+import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
+import { loginFailureView } from "../lib/login-challenge";
 import { resolveNext } from "../lib/next-url";
 
 // ⚠️ Per-viewer: this page mints a session (the api's `Set-Cookie` rides out on
@@ -22,7 +22,19 @@ markPrivate(Astro);
 // Now carries the shared nav island + fonts (BaseLayout, below). No inline
 // `<script>` on this page, so `script-src 'self'` (setPublicPageCsp's policy)
 // is safe.
+//
+// ⚠️ THE GET STAYS ON THE TIGHT POLICY, and only the response to a POST the api
+// answered CHALLENGE_REQUIRED widens it (below). The GET cannot know whether a
+// challenge is due without asking the api, and must not become a state probe, so
+// the first render never has a widget and the cost of the challenge is one
+// rejected attempt (docs/superpowers/specs/2026-10-11-login-turnstile-challenge-
+// design.md §6).
 setPublicPageCsp(Astro);
+
+// Same build-time key as signup.astro: set on the deploy build, unset in dev/e2e
+// where a domain-locked widget cannot render and the visible dummy-token input
+// below stands in. Public by design; the secret half lives only in the api.
+const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY as string | undefined;
 
 /**
  * Where to send the user after a successful login. `next` is
@@ -35,12 +47,27 @@ const next = resolveNext(Astro.url.searchParams.get("next"), Astro.url);
 
 let error: string | null = null;
 
+/** True when this response must render the Turnstile widget (see below). */
+let challenged = false;
+/** The address to put back in the re-rendered form. Escaped by Astro. Never the password. */
+let prefillEmail = "";
+
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
 
+  // ⚠️ OMITTED, not null, when the browser sent none: `form.get` is `null` for an
+  // absent field and the api's schema accepts a string or nothing, so a bare
+  // `turnstileToken: form.get(...)` would 400 every ordinary login. An empty
+  // string is omitted too (an unsolved widget submits one).
+  const turnstileToken = form.get("turnstileToken");
+
   const response = await apiFetch("/auth/login", {
     method: "POST",
-    body: { email: form.get("email"), password: form.get("password") },
+    body: {
+      email: form.get("email"),
+      password: form.get("password"),
+      ...(typeof turnstileToken === "string" && turnstileToken !== "" ? { turnstileToken } : {}),
+    },
     // ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own.
     // `checkOrigin` is the ENTIRE CSRF defense for login (no session yet, so no
     // double-submit token exists to check). Substituting our always-allowlisted
@@ -79,10 +106,25 @@ if (Astro.request.method === "POST") {
   // The one exception is a barred account (#50 Q2): the api says ACCOUNT_BARRED
   // only AFTER the password checked out, so naming the bar here tells nothing
   // to anyone but the account's own holder.
-  error =
-    response.status === 429
-      ? "Too many attempts. Please wait and try again."
-      : (barredMessage(response.data) ?? "Invalid email or password.");
+  // The decision is src/lib/login-challenge.ts's (pure, and tested as behaviour);
+  // this page only applies it.
+  const view = loginFailureView({
+    status: response.status,
+    code: apiErrorCode(response),
+    data: response.data,
+    sentToken: typeof turnstileToken === "string" && turnstileToken !== "",
+    email: form.get("email"),
+  });
+  error = view.error;
+  if (view.challenged) {
+    challenged = true;
+    // `set`s the header, so this second call replaces the tight policy above.
+    // Still no inline script: Turnstile's api.js is external.
+    setPublicPageCsp(Astro, { turnstile: true });
+    // The address comes back so the user retypes only the password. Astro
+    // escapes it in the attribute. The password is never echoed.
+    prefillEmail = view.prefillEmail;
+  }
 }
 ---
 
@@ -95,14 +137,55 @@ if (Astro.request.method === "POST") {
     <form method="POST" class="form">
       <label>
         Email
-        <input type="email" name="email" required />
+        <input type="email" name="email" value={prefillEmail} required />
       </label>
       <label>
         Password
-        <input type="password" name="password" required />
+        <input type="password" name="password" autofocus={challenged} required />
       </label>
+      {
+        challenged && (
+          turnstileSiteKey ? (
+            <>
+              <div
+                class="cf-turnstile"
+                data-sitekey={turnstileSiteKey}
+                data-response-field-name="turnstileToken"
+                data-error-callback="turnstileOnError"
+                data-timeout-callback="turnstileOnTimeout"
+              ></div>
+              {/* SSR-hidden: src/scripts/turnstile-error.ts reveals this and
+                  disables Submit on a widget error/timeout. Feedback ONLY: no
+                  mode change, no bypass (see that file's header). */}
+              <p class="turnstile-error" data-turnstile-error hidden>
+                Verification failed.{" "}
+                <button type="button" data-turnstile-retry class="link">Tap to retry</button>
+              </p>
+            </>
+          ) : (
+            // ⚠️ type="text", NOT hidden, for the same reason as signup.astro:
+            // the Playwright helper drives it with page.fill(), which times out
+            // on a hidden element. Dev/e2e only; a keyed build has none of this.
+            <input type="text" name="turnstileToken" value="dummy-token" />
+          )
+        )
+      }
       <button type="submit" class="btn btn-primary">Log in</button>
     </form>
+    {
+      challenged && turnstileSiteKey && (
+        <>
+          {/* NO Subresource Integrity, deliberately: api.js is a versionless
+              Cloudflare loader. The control is the CSP, whose script-src is
+              allowlisted to challenges.cloudflare.com only (src/lib/csp.ts). */}
+          <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+          <script>
+            import { initTurnstileErrorHandling } from "../scripts/turnstile-error";
+            initTurnstileErrorHandling();
+          </script>
+        </>
+      )
+    }
 
     <p><a class="link" href="/forgot-password">Forgot your password?</a></p>
     <p><a class="link" href="/signup">Need an account? Sign up</a></p>
@@ -115,4 +198,5 @@ if (Astro.request.method === "POST") {
   .form input{background:var(--ink2);border:1px solid var(--line);border-radius:8px;
     padding:11px 13px;color:var(--text);font:inherit}
   .form input:focus-visible{border-color:var(--green)}
+  .turnstile-error{color:var(--red, #e5484d);font-size:14px;margin-top:-4px}
 </style>
