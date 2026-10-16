@@ -22,6 +22,7 @@ import type { ContractualGround, LegalGround } from "@thinkersjournal/shared";
 import type { LegalHoldCategory } from "../media/legal-hold";
 
 import { imposeAccountHoldInTx } from "./account-holds";
+import { enqueueAuthorDecisionNotice } from "./notice-enqueue";
 import { recordModerationAction, type ModerationActionKind, type ModerationSource, type ViolationCategory } from "./actions";
 import { loadPostTagSlugs, type PurgeTarget } from "./purge-target";
 
@@ -48,6 +49,16 @@ export interface DecisionInput {
   readonly contractualGround?: ContractualGround;
   /** Spec §3 T1: the author's account is held in THIS SAME transaction. */
   readonly accountHold?: { readonly category: LegalHoldCategory };
+  /**
+   * Notice outbox PR 1: when set, the author's notice is rendered and queued
+   * (and the appeal token minted) IN THIS SAME TRANSACTION, unless
+   * `noticeSkip` says there is no one to tell or the decision is a restore of
+   * never-hidden content. `origin` is the verification-link origin computed
+   * from the request (`verificationLinkOrigin`). A failure here rolls the
+   * whole decision back. Omitted by every caller that sends its own notice
+   * (an appeal grant tells the appellant the appeal's outcome instead).
+   */
+  readonly enqueueNotice?: { readonly origin: string };
 }
 
 export interface DecisionResult {
@@ -234,6 +245,24 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
     });
   }
 
+  // ⚠️ `author_anonymised` wins when both facts hold (see DecisionResult.noticeSkip).
+  const noticeSkip = row.author_anonymised ? "author_anonymised" : row.tombstoned === true ? "comment_deleted" : null;
+
+  // Notice outbox PR 1: queue the author's notice in THIS transaction. Not
+  // wrapped in a try/catch on purpose: a failure rolls the decision back.
+  if (input.enqueueNotice !== undefined && noticeSkip === null) {
+    await enqueueAuthorDecisionNotice(c, {
+      actionId,
+      authorId: row.author_id,
+      decision: input.decision,
+      wasHidden: row.was_hidden,
+      subject: input.subject,
+      postTitle: row.title,
+      reason: input.reason,
+      origin: input.enqueueNotice.origin,
+    });
+  }
+
   const purge: PurgeTarget =
     input.subject === "post"
       ? { kind: "post", postId: row.id, authorId: row.author_id, tagSlugs: await loadPostTagSlugs(c, row.id) }
@@ -249,7 +278,7 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
     postTitle: row.title,
     purge,
     dsaReporters: dsaRows.map((r) => ({ email: r.reporter_email, noticeId: r.id })),
-    noticeSkip: row.author_anonymised ? "author_anonymised" : row.tombstoned === true ? "comment_deleted" : null,
+    noticeSkip,
   };
 }
 
