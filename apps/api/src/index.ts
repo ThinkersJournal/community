@@ -7,6 +7,7 @@ import { processPendingMoves } from "./media/moves";
 import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media";
 import { reapUnconfirmedDsaNotices } from "./moderation/dsa-notices";
 import { purgeExpiredNoticeRecords } from "./moderation/notice-records";
+import { drainNoticeOutbox, purgeExpiredNoticeOutbox } from "./moderation/notice-outbox";
 import { runEmailDrain } from "./notifications/email-drain";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
@@ -77,6 +78,8 @@ export default {
       ctx.waitUntil(reapUnconfirmedDsaNotices(env, ctx));
       /* #57 Q9 — records of sent notices past their retain_until. */
       ctx.waitUntil(purgeExpiredNoticeRecords(env, ctx));
+      /* Notice outbox — rows (delivered or not) past their retain_until. */
+      ctx.waitUntil(purgeExpiredNoticeOutbox(env, ctx));
       ctx.waitUntil(sweepForgottenAccounts(env, ctx));
       return;
     }
@@ -103,6 +106,9 @@ export default {
     if (controller.cron === "*/2 * * * *") {
       ctx.waitUntil(runMediaBackfillBatch(env, ctx));
       ctx.waitUntil(ensureLedgerAlarm(env));
+      /* Notice outbox — sends the moderation notices queued in the decisions'
+         own transactions (src/moderation/notice-outbox.ts). Never throws. */
+      ctx.waitUntil(drainNoticeOutbox(env, ctx));
     }
     const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant";
     ctx.waitUntil(runEmailDrain(env, ctx, disposition));
