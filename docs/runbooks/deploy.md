@@ -294,6 +294,40 @@ wiring: the `afterSignIn`/`afterPasswordReset` calls in login, signup and reset,
 `deviceCookieFrom` and `applyClientCountryHeader` lines. (If the class must change, leave it a no-op
 `async alarm() { await this.ctx.storage.deleteAlarm(); }`.)
 
+## Moderation notice outbox PR 1: apply 0034 BEFORE the deploy
+
+Migration `0034_moderation_notice_outbox.sql` creates `moderation_notice_outbox`
+(additive, no `-- deploy: after-code` marker). **Apply it before the api
+deploys:** the new code enqueues the author's decision notice INSIDE the
+decision's transaction, so on a database without the table every
+`POST /admin/decision` that has a notice to send (anything except a restore of
+never-hidden content, or an anonymised author) fails and rolls back. The
+normal gate for an additive migration (see "Shipping a PR with an additive
+migration" above) therefore covers this one: the build fails until it is
+applied, then proceeds.
+
+After the deploy a decision no longer mails the author from the request. The
+notice is queued, and the existing `*/2 * * * *` cron sends it (the same tick
+that runs the media backfill and the email drain), so an author's notice can
+arrive up to a couple of minutes after the decision, and a Postmark outage
+retries on 2 m, 10 m, 1 h, 6 h, 24 h, 24 h and is then marked `undeliverable`
+instead of being lost. The daily `30 3 * * *` tick also purges outbox rows past
+`retain_until` (365 days from the decision).
+
+**Rollback.** Roll the api back first, then (only if you must) run the
+migration's `-- Down Migration` SQL:
+
+```sql
+DROP INDEX IF EXISTS moderation_notice_outbox_retain_until_idx;
+DROP INDEX IF EXISTS moderation_notice_outbox_due_idx;
+DROP TABLE IF EXISTS moderation_notice_outbox;
+```
+
+Never drop the table while the new api is live (every decision would fail), and
+note that dropping it discards any notice still queued for delivery.
+`moderation_notice_records` (0032) is untouched by this PR and still records
+account notices until PR 2.
+
 ## Destructive migrations
 
 Mark a destructive migration (drop column, drop table, rename, `NOT NULL`
