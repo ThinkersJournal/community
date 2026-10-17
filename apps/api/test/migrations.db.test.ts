@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runner } from "node-pg-migrate";
@@ -80,12 +83,30 @@ async function columnExists(client: Client, table: string, column: string): Prom
   return rows.length === 1;
 }
 
+/** Whether `table.column` admits NULL (0035 makes `media.owner_id` nullable). */
+async function columnNullable(client: Client, table: string, column: string): Promise<boolean> {
+  const { rows } = await client.query<{ is_nullable: string }>(
+    `SELECT is_nullable FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`,
+    [table, column],
+  );
+  return rows[0]?.is_nullable === "YES";
+}
+
 async function indexExists(client: Client, indexName: string): Promise<boolean> {
   const { rows } = await client.query<{ n: string }>(
     `SELECT count(*) AS n FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1`,
     [indexName],
   );
   return Number(rows[0]!.n) > 0;
+}
+
+/** The live `moderation_actions_action_check` definition, or "" when absent. */
+async function actionCheck(client: Client): Promise<string> {
+  const { rows } = await client.query<{ def: string }>(
+    "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'moderation_actions_action_check'",
+  );
+  return rows[0]?.def ?? "";
 }
 
 // globalSetup migrates the SHARED DB; this one is ours to set up. Idempotent
@@ -195,6 +216,15 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "upload_scan_outcomes")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill_progress")).toBe(true);
+      // 0033 — moderation_actions accepts security_ref_resolved (security alerting).
+      expect(await actionCheck(client)).toContain("'security_ref_resolved'::text");
+      // 0034_moderation_notice_outbox.sql — the notice outbox and its two indexes.
+      expect(await tableExists(client, "moderation_notice_outbox")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_due_idx")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_retain_until_idx")).toBe(true);
+      // 0035_media_owner_nullable.sql — the ownership link can be cleared.
+      expect(await columnNullable(client, "media", "owner_id")).toBe(true);
+      expect(await columnExists(client, "media", "owner_cleared_at")).toBe(true);
     });
 
     await migrate("down");
@@ -225,6 +255,12 @@ describe("0001 users + profiles migration", () => {
       expect(await indexExists(client, "users_reserved_email_hmac_idx")).toBe(false);
       expect(await tableExists(client, "appeals")).toBe(false);
       expect(await tableExists(client, "moderation_action_tokens")).toBe(false);
+      // 0034 — the outbox and its indexes are gone.
+      expect(await tableExists(client, "moderation_notice_outbox")).toBe(false);
+      expect(await indexExists(client, "moderation_notice_outbox_due_idx")).toBe(false);
+      expect(await indexExists(client, "moderation_notice_outbox_retain_until_idx")).toBe(false);
+      // 0035 — went with the media table (a full down drops it).
+      expect(await columnExists(client, "media", "owner_cleared_at")).toBe(false);
     });
 
     // THE ISOLATION PROPERTY, pinned. The stack is torn down above — in OUR
@@ -270,7 +306,66 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "upload_scan_outcomes")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill_progress")).toBe(true);
+      // 0033 — re-applied by the round-trip.
+      expect(await actionCheck(client)).toContain("'security_ref_resolved'::text");
+      // 0034 — re-applied by the round-trip.
+      expect(await tableExists(client, "moderation_notice_outbox")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_due_idx")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_retain_until_idx")).toBe(true);
+      // 0035 — re-applied by the round-trip.
+      expect(await columnNullable(client, "media", "owner_id")).toBe(true);
+      expect(await columnExists(client, "media", "owner_cleared_at")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
+  });
+});
+
+describe("0035 media owner nullable: the Down Migration", () => {
+  // The real Down SQL from the file, run inside a transaction that is always
+  // rolled back, so the DB stays migrated (up) for whatever runs next.
+  const downSql = readFileSync(join(migrationsDir, "0035_media_owner_nullable.sql"), "utf8").split("-- Down Migration")[1] ?? "";
+
+  async function inRolledBackTx(fn: (client: Client) => Promise<void>): Promise<void> {
+    await withClient(async (client) => {
+      await client.query("BEGIN");
+      try {
+        await fn(client);
+      } finally {
+        await client.query("ROLLBACK");
+      }
+    });
+  }
+
+  async function seedUserWithMedia(client: Client, ownerCleared: boolean): Promise<void> {
+    const userId = randomUUID();
+    await client.query("INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'h')", [
+      userId,
+      `${userId}@mig-0035.test`,
+    ]);
+    await client.query(
+      `INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height)
+       VALUES ($1, $2, 's', 1, 1, 1)`,
+      [ownerCleared ? null : userId, `k-${randomUUID()}`],
+    );
+  }
+
+  it("the file has a Down section", () => {
+    expect(downSql).toContain("SET NOT NULL");
+  });
+
+  it("refuses while a media row has a NULL owner", async () => {
+    await inRolledBackTx(async (client) => {
+      await seedUserWithMedia(client, true);
+      await expect(client.query(downSql)).rejects.toThrow(/null value|not-null|owner_id/i);
+    });
+  });
+
+  it("CONTROL: the same Down SQL succeeds when every media row still has an owner", async () => {
+    await inRolledBackTx(async (client) => {
+      await seedUserWithMedia(client, false);
+      await client.query(downSql);
+      expect(await columnNullable(client, "media", "owner_id")).toBe(false);
+      expect(await columnExists(client, "media", "owner_cleared_at")).toBe(false);
+    });
   });
 });
