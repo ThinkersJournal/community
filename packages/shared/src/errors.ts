@@ -128,7 +128,10 @@ export type ApiErrorCode =
   | "APPEAL_WINDOW_CLOSED"
   | "NOT_APPEALABLE"
   | "APPEAL_RESOLVED"
-  | "APPEAL_SUPERSEDED";
+  | "APPEAL_SUPERSEDED"
+  // 409 — POST /admin/notices/:id/resend: the notice has no live account to
+  // send to (a reporter row, or an anonymised or vanished recipient).
+  | "NOT_RESENDABLE";
 
 export interface ApiErrorBody {
   code: ApiErrorCode;

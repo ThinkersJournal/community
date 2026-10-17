@@ -128,6 +128,7 @@ const queueError = queueResp.status !== 200 ? (adminApiErrorCode(queueResp) ?? "
     <p class="admin-nav"><a class="link" href="/admin/media-access">Media access requests →</a></p>
     <p class="admin-nav"><a class="link" href="/admin/dsa-notices">DSA notices →</a></p>
     <p class="admin-nav"><a class="link" href="/admin/appeals">Appeals →</a></p>
+    <p class="admin-nav"><a class="link" href="/admin/notices">Undelivered notices →</a></p>
     {decisionError && <p class="err">Decision failed: {decisionError}</p>}
     {queueError && <p class="err">Could not load the queue: {queueError}</p>}
     {
