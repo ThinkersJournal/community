@@ -7,7 +7,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json && tsc --noEmit -p test/tsconfig.node.json",
     "test": "vitest run",
-    "migrate": "node scripts/migrate.mjs dev up",
+    "migrate": "node scripts/migrate.mjs dev up --local",
     "migrate:test": "node scripts/migrate.mjs test up"
   },
   "devDependencies": {
