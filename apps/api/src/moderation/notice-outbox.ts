@@ -102,23 +102,28 @@ type Settlement =
   | { readonly kind: "undeliverable"; readonly attempts: number; readonly error: string };
 
 const LEASE_SQL = `
-  UPDATE moderation_notice_outbox
+  -- MATERIALIZED: an inline WHERE id IN (SELECT ... LIMIT n FOR UPDATE SKIP LOCKED) can be
+  -- re-evaluated by the planner under concurrent updates and lease MORE than n rows (seen in CI: 27 for
+  -- a batch of 25). Picking the ids once, in a materialised CTE, keeps the batch bound.
+  WITH picked AS MATERIALIZED (
+    SELECT id FROM moderation_notice_outbox
+     WHERE ((state = 'pending' AND next_attempt_at <= now())
+         OR (state = 'sending' AND leased_until < now()))
+       AND ($4::uuid[] IS NULL OR action_id = ANY($4::uuid[]))
+     ORDER BY next_attempt_at
+     LIMIT $1
+       FOR UPDATE SKIP LOCKED
+  )
+  UPDATE moderation_notice_outbox o
      SET state = 'sending',
          leased_until = now() + make_interval(secs => $2::double precision),
          leased_by = $3,
          -- A lease that EXPIRED means the previous pass died mid-send: count it as a failed
          -- attempt, so a row that kills the worker every pass still reaches undeliverable.
-         attempts = attempts + CASE WHEN state = 'sending' THEN 1 ELSE 0 END
-   WHERE id IN (
-     SELECT id FROM moderation_notice_outbox
-      WHERE ((state = 'pending' AND next_attempt_at <= now())
-          OR (state = 'sending' AND leased_until < now()))
-        AND ($4::uuid[] IS NULL OR action_id = ANY($4::uuid[]))
-      ORDER BY next_attempt_at
-      LIMIT $1
-        FOR UPDATE SKIP LOCKED
-   )
-  RETURNING id, action_id, recipient_user_id, recipient_email, subject, body_text, body_html, attempts`;
+         attempts = o.attempts + CASE WHEN o.state = 'sending' THEN 1 ELSE 0 END
+    FROM picked
+   WHERE o.id = picked.id
+  RETURNING o.id, o.action_id, o.recipient_user_id, o.recipient_email, o.subject, o.body_text, o.body_html, o.attempts`;
 
 /** A log-safe class for a thrown value: never its message (a pg message can quote data). */
 function errorClass(err: unknown): string {

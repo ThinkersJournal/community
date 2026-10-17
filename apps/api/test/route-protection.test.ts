@@ -167,6 +167,7 @@ const EXPECTED_DISPATCHER_BODY =
   'import { reapUnverifiedAccounts } from "./auth/reap-unverified"; ' +
   'import { recordDbProbe } from "./health/probe"; ' +
   'import { notFoundResponse } from "./http/errors"; ' +
+  'import { sweepMediaOwners } from "./media/owner-sweep"; ' +
   'import { reapOrphanMedia } from "./media/reap-orphan-media"; ' +
   'import { processPendingMoves } from "./media/moves"; ' +
   'import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media"; ' +
@@ -222,6 +223,7 @@ const EXPECTED_DISPATCHER_BODY =
   "} " +
   'if (controller.cron === "40 4 * * *") { ' +
   "ctx.waitUntil(anonymiseExpiredAccounts(env, ctx)); " +
+  "ctx.waitUntil(sweepMediaOwners(env, ctx)); " +
   "return; " +
   "} " +
   'if (controller.cron === "*/2 * * * *") { ' +

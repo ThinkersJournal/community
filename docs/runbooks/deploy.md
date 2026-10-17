@@ -140,6 +140,30 @@ and only then for both Workers.
 4. **`prod-smoke.yml` runs after the push**, as it already does for every
    push to `main` (unchanged by this work — see that workflow).
 
+## Media ownership records: `0035` must be applied BEFORE the deploy
+
+`0035_media_owner_nullable.sql` makes `media.owner_id` nullable and adds
+`media.owner_cleared_at`. The code it ships with writes `NULL` into `owner_id`
+when an account is anonymised (and in the daily sweep). **Apply it first** with
+the steps in "Shipping a PR with an additive migration" above. If the code
+deploys against a database that still has `NOT NULL`, the anonymisation
+transaction fails on that write and rolls the account's scrub back: the account
+is retried on the next daily run, so nothing is lost, but nothing is anonymised
+until the migration lands. The migration itself is additive and inert for the
+old code.
+
+**Rollback** is the file's `-- Down Migration` section:
+
+```sql
+ALTER TABLE media DROP COLUMN owner_cleared_at;
+ALTER TABLE media ALTER COLUMN owner_id SET NOT NULL;
+```
+
+It **refuses while any `media.owner_id IS NULL` row exists** (the `SET NOT NULL`
+fails and the transaction leaves both statements unapplied). Those rows have no
+owner to restore, so a down past that point is a data decision for a person.
+After a code rollback, leave the migration in place: it is inert.
+
 ## One-time secret: `RESERVED_EMAIL_KEY` (0023, BEFORE that deploy ships)
 
 `0023_reserved_email_hmac` makes a banned account's email reservation an
