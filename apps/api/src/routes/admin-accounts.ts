@@ -176,6 +176,30 @@ export async function handleAdminAccountAction(
   });
 }
 
+/** Parse and validate the terminate body. Resolves the fields, or the 4xx to return. */
+async function readTerminateInput(request: Request): Promise<{ reason: string; category: ViolationCategory | undefined } | Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("INVALID_JSON", 400);
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return errorResponse("INVALID_INPUT", 400);
+  const b = body as Record<string, unknown>;
+  const reason = b["reason"];
+  const category = b["violationCategory"];
+  if (
+    typeof reason !== "string" || reason.trim() === "" ||
+    (category !== undefined && !(REPORT_REASONS as readonly unknown[]).includes(category)) ||
+    // Permanent and irreversible from the product (never appealable): an explicit,
+    // separate confirmation on top of the reason, as for a ban.
+    b["confirmTerminate"] !== true
+  ) {
+    return errorResponse("INVALID_INPUT", 400);
+  }
+  return { reason: reason.trim(), category: category as ViolationCategory | undefined };
+}
+
 /**
  * `POST /admin/accounts/:handle/terminate` (#114): the moderator's terminate, for
  * the CSAM / severe case. A separate route from `/actions` on purpose: a terminate
@@ -203,25 +227,9 @@ export async function handleAdminTerminateAccount(
   const admin = await requireAdmin(request, env);
   if (admin instanceof Response) return admin;
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse("INVALID_JSON", 400);
-  }
-  if (typeof body !== "object" || body === null || Array.isArray(body)) return errorResponse("INVALID_INPUT", 400);
-  const b = body as Record<string, unknown>;
-  const reason = b["reason"];
-  const category = b["violationCategory"];
-  if (
-    typeof reason !== "string" || reason.trim() === "" ||
-    (category !== undefined && !(REPORT_REASONS as readonly unknown[]).includes(category)) ||
-    // Permanent and irreversible from the product (never appealable): an explicit,
-    // separate confirmation on top of the reason, as for a ban.
-    b["confirmTerminate"] !== true
-  ) {
-    return errorResponse("INVALID_INPUT", 400);
-  }
+  const input = await readTerminateInput(request);
+  if (input instanceof Response) return input;
+  const { reason, category } = input;
 
   const account = await findByHandle(env, ctx, params.handle ?? "");
   if (account === null) return errorResponse("NOT_FOUND", 404);
@@ -232,10 +240,10 @@ export async function handleAdminTerminateAccount(
     applyAccountAction(c, {
       userId: account.id,
       kind: "terminate",
-      reason: reason.trim(),
+      reason,
       actorAdmin: admin.email,
       subjectLabel: account.username,
-      violationCategory: category as ViolationCategory | undefined,
+      violationCategory: category,
       // The termination notice is queued in the action's transaction (an
       // anonymised account gets none). The */2 cron drain sends it.
       enqueueNotice: { origin: verificationLinkOrigin(request) },
