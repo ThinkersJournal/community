@@ -34,6 +34,14 @@ export const CreatePostInput = z.object({
   tags: z.array(z.string().trim().min(1).max(50)).max(5).default([]),
 });
 
+/**
+ * The `Idempotency-Key` header on `POST /posts` (design 2026-10-13): 16-64 URL-safe
+ * characters, so a UUID fits. ONE definition: the api validates with it, the web
+ * editor's prefill script checks a key from the URL fragment with it, and the
+ * posts table's CHECK (migration 0037) says the same thing in SQL.
+ */
+export const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{16,64}$/;
+
 export const UpdatePostInput = z.object({
   title: z.string().trim().min(1).max(200),
   markdownSource: z.string().min(1).max(MARKDOWN_MAX),

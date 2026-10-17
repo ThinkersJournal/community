@@ -142,6 +142,12 @@ export interface ApiFetchOptions {
   /** The api's per-session CSRF token, echoed as `X-CSRF-Token`. */
   csrfToken?: string;
   /**
+   * `Idempotency-Key` for `POST /posts` (design 2026-10-13): a retry or a double
+   * submit with the same key answers with the first post instead of making a
+   * second. Omit it and the request behaves exactly as before.
+   */
+  idempotencyKey?: string;
+  /**
    * A raw body, forwarded UNTOUCHED — no JSON serialization, no content-type.
    *
    * For binary passthrough (`POST /media` takes raw image bytes; see that
@@ -169,7 +175,7 @@ export async function apiFetch<T = unknown>(
   path: string,
   options: ApiFetchOptions = {},
 ): Promise<ApiResponse<T>> {
-  const { method = "GET", body, request, deviceCookieFrom, origin, csrfToken, rawBody } = options;
+  const { method = "GET", body, request, deviceCookieFrom, origin, csrfToken, rawBody, idempotencyKey } = options;
 
   const headers = new Headers();
 
@@ -190,6 +196,10 @@ export async function apiFetch<T = unknown>(
 
   if (csrfToken !== undefined) {
     headers.set("X-CSRF-Token", csrfToken);
+  }
+
+  if (idempotencyKey !== undefined) {
+    headers.set("Idempotency-Key", idempotencyKey);
   }
 
   // ⚠️ Keyed on `body`, NOT on whether an outgoing body ends up present —

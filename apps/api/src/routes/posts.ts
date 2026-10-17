@@ -37,8 +37,9 @@
  * M1 leans on the deploy gate's Cloudflare WAF rule. Recorded here so the
  * omission reads as a decision, like every other omission in this file.
  */
-import { CreatePostInput, UpdatePostInput } from "@thinkersjournal/shared";
+import { CreatePostInput, IDEMPOTENCY_KEY_RE, UpdatePostInput } from "@thinkersjournal/shared";
 
+import { sha256Hex } from "../auth/encoding";
 import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
 import { purgeTags } from "../cache/purge";
 import { withClient } from "../db/client";
@@ -186,11 +187,55 @@ function notFound(): Response {
 }
 
 interface InsertedPost {
+  kind: "created";
   id: string;
   slug: string;
   username: string;
   /** The normalized tag slugs written for this post — the create purge's tag pages. */
   newSlugs: string[];
+}
+
+/**
+ * The key was already used by THIS author. `sameRequest` says whether the
+ * stored request hash equals this request's; the row's own id/slug/status are
+ * what a replay answers with.
+ */
+interface ReplayedPost {
+  kind: "replay";
+  id: string;
+  slug: string;
+  status: string;
+  username: string;
+  sameRequest: boolean;
+}
+
+/** `Idempotency-Key` plus the hash of the request as submitted (see `requestHash`). */
+interface IdempotencyArg {
+  readonly key: string;
+  readonly requestSha256: string;
+}
+
+/** The unique index that makes `(author, Idempotency-Key)` one post (migration 0037). */
+const IDEMPOTENCY_CONSTRAINT = "posts_author_idempotency_key";
+
+/**
+ * The constraint a unique violation names. ⚠️ A second unique index on `posts`
+ * must NOT be retried as a slug collision, so the create path asks which one.
+ */
+function violatedConstraint(err: unknown): string | null {
+  const c = typeof err === "object" && err !== null ? (err as { constraint?: unknown }).constraint : undefined;
+  return typeof c === "string" ? c : null;
+}
+
+/**
+ * SHA-256 (hex) of the request AS SUBMITTED: title, markdown, status and the
+ * normalized, sorted tag slugs, NUL-separated. Not a secret and not a MAC: its
+ * only job is "did the client send the same thing". Stored on the row at create
+ * time, so a later edit to the post cannot make a legitimate replay look different.
+ */
+async function requestHash(title: string, markdownSource: string, status: string, tags: string[]): Promise<string> {
+  const slugs = normalizeTags(tags).map((t) => t.slug).sort();
+  return sha256Hex([title, markdownSource, status, slugs.join(",")].join("\0"));
 }
 
 /**
@@ -237,16 +282,18 @@ async function insertPost(
   markdownSource: string,
   status: string,
   tags: string[],
-): Promise<InsertedPost> {
+  idempotency: IdempotencyArg | null,
+): Promise<InsertedPost | ReplayedPost> {
   const base = slugify(title);
   for (let attempt = 1; attempt <= SLUG_ATTEMPTS; attempt++) {
     const slug = attempt === 1 ? base : `${base}-${randomSuffix()}`;
     try {
       const { rows } = await client.query<{ id: string; slug: string }>(
-        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
-         VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 = 'published' THEN now() ELSE NULL END)
+        `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at,
+                            idempotency_key, idempotency_request_sha256)
+         VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 = 'published' THEN now() ELSE NULL END, $6, $7)
          RETURNING id, slug`,
-        [authorId, title, slug, markdownSource, status],
+        [authorId, title, slug, markdownSource, status, idempotency?.key ?? null, idempotency?.requestSha256 ?? null],
       );
       const { id, slug: insertedSlug } = rows[0]!;
       // ⚠️ AFTER the RETURNING succeeds, so a tag write can NEVER re-enter the
@@ -254,9 +301,20 @@ async function insertPost(
       // writeTags cannot raise it (tags upsert is ON CONFLICT DO NOTHING; the
       // join rows are deduped after a DELETE, so no PK collision either).
       const newSlugs = await writeTags(client, id, tags);
-      return { id, slug: insertedSlug, username: await usernameFor(client, authorId), newSlugs };
+      return { kind: "created", id, slug: insertedSlug, username: await usernameFor(client, authorId), newSlugs };
     } catch (err) {
-      if (!isUniqueViolation(err) || attempt === SLUG_ATTEMPTS) throw err;
+      if (!isUniqueViolation(err)) throw err;
+      // ⚠️ A replayed key is NOT a slug collision: do not retry, answer from the
+      // row that already holds the key. (A replay usually reports the SLUG index
+      // first, because the same title makes the same slug; the suffixed retry
+      // then reports the key, so this branch is reached on attempt 2.)
+      if (idempotency !== null && violatedConstraint(err) === IDEMPOTENCY_CONSTRAINT) {
+        const replay = await readReplay(client, authorId, idempotency);
+        if (replay !== null) return replay;
+        // The post was deleted between the violation and the read: its key went
+        // with it, so the next attempt can place a fresh post.
+      }
+      if (attempt === SLUG_ATTEMPTS) throw err;
     }
   }
   // Unreachable: the FINAL iteration (attempt === SLUG_ATTEMPTS) rethrows on a
@@ -266,6 +324,24 @@ async function insertPost(
   // "gave up" path (each retry adds ~64 bits of entropy). The 409 for a genuine
   // exhaustion comes from handleCreatePost's catch on the rethrown 23505, not here.
   throw new Error("unreachable: insertPost exhausted its slug-retry loop");
+}
+
+/** The post that already holds this author's key, or null when it is gone. */
+async function readReplay(client: Client, authorId: string, idempotency: IdempotencyArg): Promise<ReplayedPost | null> {
+  const { rows } = await client.query<{ id: string; slug: string; status: string; idempotency_request_sha256: string }>(
+    `SELECT id, slug, status, idempotency_request_sha256 FROM posts WHERE author_id = $1 AND idempotency_key = $2`,
+    [authorId, idempotency.key],
+  );
+  const row = rows[0];
+  if (row === undefined) return null;
+  return {
+    kind: "replay",
+    id: row.id,
+    slug: row.slug,
+    status: row.status,
+    username: await usernameFor(client, authorId),
+    sameRequest: row.idempotency_request_sha256 === idempotency.requestSha256,
+  };
 }
 
 /** Parse + validate a post body. Resolves the fields, or the 400 to return. */
@@ -304,13 +380,26 @@ export async function handleCreatePost(
 
   // ⚠️ author_id comes from the PIPELINE's validated session, NEVER the body —
   // which a caller controls. `CreatePostInput` has no authorId field at all, so
-  // this is unrepresentable rather than merely unused.
+  // this is unrepresentable rather than merely unused. It is also the scope of
+  // the idempotency key: one user's key can never touch another user's post.
   const authorId = result.session.userId;
 
-  let inserted: InsertedPost;
+  // Idempotency-Key (design 2026-10-13): validated BEFORE any write, and a bad
+  // value is a 400 naming the HEADER only, never echoing it. No header = exactly
+  // the behaviour without this feature.
+  const keyHeader = request.headers.get("Idempotency-Key");
+  if (keyHeader !== null && !IDEMPOTENCY_KEY_RE.test(keyHeader)) {
+    return errorResponse("INVALID_INPUT", 400, { fields: ["Idempotency-Key"] });
+  }
+  const idempotency: IdempotencyArg | null =
+    keyHeader === null
+      ? null
+      : { key: keyHeader, requestSha256: await requestHash(title, markdownSource, status, input.tags) };
+
+  let inserted: InsertedPost | ReplayedPost;
   try {
     inserted = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-      insertPost(c, authorId, title, markdownSource, status, input.tags),
+      insertPost(c, authorId, title, markdownSource, status, input.tags, idempotency),
     );
   } catch (err) {
     // Every retry collided: answer 409 rather than 500. Astronomically unlikely
@@ -319,6 +408,16 @@ export async function handleCreatePost(
     // InsertedPost or throws, never null, so there is no null branch to check.
     if (isUniqueViolation(err)) return errorResponse("SLUG_TAKEN", 409);
     throw err;
+  }
+
+  if (inserted.kind === "replay") {
+    // The same key and the same request: the post already exists. Answer from the
+    // stored row; no tag write, no purge, no notification happened here.
+    if (!inserted.sameRequest) return errorResponse("IDEMPOTENCY_KEY_REUSED", 422);
+    return new Response(
+      JSON.stringify({ id: inserted.id, slug: inserted.slug, status: inserted.status, username: inserted.username }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   }
 
   // Publishing changes what a LISTING shows. There is no `post:` tag to purge —

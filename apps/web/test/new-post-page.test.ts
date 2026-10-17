@@ -526,3 +526,100 @@ describe("⚠️ hidden-pending-review banner — M4 author-facing hidden state 
     expect(code).not.toContain('href="/appeal"');
   });
 });
+
+describe("⚠️ Idempotency-Key on the create form (design 2026-10-13) — RENDERED through Astro's container", () => {
+  const KEY = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const HIDDEN_KEY = /<input type="hidden" name="idempotencyKey" value="([^"]*)"/;
+
+  async function render(opts: { url?: string; method?: string; body?: string; onPost?: (init: RequestInit) => void }): Promise<{ res: Response; html: string }> {
+    const res = await renderPage(NewPost, {
+      url: opts.url ?? "http://localhost/new-post",
+      method: opts.method,
+      body: opts.body,
+      api: (url, init) => {
+        const path = new URL(url).pathname;
+        if (path === "/auth/csrf") return json(200, { csrfToken: "tok" });
+        if (path === "/posts" && init?.method === "POST") {
+          opts.onPost?.(init);
+          return json(201, { id: "p9", slug: "s", status: "draft", username: "u" });
+        }
+        if (path === "/posts/p1") return json(200, { id: "p1", title: "T", markdownSource: "b", status: "draft", tags: [], hiddenAt: null, hiddenReason: null });
+        return json(500, { code: "UNEXPECTED_TEST_PATH", message: path });
+      },
+    });
+    return { res, html: res.status === 200 ? await res.text() : "" };
+  }
+
+  const form = (extra: string) => `csrfToken=tok&title=Hello&markdownSource=body&tags=&intent=draft${extra}`;
+
+  it("the create form carries a fresh UUID in a hidden field; the edit form carries none", async () => {
+    const create = await render({});
+    const key = HIDDEN_KEY.exec(create.html)?.[1] ?? "";
+    expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    // A second GET is a NEW form, so a NEW key.
+    expect(HIDDEN_KEY.exec((await render({})).html)?.[1]).not.toBe(key);
+    // Control that the regex finds the field when present, and the edit form really has none.
+    const edit = await render({ url: "http://localhost/new-post?post=p1" });
+    expect(edit.html).toContain('name="postId"');
+    expect(edit.html).not.toContain('name="idempotencyKey"');
+  });
+
+  it("a create POST forwards the hidden value as the Idempotency-Key header", async () => {
+    let sent: Headers | undefined;
+    const { res } = await render({ method: "POST", body: form(`&idempotencyKey=${KEY}`), onPost: (init) => (sent = new Headers(init.headers)) });
+    expect(res.status).toBe(302);
+    expect(sent?.get("Idempotency-Key")).toBe(KEY);
+  });
+
+  it("a missing or malformed hidden value sends NO header (the api behaves as before)", async () => {
+    for (const extra of ["", "&idempotencyKey=short", "&idempotencyKey=has%20space%20in%20it%2012345"]) {
+      let sent: Headers | undefined;
+      const { res } = await render({ method: "POST", body: form(extra), onPost: (init) => (sent = new Headers(init.headers)) });
+      expect(res.status, extra).toBe(302);
+      expect(sent?.has("Idempotency-Key"), extra).toBe(false);
+    }
+  });
+
+  it("a failed submit re-renders with the SAME key, so a retry is a replay and not a second post", async () => {
+    const res = await renderPage(NewPost, {
+      url: "http://localhost/new-post",
+      method: "POST",
+      body: form(`&idempotencyKey=${KEY}`),
+      api: (url, init) => {
+        const path = new URL(url).pathname;
+        if (path === "/auth/csrf") return json(200, { csrfToken: "tok" });
+        if (path === "/posts" && init?.method === "POST") return json(500, { code: "INTERNAL" });
+        return json(500, { code: "UNEXPECTED_TEST_PATH", message: path });
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(HIDDEN_KEY.exec(await res.text())?.[1]).toBe(KEY);
+  });
+
+  it("an edit (PATCH) never sends the header", async () => {
+    let patch: Headers | undefined;
+    const res = await renderPage(NewPost, {
+      url: "http://localhost/new-post?post=p1",
+      method: "POST",
+      body: form("&postId=p1"),
+      api: (url, init) => {
+        const path = new URL(url).pathname;
+        if (path === "/auth/csrf") return json(200, { csrfToken: "tok" });
+        if (path === "/posts/p1" && init?.method === "PATCH") {
+          patch = new Headers(init.headers);
+          return json(200, { id: "p1", slug: "s", status: "draft", username: "u" });
+        }
+        if (path === "/posts/p1") return json(200, { id: "p1", title: "T", markdownSource: "b", status: "draft", tags: [], hiddenAt: null, hiddenReason: null });
+        return json(500, { code: "UNEXPECTED_TEST_PATH", message: path });
+      },
+    });
+    expect(res.status).toBe(302);
+    expect(patch).toBeDefined();
+    expect(patch!.has("Idempotency-Key")).toBe(false);
+  });
+
+  it("the page mounts the prefill island via a bundled import", () => {
+    expect(code).toMatch(/import \{ initEditorPrefill \} from "\.\.\/scripts\/editor-prefill"/);
+    expect(code).toMatch(/initEditorPrefill\(\)/);
+  });
+});

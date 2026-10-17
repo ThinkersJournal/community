@@ -62,6 +62,7 @@ export type ApiErrorCode =
   | "NOT_FOUND"              // 404 — no such route, or no such visible resource
   | "EMAIL_TAKEN"            // 409 — a VERIFIED duplicate at signup
   | "SLUG_TAKEN"             // 409 — could not place a unique slug (T9)
+  | "IDEMPOTENCY_KEY_REUSED" // 422 — POST /posts: this Idempotency-Key was used for a DIFFERENT request
   | "ALREADY_BLOCKED"        // 409 — reserved for future use; block is idempotent (M4)
   | "NOT_BLOCKED"            // 404 — unblock of a pair that is not blocked (M4)
   // USERNAME_TAKEN is now also signup's collision code (handle-at-signup Task

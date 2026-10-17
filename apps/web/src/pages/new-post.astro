@@ -37,6 +37,7 @@
  * hidden field to a real header on the Service-Binding call.
  */
 import { renderMarkdown } from "@thinkersjournal/markdown";
+import { IDEMPOTENCY_KEY_RE } from "@thinkersjournal/shared";
 import type { AuthoredPost, HiddenReason } from "@thinkersjournal/shared";
 
 import BaseLayout from "../components/BaseLayout.astro";
@@ -86,6 +87,11 @@ let postId = Astro.url.searchParams.get("post");
 let title = "";
 let markdownSource = "";
 let tagsValue = "";
+// The create form's Idempotency-Key (design 2026-10-13): a fresh UUID per GET,
+// echoed back unchanged on a failed submit (no row exists yet, so reusing it is
+// correct) and sent as the `Idempotency-Key` header. A successful create
+// redirects away, so the next form is a new GET and a new key.
+let idempotencyKey = "";
 
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
@@ -110,6 +116,7 @@ if (Astro.request.method === "POST") {
   // author typed before they've even seen the error.
   tagsValue = tagsRaw;
   const submittedToken = String(form.get("csrfToken") ?? "");
+  idempotencyKey = String(form.get("idempotencyKey") ?? "");
 
   if (intent === "delete") {
     // ⚠️ CONVENIENCE DELETE FROM THE EDITOR (content-deletion + media-reclamation,
@@ -207,6 +214,9 @@ if (Astro.request.method === "POST") {
             origin,
             // The hidden input, promoted back into the header the api demands.
             csrfToken: submittedToken,
+            // A malformed or missing hidden value sends NO header (today's
+            // behaviour); the api owns the real validation.
+            idempotencyKey: IDEMPOTENCY_KEY_RE.test(idempotencyKey) ? idempotencyKey : undefined,
           })
         : await apiFetch<SavedPost>(`/posts/${encodeURIComponent(postId)}`, {
             method: "PATCH",
@@ -290,6 +300,10 @@ if (Astro.request.method === "POST") {
     }
   }
 }
+
+// A fresh key for every create form render that has no usable one (the first GET,
+// or a POST whose hidden value was missing or malformed).
+if (!IDEMPOTENCY_KEY_RE.test(idempotencyKey)) idempotencyKey = crypto.randomUUID();
 
 // Load an existing post for editing. AFTER the POST branch so a just-created
 // post's id is honoured, and only for a GET — a POST already has the text
@@ -395,6 +409,8 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
                 cannot set a header itself. */}
             <input type="hidden" name="csrfToken" value={csrfToken} />
             <input type="hidden" name="postId" value={postId ?? ""} />
+            {/* CREATE form only: the key belongs to the post this form will make. */}
+            {postId === null && <input type="hidden" name="idempotencyKey" value={idempotencyKey} />}
             <label>
               Title
               <input type="text" id="title" name="title" value={title} required />
@@ -566,6 +582,10 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     // The hide/unhide island (#61/#73) — same import-not-inline reasoning.
     import { initPostVisibility } from "../scripts/post-visibility";
     initPostVisibility();
+
+    // Prefill from a `#cr=` fragment (CodeRipper route A) — create form only.
+    import { initEditorPrefill } from "../scripts/editor-prefill";
+    initEditorPrefill();
   </script>
 </BaseLayout>
 <style>

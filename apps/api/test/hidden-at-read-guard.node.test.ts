@@ -109,6 +109,15 @@ const ALLOWLIST: readonly AllowEntry[] = [
   },
   {
     file: "posts.ts",
+    match: "FROM posts WHERE author_id = $1 AND idempotency_key = $2",
+    why:
+      "readReplay (POST /posts Idempotency-Key): answers a REPLAY from the row that already holds " +
+      "the caller's own key, scoped to author_id = session.userId. The post may have been hidden " +
+      "since it was created; the author still gets the id/slug/status of THEIR OWN post back, " +
+      "exactly as handleGetPost does. Never a public read.",
+  },
+  {
+    file: "posts.ts",
     match: "INSERT INTO moderation_snapshots (post_id, author_id, title, body_markdown)",
     why:
       "handleDeletePost (#58 Q1): the author's OWN delete, scoped to author_id = session.userId. " +
