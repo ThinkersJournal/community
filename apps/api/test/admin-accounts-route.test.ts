@@ -403,6 +403,125 @@ describe("#113 plan B — the appeal and delete-request links", () => {
   });
 });
 
+describe("POST /admin/accounts/:handle/terminate (#114)", () => {
+  const REASON = "Internal: confirmed severe violation, case 4711";
+
+  async function terminate(handle: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
+    return call(`/admin/accounts/${handle}/terminate`, {
+      method: "POST",
+      headers: { Origin: ALLOWED_ORIGIN, "content-type": "application/json", "Cf-Access-Jwt-Assertion": await makeJwt(), ...headers },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function drain(actionId: string): Promise<void> {
+    const ctx = createExecutionContext();
+    await drainNoticeOutbox(env, ctx, { onlyActionIds: [actionId] });
+    await waitOnExecutionContext(ctx);
+  }
+
+  async function userState(userId: string) {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ disabled_at: Date | null; disabled_reason: string | null }>(
+        `SELECT disabled_at, disabled_reason FROM users WHERE id = $1`,
+        [userId],
+      );
+      return rows[0]!;
+    });
+  }
+
+  it("403s a cross-site origin BEFORE the Access check; 401s without Access, and a member session grants nothing", async () => {
+    const { handle } = await seedHandle();
+    expect((await terminate(handle, { reason: REASON, confirmTerminate: true }, { Origin: "https://evil.example" })).status).toBe(403);
+    const member = await createVerifiedActor();
+    const res = await call(`/admin/accounts/${handle}/terminate`, {
+      method: "POST",
+      headers: { Origin: ALLOWED_ORIGIN, "content-type": "application/json", Cookie: member.cookie },
+      body: JSON.stringify({ reason: REASON, confirmTerminate: true }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it.each([
+    [{ confirmTerminate: true }],
+    [{ reason: "   ", confirmTerminate: true }],
+    [{ reason: REASON }],
+    [{ reason: REASON, confirmTerminate: false }],
+    [{ reason: REASON, confirmTerminate: "true" }],
+    [{ reason: REASON, confirmTerminate: true, violationCategory: "nonsense" }],
+  ])("400s %j and terminates nothing", async (body) => {
+    const { handle, userId } = await seedHandle();
+    expect((await terminate(handle, body)).status).toBe(400);
+    expect((await userState(userId)).disabled_at).toBeNull();
+    expect(await ctxRun(async (c) => (await c.query(`SELECT 1 FROM moderation_actions WHERE subject_user_id = $1`, [userId])).rowCount)).toBe(0);
+  });
+
+  it("404s an unknown handle", async () => {
+    expect((await terminate("nosuchhandle0000", { reason: REASON, confirmTerminate: true })).status).toBe(404);
+  });
+
+  it("terminates: user_terminate logged with the internal reason, account barred, one termination notice QUEUED with no token", async () => {
+    const { handle, userId, email } = await seedHandle();
+    const res = await terminate(handle, { reason: REASON, confirmTerminate: true, violationCategory: "spam" });
+    expect(res.status).toBe(200);
+    const { actionId } = (await res.json()) as { actionId: string };
+
+    expect(await userState(userId)).toMatchObject({ disabled_reason: "terminate" });
+    expect((await userState(userId)).disabled_at).not.toBeNull();
+    const log = await ctxRun(async (c) =>
+      (await c.query<{ action: string; reason: string }>(`SELECT action, reason FROM moderation_actions WHERE id = $1`, [actionId])).rows[0],
+    );
+    expect(log).toEqual({ action: "user_terminate", reason: REASON });
+
+    // Queued, not sent by the request.
+    expect(sentEmails).toHaveLength(0);
+    const rows = await ctxRun(async (c) =>
+      (await c.query<{ kind: string; state: string; recipient_user_id: string | null; body_text: string }>(
+        `SELECT kind, state, recipient_user_id, body_text FROM moderation_notice_outbox WHERE action_id = $1`, [actionId])).rows,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "account_action", state: "pending", recipient_user_id: userId });
+    const tokens = await ctxRun(async (c) => (await c.query(`SELECT 1 FROM moderation_action_tokens WHERE action_id = $1`, [actionId])).rowCount);
+    expect(tokens).toBe(0);
+
+    // Sent by the drain: the ruled generic text, and NOTHING of the internal reason.
+    await drain(actionId);
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({ To: email, MessageStream: "outbound", Subject: "Your account has been terminated" });
+    const text = String(sentEmails[0]!.TextBody);
+    expect(text).toContain("terminated");
+    expect(text).not.toContain(REASON);
+    expect(text).not.toContain("case 4711");
+    expect(text).not.toMatch(/https?:\/\//);
+  });
+
+  it("a BANNED account can be terminated: the original disabled_at is kept, the reason upgraded", async () => {
+    const { handle, userId } = await seedHandle();
+    expect((await act(handle, { action: "ban", reason: "r", confirmBan: true })).status).toBe(200);
+    const bannedAt = (await userState(userId)).disabled_at!.getTime();
+    expect((await terminate(handle, { reason: REASON, confirmTerminate: true })).status).toBe(200);
+    const s = await userState(userId);
+    expect(s.disabled_reason).toBe("terminate");
+    expect(s.disabled_at!.getTime()).toBe(bannedAt);
+  });
+
+  it("the ladder route still refuses terminate (it is not a rung)", async () => {
+    const { handle, userId } = await seedHandle();
+    expect((await act(handle, { action: "terminate", reason: REASON })).status).toBe(400);
+    expect((await userState(userId)).disabled_at).toBeNull();
+  });
+
+  it("the internal reason never appears in any queued notice for the account", async () => {
+    const { handle, userId } = await seedHandle();
+    await terminate(handle, { reason: REASON, confirmTerminate: true });
+    // The reason lives only in moderation_actions.
+    const exposed = await ctxRun(async (c) =>
+      (await c.query(`SELECT 1 FROM moderation_notice_outbox WHERE recipient_user_id = $1 AND body_text LIKE '%' || $2 || '%'`, [userId, REASON])).rowCount,
+    );
+    expect(exposed).toBe(0);
+  });
+});
+
 describe("⚠️ a member session grants no admin authority (Review Focus 3 scope)", () => {
   afterEach(async () => {
     await deleteCreatedUsers();

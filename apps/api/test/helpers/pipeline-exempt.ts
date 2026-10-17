@@ -81,6 +81,9 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   "POST /admin/backfill-hidden-media",
   // #113 — same Access + inline checkOrigin defense as /admin/decision.
   "POST /admin/accounts/:handle/actions",
+  // #114 — the moderator terminate: same Access + inline checkOrigin defense as
+  // /admin/accounts/:handle/actions directly above.
+  "POST /admin/accounts/:handle/terminate",
   // Addendum to #113 (PM ruling, 2026-10-01) — same Access trust domain and
   // same reasoning as /admin/decision/media-access-requests above.
   "POST /admin/dsa-notices/:id/close",

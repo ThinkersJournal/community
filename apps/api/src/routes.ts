@@ -35,6 +35,7 @@ import {
 } from "./routes/admin";
 import {
   handleAdminAccountAction,
+  handleAdminTerminateAccount,
   handleAdminGetAccount,
   handleAdminImposeAccountHold,
   handleAdminReleaseAccountHold,
@@ -455,6 +456,7 @@ export const ROUTES: readonly RouteDef[] = [
   // decision form (spec decision #3); the queue links to the account page.
   { method: "GET", pattern: "/admin/accounts/:handle", handler: handleAdminGetAccount },
   { method: "POST", pattern: "/admin/accounts/:handle/actions", handler: handleAdminAccountAction },
+  { method: "POST", pattern: "/admin/accounts/:handle/terminate", handler: handleAdminTerminateAccount },
 
   // account-legal-hold spec §3 T3 — manual impose/release. Same Access trust
   // domain and inline-checkOrigin shape as the routes above.
