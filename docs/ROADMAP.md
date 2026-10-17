@@ -43,6 +43,8 @@ These are open issues that nothing above holds. Each one is small enough for one
 4. **Test and harness debt:** #60 (render an Astro page in a unit test), #59, #65, #84 and #85 (local e2e hangs,
    a flaky bell test), #156 (e2e cannot cross the web-to-api ledger path), #39 and #40.
 5. **#74** endpoint-to-UI reachability audit.
+6. **Audit row for a notice resend** (`POST /admin/notices/:id/resend` logs the row id only; a `moderation_actions` row
+   needs a new kind, so a CHECK migration). PM ruling 2026-10-17: not now.
 
 ## 3b. Guideline and reality gaps (CireSnave asked, 2026-10-15)
 
