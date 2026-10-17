@@ -294,6 +294,15 @@ export interface AdminAccountHold {
 export const APPEAL_WINDOW_DAYS = 30;
 
 /**
+ * Notice outbox PR 4: the window starts when the notice is DELIVERED, not when the
+ * decision is made. A notice that is still undelivered after this long is given up
+ * on (the retry schedule is about 2 days; this is the design's horizon). A link is
+ * minted valid for horizon + window, then shortened to delivered_at + window once
+ * the notice goes out (moderation/notice-outbox.ts).
+ */
+export const NOTICE_UNDELIVERABLE_HORIZON_DAYS = 7;
+
+/**
  * #57 Q8=A: the ONE generic redress sentence appended to every ADVERSE decision
  * email (author keep_hidden/remove, account warn/suspend/ban). Names the three
  * routes generically: no body, no statute number. Plain language, not legal

@@ -29,16 +29,44 @@ interface ActionRow {
   reason: string;
   created_at: Date;
   subject_user_id: string | null;
+  /** When the appeal window closes (see `loadAction`). */
+  closes_at: Date;
   in_window: boolean;
   appealed: boolean;
 }
 
+/**
+ * ⚠️ THE APPEAL WINDOW STARTS AT DELIVERY (notice outbox design, section 5).
+ * `closes_at` is, in order:
+ *   1. the notice row is DELIVERED: `delivered_at + APPEAL_WINDOW_DAYS`;
+ *   2. the notice row exists but was not delivered (pending, sending, or
+ *      undeliverable): the window has NOT started. It stays open until the row's
+ *      `retain_until` (the decision plus the retention constant), when the record
+ *      is purged. The decision stays in force; the matter is a human one
+ *      (/admin/notices, the dispute address);
+ *   3. no notice row at all (a decision from before the outbox, an anonymised
+ *      recipient, or a record already purged): the old rule, the decision plus
+ *      the window.
+ * Only the notices that carry the appeal (kinds 1-3) count; an appeal outcome or a
+ * reporter outcome is not the notice that opens a window.
+ */
 async function loadAction(c: Client, actionId: string): Promise<ActionRow | null> {
   const { rows } = await c.query<ActionRow>(
-    `SELECT ma.id, ma.action, ma.reason, ma.created_at, ma.subject_user_id,
-            ma.created_at > now() - make_interval(days => $2::int) AS in_window,
+    `SELECT ma.id, ma.action, ma.reason, ma.created_at, ma.subject_user_id, w.closes_at,
+            w.closes_at > now() AS in_window,
             EXISTS (SELECT 1 FROM appeals a WHERE a.action_id = ma.id) AS appealed
-       FROM moderation_actions ma WHERE ma.id = $1`,
+       FROM moderation_actions ma
+      CROSS JOIN LATERAL (
+        SELECT COALESCE(
+                 (SELECT CASE WHEN o.state = 'delivered' THEN o.delivered_at + make_interval(days => $2::int)
+                              ELSE o.retain_until END
+                    FROM moderation_notice_outbox o
+                   WHERE o.action_id = ma.id AND o.kind IN ('author_decision','author_auto_hide','account_action')
+                   ORDER BY o.created_at, o.id
+                   LIMIT 1),
+                 ma.created_at + make_interval(days => $2::int)) AS closes_at
+      ) w
+      WHERE ma.id = $1`,
     [actionId, APPEAL_WINDOW_DAYS],
   );
   return rows[0] ?? null;
@@ -56,7 +84,7 @@ export async function describeAppealTarget(c: Client, actionId: string): Promise
     reason: a.reason,
     createdAt: a.created_at.toISOString(),
     alreadyAppealed: a.appealed,
-    windowClosesAt: new Date(a.created_at.getTime() + APPEAL_WINDOW_DAYS * 24 * 3600_000).toISOString(),
+    windowClosesAt: a.closes_at.toISOString(),
   };
 }
 

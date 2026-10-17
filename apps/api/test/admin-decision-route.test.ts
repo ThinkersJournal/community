@@ -8,7 +8,7 @@ import { withClient } from "../src/db/client";
 import { applyDecision, type DecisionInput } from "../src/moderation/decide";
 import { enqueueAuthorDecisionNotice } from "../src/moderation/notice-enqueue";
 import { drainNoticeOutbox } from "../src/moderation/notice-outbox";
-import { APPEAL_WINDOW_DAYS, DISPUTE_CONTACT_LINE, MODERATION_NOTICE_RETENTION_DAYS } from "@thinkersjournal/shared";
+import { APPEAL_WINDOW_DAYS, DISPUTE_CONTACT_LINE, MODERATION_NOTICE_RETENTION_DAYS, NOTICE_UNDELIVERABLE_HORIZON_DAYS } from "@thinkersjournal/shared";
 
 const TEAM = "testteam.cloudflareaccess.com";
 const AUD = "test-aud-tag";
@@ -1666,13 +1666,14 @@ describe("POST /admin/decision — notice outbox (PR 1)", () => {
     // An account recipient's address is re-read at send time, never stored.
     expect(JSON.stringify(row)).not.toContain(authorEmail);
 
-    // The appeal token was minted in the same transaction, for APPEAL_WINDOW_DAYS from the decision.
+    // The appeal token was minted in the same transaction, valid for the undeliverable horizon plus the window
+    // (the window itself starts at delivery; the drain shortens the link then).
     expect(await appealTokenCount(actionId)).toBe(1);
     const ttl = await ctxRun(async (c) => {
       const { rows: t } = await c.query<{ ok: boolean }>(
         `SELECT (expires_at > now() + make_interval(days => $2::int - 1) AND expires_at <= now() + make_interval(days => $2::int)) AS ok
            FROM moderation_action_tokens WHERE action_id = $1`,
-        [actionId, APPEAL_WINDOW_DAYS],
+        [actionId, APPEAL_WINDOW_DAYS + NOTICE_UNDELIVERABLE_HORIZON_DAYS],
       );
       return t[0]!.ok;
     });
