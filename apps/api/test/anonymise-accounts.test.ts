@@ -6,7 +6,7 @@ import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
 import type { SecurityLedgerDO } from "../src/durable-objects/SecurityLedgerDO";
-import { sweepMediaOwners } from "../src/media/owner-clearing";
+import { sweepMediaOwners } from "../src/media/owner-sweep";
 import { mintActionToken } from "../src/moderation/action-tokens";
 import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
 import { quiet } from "./helpers/security-do";

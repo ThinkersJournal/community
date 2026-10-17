@@ -23,18 +23,19 @@
  * constant. Holds are per r2_key, but a decision is per ROW: two users' rows on
  * the same (deduplicated) key are each judged on their own owner.
  *
+ * `sweepMediaOwners` (the Worker-facing wrapper) is in ./owner-sweep.ts, so this module stays free
+ * of Worker types and the Node test project can import it.
+ *
  * Logs carry counts only, never user ids, keys or addresses.
  */
 import type { Client } from "pg";
-
-import { withClient } from "../db/client";
 
 /**
  * Caps one sweep run's UPDATE — same reasoning as reap-orphan-media.ts's
  * REAP_BATCH: a large backlog is finished over the next runs, never in one
  * unbounded statement.
  */
-const SWEEP_BATCH = 500;
+export const SWEEP_BATCH = 500;
 
 /**
  * THE HOLD RULE (see the header). A predicate over a `media` row that must be
@@ -78,25 +79,4 @@ export async function clearMediaOwnersOfAnonymisedUsers(c: Client, limit = SWEEP
     [limit],
   );
   return rowCount ?? 0;
-}
-
-/**
- * The daily sweep, wired into the account-anonymisation cron branch
- * (src/index.ts, "40 4 * * *"). NEVER THROWS: a failure is logged and retried
- * by the next run, so it can neither fail the cron callback nor mask the
- * anonymisation run it rides with. Returns the number of rows cleared.
- */
-export async function sweepMediaOwners(env: Env, ctx: ExecutionContext): Promise<number> {
-  try {
-    const cleared = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => clearMediaOwnersOfAnonymisedUsers(c));
-    console.log(`media-owner-sweep: cleared ${cleared} (batch cap ${SWEEP_BATCH})`);
-    return cleared;
-  } catch (err) {
-    // The message only: an error object can echo statement parameters.
-    console.error(
-      "media-owner-sweep: failed (retried next run)",
-      err instanceof Error ? err.message : "unknown error",
-    );
-    return 0;
-  }
 }
