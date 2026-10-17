@@ -151,6 +151,17 @@ and only then for both Workers.
 4. **`prod-smoke.yml` runs after the push**, as it already does for every
    push to `main` (unchanged by this work — see that workflow).
 
+## Post idempotency key: `0037` must be applied BEFORE the deploy
+
+`0037_post_idempotency_key.sql` adds two nullable columns and a partial unique index to `posts`
+(`idempotency_key`, `idempotency_request_sha256`, `posts_author_idempotency_key`). It is **additive and inert
+for the old code**, so apply it first with the steps in "Shipping a PR with an additive migration" above. The new
+code writes the columns on every `POST /posts` (as `NULL` when the request carries no `Idempotency-Key`), so
+deploying it against a database without `0037` fails every post create.
+
+**Rollback** is the file's `-- Down Migration` (drops the index, both checks and both columns). Dropping only the
+code path is also safe: the columns are harmless and can stay.
+
 ## Notice outbox PR 2: `0036` and the deploy are a PAIR
 
 `0036_moderation_notice_outbox_per_notice.sql` adds `moderation_notice_outbox.dsa_notice_id` and swaps the

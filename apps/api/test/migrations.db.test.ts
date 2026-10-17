@@ -229,6 +229,10 @@ describe("0001 users + profiles migration", () => {
       expect(await columnExists(client, "moderation_notice_outbox", "dsa_notice_id")).toBe(true);
       expect(await indexExists(client, "moderation_notice_outbox_action_kind_key")).toBe(true);
       expect(await indexExists(client, "moderation_notice_outbox_action_kind_notice_key")).toBe(true);
+      // 0037_post_idempotency_key.sql — the key lives on the post row.
+      expect(await columnExists(client, "posts", "idempotency_key")).toBe(true);
+      expect(await columnExists(client, "posts", "idempotency_request_sha256")).toBe(true);
+      expect(await indexExists(client, "posts_author_idempotency_key")).toBe(true);
     });
 
     await migrate("down");
@@ -322,6 +326,9 @@ describe("0001 users + profiles migration", () => {
       // 0036 — re-applied by the round-trip.
       expect(await columnExists(client, "moderation_notice_outbox", "dsa_notice_id")).toBe(true);
       expect(await indexExists(client, "moderation_notice_outbox_action_kind_notice_key")).toBe(true);
+      // 0037 — re-applied by the round-trip.
+      expect(await columnExists(client, "posts", "idempotency_key")).toBe(true);
+      expect(await indexExists(client, "posts_author_idempotency_key")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });
