@@ -116,14 +116,25 @@ and only then for both Workers.
    **bash:**
 
    ```
-   DATABASE_URL="$TJ_PROD_DATABASE_URL" node apps/api/scripts/migrate.mjs dev up
+   DATABASE_URL="$TJ_PROD_DATABASE_URL" node apps/api/scripts/migrate.mjs dev up --allow-remote
    ```
 
    **PowerShell:**
 
    ```powershell
-   $env:DATABASE_URL=$env:TJ_PROD_DATABASE_URL; node apps/api/scripts/migrate.mjs dev up; Remove-Item Env:DATABASE_URL
+   $env:DATABASE_URL=$env:TJ_PROD_DATABASE_URL; node apps/api/scripts/migrate.mjs dev up --allow-remote; Remove-Item Env:DATABASE_URL
    ```
+
+   **`migrate.mjs` refuses to guess its target (2026-10-17).** It prints
+   `migrate dev up: <host>:<port>/<database> (from DATABASE_URL)` BEFORE it
+   connects (never the user or password): read that line and stop if the host
+   or database is not the one you meant. With `DATABASE_URL` unset it now
+   fails instead of silently migrating the localhost dev database (a
+   production URL held under another variable name did exactly that); `pnpm
+   migrate` passes `--local` to ask for the localhost default on purpose. A
+   non-localhost host is refused without `--allow-remote`, so the production
+   commands here carry it, and a bare `DATABASE_URL=<prod> node ... dev up`
+   stops with a message.
 
    Run from a trusted machine. The credential is only ever set for that one
    command — never written to a file, a CI secret, or a shell profile — and
@@ -359,7 +370,7 @@ migrations", so `apps/api/scripts/migrate.mjs` now takes an optional 3rd
 `count` argument for exactly this (#116 fix round 1, item 4):
 
 ```
-DATABASE_URL="$TJ_PROD_DATABASE_URL" node apps/api/scripts/migrate.mjs dev up 1
+DATABASE_URL="$TJ_PROD_DATABASE_URL" node apps/api/scripts/migrate.mjs dev up 1 --allow-remote
 ```
 
 Run this once per pending additive migration (checking `pgmigrations` or the
