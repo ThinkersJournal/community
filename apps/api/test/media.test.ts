@@ -663,7 +663,11 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
         },
       } as unknown as Hyperdrive;
       const restricted = {
+        // #148 step 8c asks the restricted bucket (before the put) whether the
+        // key was hidden. The fault this test models starts AFTER the put, so
+        // `head` answers "not there" until then.
         head: async () => {
+          if (!afterPut) return null;
           throw new Error("simulated R2 failure");
         },
         get: async () => {
