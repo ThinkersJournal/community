@@ -62,7 +62,8 @@ export function resolveRefSync(store: LedgerStore, ref: string, nowMs: number): 
 function refForListing(store: LedgerStore, userId: string, nowMs: number): string {
   const found = store.sql
     .exec<{ ref: string }>(`SELECT ref FROM account_refs WHERE user_id = ? AND ${REF_FRESH_SQL}`, userId, refFreshParam(nowMs))
-    .toArray()[0];
+    .toArray()
+    .at(0);
   if (found !== undefined) return found.ref;
   const ref = newRef();
   store.sql.exec(
@@ -87,8 +88,8 @@ const PUBLIC_ACCOUNT_KEY = /^([a-z_]+)\|([0-9a-f]{32})$/;
 function storedCursor(store: LedgerStore, after: string): string | null {
   const m = PUBLIC_ACCOUNT_KEY.exec(after);
   if (m === null) return after;
-  const row = store.sql.exec<{ user_id: string }>("SELECT user_id FROM account_refs WHERE ref = ?", m[2] ?? "").toArray()[0];
-  return row === undefined ? null : `${m[1] ?? ""}|${row.user_id}`;
+  const row = store.sql.exec<{ user_id: string }>("SELECT user_id FROM account_refs WHERE ref = ?", m.at(2) ?? "").toArray().at(0);
+  return row === undefined ? null : `${m.at(1) ?? ""}|${row.user_id}`;
 }
 
 /**
