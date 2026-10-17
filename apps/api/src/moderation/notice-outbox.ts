@@ -27,7 +27,7 @@
  */
 import type { Client } from "pg";
 
-import { classifyPostmark, type PostmarkOutcome } from "@thinkersjournal/shared";
+import { APPEAL_WINDOW_DAYS, classifyPostmark, type PostmarkOutcome } from "@thinkersjournal/shared";
 
 import { postmarkSendOutcome } from "../auth/postmark";
 import { withClient } from "../db/client";
@@ -88,6 +88,7 @@ export interface DrainOptions {
 interface LeasedRow {
   id: string;
   action_id: string;
+  kind: string;
   recipient_user_id: string | null;
   recipient_email: string | null;
   subject: string;
@@ -123,7 +124,7 @@ const LEASE_SQL = `
          attempts = o.attempts + CASE WHEN o.state = 'sending' THEN 1 ELSE 0 END
     FROM picked
    WHERE o.id = picked.id
-  RETURNING o.id, o.action_id, o.recipient_user_id, o.recipient_email, o.subject, o.body_text, o.body_html, o.attempts`;
+  RETURNING o.id, o.action_id, o.kind, o.recipient_user_id, o.recipient_email, o.subject, o.body_text, o.body_html, o.attempts`;
 
 /** A log-safe class for a thrown value: never its message (a pg message can quote data). */
 function errorClass(err: unknown): string {
@@ -192,6 +193,30 @@ async function attempt(env: Env, ctx: ExecutionContext, row: LeasedRow): Promise
   return retryOrGiveUp(row, failureClass(outcome));
 }
 
+/** The kinds whose body carries an appeal (and possibly a delete-request) link. */
+const LINK_KINDS = new Set(["author_decision", "author_auto_hide", "account_action"]);
+
+/**
+ * The appeal window starts at delivery (design section 5): shorten this notice's
+ * still-unused links from the provisional horizon + window to `delivered_at +
+ * window`. `LEAST`, so a link is never LENGTHENED. Best-effort: `fileAppeal`
+ * enforces the window from `delivered_at`, so a link left at its provisional
+ * expiry grants nothing; the failure is logged by class only.
+ */
+async function startWindowOnLinks(c: Client, row: LeasedRow): Promise<void> {
+  if (!LINK_KINDS.has(row.kind) || row.recipient_user_id === null) return;
+  try {
+    await c.query(
+      `UPDATE moderation_action_tokens
+          SET expires_at = LEAST(expires_at, now() + make_interval(days => $3::int))
+        WHERE action_id = $1 AND user_id = $2 AND used_at IS NULL AND purpose IN ('appeal','delete_request')`,
+      [row.action_id, row.recipient_user_id, APPEAL_WINDOW_DAYS],
+    );
+  } catch (err) {
+    console.error("moderation notice outbox window start failed", { error: errorClass(err) });
+  }
+}
+
 /** Write the settlement and release the lease. Fenced on `leased_by`. Returns whether a row matched. */
 async function settle(env: Env, ctx: ExecutionContext, row: LeasedRow, token: string, s: Settlement): Promise<boolean> {
   return await withClient(env.HYPERDRIVE_FRESH, ctx, async (c: Client) => {
@@ -204,6 +229,7 @@ async function settle(env: Env, ctx: ExecutionContext, row: LeasedRow, token: st
           WHERE id = $1 AND leased_by = $2 AND state = 'sending'`,
         [row.id, token, s.bodyText, s.bodyHtml],
       ));
+      if ((rowCount ?? 0) === 1) await startWindowOnLinks(c, row);
     } else if (s.kind === "retry") {
       ({ rowCount } = await c.query(
         `UPDATE moderation_notice_outbox

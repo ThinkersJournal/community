@@ -12,9 +12,17 @@ import type { Client } from "pg";
 
 import { mintActionToken } from "./action-tokens";
 
-import { APPEAL_WINDOW_DAYS } from "@thinkersjournal/shared";
+import { APPEAL_WINDOW_DAYS, NOTICE_UNDELIVERABLE_HORIZON_DAYS } from "@thinkersjournal/shared";
 
 const DAY_MS = 24 * 3600_000;
+
+/**
+ * How long a freshly minted notice link lives (outbox design, section 5): the
+ * undeliverable horizon plus the window. The window itself starts at DELIVERY and
+ * is enforced by `fileAppeal` (appeals.ts) from the outbox row's `delivered_at`;
+ * the drain shortens a delivered notice's links to `delivered_at + window`.
+ */
+const NOTICE_LINK_TTL_MS = (NOTICE_UNDELIVERABLE_HORIZON_DAYS + APPEAL_WINDOW_DAYS) * DAY_MS;
 
 export interface NoticeLinks {
   appealUrl?: string;
@@ -23,8 +31,8 @@ export interface NoticeLinks {
 
 /**
  * Mint one appeal token and return its URL, or `null` when the mint returned
- * null (anonymised or missing account). The token lives `APPEAL_WINDOW_DAYS`
- * from NOW (the decision), exactly as `noticeLinks` has always minted it.
+ * null (anonymised or missing account). The token lives `NOTICE_LINK_TTL_MS`
+ * from NOW (the decision): the undeliverable horizon plus the window.
  *
  * Takes the caller's `Client`, so a caller inside a transaction mints inside it
  * (the notice outbox enqueue, notice-enqueue.ts); `noticeLinks` below calls it
@@ -35,7 +43,7 @@ export async function mintAppealUrl(
   origin: string,
   input: { readonly actionId: string; readonly userId: string },
 ): Promise<string | null> {
-  const ttlMs = APPEAL_WINDOW_DAYS * DAY_MS;
+  const ttlMs = NOTICE_LINK_TTL_MS;
   const appeal = await mintActionToken(c, { actionId: input.actionId, userId: input.userId, purpose: "appeal", ttlMs });
   return appeal === null ? null : `${origin}/appeal?token=${encodeURIComponent(appeal)}`;
 }
@@ -51,7 +59,7 @@ export async function mintNoticeLinks(
   origin: string,
   input: { readonly actionId: string; readonly userId: string; readonly bars: boolean },
 ): Promise<NoticeLinks> {
-  const ttlMs = APPEAL_WINDOW_DAYS * DAY_MS;
+  const ttlMs = NOTICE_LINK_TTL_MS;
   const out: NoticeLinks = {};
   const appealUrl = await mintAppealUrl(c, origin, { actionId: input.actionId, userId: input.userId });
   if (appealUrl !== null) out.appealUrl = appealUrl;
