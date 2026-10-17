@@ -125,7 +125,8 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
 }
 
-const HELPERS = ["markPublicCacheable", "markFeedCacheable", "markPrivate"] as const;
+// markHealthCacheable: /health/security-ledger only (security-alerting spec §2.6 R2).
+const HELPERS = ["markPublicCacheable", "markFeedCacheable", "markPrivate", "markHealthCacheable"] as const;
 
 const executable = (f: string) => !INERT_EXTENSIONS.has(extname(f));
 
