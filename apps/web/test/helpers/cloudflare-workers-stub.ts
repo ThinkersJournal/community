@@ -5,3 +5,4 @@
  * `test/helpers/render-page.ts` fills with a fake `API` binding per render.
  */
 export const env: { API?: { fetch: (url: string, init?: RequestInit) => Promise<Response> } } = {};
+export const cache = { purge: () => Promise.resolve() };

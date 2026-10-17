@@ -438,6 +438,18 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /admin/queue",
     build: () => new Request("https://api.test/admin/queue"),
   },
+  // Security alerting PR 3 (spec §2.6 N6, F2): the same Access-gate shape as
+  // GET /admin/queue above; test/admin-security-route.test.ts owns the rest.
+  {
+    name: "401 admin security ref lookup with no Access header",
+    route: "GET /admin/security/account-ref/:ref",
+    build: () => new Request(`https://api.test/admin/security/account-ref/${"0".repeat(32)}`),
+  },
+  {
+    name: "401 admin security held list with no Access header",
+    route: "GET /admin/security/held",
+    build: () => new Request("https://api.test/admin/security/held"),
+  },
   // GET /admin/media-access-requests (endpoint/UI audit, 2026-09-24) — same
   // shape as GET /admin/queue directly above.
   {
@@ -606,6 +618,20 @@ const ERROR_FREE: ReadonlyMap<string, ErrorFreeClaim> = new Map([
       // every pin here, breaks loudly if the handler is edited.
       handlerSource:
         'async function handleHealthDb(_request, env, _ctx, _params) { const state = await (0,__vite_ssr_import_0__.readDbProbe)(env); const now = Date.now(); const ageMs = state === null ? null : now - state.lastCheckAt; const isStale = ageMs !== null && ageMs > __vite_ssr_import_0__.STALE_AFTER_MS; const status = state === null ? "unknown" : isStale ? "stale" : state.ok ? "ok" : "down"; // A dumb external HTTP monitor (uptime checker, load balancer health check) // alerts on non-200 — so "ok" is the ONLY 2xx; every other status is 503. const httpStatus = status === "ok" ? 200 : 503; const body = { status, lastCheckAt: state?.lastCheckAt ?? null, ageMs, staleAfterMs: __vite_ssr_import_0__.STALE_AFTER_MS, checkedRecently: !isStale }; // Detail (the raw error string and the recent-probe series) is withheld // from the public/prod response — a leaked connection error (hostname, // driver internals) reads badly surfaced in an incident writeup, and the // recent series is more than an external monitor needs. Gated on the same // TEST_ROUTES flag every other dev/test-only seam uses (src/routes/__test.ts); // a future prod-auth gate can widen this deliberately. if (env.TEST_ROUTES === "1") { body.error = state?.error ?? null; body.latencyMs = state?.latencyMs ?? null; body.recent = state?.recent ?? []; }; return new Response(JSON.stringify(body), { status: httpStatus, headers: { "content-type": "application/json" } }); }',
+    },
+  ],
+  // GET /health/security-ledger (security-alerting spec §2.6 R2) — a STATUS
+  // body like /health/db: 200 {"status":"ok"} or 503 {"status":"stale"}, never
+  // a {code} envelope. One KV read, no params, no DB, no Durable Object call.
+  // See src/routes/health-security-ledger.ts and test/health-security-ledger.test.ts.
+  [
+    "GET /health/security-ledger",
+    {
+      reason:
+        "Answers a bare health STATUS body (200 ok / 503 stale), never a {code} envelope. No params to validate, and it reads one KV key (never the DB, never a Durable Object), so it has no request-validation or lookup failure mode; a KV read that throws is caught and answered as the same 503 stale status body, never an envelope or an unhandled 500. See src/routes/health-security-ledger.ts.",
+      // ⚠️ `__vite_ssr_import_0__` is the pool's vite-SSR rewrite of the LIVENESS_KEY import.
+      handlerSource:
+        'async function handleHealthSecurityLedger(_request, env) { // A KV read that throws means the ledger cannot be shown alive: answer `stale` // (503), not an unhandled 500 with no body. let raw = null; try { raw = await env.HEALTH.get((0,__vite_ssr_import_0__.LIVENESS_KEY)); } catch { raw = null; }; const at = raw === null ? Number.NaN : Number(raw); const ok = Number.isFinite(at) && Date.now() - at < LEDGER_STALE_AFTER_MS; return new Response(JSON.stringify({ status: ok ? "ok" : "stale" }), { status: ok ? 200 : 503, headers: { "content-type": "application/json" } }); }',
     },
   ],
   [

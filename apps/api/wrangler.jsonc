@@ -279,6 +279,24 @@
       "name": "PROFILE_LIMITER",
       "namespace_id": "1015",
       "simple": { "limit": 60, "period": 60 }
+    },
+    // The login Turnstile challenge's SOFT thresholds (docs/superpowers/specs/
+    // 2026-10-11-login-turnstile-challenge-design.md §1; CireSnave 2026-10-11:
+    // "1) A", i.e. email 3, ip:email 3, ip 15). Consumed ONLY with LOGIN_CHALLENGE
+    // on, AFTER the three hard caps above, which keep their numbers and their
+    // order. A denial here never refuses a login: it asks for a solved Turnstile
+    // token first. Two bindings because the limit differs, for the reason
+    // LOGIN_IP_LIMITER is its own binding: this one carries `<ip>:<email>` and
+    // `email:<email>` at 3/60s, the next carries the per-IP key at 15/60s.
+    {
+      "name": "LOGIN_CHALLENGE_LIMITER",
+      "namespace_id": "1017",
+      "simple": { "limit": 3, "period": 60 }
+    },
+    {
+      "name": "LOGIN_CHALLENGE_IP_LIMITER",
+      "namespace_id": "1018",
+      "simple": { "limit": 15, "period": 60 }
     }
   ],
   // Email outbox drains (M2.3c) — api's FIRST cron. */2 = instant pass; the daily
@@ -311,11 +329,20 @@
   // emergency stop, but the NEXT `wrangler deploy` resets it to this file's
   // value. SECURITY_COUNTING "off" is the counting kill switch; the other two
   // stay "0" until phase 1b (notices) and board 131 (a transport). TEST_ROUTES
-  // is deliberately NOT here (see vitest.config.ts).
+  // is deliberately NOT here (see vitest.config.ts). LOGIN_CHALLENGE, below, is
+  // the same kind of flag and is reviewed the same way.
   "vars": {
     "SECURITY_COUNTING": "on",
     "SECURITY_ALERTS_ENABLED": "0",
-    "ACCOUNT_NOTICES_ENABLED": "0"
+    "ACCOUNT_NOTICES_ENABLED": "0",
+    // The login Turnstile challenge (docs/superpowers/specs/2026-10-11-login-
+    // turnstile-challenge-design.md §7; CireSnave 2026-10-11 ruling 4,
+    // flag-gated "so we have the option to turn it off in emergency situations").
+    // "1" = on; ANYTHING else, including a missing var, is off, and off means the
+    // soft limiters are not even consumed. Turn it on only after the web Worker
+    // that renders the widget is live (it is an api-only change either way:
+    // docs/runbooks/deploy.md, "The login challenge flag").
+    "LOGIN_CHALLENGE": "0"
   },
   // Build-identity (2026-09-24) — GET /health/build reads this. Cloudflare's
   // OWN version registry populates `id`/`tag`/`timestamp` on every deploy
