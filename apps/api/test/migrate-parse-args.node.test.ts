@@ -191,7 +191,7 @@ describe("resolveTarget: no silent default, no silent remote, always a banner", 
   });
 
   it("a remote host WITHOUT --allow-remote THROWS and names the host", () => {
-    expect(() => resolveTarget(["dev", "up"], { DATABASE_URL: PROD })).toThrow(/non-local host (db.example.neon.tech:5432/prod_db)/);
+    expect(() => resolveTarget(["dev", "up"], { DATABASE_URL: PROD })).toThrow("non-local host (db.example.neon.tech:5432/prod_db)");
   });
 
   it("a remote host WITH --allow-remote resolves, and the banner names host, port and database", () => {
