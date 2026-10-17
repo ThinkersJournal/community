@@ -54,9 +54,9 @@ function decodeBase64Url(value: string): string | null {
 /** Parse a `location.hash`. Returns null for anything that is not a well-formed `#cr=` payload. */
 export function parsePrefillFragment(hash: string): EditorPrefill | null {
   if (hash.length > FRAGMENT_MAX) return null;
-  const match = /^#cr=([A-Za-z0-9_-]+)$/.exec(hash);
-  if (match === null) return null;
-  const json = decodeBase64Url(match[1]!);
+  const encoded = /^#cr=([A-Za-z0-9_-]+)$/.exec(hash)?.[1];
+  if (encoded === undefined) return null;
+  const json = decodeBase64Url(encoded);
   if (json === null) return null;
   let raw: unknown;
   try {
