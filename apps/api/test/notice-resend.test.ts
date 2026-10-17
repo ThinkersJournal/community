@@ -6,6 +6,7 @@ import { __resetJwksCacheForTests } from "../src/admin/access-jwt";
 import { withClient } from "../src/db/client";
 import { peekActionToken } from "../src/moderation/action-tokens";
 import { applyAccountAction } from "../src/moderation/account-actions";
+import { enqueueAppealOutcomeNotice } from "../src/moderation/notice-enqueue";
 import { drainNoticeOutbox } from "../src/moderation/notice-outbox";
 import { listUndeliveredNotices, resendNotice } from "../src/moderation/notice-resend";
 
@@ -182,15 +183,14 @@ describe("resendNotice", () => {
     expect((await rowOf(rowId)).state).toBe("delivered");
   });
 
-  it("a termination notice (no links) is resent unchanged", async () => {
+  it("a notice with no links (an appeal outcome) is resent unchanged", async () => {
     const userId = await mkUser();
-    const out = await run((c) =>
-      applyAccountAction(c, { userId, kind: "terminate", reason: "r", actorAdmin: "mod@example.test", subjectLabel: "x", enqueueNotice: { origin: ORIGIN } }),
-    );
-    if (out.kind !== "applied") throw new Error("not applied");
-    actionIds.push(out.actionId);
+    const resolutionActionId = crypto.randomUUID();
+    actionIds.push(resolutionActionId);
+    await run((c) => enqueueAppealOutcomeNotice(c, { resolutionActionId, appellantId: userId, outcome: "denied", reason: "no" }));
     const rowId = await run(async (c) => (await c.query<{ id: string }>(
-      `UPDATE moderation_notice_outbox SET state = 'undeliverable' WHERE action_id = $1 RETURNING id`, [out.actionId])).rows[0]!.id);
+      `UPDATE moderation_notice_outbox SET state = 'undeliverable' WHERE action_id = $1 RETURNING id`, [resolutionActionId])).rows[0]!.id);
+    rowIds.push(rowId);
     const before = await rowOf(rowId);
     expect(await run((c) => resendNotice(c, rowId, ORIGIN))).toEqual({ kind: "resent" });
     const after = await rowOf(rowId);

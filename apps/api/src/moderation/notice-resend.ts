@@ -118,7 +118,7 @@ export async function resendNotice(c: Client, id: string, origin: string): Promi
       [APPEAL_LINK_RE, "appeal", "/appeal"],
       [DELETE_LINK_RE, "delete_request", "/account/delete-request"],
     ] as const) {
-      if (!new RegExp(re.source).test(bodyText)) continue;
+      if (bodyText.search(re) === -1) continue;
       const token = await mintActionToken(c, { actionId: row.action_id, userId: row.recipient_user_id, purpose, ttlMs });
       // An anonymised or vanished account mints nothing: there is no one to send it to.
       if (token === null) return await finish(c, { kind: "not_resendable" });
