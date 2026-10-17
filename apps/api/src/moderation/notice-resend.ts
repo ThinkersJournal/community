@@ -25,7 +25,7 @@
  */
 import type { Client } from "pg";
 
-import { APPEAL_WINDOW_DAYS, type AdminUndeliveredNotice } from "@thinkersjournal/shared";
+import { APPEAL_WINDOW_DAYS, NOTICE_UNDELIVERABLE_HORIZON_DAYS, type AdminUndeliveredNotice } from "@thinkersjournal/shared";
 
 import { BEGIN_BOUNDED_TX } from "../db/client";
 import { mintActionToken } from "./action-tokens";
@@ -113,7 +113,7 @@ export async function resendNotice(c: Client, id: string, origin: string): Promi
 
     let bodyText = row.body_text;
     let bodyHtml = row.body_html;
-    const ttlMs = APPEAL_WINDOW_DAYS * DAY_MS;
+    const ttlMs = (NOTICE_UNDELIVERABLE_HORIZON_DAYS + APPEAL_WINDOW_DAYS) * DAY_MS;
     for (const [re, purpose, path] of [
       [APPEAL_LINK_RE, "appeal", "/appeal"],
       [DELETE_LINK_RE, "delete_request", "/account/delete-request"],
