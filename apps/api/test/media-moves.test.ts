@@ -61,6 +61,60 @@ describe("enqueueAndAttemptMove", () => {
   });
 });
 
+describe("a queued to_public move for a legally held key (#148)", () => {
+  it("is cancelled, never republished: the held bytes stay in MEDIA_RESTRICTED and the row is closed", async () => {
+    const key = randomKey();
+    await env.MEDIA_RESTRICTED.put(key, "held bytes");
+    // The ordering the issue describes: the to_public row was queued FIRST ...
+    await ctxRun((c) => c.query(`INSERT INTO media_moves (r2_key, direction) VALUES ($1, 'to_public')`, [key]));
+    // ... and the hold was imposed afterwards.
+    await ctxRun((c) =>
+      c.query(`INSERT INTO media_legal_holds (r2_key, imposed_by, category) VALUES ($1, 'mod@example.test', 'csam')`, [key]),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const ctx = createExecutionContext();
+      await processPendingMoves(env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      // RED before the fix: the retry copied the bytes into the PUBLIC bucket.
+      expect(await env.MEDIA.head(key)).toBeNull();
+      expect(await env.MEDIA_RESTRICTED.head(key)).not.toBeNull();
+      // RED before the fix: the row was marked done with no note.
+      const row = await ctxRun(async (c) => {
+        const { rows } = await c.query<{ status: string; last_error: string | null }>(
+          `SELECT status, last_error FROM media_moves WHERE r2_key = $1`,
+          [key],
+        );
+        return rows[0]!;
+      });
+      expect(row.status).toBe("done");
+      expect(row.last_error).toMatch(/cancelled.*legal hold/);
+      expect(warn.mock.calls.some((c) => JSON.stringify(c).includes(key))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      await ctxRun(async (c) => {
+        await c.query(`DELETE FROM media_legal_holds WHERE r2_key = $1`, [key]);
+        await c.query(`DELETE FROM media_moves WHERE r2_key = $1`, [key]);
+      });
+      await env.MEDIA_RESTRICTED.delete(key);
+    }
+  });
+
+  it("control: the same queued to_public for an UNHELD key still moves", async () => {
+    const key = randomKey();
+    await env.MEDIA_RESTRICTED.put(key, "bytes");
+    await ctxRun((c) => c.query(`INSERT INTO media_moves (r2_key, direction) VALUES ($1, 'to_public')`, [key]));
+    const ctx = createExecutionContext();
+    await processPendingMoves(env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(await env.MEDIA.head(key)).not.toBeNull();
+    expect(await moveRow(key)).toMatchObject({ status: "done" });
+    await ctxRun((c) => c.query(`DELETE FROM media_moves WHERE r2_key = $1`, [key]));
+    await env.MEDIA.delete(key);
+  });
+});
+
 describe("processPendingMoves — retry and failure", () => {
   it("retries a pending row and eventually marks it failed, alerting loudly", async () => {
     const key = randomKey();
