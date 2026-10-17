@@ -145,7 +145,7 @@ jobs:
       # globalSetup, which does NOT run here, so without this step every signup
       # 500s on a schema-less Postgres and every spec fails. On a persistent local
       # volume this is invisible (the dev DB was migrated once, long ago); on a
-      # fresh CI runner it is fatal. (`migrate` = node scripts/migrate.mjs dev up,
+      # fresh CI runner it is fatal. (`migrate` = node scripts/migrate.mjs dev up --local,
       # which targets the localhost dev DB by default.)
       - name: Migrate the dev database (E2E writes real users to it)
         run: pnpm --filter @thinkersjournal/api run migrate
