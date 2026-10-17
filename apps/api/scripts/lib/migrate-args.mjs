@@ -19,10 +19,9 @@
  *      password) BEFORE it connects.
  */
 
-export const DEFAULT_URLS = {
-  dev: "postgres://postgres:postgres@localhost:5432/thinkersjournal",
-  test: "postgres://postgres:postgres@localhost:5432/thinkersjournal_test",
-};
+// Two plain constants, not an object: the side-effect test splits statements by brace depth.
+export const DEFAULT_DEV_URL = "postgres://postgres:postgres@localhost:5432/thinkersjournal";
+export const DEFAULT_TEST_URL = "postgres://postgres:postgres@localhost:5432/thinkersjournal_test";
 
 export const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1", "[::1]"];
 export const KNOWN_FLAGS = ["--local", "--allow-remote"];
@@ -103,7 +102,7 @@ export function resolveTarget(argv, env) {
         `Set ${envName}, or pass --local if the localhost dev database is what you mean.`,
     );
   }
-  const databaseUrl = isSet ? fromEnv : DEFAULT_URLS[target];
+  const databaseUrl = isSet ? fromEnv : target === "test" ? DEFAULT_TEST_URL : DEFAULT_DEV_URL;
 
   const { host, port, database } = describeTarget(databaseUrl);
   if (!isLoopbackHost(host) && !allowRemote) {
