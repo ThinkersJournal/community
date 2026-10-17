@@ -9,7 +9,9 @@
  * `terminate` has its OWN entry point, `sendTerminationNotice`, and
  * deliberately NOT a kind of `AccountNotice`: that type carries a reason and
  * appeal/delete links, and a termination carries none of them (#114 ruling).
- * The text names no report, evidence or reason. No route calls it yet.
+ * The text names no report, evidence or reason. The moderator route queues it
+ * through the notice outbox (`enqueueTerminationNotice`); `sendTerminationNotice`
+ * below is the direct-send entry point and has no production caller.
  */
 import { postmarkSend } from "../auth/postmark";
 import { escapeHtml } from "../auth/email-verify";

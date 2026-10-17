@@ -36,6 +36,17 @@ describe("/admin/accounts/[handle]", () => {
     expect(source).not.toMatch(/<button[^>]*>\s*terminate\s*<\/button>/i);
   });
 
+  it("#114: terminate has its OWN confirmed form and api route, with an internal-only reason", () => {
+    expect(source).toMatch(/intent === "terminate"/);
+    expect(source).toContain("/terminate`");
+    expect(source).toMatch(/name="confirmTerminate"/);
+    expect(source).toContain("I confirm a permanent termination");
+    expect(source).toMatch(/confirmTerminate:\s*form\.get\("confirmTerminate"\)\s*===\s*"on"/);
+    expect(source).toContain("Internal reason (NOT sent to the user)");
+    // Not offered for an account that is already terminated.
+    expect(source).toMatch(/account\.disabledReason !== "terminate"/);
+  });
+
   it("offers the adopted suspension durations, defaulting to 7 days", () => {
     expect(source).toContain("SUSPENSION_HOURS.map(");
     expect(source).toContain("DEFAULT_SUSPENSION_HOURS");

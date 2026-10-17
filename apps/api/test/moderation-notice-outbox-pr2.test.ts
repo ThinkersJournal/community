@@ -149,9 +149,18 @@ describe("account actions through applyAccountAction", () => {
     expect(tokens).toBe(0);
   });
 
-  it("terminate queues nothing (its notice is #114's own route)", async () => {
+  it("terminate queues the termination notice (#114): one account_action row, and NO token is minted", async () => {
     const userId = await mkUser();
     const actionId = await applied(userId, "terminate");
+    const rows = await rowsFor(actionId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "account_action", recipient_user_id: userId, recipient_email: null });
+    const tokens = await run(async (c) => (await c.query(`SELECT 1 FROM moderation_action_tokens WHERE action_id = $1`, [actionId])).rowCount);
+    expect(tokens).toBe(0);
+  });
+
+  it("terminate of an anonymised account queues nothing", async () => {
+    const actionId = await applied(await mkUser(true), "terminate");
     expect(await rowsFor(actionId)).toHaveLength(0);
   });
 

@@ -177,6 +177,88 @@ export async function handleAdminAccountAction(
 }
 
 /**
+ * `POST /admin/accounts/:handle/terminate` (#114): the moderator's terminate, for
+ * the CSAM / severe case. A separate route from `/actions` on purpose: a terminate
+ * is not a rung of the ladder, and `/actions` keeps rejecting it.
+ *
+ * Body `{ reason, confirmTerminate: true, violationCategory? }`. ⚠️ `reason` is the
+ * moderators' INTERNAL record (moderation_actions.reason); the user is NEVER shown
+ * it: the notice is the ruled generic termination text (no reason, evidence or
+ * link), and the barred-login response withholds the reason of a terminate
+ * (auth/account-status.ts). A terminate is never appealable and offers no
+ * deletion request, so no token is minted.
+ *
+ * Same bar-then-commit-then-bar epoch sequence as `handleAdminAccountAction`: a
+ * terminate bars the account. An already-banned or suspended account may be
+ * terminated (applyAccountAction allows it and keeps the original disabled_at).
+ */
+export async function handleAdminTerminateAccount(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  // ⚠️ ORIGIN FIRST — see routes/admin.ts handleAdminDecision.
+  if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("INVALID_JSON", 400);
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return errorResponse("INVALID_INPUT", 400);
+  const b = body as Record<string, unknown>;
+  const reason = b["reason"];
+  const category = b["violationCategory"];
+  if (
+    typeof reason !== "string" || reason.trim() === "" ||
+    (category !== undefined && !(REPORT_REASONS as readonly unknown[]).includes(category)) ||
+    // Permanent and irreversible from the product (never appealable): an explicit,
+    // separate confirmation on top of the reason, as for a ban.
+    b["confirmTerminate"] !== true
+  ) {
+    return errorResponse("INVALID_INPUT", 400);
+  }
+
+  const account = await findByHandle(env, ctx, params.handle ?? "");
+  if (account === null) return errorResponse("NOT_FOUND", 404);
+
+  await env.USER_SECURITY.getByName(account.id).bumpEpoch();
+
+  const outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    applyAccountAction(c, {
+      userId: account.id,
+      kind: "terminate",
+      reason: reason.trim(),
+      actorAdmin: admin.email,
+      subjectLabel: account.username,
+      violationCategory: category as ViolationCategory | undefined,
+      // The termination notice is queued in the action's transaction (an
+      // anonymised account gets none). The */2 cron drain sends it.
+      enqueueNotice: { origin: verificationLinkOrigin(request) },
+    }),
+  );
+  if (outcome.kind === "not_found") return errorResponse("NOT_FOUND", 404);
+  // A terminate is never "already disabled" (applyAccountAction); keep the switch total.
+  if (outcome.kind === "already_disabled") return errorResponse("ACCOUNT_ALREADY_DISABLED", 409);
+
+  try {
+    await env.USER_SECURITY.getByName(account.id).bumpEpoch();
+  } catch (err) {
+    // Committed; the first bump already killed every session that existed before it.
+    console.error("post-commit epoch bump failed", { actionId: outcome.actionId, err });
+  }
+
+  return new Response(JSON.stringify({ actionId: outcome.actionId }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
  * T3's manual impose (account-legal-hold spec §3). `csam` is deliberately
  * excluded here: CSAM holds come only from T1/T2, where there is evidence of
  * the case. Same Access trust domain / inline-checkOrigin shape as

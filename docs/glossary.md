@@ -94,7 +94,7 @@ This glossary defines the domain terms used across Thinker's Journal Community: 
 
 **Tag**: A freeform, author-created topic label (maximum 5 per post), stored as a lowercase `citext` slug with the original text kept as the label. Browsing is at `/tag/<slug>` and the popularity-ordered `/tags` index. (see docs/superpowers/specs/2026-08-06-m2-4c-tags-design.md)
 
-**Terminate**: The account action reserved for the CSAM path, supported by `applyAccountAction` but with no admin button and no email; whether a terminated user may be told why is an open legal question. (see docs/superpowers/plans/2026-10-01-m4-2c-enforcement-ladder.md)
+**Terminate**: The account action reserved for the CSAM and severe path: a moderator route and a separate confirmed form (not a ladder button) queue a fixed notice that names no reason (the reason is internal only); whether a terminated user may be told why is an open legal question. (see docs/superpowers/plans/2026-10-01-m4-2c-enforcement-ladder.md)
 
 **Tombstone**: A deleted comment that remains as a row with `deleted_at` set and its body emptied, rendered with `deleted: true` and a null author. A deleted post, by contrast, is hard-deleted; and an anonymised account's content is also shown as tombstones. (see docs/superpowers/specs/2026-10-14-moderation-author-notices-design.md)
 
