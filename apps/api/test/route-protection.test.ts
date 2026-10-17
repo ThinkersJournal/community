@@ -173,6 +173,7 @@ const EXPECTED_DISPATCHER_BODY =
   'import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media"; ' +
   'import { reapUnconfirmedDsaNotices } from "./moderation/dsa-notices"; ' +
   'import { purgeExpiredNoticeRecords } from "./moderation/notice-records"; ' +
+  'import { drainNoticeOutbox, purgeExpiredNoticeOutbox } from "./moderation/notice-outbox"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
@@ -206,6 +207,8 @@ const EXPECTED_DISPATCHER_BODY =
   "ctx.waitUntil(reapUnverifiedAccounts(env, ctx)); " +
   "ctx.waitUntil(reapUnconfirmedDsaNotices(env, ctx)); " +
   "ctx.waitUntil(purgeExpiredNoticeRecords(env, ctx)); " +
+  // Notice outbox PR 1: rows past retain_until, beside the 0032 records purge.
+  "ctx.waitUntil(purgeExpiredNoticeOutbox(env, ctx)); " +
   // Security alerting (PM ruling R2-1): the nightly N7 sweep rides the reaper's tick.
   "ctx.waitUntil(sweepForgottenAccounts(env, ctx)); " +
   "return; " +
@@ -226,6 +229,8 @@ const EXPECTED_DISPATCHER_BODY =
   'if (controller.cron === "*/2 * * * *") { ' +
   "ctx.waitUntil(runMediaBackfillBatch(env, ctx)); " +
   "ctx.waitUntil(ensureLedgerAlarm(env)); " +
+  // Notice outbox PR 1: the drain rides the two-minute tick.
+  "ctx.waitUntil(drainNoticeOutbox(env, ctx)); " +
   "} " +
   'const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant"; ' +
   "ctx.waitUntil(runEmailDrain(env, ctx, disposition)); " +

@@ -101,6 +101,14 @@ async function indexExists(client: Client, indexName: string): Promise<boolean> 
   return Number(rows[0]!.n) > 0;
 }
 
+/** The live `moderation_actions_action_check` definition, or "" when absent. */
+async function actionCheck(client: Client): Promise<string> {
+  const { rows } = await client.query<{ def: string }>(
+    "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'moderation_actions_action_check'",
+  );
+  return rows[0]?.def ?? "";
+}
+
 // globalSetup migrates the SHARED DB; this one is ours to set up. Idempotent
 // (node-pg-migrate's `pgmigrations` table), so this is a no-op after run 1.
 beforeAll(async () => {
@@ -208,6 +216,12 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "upload_scan_outcomes")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill_progress")).toBe(true);
+      // 0033 — moderation_actions accepts security_ref_resolved (security alerting).
+      expect(await actionCheck(client)).toContain("'security_ref_resolved'::text");
+      // 0034_moderation_notice_outbox.sql — the notice outbox and its two indexes.
+      expect(await tableExists(client, "moderation_notice_outbox")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_due_idx")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_retain_until_idx")).toBe(true);
       // 0035_media_owner_nullable.sql — the ownership link can be cleared.
       expect(await columnNullable(client, "media", "owner_id")).toBe(true);
       expect(await columnExists(client, "media", "owner_cleared_at")).toBe(true);
@@ -241,6 +255,10 @@ describe("0001 users + profiles migration", () => {
       expect(await indexExists(client, "users_reserved_email_hmac_idx")).toBe(false);
       expect(await tableExists(client, "appeals")).toBe(false);
       expect(await tableExists(client, "moderation_action_tokens")).toBe(false);
+      // 0034 — the outbox and its indexes are gone.
+      expect(await tableExists(client, "moderation_notice_outbox")).toBe(false);
+      expect(await indexExists(client, "moderation_notice_outbox_due_idx")).toBe(false);
+      expect(await indexExists(client, "moderation_notice_outbox_retain_until_idx")).toBe(false);
       // 0035 — went with the media table (a full down drops it).
       expect(await columnExists(client, "media", "owner_cleared_at")).toBe(false);
     });
@@ -288,6 +306,12 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "upload_scan_outcomes")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill")).toBe(true);
       expect(await tableExists(client, "media_scan_backfill_progress")).toBe(true);
+      // 0033 — re-applied by the round-trip.
+      expect(await actionCheck(client)).toContain("'security_ref_resolved'::text");
+      // 0034 — re-applied by the round-trip.
+      expect(await tableExists(client, "moderation_notice_outbox")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_due_idx")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_retain_until_idx")).toBe(true);
       // 0035 — re-applied by the round-trip.
       expect(await columnNullable(client, "media", "owner_id")).toBe(true);
       expect(await columnExists(client, "media", "owner_cleared_at")).toBe(true);

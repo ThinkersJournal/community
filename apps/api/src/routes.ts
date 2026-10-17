@@ -40,6 +40,7 @@ import {
   handleAdminReleaseAccountHold,
 } from "./routes/admin-accounts";
 import { handleAdminListAppeals, handleAdminResolveAppeal } from "./routes/admin-appeals";
+import { handleAdminSecurityHeld, handleAdminSecurityRef } from "./routes/admin-security";
 import {
   handleAppealByToken,
   handleAppealForPost,
@@ -62,6 +63,7 @@ import { handleForgotPassword } from "./routes/forgot-password";
 import { handleHealthBuild } from "./routes/health-build";
 import { handleHealthDb } from "./routes/health-db";
 import { handleHealthSchema } from "./routes/health-schema";
+import { handleHealthSecurityLedger } from "./routes/health-security-ledger";
 import { handleLogin } from "./routes/login";
 import { handleLogout, handleLogoutAll } from "./routes/logout";
 import { handleUploadMedia } from "./routes/media";
@@ -134,6 +136,10 @@ export const ROUTES: readonly RouteDef[] = [
   // latest name (PM ruling); reads `pgmigrations` through HYPERDRIVE_FRESH.
   // See src/routes/health-schema.ts and scripts/check-migrations-applied.mjs.
   { method: "GET", pattern: "/health/schema", handler: handleHealthSchema },
+
+  // Security ledger liveness (security-alerting spec §2.6 R2): one KV read, ok/stale,
+  // no Durable Object call. See src/routes/health-security-ledger.ts.
+  { method: "GET", pattern: "/health/security-ledger", handler: handleHealthSecurityLedger },
 
   // ⚠️ Signup and login do NOT run the mutating pipeline (src/auth/pipeline.ts)
   // — they are how a session comes to exist, so its "401 if no session" step
@@ -459,6 +465,10 @@ export const ROUTES: readonly RouteDef[] = [
   // and inline-checkOrigin shape as /admin/decision.
   { method: "GET", pattern: "/admin/appeals", handler: handleAdminListAppeals },
   { method: "POST", pattern: "/admin/appeals/:id/resolve", handler: handleAdminResolveAppeal },
+  // Security alerting (spec §2.6 N6, F2) — same Access trust domain as /admin/whoami.
+  // Both GET: the ref lookup appends an audit row (R4); the held list writes nothing.
+  { method: "GET", pattern: "/admin/security/account-ref/:ref", handler: handleAdminSecurityRef },
+  { method: "GET", pattern: "/admin/security/held", handler: handleAdminSecurityHeld },
 
   // #113 plan B — appeals. by-token is session-less (the emailed token is the
   // authority) and defends itself with inline checkOrigin; the signed-in POST

@@ -1,0 +1,163 @@
+---
+/**
+ * `/admin/security` — security alerting's admin page (spec §2.6 N6, F2). Two
+ * jobs: resolve an alert's opaque account ref to its account, and
+ * page through the FULL held list that every held-subject report's `adminUrl`
+ * links to (200 rows a page, class by class, cursor = the immutable key).
+ *
+ * ⚠️⚠️ THE SAME PROPERTY AS THE OTHER ADMIN PAGES (see queue.astro's header): no
+ * held subject or account reaches the HTML on a request without a verified
+ * Access JWT. The guard is the FIRST statement, before markPrivate, before the
+ * CSP, before any api call.
+ *
+ * ⚠️ A RESOLUTION IS AUDITED. The api appends a `security_ref_resolved` row to
+ * the moderation log for every successful lookup (the admin and the ref, never
+ * the user, R4). Paging the held list writes nothing.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { adminApiErrorCode, adminApiFetch } from "../../lib/admin-api";
+import { HELD_CLASSES, isExpiredCursor, parseHeldClass, parseRef } from "../../lib/admin-security";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+import {
+  ACCESS_JWT_HEADER,
+  type AdminSecurityHeldResponse,
+  type AdminSecurityRefResponse,
+} from "@thinkersjournal/shared";
+
+// ⚠️⚠️ THE GUARD — see this file's header.
+const accessJwt = Astro.request.headers.get(ACCESS_JWT_HEADER);
+if (accessJwt === null || accessJwt === "") {
+  return new Response(null, { status: 401 });
+}
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+const params = Astro.url.searchParams;
+const ref = parseRef(params.get("ref"));
+let resolved: AdminSecurityRefResponse | null = null;
+let refError: string | null = null;
+if (params.get("ref") !== null) {
+  if (ref === null) {
+    refError = "NOT_FOUND";
+  } else {
+    const res = await adminApiFetch<AdminSecurityRefResponse>(`/admin/security/account-ref/${encodeURIComponent(ref)}`, {
+      accessJwt,
+    });
+    if (res.status === 200 && res.data !== null) resolved = res.data;
+    else refError = adminApiErrorCode(res) ?? "LOOKUP_FAILED";
+  }
+}
+
+// ⚠️ The class is validated against the classes the api holds rows for; an
+// arbitrary string is never forwarded.
+const signalClass = parseHeldClass(params.get("class"));
+const after = params.get("after") ?? "";
+let held: AdminSecurityHeldResponse | null = null;
+let heldError: string | null = null;
+let cursorExpired = false;
+if (signalClass === null) {
+  heldError = "UNKNOWN_CLASS";
+} else {
+  const q = new URLSearchParams({ class: signalClass, after });
+  const heldResp = await adminApiFetch<AdminSecurityHeldResponse>(`/admin/security/held?${q.toString()}`, { accessJwt });
+  if (heldResp.status === 200) held = heldResp.data;
+  cursorExpired = isExpiredCursor(heldResp);
+  if (held === null && !cursorExpired) heldError = adminApiErrorCode(heldResp) ?? "LIST_LOAD_FAILED";
+}
+
+/** A subject as the page shows it: a ref (resolvable here), a prefix, or a marker. */
+function subjectText(s: AdminSecurityHeldResponse["rows"][number]["subject"]): string {
+  if (s.kind === "account") return `account ref ${s.ref}`;
+  if (s.kind === "ip_prefix") return s.value;
+  return s.kind === "no_ip" ? "(no IP)" : "(site)";
+}
+---
+<BaseLayout title="Security">
+  <div class="wrap admin-page">
+    <h1>Security</h1>
+    <p class="admin-nav"><a class="link" href="/admin/queue">← Moderation queue</a></p>
+
+    <h2>Resolve an alert reference</h2>
+    <p class="note">Every lookup is recorded in the moderation log, with your identity and the reference.</p>
+    <form method="GET" class="ref-form">
+      <label>Reference <input name="ref" required pattern="[0-9a-fA-F]{32}" value={ref ?? ""} /></label>
+      <button type="submit" class="btn btn-primary">Resolve</button>
+    </form>
+    {refError && <p class="err">No such reference (unknown, or unused for 7 days): {refError}</p>}
+    {
+      resolved && (
+        <p class="ok" id="resolved">
+          {resolved.handle !== null ? (
+            <a class="link" href={`/admin/accounts/${encodeURIComponent(resolved.handle)}`}>@{resolved.handle} →</a>
+          ) : (
+            <>Account {resolved.userId} (no profile)</>
+          )}
+        </p>
+      )
+    }
+
+    <h2>Held subjects</h2>
+    {
+      cursorExpired && signalClass && (
+        <p class="err" id="cursor-expired">
+          This page's cursor has expired (an account reference it pointed at aged out). Restart the list:{" "}
+          <a class="link" href={`?class=${signalClass}`}>first page of {signalClass}</a>
+        </p>
+      )
+    }
+    {heldError && <p class="err">Could not load the held list: {heldError}</p>}
+    {
+      signalClass === null && (
+        <p class="classes">
+          {HELD_CLASSES.map((c) => (
+            <a class="link" href={`?class=${encodeURIComponent(c)}`}>{c}</a>
+          ))}
+        </p>
+      )
+    }
+    {
+      held && (
+        <>
+          <p class="classes">
+            {held.classOrder.map((c) => (
+              <a class={c === held.signalClass ? "link current" : "link"} href={`?class=${encodeURIComponent(c)}`}>{c}</a>
+            ))}
+          </p>
+          {held.rows.length === 0 ? (
+            <p id="no-held">Nothing held in {held.signalClass}.</p>
+          ) : (
+            <table class="held">
+              <thead><tr><th>Signal</th><th>Subject</th><th>Events</th><th>Suppressed</th><th>Version</th><th>State</th></tr></thead>
+              <tbody>
+                {held.rows.map((r) => (
+                  <tr>
+                    <td>{r.signal}</td><td>{subjectText(r.subject)}</td><td>{r.events}</td>
+                    <td>{r.suppressed}</td><td>{r.version}</td><td>{r.open ? "open" : "covered"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {held.nextAfter !== null && (
+            <p><a class="link" href={`?class=${held.signalClass}&after=${encodeURIComponent(held.nextAfter)}`}>Next page →</a></p>
+          )}
+        </>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .admin-page{padding:clamp(40px,7vw,80px) 0}
+  .admin-nav{margin:4px 0 20px}
+  .err{color:var(--red, #e5484d)}
+  .ok{color:var(--green)}
+  .note{color:var(--muted);font-size:14px}
+  .ref-form{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin:12px 0}
+  .classes{display:flex;gap:14px;flex-wrap:wrap}
+  .classes .current{font-weight:600}
+  .held{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px}
+  .held th,.held td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left}
+</style>

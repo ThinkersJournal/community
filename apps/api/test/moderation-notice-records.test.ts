@@ -50,6 +50,12 @@ afterEach(async () => {
   created.length = 0;
 });
 
+describe("retention constant", () => {
+  it("is one year (CireSnave's 2026-10-15 ruling: Q2 of the notice outbox design)", () => {
+    expect(MODERATION_NOTICE_RETENTION_DAYS).toBe(365);
+  });
+});
+
 describe("recordNotice", () => {
   it("stores the rendered strings and retain_until = the decision's created_at + the retention constant", async () => {
     const a = await seedAction();

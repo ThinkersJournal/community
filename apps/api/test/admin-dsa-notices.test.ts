@@ -95,6 +95,8 @@ afterEach(async () => {
   }
   if (createdUserIds.length > 0) {
     await ctxRun(async (c) => {
+      // No FK from the notice outbox to users: remove the queued author notices explicitly.
+      await c.query(`DELETE FROM moderation_notice_outbox WHERE recipient_user_id = ANY($1::uuid[])`, [createdUserIds]);
       await c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [createdUserIds]);
     });
   }
@@ -405,8 +407,14 @@ describe("POST /admin/decision resolves DSA notices", () => {
     expect(rowC.resolved_at).toBeNull();
     expect(rowC.resolution_action_id).toBeNull();
 
-    // Author email + 2 reporter emails.
-    expect(sentEmails).toHaveLength(3);
+    // The 2 reporter emails go from the request. The author's notice is only
+    // QUEUED by the request now (notice outbox PR 1; the cron drain sends it).
+    const queuedForAuthor = await ctxRun(async (c) => {
+      const { rows } = await c.query(`SELECT 1 FROM moderation_notice_outbox WHERE action_id = $1 AND kind = 'author_decision'`, [actionId]);
+      return rows.length;
+    });
+    expect(queuedForAuthor).toBe(1);
+    expect(sentEmails).toHaveLength(2);
     const reporterEmails = sentEmails.filter((e) => e["To"] === "a@example.test" || e["To"] === "b@example.test");
     expect(reporterEmails).toHaveLength(2);
     for (const e of reporterEmails) {

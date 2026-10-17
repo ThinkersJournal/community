@@ -11,5 +11,15 @@
 /** Where a member contests an adverse moderation decision. */
 export const DISPUTE_EMAIL = "dispute@thinkersjournal.com";
 
+/**
+ * The line every moderation notice carries (notice outbox design, F4: "They
+ * should always have the option to email us at dispute@thinkersjournal.com
+ * whether they have a token or not."). Appended to the text AND html body of
+ * the notice whether or not it also holds an appeal link. Plain text with no
+ * HTML-special character, so the html body can pass it through `escapeHtml`
+ * and get it back unchanged.
+ */
+export const DISPUTE_CONTACT_LINE = `You can always dispute this by emailing ${DISPUTE_EMAIL}, whether or not this message includes an appeal link.`;
+
 /** General contact: guidelines, privacy rights, trademark complaints, Terms. */
 export const CONTACT_EMAIL = "contact@thinkersjournal.com";
