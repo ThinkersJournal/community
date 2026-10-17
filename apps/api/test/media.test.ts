@@ -338,6 +338,16 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
   const touchedKeys: string[] = [];
   let sharedFixtureKey: string;
 
+  async function refusals(key: string): Promise<{ uploader_id: string; reason: string }[]> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ uploader_id: string; reason: string }>(
+        `SELECT uploader_id, reason FROM media_upload_refusals WHERE r2_key = $1 ORDER BY created_at`,
+        [key],
+      );
+      return rows;
+    });
+  }
+
   async function ctxRun<T>(fn: (c: import("pg").Client) => Promise<T>): Promise<T> {
     const ctx = createExecutionContext();
     const v = await withClient(env.HYPERDRIVE_FRESH, ctx, fn);
@@ -445,6 +455,7 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
     await ctxRun(async (c) => {
       await c.query(`DELETE FROM media_legal_holds WHERE r2_key = ANY($1::text[])`, [touchedKeys]);
       await c.query(`DELETE FROM media_moves WHERE r2_key = ANY($1::text[])`, [touchedKeys]);
+      await c.query(`DELETE FROM media_upload_refusals WHERE r2_key = ANY($1::text[])`, [touchedKeys]);
     });
     for (const key of touchedKeys) {
       await env.MEDIA.delete(key);
@@ -482,6 +493,8 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
       expect(await mediaRowCount(key)).toBe(rowsBefore);
       // Still restricted — the refusal did not disturb the evidence.
       expect(await env.MEDIA_RESTRICTED.head(key)).not.toBeNull();
+      // RED before the fix: no durable row (#148 item 3) — only the log line below.
+      expect(await refusals(key)).toEqual([{ uploader_id: reuploader.userId, reason: "legal_hold" }]);
       // Moderators can see who tried, and what.
       const sha256 = key.slice("media/post/".length, -".webp".length);
       expect(
@@ -494,6 +507,73 @@ describe("a LEGALLY HELD object is never re-published (#61)", () => {
       warn.mockRestore();
       vi.unstubAllGlobals();
     }
+  });
+
+  /**
+   * #148 item 2. An ordinary moderation hide (no legal hold) moves the object
+   * to MEDIA_RESTRICTED; a re-upload used to put it straight back at its public
+   * URL. The rule: refuse while the key is restricted AND no visible post uses it.
+   */
+  describe("a HIDDEN (not held) object (#148)", () => {
+    async function hideThroughModeration(owner: Actor, key: string): Promise<void> {
+      const postId = await seedHiddenPostReferencing(owner, key);
+      const ctx = createExecutionContext();
+      await applyMediaVisibilityChange(env, ctx, { subject: "post", subjectId: postId, hidden: true });
+      await waitOnExecutionContext(ctx);
+      expect(await env.MEDIA.head(key), "precondition: the hide moved the object out").toBeNull();
+      expect(await env.MEDIA_RESTRICTED.head(key)).not.toBeNull();
+    }
+
+    it("is not re-published by a re-upload: no public put, no new row, a generic 415, a durable record", async () => {
+      const owner = await createVerifiedActor();
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const { image, key } = await uploadUnique(owner);
+        await hideThroughModeration(owner, key);
+        const rowsBefore = await mediaRowCount(key);
+        const genericBody = await (await fetchWorker(upload(SVG_BYTES, owner))).json();
+
+        const reuploader = await createVerifiedActor();
+        const media = recordingMedia();
+        const response = await fetchWorkerWith(upload(image, reuploader), { ...env, MEDIA: media.bucket } as Env);
+
+        // RED before the fix: 201, and the object is public again.
+        expect(response.status).toBe(415);
+        expect(await response.json()).toEqual(genericBody);
+        expect(media.puts).not.toContain(key);
+        expect(await env.MEDIA.head(key)).toBeNull();
+        expect(await mediaRowCount(key)).toBe(rowsBefore);
+        expect(await env.MEDIA_RESTRICTED.head(key)).not.toBeNull();
+        expect(await refusals(key)).toEqual([{ uploader_id: reuploader.userId, reason: "restricted_unreachable" }]);
+      } finally {
+        warn.mockRestore();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("control: a re-upload IS accepted when a visible post still uses the key", async () => {
+      const owner = await createVerifiedActor();
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+      try {
+        const { image, key } = await uploadUnique(owner);
+        await hideThroughModeration(owner, key);
+        // A visible post now uses the identical bytes (the legitimate sibling case).
+        await ctxRun((c) =>
+          c.query(
+            `INSERT INTO posts (author_id, title, slug, markdown_source, status, published_at)
+             VALUES ($1, 'visible', $2, $3, 'published', now())`,
+            [owner.userId, `visible-${crypto.randomUUID().slice(0, 8)}`, `![x](https://cdn.thinkersjournal.com/${key})`],
+          ),
+        );
+        const response = await fetchWorker(upload(image, owner));
+        expect(response.status).toBe(201);
+        expect(await env.MEDIA.head(key)).not.toBeNull();
+        expect(await refusals(key)).toEqual([]);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   /**

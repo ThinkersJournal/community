@@ -151,6 +151,13 @@ and only then for both Workers.
 4. **`prod-smoke.yml` runs after the push**, as it already does for every
    push to `main` (unchanged by this work — see that workflow).
 
+## Upload refusal record: `0038` must be applied BEFORE the deploy
+
+`0038_media_upload_refusals.sql` adds the `media_upload_refusals` table (one row per refused upload of held or
+restricted bytes). It is **additive and inert for the old code**: apply it first with the steps in "Shipping a PR
+with an additive migration" above. The new code only logs an error (and still answers the generic 415) if the
+table is missing, so skew loses the evidence, not the refusal. **Rollback** is the file's `-- Down Migration`.
+
 ## Post idempotency key: `0037` must be applied BEFORE the deploy
 
 `0037_post_idempotency_key.sql` adds two nullable columns and a partial unique index to `posts`
