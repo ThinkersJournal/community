@@ -26,7 +26,7 @@ import { MODERATION_NOTICE_RETENTION_DAYS } from "@thinkersjournal/shared";
 
 import type { DecisionKind } from "./decide";
 import { mintAppealUrl, mintNoticeLinks } from "./notice-links";
-import { renderAccountActionNotice } from "./notify-account";
+import { renderAccountActionNotice, renderTerminationNotice } from "./notify-account";
 import { renderAppealOutcomeNotice } from "./notify-appeal";
 import { renderModerationNotice, type RenderedNotice } from "./notify-author";
 import { renderDsaOutcome } from "./notify-reporter";
@@ -118,8 +118,8 @@ export interface AccountActionNoticeInput {
 /**
  * Queue the account-action notice (kind 3). The caller skips an anonymised
  * account before calling, so no token is minted for a message nobody can
- * receive. A `terminate` has no entry here: its notice carries no reason and
- * no links (#114) and is queued by its own route.
+ * receive. A `terminate` has its own entry, `enqueueTerminationNotice`: its
+ * notice carries no reason and no links (#114).
  */
 export async function enqueueAccountActionNotice(c: Client, input: AccountActionNoticeInput): Promise<void> {
   // ⚠️ userId is the ACTIONED account, never the admin.
@@ -136,6 +136,21 @@ export async function enqueueAccountActionNotice(c: Client, input: AccountAction
     deleteRequestUrl: links.deleteRequestUrl,
   });
   await insertOutbox(c, { actionId: input.actionId, kind: "account_action", recipientUserId: input.userId, rendered });
+}
+
+/**
+ * Queue the termination notice (kind 3, #114 ruling). It takes NO reason,
+ * evidence or link, mints NO token (a terminate is never appealable and offers no
+ * deletion request), and goes through the same outbox as every account notice, so
+ * the row is the record of what was sent. The caller skips an anonymised account.
+ */
+export async function enqueueTerminationNotice(c: Client, input: { readonly actionId: string; readonly userId: string }): Promise<void> {
+  await insertOutbox(c, {
+    actionId: input.actionId,
+    kind: "account_action",
+    recipientUserId: input.userId,
+    rendered: renderTerminationNotice(),
+  });
 }
 
 export interface AppealOutcomeNoticeInput {

@@ -12,8 +12,9 @@
  * not carry a verified Access JWT. The guard is the FIRST statement, before
  * markPrivate, before the CSP, before any api call.
  *
- * ⚠️ `terminate` is deliberately never offered here — it is the CSAM path
- * (#114), which calls the primitive itself and has no admin button.
+ * ⚠️ `terminate` (#114) is NOT one of the ladder's ACTION buttons
+ * (ADMIN_ACCOUNT_ACTIONS excludes it): it has its own separate, confirmed form
+ * ("Terminate account"), its own api route, and a reason that is internal only.
  */
 import BaseLayout from "../../../components/BaseLayout.astro";
 import { adminApiErrorCode, adminApiFetch } from "../../../lib/admin-api";
@@ -69,6 +70,19 @@ if (Astro.request.method === "POST") {
     if (res.status === 200 && res.data?.created === false) {
       actionNotice = `This account already has an active ${String(form.get("category"))} hold.`;
     } else if (res.status === 200) actionOk = true;
+    else actionError = adminApiErrorCode(res) ?? "ACTION_FAILED";
+  } else if (intent === "terminate") {
+    const res = await adminApiFetch(`/admin/accounts/${encodeURIComponent(handle)}/terminate`, {
+      method: "POST",
+      accessJwt,
+      origin,
+      body: {
+        reason: form.get("reason"),
+        confirmTerminate: form.get("confirmTerminate") === "on",
+        ...(form.get("violationCategory") ? { violationCategory: form.get("violationCategory") } : {}),
+      },
+    });
+    if (res.status === 200) actionOk = true;
     else actionError = adminApiErrorCode(res) ?? "ACTION_FAILED";
   } else if (intent === "hold_release") {
     const holdId = form.get("holdId");
@@ -208,6 +222,39 @@ function stateLine(account: AdminAccountResponse): string {
                   ))}
                 </div>
               </form>
+            )
+          }
+
+          {
+            account.disabledReason !== "terminate" && (
+              <details class="terminate-zone">
+                <summary class="btn btn-ghost">Terminate account…</summary>
+                <form method="POST" class="terminate-form">
+                  <input type="hidden" name="intent" value="terminate" />
+                  <p>
+                    Permanent and not appealable. The user is sent a fixed notice that names no reason, report or
+                    evidence.
+                  </p>
+                  <label>
+                    Internal reason (NOT sent to the user)
+                    <textarea name="reason" required maxlength="2000" />
+                  </label>
+                  <label>
+                    Violation category (optional)
+                    <select name="violationCategory">
+                      <option value="">—</option>
+                      {REPORT_REASONS.map((cat) => (
+                        <option value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label class="confirm-terminate">
+                    <input type="checkbox" name="confirmTerminate" />
+                    I confirm a permanent termination
+                  </label>
+                  <button type="submit" class="btn btn-ghost">Terminate account</button>
+                </form>
+              </details>
             )
           }
 
