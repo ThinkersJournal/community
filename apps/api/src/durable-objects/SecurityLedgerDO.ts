@@ -24,6 +24,7 @@ import {
   logSecurityEvent,
   resolveDeviceKeys,
   selectSecurityAlertSink,
+  type AdminSecurityHeldResponse,
   type CounterReport,
   type LedgerReportBatch,
   type SecurityAlertEnv,
@@ -35,7 +36,9 @@ import {
   type SiteSummaryRpc,
 } from "@thinkersjournal/shared";
 
+import { CANONICAL_ORIGIN } from "../auth/email-verify";
 import { COUNTER_RETENTION_MINUTES, MAX_PENDING_REPORTS } from "./SecurityCounterDO";
+import { listHeldSync, resolveRefSync } from "../security/ledger-admin";
 import { alertFrom, digestFrom, heartbeatFrom, HEARTBEAT_HOUR_UTC } from "../security/ledger-messages";
 import {
   applyCoverage,
@@ -67,11 +70,8 @@ export const OUTBOX_BACKOFF_MINUTES: readonly number[] = [1, 5, 30];
 const LEDGER_ACCOUNT_IDS = `(SELECT subject AS id FROM held WHERE subject_kind = 'account'
                              UNION SELECT user_id AS id FROM account_refs)`;
 
-/**
- * `adminUrl` in every held-subject report (§2.6). Null until the admin page
- * ships in PR 3, so no message links to a 404 (PM ruling I-11).
- */
-export const SECURITY_ADMIN_URL: string | null = null;
+/** `adminUrl` in every held-subject report: the page that lists the full held list (§2.6). */
+export const SECURITY_ADMIN_URL = `${CANONICAL_ORIGIN}/admin/security`;
 
 type OutboxRow = { id: number; message: string; covers: string | null; attempts: number };
 
@@ -543,6 +543,16 @@ export class SecurityLedgerDO extends DurableObject<Env> {
       this.store.queue({ type: "config_fault", key: "DEVICE_HASH_KEY", detail: "missing" }, nowMs);
       this.store.setMeta("config_fault_day", day);
     });
+  }
+
+  /** RPC (PR 3, N6): the account a ref names, or null for an unknown or expired ref. Writes nothing. */
+  resolveRef(ref: string): Promise<Nullable<string>> {
+    return Promise.resolve(resolveRefSync(this.store, ref, Date.now()));
+  }
+
+  /** RPC (PR 3, F2): one page of the full held list for the admin page; null when the cursor's account ref is gone. */
+  listHeld(signalClass: SignalClass, after: string): Promise<AdminSecurityHeldResponse | null> {
+    return Promise.resolve(this.ctx.storage.transactionSync(() => listHeldSync(this.store, signalClass, after, Date.now())));
   }
 
   /** RPC from `UserSecurityDO` (§4.4): one `notice_dropped` per drop state per UTC day; the rest counted. */

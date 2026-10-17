@@ -6,12 +6,10 @@
  * without inventing a feature the queue module has not designed yet.
  */
 import { checkOrigin } from "../auth/csrf";
+import { verificationLinkOrigin } from "../auth/email-verify";
 import { errorResponse } from "../http/errors";
 import { applyDecision, type DecisionKind } from "../moderation/decide";
 import { afterContentDecision } from "../moderation/after-content-decision";
-import { sendModerationNotice } from "../moderation/notify-author";
-import { recordNotice } from "../moderation/notice-records";
-import { noticeLinks, type NoticeLinks } from "../moderation/notice-links";
 import { sendDsaOrphanedOutcome } from "../moderation/notify-reporter";
 import { closeOrphanedDsaNotice, listOpenDsaNotices, orphanedDsaNoticeCandidate } from "../moderation/dsa-notices";
 import { requireAdmin } from "../admin/require-admin";
@@ -185,6 +183,10 @@ export async function handleAdminDecision(
       legalGround: legalGround as LegalGround | undefined,
       contractualGround: contractualGround as ContractualGround | undefined,
       accountHold: legalHold === true ? { category: legalHoldCategory as LegalHoldCategory } : undefined,
+      // Notice outbox PR 1: the author's notice is rendered and queued, and the
+      // appeal token minted, INSIDE the decision's transaction (a failure rolls
+      // the decision back). The cron drain sends it; nothing is sent from here.
+      enqueueNotice: { origin: verificationLinkOrigin(request) },
     }),
   );
 
@@ -203,57 +205,24 @@ export async function handleAdminDecision(
   // outcome emails): Art. 16(5)/17 owes the reporter an outcome whatever
   // became of the content, and refusing here would make a legal hold on an
   // anonymised account's content impossible to record. Only the AUTHOR's
-  // notice is skipped, and with it the appeal-link mint: a mint with no
-  // message to carry it is a credential nobody can use. ⚠️ The line carries
-  // the action id and the reason and NOTHING else — no address (the sentinel,
-  // or a real one), no title, no author id.
+  // notice is skipped (decide.ts queued nothing and minted no appeal token: a
+  // mint with no message to carry it is a credential nobody can use). ⚠️ The
+  // line carries the action id and the reason and NOTHING else — no address
+  // (the sentinel, or a real one), no title, no author id.
   if (result.noticeSkip !== null) {
     // ⚠️ Log only a notice that was ACTUALLY suppressed. A restore of
-    // never-hidden content is a dismissal that `sendModerationNotice` would
-    // have no-oped anyway, so "skipped" there would be a false report.
+    // never-hidden content is a dismissal that renders no notice at all
+    // (renderModerationNotice returns null), so "skipped" there would be a
+    // false report.
     const dismissal = decision === "restore" && !result.wasHidden;
     if (!dismissal) {
       console.warn("moderation notice skipped", { actionId: result.actionId, reason: result.noticeSkip });
     }
-    return decisionOk(result.actionId);
   }
 
-  // #113 plan B — tokens are minted AFTER the action has committed, on a
-  // fresh connection, never inside decide.ts's transaction. A restore has
-  // nothing left to appeal, so no mint runs for it. A mint failure must not
-  // fail an action that already happened: the notice goes out without the
-  // link.
-  let links: NoticeLinks = {};
-  if (decision !== "restore") {
-    try {
-      links = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-        noticeLinks(c, request, { actionId: result.actionId, userId: result.authorId, bars: false }),
-      );
-    } catch (err) {
-      console.error("appeal link not minted", { actionId: result.actionId, err });
-    }
-  }
-
-  // ⚠️ AFTER the commit and OUTSIDE the response path. The decision is already
-  // durable; a Postmark outage must not turn a successful moderation action
-  // into a 500. See R5. A dismissal (Restore of never-hidden content) sends
-  // nothing — sendModerationNotice owns that rule.
-  ctx.waitUntil(
-    sendModerationNotice(env, result.authorEmail, {
-      decision: decision as DecisionKind,
-      wasHidden: result.wasHidden,
-      subject,
-      postTitle: result.postTitle,
-      reason: reason.trim(),
-      appealUrl: links.appealUrl,
-    }, (rendered) => recordNotice(env, ctx, result.actionId, "author", rendered)).then((sent) => {
-      if (!sent) {
-        // A lost notice must be findable and re-sendable (R5).
-        console.error("moderation notice not sent", { actionId: result.actionId });
-      }
-    }),
-  );
-
+  // The author's notice is already durable in moderation_notice_outbox (queued
+  // in the decision's transaction); the */2 cron drain sends it. No token mint
+  // and no waitUntil send happen here any more.
   return decisionOk(result.actionId);
 }
 

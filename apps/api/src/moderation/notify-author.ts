@@ -20,7 +20,7 @@ import { withClient } from "../db/client";
 import type { AutoHideResult } from "./auto-hide";
 import type { DecisionKind } from "./decide";
 
-import { APPEAL_WINDOW_DAYS, GUIDELINES_PATH, GUIDELINES_VERSION, REDRESS_SENTENCE } from "@thinkersjournal/shared";
+import { APPEAL_WINDOW_DAYS, DISPUTE_CONTACT_LINE, GUIDELINES_PATH, GUIDELINES_VERSION, REDRESS_SENTENCE } from "@thinkersjournal/shared";
 
 export interface ModerationNotice {
   readonly decision: DecisionKind;
@@ -90,21 +90,19 @@ export interface RenderedNotice {
 }
 
 /**
- * @param onSent #57 Q9 — called with the EXACT strings sent, only when Postmark
- *   accepted them. Best-effort: a throw or rejection is swallowed here, so
- *   storing the record can never fail or block the notice.
+ * Render the author's decision notice. PURE: no I/O, no clock.
+ *
+ * Returns `null` for a Restore of content that was never hidden: that is a
+ * DISMISSAL, nothing was done to the author, so there is nothing to send or to
+ * queue. This is the ONLY place the rule lives — `sendModerationNotice` and the
+ * outbox enqueue (notice-enqueue.ts) both call this. A second copy of the rule
+ * in a caller would make each copy impossible to test on its own.
+ *
+ * Every rendered notice, with or without an appeal link, ends with
+ * `DISPUTE_CONTACT_LINE` (notice outbox design F4).
  */
-export async function sendModerationNotice(
-  env: Env,
-  to: string,
-  notice: ModerationNotice,
-  onSent?: (rendered: RenderedNotice) => Promise<void>,
-): Promise<boolean> {
-  // ⚠️ A Restore of content that was never hidden is a DISMISSAL: nothing was
-  // done to the author, so nothing is sent. This is the ONLY place the rule
-  // lives — the route calls this unconditionally. A second copy of the rule in
-  // the caller would make each copy impossible to test on its own.
-  if (notice.decision === "restore" && !notice.wasHidden) return true;
+export function renderModerationNotice(notice: ModerationNotice): RenderedNotice | null {
+  if (notice.decision === "restore" && !notice.wasHidden) return null;
 
   // The early return above removed the one pair COPY has no entry for.
   const { subject, lead } = COPY[`${notice.decision}:${notice.wasHidden}` as NoticeKey];
@@ -137,7 +135,7 @@ ${guidelines.text}
     ? `<p>You can read our Community Guidelines (version ${escapeHtml(GUIDELINES_VERSION)}): <a href="${escapeHtml(guidelines.url)}">${escapeHtml(guidelines.url)}</a></p>`
     : "";
 
-  const rendered: RenderedNotice = {
+  return {
     subject,
     textBody: `${lead}
 
@@ -146,9 +144,26 @@ ${contentLine}
 Reason given by the reviewer:
 
 ${notice.reason}
-${guidelinesText}${redressText}${appealTextLine}`,
-    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>${guidelinesHtml}${redressHtml}${appealHtmlLine}`,
+${guidelinesText}${redressText}${appealTextLine}
+${DISPUTE_CONTACT_LINE}`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>${guidelinesHtml}${redressHtml}${appealHtmlLine}<p>${escapeHtml(DISPUTE_CONTACT_LINE)}</p>`,
   };
+}
+
+/**
+ * @param onSent #57 Q9 — called with the EXACT strings sent, only when Postmark
+ *   accepted them. Best-effort: a throw or rejection is swallowed here, so
+ *   storing the record can never fail or block the notice.
+ */
+export async function sendModerationNotice(
+  env: Env,
+  to: string,
+  notice: ModerationNotice,
+  onSent?: (rendered: RenderedNotice) => Promise<void>,
+): Promise<boolean> {
+  const rendered = renderModerationNotice(notice);
+  // A dismissal sends nothing (see renderModerationNotice).
+  if (rendered === null) return true;
   const sent = await postmarkSend(env, { from: "noreply@thinkersjournal.com", to, ...rendered, stream: "outbound" });
   if (sent && onSent !== undefined) {
     try {

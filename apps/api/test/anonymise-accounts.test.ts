@@ -1,11 +1,12 @@
 import { createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import worker from "../src";
 import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { createSession } from "../src/auth/session";
 import { withClient } from "../src/db/client";
 import type { SecurityLedgerDO } from "../src/durable-objects/SecurityLedgerDO";
+import { sweepMediaOwners } from "../src/media/owner-sweep";
 import { mintActionToken } from "../src/moderation/action-tokens";
 import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
 import { quiet } from "./helpers/security-do";
@@ -969,5 +970,190 @@ describe("anonymiseExpiredAccounts — device clean-up", () => {
       await waitOnExecutionContext(ctx);
     });
     expect(await devicesAndPending(f.id)).toEqual([0, 0]);
+  });
+});
+
+// ---- media ownership records (0035; design 2026-10-16) -----------------------
+
+/**
+ * The anonymisation transaction clears `media.owner_id` (src/media/owner-clearing.ts).
+ * Cleared rows have no owner, so the users' cascade no longer removes them: this
+ * block deletes its own rows and holds. Fixtures are seeded INELIGIBLE and made
+ * due only under the reaper lock, like every other run-specific case above.
+ */
+describe("anonymiseExpiredAccounts — media ownership records", () => {
+  const mediaIds: string[] = [];
+  const heldKeys: string[] = [];
+
+  afterEach(async () => {
+    await ctxRun(async (c) => {
+      await c.query("DELETE FROM media WHERE id = ANY($1::uuid[])", [mediaIds]);
+      await c.query("DELETE FROM media_legal_holds WHERE r2_key = ANY($1::text[])", [heldKeys]);
+    });
+    mediaIds.length = 0;
+    heldKeys.length = 0;
+  });
+
+  function newKey(): string {
+    return `media/post/${crypto.randomUUID().replace(/-/g, "")}.webp`;
+  }
+
+  async function seedUpload(ownerId: string, key = newKey()): Promise<string> {
+    const id = await ctxRun(async (c) => {
+      const { rows } = await c.query<{ id: string }>(
+        `INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height,
+                            original_md5, original_sha1, original_sha256, pdq, pdq_quality, pdq_source)
+         VALUES ($1, $2, $3, 77, 2, 3, $4, $5, $6, $7, 80, 'original') RETURNING id`,
+        [ownerId, key, "d".repeat(64), "a".repeat(32), "b".repeat(40), "c".repeat(64), "e".repeat(64)],
+      );
+      return rows[0]!.id;
+    });
+    mediaIds.push(id);
+    return id;
+  }
+
+  async function holdKey(key: string): Promise<void> {
+    heldKeys.push(key);
+    await ctxRun((c) =>
+      c.query(`INSERT INTO media_legal_holds (r2_key, imposed_by, category) VALUES ($1, 'mod@example.test', 'other')`, [key]),
+    );
+  }
+
+  async function mediaRow(id: string): Promise<Record<string, unknown>> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<Record<string, unknown>>(
+        `SELECT owner_id, owner_cleared_at, r2_key, sha256, bytes::text AS bytes, width, height, created_at,
+                original_md5, original_sha1, original_sha256, pdq, pdq_quality, pdq_source
+           FROM media WHERE id = $1`,
+        [id],
+      );
+      return rows[0]!;
+    });
+  }
+
+  /** Make the fixtures due and run the reaper once, both under the lock. */
+  async function scrub(...ids: string[]): Promise<void> {
+    await withAnonymiseReaperLock(async () => {
+      for (const id of ids) await makeEligible(id);
+      const ctx = createExecutionContext();
+      await anonymiseExpiredAccounts(env, ctx);
+      await waitOnExecutionContext(ctx);
+    });
+  }
+
+  it("clears an ordinary upload's owner in the scrub and keeps every hash column byte-for-byte", async () => {
+    const f = await seedAccount({ eligible: false });
+    const id = await seedUpload(f.id);
+    const before = await mediaRow(id);
+    expect(before.owner_id).toBe(f.id); // CONTROL: owned before the run
+
+    await scrub(f.id);
+
+    expect(await anonymisedAt(f.id), "the reaper scrubbed nothing").not.toBeNull();
+    const after = await mediaRow(id);
+    expect(after.owner_id).toBeNull();
+    expect(after.owner_cleared_at).not.toBeNull();
+    // Everything but the two ownership columns is unchanged.
+    const kept = (r: Record<string, unknown>): Record<string, unknown> => {
+      const copy = { ...r };
+      delete copy.owner_id;
+      delete copy.owner_cleared_at;
+      return copy;
+    };
+    expect(kept(after)).toEqual(kept(before));
+    expect(after.original_sha256).toBe("c".repeat(64));
+  });
+
+  it("a row on a held r2_key keeps its owner while an unheld sibling is cleared; after the hold is released the sweep clears it", async () => {
+    const f = await seedAccount({ eligible: false });
+    const heldKey = newKey();
+    const heldId = await seedUpload(f.id, heldKey);
+    const plainId = await seedUpload(f.id);
+    await holdKey(heldKey);
+
+    await scrub(f.id);
+
+    expect(await anonymisedAt(f.id)).not.toBeNull();
+    expect((await mediaRow(plainId)).owner_id, "the unheld sibling was not cleared").toBeNull();
+    expect((await mediaRow(heldId)).owner_id).toBe(f.id);
+
+    await ctxRun((c) => c.query("DELETE FROM media_legal_holds WHERE r2_key = $1", [heldKey]));
+    const ctx = createExecutionContext();
+    await sweepMediaOwners(env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect((await mediaRow(heldId)).owner_id).toBeNull();
+    expect((await mediaRow(heldId)).owner_cleared_at).not.toBeNull();
+  });
+
+  it("an account under an active account legal hold is not anonymised, so its uploads keep their owner; an unheld account in the same run is cleared", async () => {
+    const held = await seedAccount({ eligible: false });
+    const control = await seedAccount({ eligible: false });
+    const heldRow = await seedUpload(held.id);
+    const controlRow = await seedUpload(control.id);
+    await ctxRun((c) => imposeHold(c, held.id, "dmca"));
+
+    await scrub(held.id, control.id);
+
+    expect(await anonymisedAt(control.id), "the reaper scrubbed nothing").not.toBeNull();
+    expect((await mediaRow(controlRow)).owner_id).toBeNull();
+    expect(await anonymisedAt(held.id)).toBeNull();
+    expect((await mediaRow(heldRow)).owner_id).toBe(held.id);
+  });
+});
+
+describe("sweepMediaOwners", () => {
+  const mediaIds: string[] = [];
+
+  afterEach(async () => {
+    await ctxRun((c) => c.query("DELETE FROM media WHERE id = ANY($1::uuid[])", [mediaIds]));
+    mediaIds.length = 0;
+  });
+
+  it("clears the upload of an account anonymised before 0035 and leaves a live account's alone", async () => {
+    const gone = await seedAccount({ eligible: false });
+    const live = await seedAccount({ eligible: false });
+    await ctxRun((c) => c.query("UPDATE users SET anonymised_at = now() WHERE id = $1", [gone.id]));
+    const ids = await ctxRun(async (c) => {
+      const out: string[] = [];
+      for (const owner of [gone.id, live.id]) {
+        const { rows } = await c.query<{ id: string }>(
+          `INSERT INTO media (owner_id, r2_key, sha256, bytes, width, height)
+           VALUES ($1, $2, 's', 1, 1, 1) RETURNING id`,
+          [owner, `media/post/${crypto.randomUUID().replace(/-/g, "")}.webp`],
+        );
+        out.push(rows[0]!.id);
+      }
+      return out;
+    });
+    mediaIds.push(...ids);
+
+    const ctx = createExecutionContext();
+    const n = await sweepMediaOwners(env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(n).toBeGreaterThanOrEqual(1);
+    const owners = await ctxRun(async (c) => {
+      const { rows } = await c.query<{ id: string; owner_id: string | null }>(
+        "SELECT id, owner_id FROM media WHERE id = ANY($1::uuid[])",
+        [ids],
+      );
+      return new Map(rows.map((r) => [r.id, r.owner_id]));
+    });
+    expect(owners.get(ids[0]!)).toBeNull();
+    expect(owners.get(ids[1]!)).toBe(live.id);
+  });
+
+  it("never throws: a failing run is logged and returns 0", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const broken = { ...env, HYPERDRIVE_FRESH: undefined } as unknown as Env;
+      const ctx = createExecutionContext();
+      await expect(sweepMediaOwners(broken, ctx)).resolves.toBe(0);
+      await waitOnExecutionContext(ctx);
+      expect(spy.mock.calls.some((call) => String(call[0]).startsWith("media-owner-sweep: failed"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

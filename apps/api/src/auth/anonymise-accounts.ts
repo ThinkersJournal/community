@@ -52,6 +52,7 @@
 import type { Client } from "pg";
 
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";
+import { clearMediaOwnerForAnonymisedUser } from "../media/owner-clearing";
 import { forgetAll } from "../security/forget";
 
 import { hasReservedEmailKey, ReservedEmailKeyMissingError, reservedEmailHmac } from "./reserved-email";
@@ -251,6 +252,11 @@ async function scrubOne(c: Client, env: Env, id: string, email: string): Promise
       // action-tokens.ts also refuses an anonymised account; this removes the
       // bearer tokens themselves.
       await c.query("DELETE FROM moderation_action_tokens WHERE user_id = $1", [id]);
+      // Media ownership records (design 2026-10-16): clear the owner link on this
+      // account's uploads in the SAME transaction, so a scrubbed account never
+      // keeps a stable key linking its uploads. Held objects keep their owner
+      // (src/media/owner-clearing.ts); the daily sweep catches those up later.
+      await clearMediaOwnerForAnonymisedUser(c, id);
     }
     await c.query("COMMIT");
     return changed;
