@@ -41,6 +41,7 @@ import {
   handleAdminReleaseAccountHold,
 } from "./routes/admin-accounts";
 import { handleAdminListAppeals, handleAdminResolveAppeal } from "./routes/admin-appeals";
+import { handleAdminListUndeliveredNotices, handleAdminResendNotice } from "./routes/admin-notices";
 import { handleAdminSecurityHeld, handleAdminSecurityRef } from "./routes/admin-security";
 import {
   handleAppealByToken,
@@ -445,6 +446,11 @@ export const ROUTES: readonly RouteDef[] = [
   // migration 0020). Same Access trust domain/inline-checkOrigin shape as
   // /admin/decision and the media-access-requests routes above.
   { method: "POST", pattern: "/admin/dsa-notices/:id/close", handler: handleCloseOrphanedDsaNotice },
+
+  // Notice outbox PR 3 — the undelivered-notices list and RESEND. Same Access
+  // trust domain / inline-checkOrigin shape as /admin/dsa-notices above.
+  { method: "GET", pattern: "/admin/notices/undelivered", handler: handleAdminListUndeliveredNotices },
+  { method: "POST", pattern: "/admin/notices/:id/resend", handler: handleAdminResendNotice },
 
   // #61 — the one-off backfill for media already public despite belonging to
   // already-hidden content. Same Access trust domain/shape as the routes

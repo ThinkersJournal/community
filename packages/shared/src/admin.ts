@@ -252,6 +252,32 @@ export interface AdminDsaNoticesResponse {
   notices: AdminDsaNotice[];
 }
 
+/**
+ * A row in `GET /admin/notices/undelivered` (notice outbox PR 3): a moderation
+ * notice that reached `undeliverable`. No body and no address: the subject line
+ * and the account's handle only. ISO strings.
+ */
+export interface AdminUndeliveredNotice {
+  readonly id: string;
+  readonly kind: "author_decision" | "author_auto_hide" | "account_action" | "appeal_outcome" | "reporter_outcome";
+  readonly actionId: string;
+  readonly subject: string;
+  readonly createdAt: string;
+  readonly attempts: number;
+  /** A failure CLASS (never a message, body or address), e.g. `recipient_refused`. */
+  readonly lastError: string | null;
+  /** The row is purged then; a never-delivered window closes with it. */
+  readonly retainUntil: string;
+  /** `null` for a reporter (no account). */
+  readonly recipientHandle: string | null;
+  /** False for a reporter row and for an anonymised or vanished recipient. */
+  readonly resendable: boolean;
+}
+
+export interface AdminUndeliveredNoticesResponse {
+  notices: AdminUndeliveredNotice[];
+}
+
 /** One row of an account's legal-hold history (account-legal-hold spec §2). ISO strings. */
 export interface AdminAccountHold {
   readonly id: string;

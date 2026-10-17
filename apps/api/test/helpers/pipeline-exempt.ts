@@ -81,6 +81,8 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   "POST /admin/backfill-hidden-media",
   // #113 — same Access + inline checkOrigin defense as /admin/decision.
   "POST /admin/accounts/:handle/actions",
+  // Notice outbox PR 3 — same Access + inline checkOrigin defense as /admin/decision.
+  "POST /admin/notices/:id/resend",
   // #114 — the moderator terminate: same Access + inline checkOrigin defense as
   // /admin/accounts/:handle/actions directly above.
   "POST /admin/accounts/:handle/terminate",
