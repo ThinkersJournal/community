@@ -5,29 +5,25 @@
  * (#113 plan B); the comments came with the code.
  *
  * ⚠️ Call it only AFTER the transaction that wrote the decision committed.
- * The author's own notice is NOT here: an appeal grant tells the appellant
- * the appeal's outcome instead, so each caller sends its own.
+ * No notice is sent from here: the author's, the appellant's and the DSA
+ * reporters' notices are all queued in the decision's own transaction
+ * (notice-enqueue.ts) and sent by the outbox drain.
  */
 import { purgeTags } from "../cache/purge";
 import { applyMediaVisibilityChange } from "../media/visibility-hook";
 import type { LegalHoldCategory } from "../media/legal-hold";
-import type { DecisionKind, DecisionResult } from "./decide";
-import { sendDsaOutcome } from "./notify-reporter";
+import type { DecisionResult } from "./decide";
 import { purgeTagsFor } from "./purge-target";
 
 export interface AfterContentDecisionArgs {
   readonly subject: "post" | "comment";
-  /** The decision `result` recorded: an appeal grant passes "restore". */
-  readonly decision: DecisionKind;
-  /** The trimmed statement of reasons. DSA reporters receive it verbatim. */
-  readonly reason: string;
   readonly result: DecisionResult;
   /** #61 — only from handleAdminDecision, only for keep_hidden/remove. */
   readonly legalHold?: { readonly category: LegalHoldCategory; readonly imposedBy: string };
 }
 
 export async function afterContentDecision(env: Env, ctx: ExecutionContext, args: AfterContentDecisionArgs): Promise<void> {
-  const { subject, decision, reason, result, legalHold } = args;
+  const { subject, result, legalHold } = args;
 
   // ⚠️ PURGE AFTER THE COMMIT. Without this a Remove leaves the content served
   // from the edge cache for up to 25 hours (PUBLIC_MAX_AGE + PUBLIC_SWR).
@@ -52,15 +48,4 @@ export async function afterContentDecision(env: Env, ctx: ExecutionContext, args
         ? undefined
         : { category: legalHold.category, moderationActionId: result.actionId, imposedBy: legalHold.imposedBy },
   });
-
-  // DSA (spec §8): every CONFIRMED, open notice this ruling resolved (same
-  // transaction — see decide.ts) gets its reporter a statement of reasons.
-  // Same after-the-commit, waitUntil discipline as the author notice.
-  for (const r of result.dsaReporters) {
-    ctx.waitUntil(
-      sendDsaOutcome(env, r.email, { decision, reason, subject, postTitle: result.postTitle }).then((sent) => {
-        if (!sent) console.error("dsa outcome not sent", { noticeId: r.noticeId, actionId: result.actionId });
-      }),
-    );
-  }
 }

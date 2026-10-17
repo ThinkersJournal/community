@@ -3,6 +3,7 @@ import type { Client } from "pg";
 import { releaseReservedEmail } from "../auth/reserved-email";
 import { BEGIN_BOUNDED_TX } from "../db/client";
 import { recordModerationAction } from "./actions";
+import { enqueueAppealOutcomeNotice } from "./notice-enqueue";
 import { applyDecisionInTx, type DecisionResult } from "./decide";
 import { HUMAN_CONTENT_RULING_KINDS_SQL } from "./visibility-actions";
 
@@ -264,6 +265,15 @@ export async function resolveAppeal(
       input.grant ? "granted" : "denied",
       resolutionActionId,
     ]);
+    // Notice outbox PR 2: the appellant's outcome is queued in THIS transaction
+    // (kind 4), so "resolved" implies "told". Nothing is queued for an
+    // anonymised appellant (B3).
+    await enqueueAppealOutcomeNotice(c, {
+      resolutionActionId,
+      appellantId: ap.appellant_id,
+      outcome: input.grant ? "granted" : "denied",
+      reason: input.reason,
+    });
     await c.query("COMMIT");
     return {
       kind: "resolved",

@@ -18,6 +18,7 @@
 import { postmarkSend } from "../auth/postmark";
 import { escapeHtml } from "../auth/email-verify";
 import type { DecisionKind } from "./decide";
+import type { RenderedNotice } from "./notify-author";
 
 export interface DsaOutcome {
   readonly decision: DecisionKind;
@@ -42,11 +43,8 @@ const LEAD: Readonly<Record<DecisionKind, string>> = {
     "We reviewed the content you reported and decided it does not break our rules or the law, so no action was taken.",
 };
 
-export async function sendDsaOutcome(
-  env: Env,
-  to: string,
-  outcome: DsaOutcome,
-): Promise<boolean> {
+/** Render the reporter's outcome email. Pure: the notice outbox renders it inside the ruling's transaction. */
+export function renderDsaOutcome(outcome: DsaOutcome): RenderedNotice {
   const lead = LEAD[outcome.decision];
   const contentLine =
     outcome.subject === "post"
@@ -55,12 +53,22 @@ export async function sendDsaOutcome(
   const transparencyLine =
     "This decision was made by a human moderator, in keeping with the Digital Services Act.";
 
-  return await postmarkSend(env, {
-    from: "noreply@thinkersjournal.com",
-    to,
+  return {
     subject: "The content you reported has been reviewed",
     textBody: `${lead}\n\n${contentLine}\n\nReason given by the moderator:\n\n${outcome.reason}\n\n${transparencyLine}\n`,
     htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the moderator:</strong></p><p>${escapeHtml(outcome.reason)}</p><p>${escapeHtml(transparencyLine)}</p>`,
+  };
+}
+
+export async function sendDsaOutcome(
+  env: Env,
+  to: string,
+  outcome: DsaOutcome,
+): Promise<boolean> {
+  return await postmarkSend(env, {
+    from: "noreply@thinkersjournal.com",
+    to,
+    ...renderDsaOutcome(outcome),
     stream: "outbound",
   });
 }

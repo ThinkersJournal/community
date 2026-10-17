@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { __resetJwksCacheForTests } from "../src/admin/access-jwt";
 import { withClient } from "../src/db/client";
+import { drainNoticeOutbox } from "../src/moderation/notice-outbox";
 
 import { createVerifiedActor, deleteCreatedUsers } from "./actor";
 
@@ -76,6 +77,8 @@ afterEach(async () => {
   // Clean up created users to prevent accumulation
   if (createdUserIds.length > 0) {
     await ctxRun(async (c) => {
+      // No FK from the outbox to users: remove its rows explicitly.
+      await c.query(`DELETE FROM moderation_notice_outbox WHERE recipient_user_id = ANY($1::uuid[])`, [createdUserIds]);
       await c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [createdUserIds]);
     });
   }
@@ -96,7 +99,20 @@ async function seedHandle(): Promise<{ userId: string; handle: string; email: st
   });
 }
 
+/** `act`, then ONE outbox drain scoped to this action (the test database is shared with other files). This is what the cron does. */
 async function act(handle: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
+  const res = await actQueuedOnly(handle, body, headers);
+  if (res.status === 200) {
+    const { actionId } = (await res.clone().json()) as { actionId: string };
+    const ctx = createExecutionContext();
+    await drainNoticeOutbox(env, ctx, { onlyActionIds: [actionId] });
+    await waitOnExecutionContext(ctx);
+  }
+  return res;
+}
+
+/** The account action with its notice left QUEUED: no drain runs. */
+async function actQueuedOnly(handle: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
   return call(`/admin/accounts/${handle}/actions`, {
     method: "POST",
     headers: { Origin: ALLOWED_ORIGIN, "content-type": "application/json", "Cf-Access-Jwt-Assertion": await makeJwt(), ...headers },
@@ -270,6 +286,62 @@ describe("POST /admin/accounts/:handle/actions — notice emails (Review Focus 2
     const res = await act(handle, { action: "warn", reason: "r" });
     expect(res.status).toBe(404);
     expect(sentEmails).toHaveLength(0);
+  });
+});
+
+describe("notice outbox PR 2 — the account notice is queued in the action's transaction", () => {
+  interface Row {
+    kind: string;
+    state: string;
+    recipient_user_id: string | null;
+    recipient_email: string | null;
+    dsa_notice_id: string | null;
+    body_text: string;
+  }
+  async function outboxFor(actionId: string): Promise<Row[]> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<Row>(
+        `SELECT kind, state, recipient_user_id, recipient_email, dsa_notice_id, body_text
+           FROM moderation_notice_outbox WHERE action_id = $1`,
+        [actionId],
+      );
+      return rows;
+    });
+  }
+
+  it.each(["warn", "suspend", "ban"] as const)(
+    "%s: one pending account_action row for the account, NO address stored, and nothing sent by the request",
+    async (action) => {
+      const { handle, userId, email } = await seedHandle();
+      const res = await actQueuedOnly(handle, { action, reason: "r", confirmBan: true });
+      expect(res.status).toBe(200);
+      const { actionId } = (await res.json()) as { actionId: string };
+
+      const rows = await outboxFor(actionId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        kind: "account_action",
+        state: "pending",
+        recipient_user_id: userId,
+        recipient_email: null,
+        dsa_notice_id: null,
+      });
+      expect(rows[0]!.body_text).toContain("/appeal?token=");
+      expect(rows[0]!.body_text).not.toContain(email);
+      expect(sentEmails).toHaveLength(0);
+    },
+  );
+
+  it("a delivered notice keeps the account address from users, and its stored body no longer holds a live link", async () => {
+    const { handle, email } = await seedHandle();
+    const res = await act(handle, { action: "ban", reason: "r", confirmBan: true });
+    const { actionId } = (await res.json()) as { actionId: string };
+
+    expect(sentEmails[0]).toMatchObject({ To: email });
+    const [row] = await outboxFor(actionId);
+    expect(row!.state).toBe("delivered");
+    expect(row!.body_text).not.toContain("?token=");
+    expect(row!.body_text).toContain("[link removed after delivery]");
   });
 });
 

@@ -7,14 +7,12 @@
  * separate, deliberate steps.
  */
 import { checkOrigin } from "../auth/csrf";
+import { verificationLinkOrigin } from "../auth/email-verify";
 import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
 import { applyAccountAction, loadAccountHistory } from "../moderation/account-actions";
 import { imposeManualAccountHold, listAccountHolds, releaseAccountHold } from "../moderation/account-holds";
-import { sendAccountActionNotice } from "../moderation/notify-account";
-import { recordNotice } from "../moderation/notice-records";
-import { noticeLinks, type NoticeLinks } from "../moderation/notice-links";
 
 import {
   ADMIN_ACCOUNT_ACTIONS,
@@ -153,6 +151,7 @@ export async function handleAdminAccountAction(
       subjectLabel: account.username,
       suspensionHours: kind === "suspend" ? (hours as SuspensionHours) : undefined,
       violationCategory: category as ViolationCategory | undefined,
+      enqueueNotice: { origin: verificationLinkOrigin(request) },
     }),
   );
   if (outcome.kind === "not_found") return errorResponse("NOT_FOUND", 404);
@@ -168,33 +167,9 @@ export async function handleAdminAccountAction(
     }
   }
 
-  // ⚠️ Review Focus 5 — never mail a scrubbed address.
-  if (!outcome.anonymised) {
-    // #113 plan B — minted AFTER the action has committed, on a fresh
-    // connection. A mint failure must not fail an action that already
-    // happened: the notice goes out without the link.
-    let links: NoticeLinks = {};
-    try {
-      links = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-        // ⚠️ userId is the ACTIONED account (account.id), never the admin.
-        noticeLinks(c, request, { actionId: outcome.actionId, userId: account.id, bars }),
-      );
-    } catch (err) {
-      console.error("appeal links not minted", { actionId: outcome.actionId, err });
-    }
-    ctx.waitUntil(
-      sendAccountActionNotice(env, outcome.email, {
-        kind,
-        reason: reason.trim(),
-        suspendedUntil: outcome.suspendedUntil ?? undefined,
-        appealUrl: links.appealUrl,
-        deleteRequestUrl: links.deleteRequestUrl,
-      }, (rendered) => recordNotice(env, ctx, outcome.actionId, "account", rendered)).then((sent) => {
-        if (!sent) console.error("account notice not sent", { actionId: outcome.actionId });
-      }),
-    );
-  }
-
+  // The account's notice is already durable in moderation_notice_outbox (queued,
+  // with its appeal / delete-request tokens, in the action's transaction; an
+  // anonymised account gets none). The */2 cron drain sends it.
   return new Response(JSON.stringify({ actionId: outcome.actionId }), {
     status: 200,
     headers: { "content-type": "application/json" },

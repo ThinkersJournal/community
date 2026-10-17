@@ -194,8 +194,6 @@ export async function handleAdminDecision(
 
   await afterContentDecision(env, ctx, {
     subject,
-    decision: decision as DecisionKind,
-    reason: reason.trim(),
     result,
     legalHold: legalHold === true ? { category: legalHoldCategory as LegalHoldCategory, imposedBy: admin.email } : undefined,
   });

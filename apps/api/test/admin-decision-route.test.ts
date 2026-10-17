@@ -249,12 +249,25 @@ interface OutboxRow {
   retain_until: Date; next_attempt_at: Date;
 }
 
+/** The AUTHOR's row(s) for an action: the DSA reporters' rows (notice outbox PR 2) are read by `reporterRows`. */
 async function outboxRows(actionId: string): Promise<OutboxRow[]> {
   return ctxRun(async (c) => {
     const { rows } = await c.query<OutboxRow>(
       `SELECT kind, state, attempts, recipient_user_id, recipient_email, subject, body_text, body_html,
               delivered_at, last_error, retain_until, next_attempt_at
-         FROM moderation_notice_outbox WHERE action_id = $1`,
+         FROM moderation_notice_outbox WHERE action_id = $1 AND kind <> 'reporter_outcome'`,
+      [actionId],
+    );
+    return rows;
+  });
+}
+
+async function reporterRows(actionId: string): Promise<Array<OutboxRow & { dsa_notice_id: string | null }>> {
+  return ctxRun(async (c) => {
+    const { rows } = await c.query<OutboxRow & { dsa_notice_id: string | null }>(
+      `SELECT kind, state, attempts, recipient_user_id, recipient_email, subject, body_text, body_html,
+              delivered_at, last_error, retain_until, next_attempt_at, dsa_notice_id
+         FROM moderation_notice_outbox WHERE action_id = $1 AND kind = 'reporter_outcome'`,
       [actionId],
     );
     return rows;
@@ -298,7 +311,12 @@ afterEach(async () => {
   if (createdUserIds.length > 0) {
     await ctxRun(async (c) => {
       // No FK from the outbox to users: remove its rows explicitly.
-      await c.query(`DELETE FROM moderation_notice_outbox WHERE recipient_user_id = ANY($1::uuid[])`, [createdUserIds]);
+      await c.query(
+        `DELETE FROM moderation_notice_outbox
+          WHERE recipient_user_id = ANY($1::uuid[])
+             OR action_id IN (SELECT id FROM moderation_actions WHERE subject_user_id = ANY($1::uuid[]))`,
+        [createdUserIds],
+      );
       await c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [createdUserIds]);
     });
   }
@@ -1500,6 +1518,23 @@ describe("POST /admin/decision — #57 source, expiry and scope", () => {
       return rows.length;
     });
     expect(resolved).toBe(2);
+  });
+
+  it("notice outbox PR 2: EACH resolved notice's reporter gets its own queued outcome (two notices, two rows), none sent by the request", async () => {
+    const { postId } = await seedReportedButVisiblePost();
+    const n1 = await seedNotice(postId, "2026-01-01T00:00:00Z");
+    const n2 = await seedNotice(postId, "2026-02-01T00:00:00Z");
+    const res = await decideQueuedOnly({ subject: "post", subjectId: postId, decision: "remove", reason: "r" });
+    expect(res.status).toBe(200);
+    const { actionId } = (await res.json()) as { actionId: string };
+
+    const rows = await reporterRows(actionId);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.dsa_notice_id).sort()).toEqual([n1, n2].sort());
+    for (const r of rows) {
+      expect(r).toMatchObject({ kind: "reporter_outcome", state: "pending", recipient_user_id: null });
+      expect(r.recipient_email).toMatch(/^rep-.*@example\.test$/);
+    }
   });
 
   it("durationHours records action_expires_at on a keep_hidden", async () => {

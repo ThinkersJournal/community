@@ -52,6 +52,28 @@ describe("moderation_notice_outbox (0034)", () => {
     }
   });
 
+  it("0036: a reporter row is unique per (action_id, kind, dsa_notice_id), and a null notice id keeps the old rule", async () => {
+    const id = "00000000-0000-4000-8000-0000000000b4";
+    const n1 = "00000000-0000-4000-8000-0000000000c1";
+    const n2 = "00000000-0000-4000-8000-0000000000c2";
+    const reporter = `INSERT INTO moderation_notice_outbox (action_id, kind, dsa_notice_id, recipient_email, subject, body_text, body_html, retain_until)
+                      VALUES ($1, 'reporter_outcome', $2, 'r@example.test', 's', 't', '<p>t</p>', now())`;
+    try {
+      await client.query(reporter, [id, n1]);
+      // Control: a SECOND notice on the same action and kind is accepted, so the refusal below is the index.
+      await client.query(reporter, [id, n2]);
+      await expect(client.query(reporter, [id, n1])).rejects.toThrow(/moderation_notice_outbox_action_kind_notice_key/);
+      // A bare ON CONFLICT DO NOTHING absorbs the duplicate.
+      const r = await client.query(`${reporter} ON CONFLICT DO NOTHING`, [id, n1]);
+      expect(r.rowCount).toBe(0);
+      // A row with no notice id is still one per (action, kind).
+      await client.query(INSERT, [id, "appeal_outcome"]);
+      await expect(client.query(INSERT, [id, "appeal_outcome"])).rejects.toThrow(/moderation_notice_outbox_action_kind_key/);
+    } finally {
+      await client.query("DELETE FROM moderation_notice_outbox WHERE action_id = $1", [id]);
+    }
+  });
+
   it("accepts all five kinds and refuses an unknown one", async () => {
     const id = "00000000-0000-4000-8000-0000000000b2";
     try {

@@ -7,6 +7,7 @@ import { anonymiseExpiredAccounts } from "../src/auth/anonymise-accounts";
 import { withClient } from "../src/db/client";
 import { applyAccountAction } from "../src/moderation/account-actions";
 import { fileAppeal, resolveAppeal } from "../src/moderation/appeals";
+import { drainNoticeOutbox } from "../src/moderation/notice-outbox";
 import { applyDecision, applyDecisionInTx } from "../src/moderation/decide";
 import { createPublished, createVerifiedActor, deleteCreatedUsers } from "./actor";
 import { withAnonymiseReaperLock } from "./helpers/anonymise-reaper-lock";
@@ -79,7 +80,18 @@ afterEach(async () => {
   if (madeNotices.length > 0) await ctxRun((c) => c.query(`DELETE FROM dsa_notices WHERE id = ANY($1::uuid[])`, [madeNotices]));
   madeNotices.length = 0;
   // appeals cascade with the user; moderation_actions rows stay (append-only, by design).
-  if (madeUsers.length > 0) await ctxRun((c) => c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [madeUsers]));
+  if (madeUsers.length > 0) {
+    // The outbox has no FK to users or actions: remove the appellants' and the reporters' rows explicitly.
+    await ctxRun((c) =>
+      c.query(
+        `DELETE FROM moderation_notice_outbox
+          WHERE recipient_user_id = ANY($1::uuid[])
+             OR action_id IN (SELECT id FROM moderation_actions WHERE subject_user_id = ANY($1::uuid[]))`,
+        [madeUsers],
+      ),
+    );
+    await ctxRun((c) => c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [madeUsers]));
+  }
   madeUsers.length = 0;
   await deleteCreatedUsers();
   vi.restoreAllMocks();
@@ -643,6 +655,17 @@ async function resolveRoute(
     ctx,
   );
   await waitOnExecutionContext(ctx);
+  if (response.status === 200) {
+    // The cron's drain, scoped to this appeal's rows: the resolution action and, on a content grant,
+    // the restore (which carries the DSA reporters' rows). Both notes begin "appeal <id> ".
+    const dctx = createExecutionContext();
+    const ids = await ctxRun(async (c) => {
+      const { rows } = await c.query<{ id: string }>(`SELECT id FROM moderation_actions WHERE internal_note LIKE $1`, [`appeal ${appealId} %`]);
+      return rows.map((r) => r.id);
+    });
+    await drainNoticeOutbox(env, dctx, { onlyActionIds: ids });
+    await waitOnExecutionContext(dctx);
+  }
   return { response, purges };
 }
 
