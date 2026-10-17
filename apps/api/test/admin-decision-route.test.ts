@@ -6,6 +6,9 @@ import { __resetJwksCacheForTests } from "../src/admin/access-jwt";
 import { withClient } from "../src/db/client";
 
 import { applyDecision, type DecisionInput } from "../src/moderation/decide";
+import { enqueueAuthorDecisionNotice } from "../src/moderation/notice-enqueue";
+import { drainNoticeOutbox } from "../src/moderation/notice-outbox";
+import { APPEAL_WINDOW_DAYS, DISPUTE_CONTACT_LINE, MODERATION_NOTICE_RETENTION_DAYS } from "@thinkersjournal/shared";
 
 const TEAM = "testteam.cloudflareaccess.com";
 const AUD = "test-aud-tag";
@@ -203,7 +206,11 @@ async function decide(input: Partial<DecisionInput> & { subject: "post" | "comme
   });
 }
 
-async function decideRaw(opts: { headers?: Record<string, string>; body?: unknown } = {}): Promise<Response> {
+/**
+ * POST /admin/decision and nothing else. Since notice outbox PR 1 the author's
+ * notice is only QUEUED by the request; the two-minute cron drain sends it.
+ */
+async function postDecision(opts: { headers?: Record<string, string>; body?: unknown } = {}): Promise<Response> {
   return call("/admin/decision", {
     method: "POST",
     headers: {
@@ -211,6 +218,53 @@ async function decideRaw(opts: { headers?: Record<string, string>; body?: unknow
       ...opts.headers,
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+}
+
+/**
+ * `postDecision`, then ONE outbox drain scoped to this decision's action (the
+ * test database is shared with other files, so an unscoped drain could send
+ * their rows). This is what the cron does, so `sentEmails` keeps meaning "what
+ * the author was mailed" for the tests that predate the outbox.
+ */
+async function decideRaw(opts: { headers?: Record<string, string>; body?: unknown } = {}): Promise<Response> {
+  const res = await postDecision(opts);
+  if (res.status === 200) {
+    const { actionId } = (await res.clone().json()) as { actionId: string };
+    const ctx = createExecutionContext();
+    await drainNoticeOutbox(env, ctx, { onlyActionIds: [actionId] });
+    await waitOnExecutionContext(ctx);
+  }
+  return res;
+}
+
+/** A decision whose notice is left QUEUED: no drain runs. */
+async function decideQueuedOnly(input: Partial<DecisionInput> & { subject: "post" | "comment"; subjectId: string; decision: "restore" | "keep_hidden" | "remove" }): Promise<Response> {
+  return postDecision({ headers: { ...await adminHeaders(), Origin: ALLOWED_ORIGIN }, body: input });
+}
+
+interface OutboxRow {
+  kind: string; state: string; attempts: number; recipient_user_id: string | null; recipient_email: string | null;
+  subject: string; body_text: string; body_html: string; delivered_at: Date | null; last_error: string | null;
+  retain_until: Date; next_attempt_at: Date;
+}
+
+async function outboxRows(actionId: string): Promise<OutboxRow[]> {
+  return ctxRun(async (c) => {
+    const { rows } = await c.query<OutboxRow>(
+      `SELECT kind, state, attempts, recipient_user_id, recipient_email, subject, body_text, body_html,
+              delivered_at, last_error, retain_until, next_attempt_at
+         FROM moderation_notice_outbox WHERE action_id = $1`,
+      [actionId],
+    );
+    return rows;
+  });
+}
+
+async function appealTokenCount(actionId: string): Promise<number> {
+  return ctxRun(async (c) => {
+    const { rows } = await c.query<{ n: string }>(`SELECT count(*) AS n FROM moderation_action_tokens WHERE action_id = $1`, [actionId]);
+    return Number(rows[0]!.n);
   });
 }
 
@@ -243,6 +297,8 @@ afterEach(async () => {
   // Clean up created users to prevent accumulation
   if (createdUserIds.length > 0) {
     await ctxRun(async (c) => {
+      // No FK from the outbox to users: remove its rows explicitly.
+      await c.query(`DELETE FROM moderation_notice_outbox WHERE recipient_user_id = ANY($1::uuid[])`, [createdUserIds]);
       await c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [createdUserIds]);
     });
   }
@@ -434,18 +490,16 @@ describe("POST /admin/decision", () => {
       expect(await appealTokenRowsFor(authorId)).toEqual([]);
     });
 
-    // ⚠️ A mint failure must not fail an action that already happened (the
-    // brief's rule). Forces a real INSERT failure — a trigger on the token
-    // table scoped to THIS author — rather than any module mock, since this
-    // codebase has no module-mocking precedent against the workerd pool.
-    it("a mint that throws still sends the notice, without a link, and logs it", async () => {
+    // ⚠️ SINCE NOTICE OUTBOX PR 1 THE MINT IS INSIDE THE DECISION'S TRANSACTION,
+    // so a mint failure ROLLS THE DECISION BACK (design section 4: an
+    // unannounceable decision is the failure being closed). Forces a real
+    // INSERT failure with a trigger scoped to ONE author, since this codebase
+    // has no module-mocking precedent against the workerd pool.
+    it("a mint that throws rolls the whole decision back (no action row, still visible, no outbox row); an unrelated author is unaffected", async () => {
       const userId = await seedUser();
-      const authorEmail = await ctxRun(async (c) => {
-        const { rows } = await c.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId]);
-        return rows[0]!.email;
-      });
-      const post = await seedPost(userId, new Date());
-      await seedReport(post.id);
+      const post = await seedPost(userId);
+      const otherUserId = await seedUser();
+      const otherPost = await seedPost(otherUserId);
 
       const suffix = crypto.randomUUID().replace(/-/g, "");
       const fnName = `test_fail_on_token_insert_${suffix}`;
@@ -468,24 +522,71 @@ describe("POST /admin/decision", () => {
       });
 
       try {
-        const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-        const res = await decide({ subject: "post", subjectId: post.id, decision: "remove", reason: "x" });
+        const input = { subject: "post", decision: "remove", reason: "x", actorAdmin: adminEmail, enqueueNotice: { origin: "https://community.thinkersjournal.com" } } as const;
+        await expect(ctxRun((c) => applyDecision(c, { ...input, subjectId: post.id }))).rejects.toThrow(/forced mint failure/);
 
-        // The decision itself still succeeds, and the notice still goes out —
-        // just without the link.
-        expect(res.status).toBe(200);
-        const { actionId } = (await res.json()) as { actionId: string };
-        expect(sentEmails).toHaveLength(1);
-        expect(sentEmails[0]).toMatchObject({ To: authorEmail });
-        expect(String(sentEmails[0]!["TextBody"])).not.toContain("/appeal?token=");
+        const after = await ctxRun(async (c) => {
+          const hidden = await c.query<{ hidden_at: Date | null }>(`SELECT hidden_at FROM posts WHERE id = $1`, [post.id]);
+          const actions = await c.query(`SELECT 1 FROM moderation_actions WHERE post_id = $1`, [post.id]);
+          const outbox = await c.query(`SELECT 1 FROM moderation_notice_outbox WHERE recipient_user_id = $1`, [userId]);
+          return { hiddenAt: hidden.rows[0]!.hidden_at, actions: actions.rowCount, outbox: outbox.rowCount };
+        });
+        expect(after).toEqual({ hiddenAt: null, actions: 0, outbox: 0 });
 
-        const mintLogs = errorLog.mock.calls.filter((args) => args[0] === "appeal link not minted");
-        expect(mintLogs).toEqual([["appeal link not minted", { actionId, err: expect.anything() }]]);
-
-        expect(await appealTokenRowsFor(userId)).toEqual([]);
+        // CONTROL: the same call for an author the trigger does not match
+        // succeeds and queues its notice, so the failure above is the trigger.
+        const ok = await ctxRun((c) => applyDecision(c, { ...input, subjectId: otherPost.id }));
+        expect(ok).not.toBeNull();
+        expect(await outboxRows(ok!.actionId)).toHaveLength(1);
       } finally {
         await ctxRun(async (c) => {
           await c.query(`DROP TRIGGER IF EXISTS ${trgName} ON moderation_action_tokens`);
+          await c.query(`DROP FUNCTION IF EXISTS ${fnName}()`);
+        });
+      }
+    });
+
+    it("an outbox INSERT that fails rolls the decision back too, and takes the minted appeal token with it", async () => {
+      const userId = await seedUser();
+      const post = await seedPost(userId);
+      const suffix = crypto.randomUUID().replace(/-/g, "");
+      const fnName = `test_fail_on_outbox_insert_${suffix}`;
+      const trgName = `test_fail_outbox_insert_${suffix}`;
+      await ctxRun(async (c) => {
+        await c.query(
+          `CREATE FUNCTION ${fnName}() RETURNS trigger AS $$
+           BEGIN
+             RAISE EXCEPTION 'forced outbox failure';
+           END;
+           $$ LANGUAGE plpgsql`,
+        );
+        await c.query(
+          `CREATE TRIGGER ${trgName}
+             BEFORE INSERT ON moderation_notice_outbox
+             FOR EACH ROW
+             WHEN (NEW.recipient_user_id = '${userId}'::uuid)
+             EXECUTE FUNCTION ${fnName}()`,
+        );
+      });
+      try {
+        await expect(
+          ctxRun((c) =>
+            applyDecision(c, {
+              subject: "post", subjectId: post.id, decision: "remove", reason: "x", actorAdmin: adminEmail,
+              enqueueNotice: { origin: "https://community.thinkersjournal.com" },
+            }),
+          ),
+        ).rejects.toThrow(/forced outbox failure/);
+        const after = await ctxRun(async (c) => {
+          const hidden = await c.query<{ hidden_at: Date | null }>(`SELECT hidden_at FROM posts WHERE id = $1`, [post.id]);
+          const actions = await c.query(`SELECT 1 FROM moderation_actions WHERE post_id = $1`, [post.id]);
+          const tokens = await c.query(`SELECT 1 FROM moderation_action_tokens WHERE user_id = $1`, [userId]);
+          return { hiddenAt: hidden.rows[0]!.hidden_at, actions: actions.rowCount, tokens: tokens.rowCount };
+        });
+        expect(after).toEqual({ hiddenAt: null, actions: 0, tokens: 0 });
+      } finally {
+        await ctxRun(async (c) => {
+          await c.query(`DROP TRIGGER IF EXISTS ${trgName} ON moderation_notice_outbox`);
           await c.query(`DROP FUNCTION IF EXISTS ${fnName}()`);
         });
       }
@@ -712,8 +813,8 @@ describe("POST /admin/decision", () => {
     expect(sentEmails[0]).toMatchObject({ Subject: "Your content has been hidden after review" });
   });
 
-  it("a failed notice send is logged with the action id, and the decision still succeeds", async () => {
-    const { postId } = await seedHiddenPost();
+  it("a failed notice send does not undo the decision: the notice stays queued for retry (attempts 1, http_500, next attempt in the future)", async () => {
+    const { postId, authorEmail } = await seedHiddenPost();
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     let postmarkCalls = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -731,9 +832,12 @@ describe("POST /admin/decision", () => {
     expect(res.status).toBe(200);
     const { actionId } = (await res.json()) as { actionId: string };
     expect(postmarkCalls).toBe(1);
-    // postmarkSend logs its own line too; pick out the route's by its message.
-    const noticeLogs = errorLog.mock.calls.filter((args) => args[0] === "moderation notice not sent");
-    expect(noticeLogs).toEqual([["moderation notice not sent", { actionId }]]);
+    const rows = await outboxRows(actionId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ state: "pending", attempts: 1, last_error: "http_500", delivered_at: null });
+    expect(rows[0]!.next_attempt_at.getTime()).toBeGreaterThan(Date.now());
+    // No log line carries the author's address.
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain(authorEmail);
   });
 });
 
@@ -1124,6 +1228,8 @@ describe("POST /admin/decision author-notice gate (#138, #135)", () => {
     expect(toAuthor[0]!["To"]).toBe(await authorEmailOf(userId));
     expect(String(toAuthor[0]!["TextBody"])).toContain("/appeal?token=");
     expect(await tokenCount(actionId)).toBe(1);
+    // ...and it went through the outbox: exactly one queued row (sent by the drain this helper ran).
+    expect(await outboxRows(actionId)).toHaveLength(1);
     // ...and the DSA reporter is told too.
     expect(sentEmails.filter((e) => e["To"] === "reporter@example.test")).toHaveLength(1);
   });
@@ -1142,6 +1248,7 @@ describe("POST /admin/decision author-notice gate (#138, #135)", () => {
     expect(sentEmails.filter((e) => e["To"] === email)).toHaveLength(0);
     expect(sentEmails.filter((e) => String(e["To"]).endsWith("@invalid.thinkersjournal.local"))).toHaveLength(0);
     expect(await tokenCount(actionId)).toBe(0);
+    expect(await outboxRows(actionId)).toHaveLength(0);
     // The reporter is owed an outcome whatever happened to the author's account (Art. 16(5)).
     expect(sentEmails.filter((e) => e["To"] === "reporter@example.test")).toHaveLength(1);
     expect(sentEmails).toHaveLength(1);
@@ -1173,6 +1280,7 @@ describe("POST /admin/decision author-notice gate (#138, #135)", () => {
     // The live author means the mint WOULD have succeeded: this is what proves
     // the mint is gated, not just the send.
     expect(await tokenCount(actionId)).toBe(0);
+    expect(await outboxRows(actionId)).toHaveLength(0);
   });
 
   it("a skipped notice logs one structured line with the action id and the reason, and no address", async () => {
@@ -1483,5 +1591,151 @@ describe("POST /admin/decision — #57 grounds", () => {
     expect((await post({ ...base, decision: "restore", legalGround: "csam" })).status).toBe(400);
     expect((await post({ ...base, decision: "restore", contractualGround: "guidelines_spam" })).status).toBe(400);
     expect(await actionCount()).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Notice outbox PR 1 (#57 gap 1): the author's notice is rendered and queued
+// INSIDE the decision's transaction; the request never calls Postmark.
+// ---------------------------------------------------------------------------
+describe("POST /admin/decision — notice outbox (PR 1)", () => {
+  async function authorIdOfPost(postId: string): Promise<string> {
+    return ctxRun(async (c) => {
+      const { rows } = await c.query<{ author_id: string }>(`SELECT author_id FROM posts WHERE id = $1`, [postId]);
+      return rows[0]!.author_id;
+    });
+  }
+
+  it("keep_hidden queues exactly ONE author_decision row (appeal link, dispute line) and does NOT call Postmark in the request", async () => {
+    const { postId, authorEmail } = await seedHiddenPost();
+    const res = await decideQueuedOnly({ subject: "post", subjectId: postId, decision: "keep_hidden", reason: "Violates the guidelines." });
+    expect(res.status).toBe(200);
+    const { actionId } = (await res.json()) as { actionId: string };
+
+    // The request sent nothing.
+    expect(sentEmails).toHaveLength(0);
+
+    const rows = await outboxRows(actionId);
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row).toMatchObject({
+      kind: "author_decision", state: "pending", attempts: 0, delivered_at: null, last_error: null,
+      recipient_email: null, subject: "Your content remains hidden after review",
+    });
+    expect(row.recipient_user_id).toBe(await authorIdOfPost(postId));
+    expect(row.body_text).toContain("Violates the guidelines.");
+    expect(row.body_text).toContain("/appeal?token=");
+    expect(row.body_html).toContain("/appeal?token=");
+    expect(row.body_text).toContain(DISPUTE_CONTACT_LINE);
+    expect(row.body_html).toContain(DISPUTE_CONTACT_LINE);
+    // An account recipient's address is re-read at send time, never stored.
+    expect(JSON.stringify(row)).not.toContain(authorEmail);
+
+    // The appeal token was minted in the same transaction, for APPEAL_WINDOW_DAYS from the decision.
+    expect(await appealTokenCount(actionId)).toBe(1);
+    const ttl = await ctxRun(async (c) => {
+      const { rows: t } = await c.query<{ ok: boolean }>(
+        `SELECT (expires_at > now() + make_interval(days => $2::int - 1) AND expires_at <= now() + make_interval(days => $2::int)) AS ok
+           FROM moderation_action_tokens WHERE action_id = $1`,
+        [actionId, APPEAL_WINDOW_DAYS],
+      );
+      return t[0]!.ok;
+    });
+    expect(ttl).toBe(true);
+  });
+
+  it("retain_until is the decision's created_at plus the retention constant (365 days)", async () => {
+    expect(MODERATION_NOTICE_RETENTION_DAYS).toBe(365);
+    const { postId } = await seedHiddenPost();
+    const res = await decideQueuedOnly({ subject: "post", subjectId: postId, decision: "remove", reason: "x" });
+    const { actionId } = (await res.json()) as { actionId: string };
+    const { rows: actionRows } = await ctxRun((c) =>
+      c.query<{ created_at: Date }>(`SELECT created_at FROM moderation_actions WHERE id = $1`, [actionId]),
+    );
+    const [row] = await outboxRows(actionId);
+    const expected = actionRows[0]!.created_at.getTime() + MODERATION_NOTICE_RETENTION_DAYS * 86_400_000;
+    // Day arithmetic in SQL is timezone-sensitive across DST; allow one hour.
+    expect(Math.abs(row!.retain_until.getTime() - expected)).toBeLessThanOrEqual(3_600_000);
+  });
+
+  it("the drain then sends the queued notice once, stamps delivered_at and leaves no live link in the stored copy", async () => {
+    const { postId, authorEmail } = await seedHiddenPost();
+    const res = await decideQueuedOnly({ subject: "post", subjectId: postId, decision: "remove", reason: "x" });
+    const { actionId } = (await res.json()) as { actionId: string };
+    const [queued] = await outboxRows(actionId);
+
+    const ctx = createExecutionContext();
+    const counts = await drainNoticeOutbox(env, ctx, { onlyActionIds: [actionId] });
+    await waitOnExecutionContext(ctx);
+
+    expect(counts).toMatchObject({ leased: 1, delivered: 1 });
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({ To: authorEmail, MessageStream: "outbound" });
+    // What was mailed is what was queued, link included.
+    expect(String(sentEmails[0]!["TextBody"])).toBe(queued!.body_text);
+    expect(String(sentEmails[0]!["TextBody"])).toContain("/appeal?token=");
+
+    const [after] = await outboxRows(actionId);
+    expect(after).toMatchObject({ state: "delivered" });
+    expect(after!.delivered_at).not.toBeNull();
+    expect(after!.body_text).not.toContain("token=");
+    expect(after!.body_html).not.toContain("token=");
+  });
+
+  it("restore of HIDDEN content queues a notice with the dispute line and NO appeal link or token", async () => {
+    const { postId } = await seedHiddenPost();
+    const res = await decideQueuedOnly({ subject: "post", subjectId: postId, decision: "restore", reason: "Mistaken." });
+    expect(res.status).toBe(200);
+    const { actionId } = (await res.json()) as { actionId: string };
+    const rows = await outboxRows(actionId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "author_decision", subject: "Your content has been restored" });
+    expect(rows[0]!.body_text).toContain(DISPUTE_CONTACT_LINE);
+    expect(rows[0]!.body_text).not.toContain("/appeal?token=");
+    expect(await appealTokenCount(actionId)).toBe(0);
+  });
+
+  it("restore of NEVER-hidden content (a dismissal) queues nothing and mints nothing", async () => {
+    const userId = await seedUser();
+    const post = await seedPost(userId);
+    await seedReport(post.id);
+    const res = await decideQueuedOnly({ subject: "post", subjectId: post.id, decision: "restore", reason: "Mistaken." });
+    expect(res.status).toBe(200);
+    const { actionId } = (await res.json()) as { actionId: string };
+    // Control: the decision itself was applied and recorded.
+    expect(await lastActionFor(post.id)).toMatchObject({ action: "content_restore" });
+    expect(await outboxRows(actionId)).toHaveLength(0);
+    expect(await appealTokenCount(actionId)).toBe(0);
+  });
+
+  it("an ANONYMISED author: decision applied, nothing queued, no token, and the skip is still logged (action id and reason only)", async () => {
+    const userId = await seedUser();
+    const email = `deleted-${userId}@invalid.thinkersjournal.local`;
+    await ctxRun(async (c) => {
+      await c.query(`UPDATE users SET email = $2, anonymised_at = now() WHERE id = $1`, [userId, email]);
+    });
+    const post = await seedPost(userId);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const res = await decideQueuedOnly({ subject: "post", subjectId: post.id, decision: "remove", reason: "x" });
+    expect(res.status).toBe(200);
+    const { actionId } = (await res.json()) as { actionId: string };
+    expect(await lastActionFor(post.id)).toMatchObject({ action: "content_remove" });
+    expect(await outboxRows(actionId)).toHaveLength(0);
+    expect(await appealTokenCount(actionId)).toBe(0);
+    const skipped = warn.mock.calls.filter((a) => a[0] === "moderation notice skipped");
+    expect(skipped).toEqual([["moderation notice skipped", { actionId, reason: "author_anonymised" }]]);
+  });
+
+  it("a retried enqueue for the same (action, kind) is a no-op: one row", async () => {
+    const userId = await seedUser();
+    const actionId = crypto.randomUUID();
+    // A restore of hidden content mints no token, so no moderation_actions row is needed.
+    const input = {
+      actionId, authorId: userId, decision: "restore", wasHidden: true, subject: "post",
+      postTitle: "T", reason: "r", origin: "https://community.thinkersjournal.com",
+    } as const;
+    expect(await ctxRun((c) => enqueueAuthorDecisionNotice(c, input))).toBe(true);
+    expect(await ctxRun((c) => enqueueAuthorDecisionNotice(c, input))).toBe(true);
+    expect(await outboxRows(actionId)).toHaveLength(1);
   });
 });

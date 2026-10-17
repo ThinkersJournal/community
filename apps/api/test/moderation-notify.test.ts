@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 
-import { sendModerationNotice } from "../src/moderation/notify-author";
+import { escapeHtml } from "../src/auth/email-verify";
+import { renderModerationNotice, sendModerationNotice } from "../src/moderation/notify-author";
+import { DISPUTE_CONTACT_LINE, DISPUTE_EMAIL } from "@thinkersjournal/shared";
 
 /**
  * Helper to capture sends with full request body inspection
@@ -407,5 +409,68 @@ describe("Community Guidelines link", () => {
   it("the added line mentions no report, notice, reporter (#57 Q2)", async () => {
     const { guidelinesLine } = await import("../src/moderation/notify-author");
     expect(guidelinesLine().text).not.toMatch(/report|notice|notif|complain|flag/i);
+  });
+});
+
+// Notice outbox design F4 — CireSnave: "They should always have the option to
+// email us at dispute@thinkersjournal.com whether they have a token or not."
+// The pin for the author_decision kind.
+//
+// MUTATION CHECK (by reasoning; this suite could not be run when written):
+// deleting `${DISPUTE_CONTACT_LINE}` from `textBody` in
+// renderModerationNotice fails every `toContain(DISPUTE_CONTACT_LINE)` on
+// TextBody below (and the "ends with" assertion); deleting the
+// `<p>${escapeHtml(DISPUTE_CONTACT_LINE)}</p>` from `htmlBody` fails the
+// HtmlBody ones; making either conditional on `appealUrl` fails the
+// `appealUrl: undefined` rows. Each assertion has a control: the row is a
+// notice that was actually rendered (its subject is checked), so the line's
+// absence cannot be an empty render.
+describe("dispute contact line (notice outbox F4)", () => {
+  const base = { subject: "post", postTitle: "T", reason: "r" } as const;
+  const appealUrl = "https://community.thinkersjournal.com/appeal?token=abc";
+  const cases = [
+    { decision: "keep_hidden", wasHidden: true },
+    { decision: "keep_hidden", wasHidden: false },
+    { decision: "remove", wasHidden: true },
+    { decision: "remove", wasHidden: false },
+    { decision: "restore", wasHidden: true },
+  ] as const;
+
+  it("every rendered author_decision notice carries it, in text and html, with and without an appeal link", () => {
+    for (const c of cases) {
+      for (const link of [undefined, appealUrl]) {
+        const label = `${c.decision}:${String(c.wasHidden)} link=${String(link !== undefined)}`;
+        const rendered = renderModerationNotice({ ...base, ...c, appealUrl: link });
+        expect(rendered, label).not.toBeNull();
+        // Control: a real notice for this pair, not a blank one.
+        expect(rendered!.subject, label).toMatch(/^Your content /);
+        expect(rendered!.textBody, label).toContain(DISPUTE_CONTACT_LINE);
+        expect(rendered!.htmlBody, label).toContain(DISPUTE_CONTACT_LINE);
+        expect(rendered!.textBody.trimEnd().endsWith(DISPUTE_CONTACT_LINE), label).toBe(true);
+        // The line is independent of the link: present exactly when asked, absent otherwise.
+        const expectsLink = link !== undefined && c.decision !== "restore";
+        expect(rendered!.textBody.includes("/appeal?token="), label).toBe(expectsLink);
+      }
+    }
+  });
+
+  it("is what Postmark receives from sendModerationNotice, with no appeal link", async () => {
+    const sent = await captureSendFull(() =>
+      sendModerationNotice(env, "a@b.test", { ...base, decision: "remove", wasHidden: true }),
+    );
+    expect(sent.Subject).toBe("Your content has been removed");
+    expect(String(sent.TextBody)).not.toContain("/appeal?token=");
+    expect(String(sent.TextBody)).toContain(DISPUTE_CONTACT_LINE);
+    expect(String(sent.HtmlBody)).toContain(DISPUTE_CONTACT_LINE);
+  });
+
+  it("names the dispute address, passes through escapeHtml unchanged, and says nothing about a report (#57 Q2)", () => {
+    expect(DISPUTE_CONTACT_LINE).toContain(DISPUTE_EMAIL);
+    expect(escapeHtml(DISPUTE_CONTACT_LINE)).toBe(DISPUTE_CONTACT_LINE);
+    expect(DISPUTE_CONTACT_LINE).not.toMatch(/report|notice|notif|complain|flag/i);
+  });
+
+  it("a restore of never-hidden content renders nothing at all (null), so nothing is sent or queued", () => {
+    expect(renderModerationNotice({ ...base, decision: "restore", wasHidden: false })).toBeNull();
   });
 });
