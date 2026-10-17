@@ -26,6 +26,7 @@
  */
 import { purgeMediaUrls } from "../cache/purge-url";
 import { withClient } from "../db/client";
+import { isKeyLegallyHeld } from "./legal-hold";
 
 const MAX_ATTEMPTS = 8;
 
@@ -86,6 +87,19 @@ async function runMove(
 ): Promise<void> {
   const { from, to } = bucketsFor(env, direction);
   try {
+    // ⚠️ #148: a `to_public` row can be queued BEFORE a hold is imposed and
+    // retried AFTER it. A hold restricts the OBJECT unconditionally and is never
+    // lifted by a move, so a held key's `to_public` is cancelled, not retried.
+    // The hold's own `to_restricted` move is what puts (or keeps) the bytes
+    // private. Read per attempt, so a hold committed mid-retry is seen.
+    if (direction === "to_public") {
+      const held = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => isKeyLegallyHeld(c, r2Key));
+      if (held) {
+        console.warn("media move cancelled: to_public for a key under a legal hold", { moveId, r2Key });
+        await markDone(env, ctx, moveId, "cancelled: key is under a legal hold");
+        return;
+      }
+    }
     // Object already gone from `from` (a prior attempt got past the delete
     // step but died before COMMITting `done`) — `get` on the SOURCE would
     // fail; check `to` first so a retry is idempotent rather than fatal.
@@ -109,9 +123,12 @@ async function runMove(
   }
 }
 
-async function markDone(env: Env, ctx: ExecutionContext, moveId: string): Promise<void> {
+async function markDone(env: Env, ctx: ExecutionContext, moveId: string, note?: string): Promise<void> {
   await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
-    c.query(`UPDATE media_moves SET status = 'done', updated_at = now() WHERE id = $1`, [moveId]),
+    c.query(`UPDATE media_moves SET status = 'done', last_error = COALESCE($2, last_error), updated_at = now() WHERE id = $1`, [
+      moveId,
+      note ?? null,
+    ]),
   );
 }
 

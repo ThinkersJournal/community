@@ -55,6 +55,8 @@ import {
   toWebp,
 } from "../media/images";
 import { isKeyLegallyHeld } from "../media/legal-hold";
+import { isKeyPubliclyReachable } from "../media/reachability";
+import { recordUploadRefusal } from "../media/upload-refusals";
 import { attemptMove } from "../media/moves";
 import { SNIFF_HEADER_BYTES, sniffImageFormat } from "../media/sniff";
 
@@ -258,7 +260,30 @@ export async function handleUploadMedia(
   const heldBeforePut = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => isKeyLegallyHeld(c, key));
   if (heldBeforePut) {
     console.warn("media upload refused: object is under a legal hold", { uploaderId: userId, sha256: hash });
+    await recordUploadRefusal(env, ctx, { r2Key: key, uploaderId: userId, reason: "legal_hold" });
     return unsupportedMediaType();
+  }
+
+  // ---- 8c. HIDDEN (not held) bytes — do not put them back at the public URL --
+  // ⚠️ #148: an ordinary moderation hide moves the object to MEDIA_RESTRICTED
+  // with no hold, and the unconditional put below would re-create the public
+  // copy. The rule is "in the restricted bucket AND not reachable through any
+  // visible post/comment": a key that a visible post still uses was never
+  // restricted in the first place, and the put is the idempotent no-op it
+  // always was. Refused with the same generic 415 as a hold (same accepted
+  // oracle, see 8b); the refusal is recorded. Accepted cost: the author of a
+  // hidden post cannot re-upload the identical image until a visible post
+  // uses it again.
+  if ((await env.MEDIA_RESTRICTED.head(key)) !== null) {
+    const reachable = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => isKeyPubliclyReachable(c, hash));
+    if (!reachable) {
+      console.warn("media upload refused: object is restricted and not publicly reachable", {
+        uploaderId: userId,
+        sha256: hash,
+      });
+      await recordUploadRefusal(env, ctx, { r2Key: key, uploaderId: userId, reason: "restricted_unreachable" });
+      return unsupportedMediaType();
+    }
   }
 
   // ---- 9. R2 ---------------------------------------------------------------
@@ -335,6 +360,7 @@ export async function handleUploadMedia(
       uploaderId: userId,
       sha256: hash,
     });
+    await recordUploadRefusal(env, ctx, { r2Key: key, uploaderId: userId, reason: "hold_imposed_in_flight" });
     // The move row is already durable. Attempt it now; if that fails, the row
     // stays `pending` and the retry cron finishes it — so the client's answer
     // does not depend on it.
