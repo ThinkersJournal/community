@@ -1,7 +1,7 @@
 /**
  * The moderation notice OUTBOX drain and purge (notice outbox design, sections
- * 5-7; PR 1 handles kind `author_decision` only, but nothing here depends on
- * the kind: the body is rendered at enqueue time).
+ * 5-7; nothing here depends on the kind: the body is rendered at enqueue
+ * time, in the decision's transaction, by notice-enqueue.ts).
  *
  * One pass per two-minute cron tick (index.ts `scheduled`):
  *   1. LEASE a bounded batch with ONE atomic conditional UPDATE ... RETURNING

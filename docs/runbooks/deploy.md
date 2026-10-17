@@ -151,6 +151,22 @@ and only then for both Workers.
 4. **`prod-smoke.yml` runs after the push**, as it already does for every
    push to `main` (unchanged by this work — see that workflow).
 
+## Notice outbox PR 2: `0036` and the deploy are a PAIR
+
+`0036_moderation_notice_outbox_per_notice.sql` adds `moderation_notice_outbox.dsa_notice_id` and swaps the
+`UNIQUE (action_id, kind)` constraint for two partial unique indexes (one row per `(action_id, kind)`, or per
+`(action_id, kind, dsa_notice_id)` for a reporter row), so one ruling that resolves several DSA notices queues
+one outcome per reporter.
+
+⚠️ **Both directions of skew fail, so apply it and let the deploy follow immediately.** PR 1's code inserts with
+`ON CONFLICT (action_id, kind)`, which no longer infers a unique index after `0036`: until the new code is live,
+a content decision that queues an author notice fails (and rolls back, by design) and is retried by the
+moderator. The new code inserts `dsa_notice_id`, so it fails the same way against a database without `0036`.
+The deploy gate already refuses a build until the migration is applied, so apply, then retry the build.
+
+**Rollback** is the file's `-- Down Migration`: it deletes the reporter rows (they cannot exist under the old
+constraint), restores the constraint and drops the column.
+
 ## Media ownership records: `0035` must be applied BEFORE the deploy
 
 `0035_media_owner_nullable.sql` makes `media.owner_id` nullable and adds

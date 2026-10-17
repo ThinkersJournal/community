@@ -225,6 +225,10 @@ describe("0001 users + profiles migration", () => {
       // 0035_media_owner_nullable.sql — the ownership link can be cleared.
       expect(await columnNullable(client, "media", "owner_id")).toBe(true);
       expect(await columnExists(client, "media", "owner_cleared_at")).toBe(true);
+      // 0036_moderation_notice_outbox_per_notice.sql — a reporter row is unique per DSA notice.
+      expect(await columnExists(client, "moderation_notice_outbox", "dsa_notice_id")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_action_kind_key")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_action_kind_notice_key")).toBe(true);
     });
 
     await migrate("down");
@@ -315,6 +319,9 @@ describe("0001 users + profiles migration", () => {
       // 0035 — re-applied by the round-trip.
       expect(await columnNullable(client, "media", "owner_id")).toBe(true);
       expect(await columnExists(client, "media", "owner_cleared_at")).toBe(true);
+      // 0036 — re-applied by the round-trip.
+      expect(await columnExists(client, "moderation_notice_outbox", "dsa_notice_id")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_action_kind_notice_key")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });

@@ -22,7 +22,7 @@ import type { ContractualGround, LegalGround } from "@thinkersjournal/shared";
 import type { LegalHoldCategory } from "../media/legal-hold";
 
 import { imposeAccountHoldInTx } from "./account-holds";
-import { enqueueAuthorDecisionNotice } from "./notice-enqueue";
+import { enqueueAuthorDecisionNotice, enqueueReporterOutcomeNotices } from "./notice-enqueue";
 import { recordModerationAction, type ModerationActionKind, type ModerationSource, type ViolationCategory } from "./actions";
 import { loadPostTagSlugs, type PurgeTarget } from "./purge-target";
 
@@ -77,8 +77,6 @@ export interface DecisionResult {
   readonly postTitle: string;
   /** Canonical ids for the cache purge (purgeTagsFor). */
   readonly purge: PurgeTarget;
-  /** Every CONFIRMED, open DSA notice this ruling resolved — Task 4 emails each reporter. */
-  readonly dsaReporters: readonly { email: string; noticeId: string }[];
   /**
    * Why the AUTHOR's notice must not be sent, or `null` when it should be
    * (#138, #135). Computed from the row THIS statement wrote, so it cannot
@@ -233,6 +231,20 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
     [noticeRows.map((n) => n.id), actionId],
   );
 
+  // Notice outbox PR 2: every CONFIRMED notice this ruling resolved gets its
+  // reporter an outcome, queued in THIS transaction (kind 5). Not gated on
+  // `noticeSkip` below: the reporter is owed an answer whatever became of the
+  // author's account (Art. 16(5)/17). A failure rolls the ruling back, as for
+  // the author's notice.
+  await enqueueReporterOutcomeNotices(c, {
+    actionId,
+    reporters: dsaRows.map((r) => ({ email: r.reporter_email, noticeId: r.id })),
+    decision: input.decision,
+    reason: input.reason,
+    subject: input.subject,
+    postTitle: row.title,
+  });
+
   if (input.accountHold !== undefined) {
     // Spec §3 T1: the author's account is held in THE SAME transaction as the
     // decision — unlike the image hold, which stays post-commit and best-effort.
@@ -277,7 +289,6 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
     hidden: row.hidden,
     postTitle: row.title,
     purge,
-    dsaReporters: dsaRows.map((r) => ({ email: r.reporter_email, noticeId: r.id })),
     noticeSkip,
   };
 }

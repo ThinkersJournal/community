@@ -100,41 +100,39 @@ export async function sendTerminationNotice(
   }
 }
 
-/** @param onSent #57 Q9 — the exact strings sent, only on acceptance; best-effort (see sendModerationNotice). */
-export async function sendAccountActionNotice(
-  env: Env,
-  to: string,
-  notice: AccountNotice,
-  onSent?: (rendered: RenderedNotice) => Promise<void>,
-): Promise<boolean> {
-  try {
-    const text = lead(notice);
+/**
+ * Render the notice for a warn / suspend / ban. Pure: the notice outbox
+ * (notice-enqueue.ts) renders it inside the action's transaction and
+ * `sendAccountActionNotice` renders it for a direct send.
+ */
+export function renderAccountActionNotice(notice: AccountNotice): RenderedNotice {
+  const text = lead(notice);
 
-    const appealTextLine =
-      notice.appealUrl === undefined ? "" : `\nYou can appeal this decision within ${APPEAL_WINDOW_DAYS} days: ${notice.appealUrl}`;
-    const appealHtmlLine =
-      notice.appealUrl === undefined
-        ? ""
-        : `<p>You can appeal this decision within ${APPEAL_WINDOW_DAYS} days: <a href="${escapeHtml(notice.appealUrl)}">${escapeHtml(notice.appealUrl)}</a></p>`;
+  const appealTextLine =
+    notice.appealUrl === undefined ? "" : `\nYou can appeal this decision within ${APPEAL_WINDOW_DAYS} days: ${notice.appealUrl}`;
+  const appealHtmlLine =
+    notice.appealUrl === undefined
+      ? ""
+      : `<p>You can appeal this decision within ${APPEAL_WINDOW_DAYS} days: <a href="${escapeHtml(notice.appealUrl)}">${escapeHtml(notice.appealUrl)}</a></p>`;
 
-    const deleteRequestTextLine =
-      notice.deleteRequestUrl === undefined || notice.kind === "warn"
-        ? ""
-        : `\nYou can also ask for your account to be deleted: ${notice.deleteRequestUrl}\n${DELETE_REQUEST_SENTENCE_AFTER}`;
-    const deleteRequestHtmlLine =
-      notice.deleteRequestUrl === undefined || notice.kind === "warn"
-        ? ""
-        : `<p>You can also ask for your account to be deleted: <a href="${escapeHtml(notice.deleteRequestUrl)}">${escapeHtml(notice.deleteRequestUrl)}</a>. ${escapeHtml(DELETE_REQUEST_SENTENCE_AFTER)}</p>`;
+  const deleteRequestTextLine =
+    notice.deleteRequestUrl === undefined || notice.kind === "warn"
+      ? ""
+      : `\nYou can also ask for your account to be deleted: ${notice.deleteRequestUrl}\n${DELETE_REQUEST_SENTENCE_AFTER}`;
+  const deleteRequestHtmlLine =
+    notice.deleteRequestUrl === undefined || notice.kind === "warn"
+      ? ""
+      : `<p>You can also ask for your account to be deleted: <a href="${escapeHtml(notice.deleteRequestUrl)}">${escapeHtml(notice.deleteRequestUrl)}</a>. ${escapeHtml(DELETE_REQUEST_SENTENCE_AFTER)}</p>`;
 
-    // #57 Q8=A: every kind here (warn/suspend/ban) is adverse. Positioned
-    // before the appeal line so it appears when the appeal link is absent.
-    // Every lead above names the Community Guidelines, so every kind links to them.
-    const guidelines = guidelinesLine();
-    const guidelinesHtml = `<p>You can read our Community Guidelines (version ${escapeHtml(GUIDELINES_VERSION)}): <a href="${escapeHtml(guidelines.url)}">${escapeHtml(guidelines.url)}</a></p>`;
+  // #57 Q8=A: every kind here (warn/suspend/ban) is adverse. Positioned
+  // before the appeal line so it appears when the appeal link is absent.
+  // Every lead above names the Community Guidelines, so every kind links to them.
+  const guidelines = guidelinesLine();
+  const guidelinesHtml = `<p>You can read our Community Guidelines (version ${escapeHtml(GUIDELINES_VERSION)}): <a href="${escapeHtml(guidelines.url)}">${escapeHtml(guidelines.url)}</a></p>`;
 
-    const rendered: RenderedNotice = {
-      subject: SUBJECT[notice.kind],
-      textBody: `${text}
+  return {
+    subject: SUBJECT[notice.kind],
+    textBody: `${text}
 
 Reason given by the moderator:
 
@@ -144,9 +142,19 @@ ${guidelines.text}
 
 ${REDRESS_SENTENCE}
 ${appealTextLine}${deleteRequestTextLine}`,
-      htmlBody: `<p>${escapeHtml(text)}</p><p><strong>Reason given by the moderator:</strong></p><p>${escapeHtml(notice.reason)}</p>${guidelinesHtml}<p>${escapeHtml(REDRESS_SENTENCE)}</p>${appealHtmlLine}${deleteRequestHtmlLine}`,
-    };
-    return await deliver(env, to, rendered, onSent);
+    htmlBody: `<p>${escapeHtml(text)}</p><p><strong>Reason given by the moderator:</strong></p><p>${escapeHtml(notice.reason)}</p>${guidelinesHtml}<p>${escapeHtml(REDRESS_SENTENCE)}</p>${appealHtmlLine}${deleteRequestHtmlLine}`,
+  };
+}
+
+/** @param onSent #57 Q9 — the exact strings sent, only on acceptance; best-effort (see sendModerationNotice). */
+export async function sendAccountActionNotice(
+  env: Env,
+  to: string,
+  notice: AccountNotice,
+  onSent?: (rendered: RenderedNotice) => Promise<void>,
+): Promise<boolean> {
+  try {
+    return await deliver(env, to, renderAccountActionNotice(notice), onSent);
   } catch (err) {
     console.error("account notice threw", err);
     return false;

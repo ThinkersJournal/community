@@ -17,6 +17,7 @@ import type { Client } from "pg";
 
 import { BEGIN_BOUNDED_TX } from "../db/client";
 import { recordModerationAction, type ModerationActionKind, type ViolationCategory } from "./actions";
+import { enqueueAccountActionNotice } from "./notice-enqueue";
 
 import type { AdminAccountHistoryEntry, SuspensionHours } from "@thinkersjournal/shared";
 import { ESCALATION_WINDOW_MONTHS } from "@thinkersjournal/shared";
@@ -36,6 +37,13 @@ export interface AccountActionInput {
   readonly suspensionHours?: SuspensionHours;
   readonly violationCategory?: ViolationCategory;
   readonly internalNote?: string;
+  /**
+   * Notice outbox PR 2: queue the account's notice (kind 3) in THIS transaction.
+   * `origin` is the link origin for the appeal / delete-request links. Never
+   * queued for an anonymised account, nor for `terminate` (its notice carries
+   * no reason and no links, #114).
+   */
+  readonly enqueueNotice?: { readonly origin: string };
 }
 
 export type AccountActionOutcome =
@@ -115,6 +123,19 @@ export async function applyAccountAction(c: Client, input: AccountActionInput): 
       actionExpiresAt: ownEnd ?? undefined,
       internalNote: input.internalNote,
     });
+
+    // ⚠️ Not wrapped in a try/catch on purpose: a failure rolls the action back
+    // (a ban nobody can be told about is the Art. 17 failure the outbox closes).
+    if (input.enqueueNotice !== undefined && input.kind !== "terminate" && !user.anonymised) {
+      await enqueueAccountActionNotice(c, {
+        actionId,
+        userId: input.userId,
+        kind: input.kind,
+        reason: input.reason,
+        suspendedUntil: suspendedUntil ?? undefined,
+        origin: input.enqueueNotice.origin,
+      });
+    }
 
     await c.query("COMMIT");
     return { kind: "applied", actionId, email: user.email, anonymised: user.anonymised, suspendedUntil };

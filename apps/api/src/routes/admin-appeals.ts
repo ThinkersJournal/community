@@ -5,8 +5,6 @@
  * check comes first).
  */
 import { checkOrigin } from "../auth/csrf";
-import { escapeHtml } from "../auth/email-verify";
-import { postmarkSend } from "../auth/postmark";
 import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
@@ -79,39 +77,14 @@ export async function handleAdminResolveAppeal(
       break;
   }
 
-  // Post-commit, as handleAdminDecision: purge, media move, and the DSA
-  // reporters whose confirmed notices the restore resolved.
+  // Post-commit, as handleAdminDecision: purge and media move. The appellant's
+  // outcome and the DSA reporters' outcomes were queued in the resolution's
+  // transaction (resolveAppeal); the cron drain sends them.
   if (outcome.content !== null && outcome.subject !== null) {
     await afterContentDecision(env, ctx, {
       subject: outcome.subject,
-      decision: "restore",
-      reason: trimmed,
       result: outcome.content,
     });
-  }
-
-  // The outcome to the appellant. Never to an anonymised account (B3).
-  const to = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-    const { rows } = await c.query<{ email: string }>(
-      `SELECT email FROM users WHERE id = $1 AND anonymised_at IS NULL`,
-      [outcome.appellantId],
-    );
-    return rows[0]?.email ?? null;
-  });
-  if (to !== null) {
-    const lead = outcome.outcome === "granted" ? "Your appeal was granted." : "Your appeal was not granted.";
-    ctx.waitUntil(
-      postmarkSend(env, {
-        from: "noreply@thinkersjournal.com",
-        to,
-        subject: outcome.outcome === "granted" ? "Your appeal was granted" : "Your appeal was not granted",
-        textBody: `${lead}\n\nReason given by the moderator:\n\n${trimmed}\n`,
-        htmlBody: `<p>${escapeHtml(lead)}</p><p><strong>Reason given by the moderator:</strong></p><p>${escapeHtml(trimmed)}</p>`,
-        stream: "outbound",
-      }).then((sent) => {
-        if (!sent) console.error("appeal outcome not sent", { appealId, actionId: outcome.resolutionActionId });
-      }),
-    );
   }
 
   const body: AdminAppealResolveResponse = {

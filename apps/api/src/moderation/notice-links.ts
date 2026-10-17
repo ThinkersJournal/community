@@ -1,6 +1,6 @@
 /**
  * Mint the per-purpose links for one action's notice (#113 plan B). Called by
- * the admin routes AFTER the action has committed, on its own connection.
+ * the notice outbox INSIDE the action's transaction (notice-enqueue.ts).
  *
  * A link is omitted when its mint returns null: the account was anonymised
  * (B3), so there is no one to send it to. Whether a notice is sent AT ALL is
@@ -10,7 +10,6 @@
  */
 import type { Client } from "pg";
 
-import { verificationLinkOrigin } from "../auth/email-verify";
 import { mintActionToken } from "./action-tokens";
 
 import { APPEAL_WINDOW_DAYS } from "@thinkersjournal/shared";
@@ -41,12 +40,17 @@ export async function mintAppealUrl(
   return appeal === null ? null : `${origin}/appeal?token=${encodeURIComponent(appeal)}`;
 }
 
-export async function noticeLinks(
+/**
+ * The links of an account-action notice: the appeal link, plus the
+ * delete-request link when the action bars the account. Takes the caller's
+ * `Client` and the link origin, so the notice outbox mints inside the action's
+ * transaction (notice-enqueue.ts).
+ */
+export async function mintNoticeLinks(
   c: Client,
-  request: Request,
+  origin: string,
   input: { readonly actionId: string; readonly userId: string; readonly bars: boolean },
 ): Promise<NoticeLinks> {
-  const origin = verificationLinkOrigin(request);
   const ttlMs = APPEAL_WINDOW_DAYS * DAY_MS;
   const out: NoticeLinks = {};
   const appealUrl = await mintAppealUrl(c, origin, { actionId: input.actionId, userId: input.userId });
