@@ -195,7 +195,11 @@ the authoritative table):
 | types | `pnpm typecheck` | exit 0 |
 
 `pnpm test:e2e` starts everything it needs (build → api on :8788 → web on :8787) and
-requires only Docker Postgres to be up. (A third, single-process api+web server on :8789 serves
+requires only Docker Postgres to be up, **migrated to head**: on a persistent local volume run
+`pnpm --filter @thinkersjournal/api run migrate` first (and again after pulling new migrations).
+A preflight (`apps/api/scripts/e2e-preflight.mjs`) runs before anything starts and fails in seconds with
+`dev DB unmigrated (ledger N < files M)` instead of the old symptom, a 3-minute webServer timeout
+after repeated `503` on `/` (#84). (A third, single-process api+web server on :8789 serves
 only `e2e/security-ledger.spec.ts`, because the web-to-ledger Durable Object call only resolves
 in one `wrangler dev` process; see the header of `playwright.config.ts`.) It writes real users to the **dev** database via
 the real signup path and does not clean up, so every run uses a fresh random email.

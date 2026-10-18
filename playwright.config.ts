@@ -289,7 +289,15 @@ export default defineConfig({
       // cleans dist and reaps the workerd processes astro leaks (they lock
       // dist/ and make every later build fail on Windows). It reaps only what
       // its own build spawned — verified: 4 leaked, 0 left, api untouched.
+      //
+      // #84: THE FIRST STEP IS A PREFLIGHT, because `globalSetup` runs too late
+      // (after the webServers) to catch what it guards against. A persistent local
+      // dev DB that is behind the migration files makes web's `/` 503 until the
+      // 180 s webServer timeout, with no pointer to the cause. This reads the
+      // ledger (local DB only) and fails in seconds naming the fix. It exits 0
+      // for a non-local E2E_DATABASE_URL (skipped, and it says so).
       command: [
+        "pnpm --filter @thinkersjournal/api exec node scripts/e2e-preflight.mjs",
         "pnpm --filter @thinkersjournal/web build",
         `pnpm --filter @thinkersjournal/api exec wrangler dev --port ${API_PORT} ${apiVars}`,
       ].join(" && "),
