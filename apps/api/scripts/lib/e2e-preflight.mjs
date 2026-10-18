@@ -30,6 +30,31 @@ export function listMigrationNames(dirEntries) {
 const fail = (status, message, extra = {}) => ({ ok: false, status, message, ...extra });
 
 /**
+ * Maps a failed ledger read to a verdict. `null` means "no pgmigrations table yet"
+ * (42P01), which the caller treats as an empty ledger rather than a failure.
+ */
+function ledgerReadFailure(err, target) {
+  const code = err && typeof err === "object" ? err.code : undefined;
+  if (code === "42P01") return null;
+  if (code === "3D000") {
+    return fail(
+      "no-database",
+      `e2e preflight: database "${target.database}" does not exist on ${target.host}:${target.port}. ` +
+        `Create it (docker compose does), then run: ${MIGRATE_COMMAND}`,
+    );
+  }
+  if (code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ENOTFOUND") {
+    return fail(
+      "unreachable",
+      `e2e preflight: Postgres is not reachable at ${target.host}:${target.port} (${code}). ` +
+        `Start it (docker compose up -d --wait db) and re-run.`,
+    );
+  }
+  const where = `${target.host}:${target.port}/${target.database}`;
+  return fail("error", `e2e preflight: could not read the migration ledger on ${where}: ${err instanceof Error ? err.message : String(err)}`);
+}
+
+/**
  * @param {object} args
  * @param {string} args.databaseUrl the e2e's dev database URL
  * @param {string[]} args.migrationNames from `listMigrationNames`
@@ -61,24 +86,9 @@ export async function checkDevDb({ databaseUrl, migrationNames, queryApplied }) 
   try {
     applied = await queryApplied();
   } catch (err) {
-    const code = err && typeof err === "object" ? err.code : undefined;
-    if (code === "42P01") {
-      applied = []; // no pgmigrations table at all: nothing has been migrated
-    } else if (code === "3D000") {
-      return fail(
-        "no-database",
-        `e2e preflight: database "${target.database}" does not exist on ${target.host}:${target.port}. ` +
-          `Create it (docker compose does), then run: ${MIGRATE_COMMAND}`,
-      );
-    } else if (code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ENOTFOUND") {
-      return fail(
-        "unreachable",
-        `e2e preflight: Postgres is not reachable at ${target.host}:${target.port} (${code}). ` +
-          `Start it (docker compose up -d --wait db) and re-run.`,
-      );
-    } else {
-      return fail("error", `e2e preflight: could not read the migration ledger on ${where}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    const failure = ledgerReadFailure(err, target);
+    if (failure !== null) return failure;
+    applied = []; // no pgmigrations table at all: nothing has been migrated
   }
 
   const appliedSet = new Set(applied);
