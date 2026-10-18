@@ -1,6 +1,6 @@
 # Thinker's Journal Community — roadmap
 
-**As of:** `origin/main` eaa9bff (package version 0.1.48), 2026-10-15. This is the project's own view of order and
+**As of:** `origin/main` 06f90e0 (package version 0.1.67), 2026-10-18 (§3 only; §1 and §2 predate it). This is the project's own view of order and
 state. The portfolio roadmap sits above it and wins on priority; CireSnave's decisions win on everything. It is a
 plan, not a promise: items are in the order the lane intends to take them, and anything marked **held** waits on a
 person, not on code.
@@ -34,17 +34,15 @@ one, delete it. Re-read `git log origin/main` and `gh pr list` before relying on
 
 ## 3. Unblocked, in the order I would take them
 
-These are open issues that nothing above holds. Each one is small enough for one reviewed PR.
+**Nothing is unblocked** (`origin/main` 06f90e0, 2026-10-18). Open issues: #114 (NCMEC pipeline; waits on
+CireSnave's inputs, board 119) and #72 (file-picker report, environment-suspected, low; no work until it recurs).
 
-1. **#57** durable delivery: the outbox, per the design note in #197. The Art. 17 contents shipped in #189, #191, #192 and #193 (#138, #135 and #56 shipped in #174).
-2. **#78** own-profile Follow button and the hidden-post path back, a user-visible defect that needs runtime data.
-3. **#148** media holds not enforced on queued `to_public` moves (sequence after #161 and the ownership work;
-   they touch the same tables).
-4. **Test and harness debt:** #60 (render an Astro page in a unit test), #59, #65, #84 and #85 (local e2e hangs,
-   a flaky bell test), #156 (e2e cannot cross the web-to-api ledger path), #39 and #40.
-5. **#74** endpoint-to-UI reachability audit: refreshed 2026-10-17 (`docs/audits/2026-10-17-endpoint-ui-reachability-audit.md`): 0 bucket A, 0 bucket B of 104 routes.
-6. **Audit row for a notice resend** (`POST /admin/notices/:id/resend` logs the row id only; a `moderation_actions` row
-   needs a new kind, so a CHECK migration). PM ruling 2026-10-17: not now.
+Closed since the last refresh: #57 (outbox, #197 and follow-ups), #78, #148, #156, #39, #40, #59, #60, #65, #85
+(already fixed by #182), #84 (unmigrated local dev DB; #218 adds an e2e preflight) and #74 (audit refreshed in
+#217: 0 bucket A, 0 bucket B of 104 routes).
+
+Parked, not queued: an audit row for a notice resend (`POST /admin/notices/:id/resend` logs the row id only; a
+`moderation_actions` row needs a new kind, so a CHECK migration). PM ruling 2026-10-17: not now.
 
 ## 3b. Guideline and reality gaps (CireSnave asked, 2026-10-15)
 
