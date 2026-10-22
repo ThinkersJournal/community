@@ -11,6 +11,17 @@ SafeImage (`docs/NPM-PACKAGE.md`, `ROADMAP.md`, `wasm/npm/index.d.ts`), auth-fra
 Anything I did not establish is under "Not verified". `origin/main` of each moves; these are statements about that
 day, not about the present.
 
+## Update 2026-10-22 (board 228 ruled A)
+
+CireSnave, verbatim: *"On decision 228: A for now but we will be transitioning all projects to our own tool stack over time.  For web-based (non-Rust) projects, that will likely require hosted services we will run."* So: **now** SafeImage via its WASM/npm package; **later** auth-framework as a separate hosted service (spike after the migrations settle), then persistence and other services; PersistAnt does not apply to Community yet. Hosting services we run is therefore expected, which softens the "we have no server" gap in section 2 but does not remove it.
+
+Facts re-read 2026-10-22 (SafeImage `origin/main` a8e1734, 0.3.24; npm registry; CI run 39014029155):
+
+- `@thinkersjournal/safeimage` is **not published** (`npm view`: 404). The unscoped `safeimage` on npm is an unrelated 2016 React package. Blockers (SafeImage lane, PM): the publish flip (SafeImage #15, draft) waits on F4 (board 222); the npm organisation and trusted publishing (OIDC, no stored token) are on CireSnave's board 247; no publish job is built yet; the crates.io release is the PM's (Q8).
+- The typed TypeScript wrapper is **not** in the package: `index.js` exports `ABI_VERSION`, `wasmUrl` and `instantiate()` returning the raw `si_*` exports. PM ruled A: SafeImage builds the wrapper into the package. Community writes no private copy.
+- The packed tarball from that run (`thinkersjournal-safeimage-0.3.24.tgz`, a CI artifact): `safeimage_wasm.wasm` is 27,158 bytes (26,943 gzipped), ABI 4, built with rustc 1.99.0; `PROVENANCE.json` names the commit and run. I did not instantiate it under workerd, so cold start and isolate memory remain unmeasured.
+- Community can do nothing that merges before a published version exists: a vendored `.wasm` is ruled out (board 174 Q10), and steps 3 to 5 of `2026-10-10-safeimage-split.md` section 5 depend on the package. A prepared branch is not started.
+
 ## 0. The constraint that shapes all three answers
 
 Community is **not a Node service**. Both Workers run on Cloudflare workerd (`compatibility_flags: ["nodejs_compat"]`,
@@ -108,14 +119,14 @@ different points on that scale.
 
 ## 4. Order
 
-1. SafeImage (unblocked on engineering; blocked on publishing, which is the PM's).
-2. auth-framework spike (A), only after the #204/#205/#207 migrations are applied, so identity work does not collide
+1. SafeImage, now (board 228 A). Engineering waits on the typed wrapper (SafeImage) and publishing (F4, npm org with OIDC, crates.io release).
+2. Later: auth-framework as a separate hosted service we run (spike A), only after the #204/#205/#207 migrations are applied, so identity work does not collide
    with them.
-3. PersistAnt: no Community work until a TypeScript route exists or CireSnave widens the scope in writing.
+3. Then persistence and other services. PersistAnt: no Community work until a TypeScript route exists or CireSnave widens the scope in writing.
 
 ## 5. Not verified (each would change an answer above)
 
 - Whether `@authframework/js-sdk` is published and runs on workerd.
 - Whether auth-framework can reference an external user row; argon2id parameter compatibility.
-- The size of `safeimage_wasm.wasm` against the Worker size limit, and its cold-start cost.
+- The cold-start cost and isolate memory of `safeimage_wasm.wasm` under workerd (its size, 27 KB, is measured; the Worker size limit was not re-fetched).
 - Whether PersistAnt's relational kind can serve a transaction to a remote caller, and whether it runs on workerd.
