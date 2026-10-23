@@ -34,7 +34,18 @@ one, delete it. Re-read `git log origin/main` and `gh pr list` before relying on
 
 ## 3. Unblocked, in the order I would take them
 
-**Nothing is unblocked** (`origin/main` 06f90e0, 2026-10-18). Open issues: #114 (NCMEC pipeline; waits on
+Rows from the advisory CodeRipper check (#221, `portfolio` job, run 40005620570, 2026-10-23; the check is not required):
+
+1. **version-and-changelog:** create `CHANGELOG.md` (the repo has none; the rule fails for any version).
+2. **licence:** 645 of 645 source files lack an `SPDX-License-Identifier` in their first 15 lines. Write a script that adds the header
+   to the files `git ls-files` lists (not a disk walk), idempotent, and run it once; mind CRLF and `.astro` frontmatter.
+3. **SEC-002: no action, verdict 2026-10-23.** The 3 gitleaks `generic-api-key` hits are test fixtures, not secrets:
+   `new-post-page.test.ts:531` and `editor-prefill.test.ts:14` are the RFC 4122 sample UUID `0f8fad5b-d9cb-469f-a165-70867728950e`
+   (36 chars) used as an idempotency key; `moderation-notice-outbox-drain.test.ts:29` is base64url of the literal `foobar_BAZ-123?ABC`
+   (24 chars). Checked by length, prefix and decoding; no value compared against a secret store. Silence them by an
+   `[[allow]]` with reason and owner in `.coderipper.toml` or a gitleaks allowlist, not by weakening the rule.
+
+Otherwise nothing is unblocked (`origin/main` 06f90e0, 2026-10-18). Open issues: #114 (NCMEC pipeline; waits on
 CireSnave's inputs, board 119) and #72 (file-picker report, environment-suspected, low; no work until it recurs).
 
 Closed since the last refresh: #57 (outbox, #197 and follow-ups), #78, #148, #156, #39, #40, #59, #60, #65, #85
