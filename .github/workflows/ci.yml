@@ -191,3 +191,15 @@ jobs:
             test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  # ADVISORY, not a required check (CireSnave 2026-10-23: "Roll out advisory-only,
+  # non-blocking CodeRipper checks everywhere."). The reusable workflow is pinned
+  # to a commit SHA on coderipper main; the repo is public, so the default
+  # GitHub-hosted runner applies. A job that calls a reusable workflow cannot
+  # set continue-on-error, so "advisory" means it is not in branch protection's
+  # required checks: a finding shows red on the PR but blocks nothing.
+  portfolio:
+    name: portfolio (CodeRipper, advisory)
+    permissions:
+      contents: read
+    uses: ciresnave/coderipper/.github/workflows/portfolio.yml@c665210ad0972cf3ddb7bc81bdd7800c3248a938
