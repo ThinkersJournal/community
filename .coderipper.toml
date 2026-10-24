@@ -1,0 +1,19 @@
+# CodeRipper waivers. Each is a test fixture the secret scan mistakes for a key (verdict 2026-10-23, docs/ROADMAP.md §3).
+# Owner: the Community lane. Remove if the fixture changes.
+[[allow]]
+check = "SEC-002"
+file = "apps/web/test/new-post-page.test.ts"
+lines = "531"
+reason = "test fixture: the RFC 4122 sample UUID 0f8fad5b-d9cb-469f-a165-70867728950e used as an idempotency key, not a secret. Owner: Community lane."
+
+[[allow]]
+check = "SEC-002"
+file = "apps/web/test/editor-prefill.test.ts"
+lines = "14"
+reason = "test fixture: the RFC 4122 sample UUID used as an idempotency key, not a secret. Owner: Community lane."
+
+[[allow]]
+check = "SEC-002"
+file = "apps/api/test/moderation-notice-outbox-drain.test.ts"
+lines = "29"
+reason = "test fixture: base64url of the literal foobar_BAZ-123?ABC, not a secret. Owner: Community lane."
