@@ -73,6 +73,10 @@ Where the published rules and the platform differ. Source for every row: the aud
   provider is referred to only as "hash-matching service A"; the registration and its secrets are CireSnave's.
 - **SafeImage adoption** (layers 1–5 as a crate, `2026-10-10-safeimage-split.md`): steps 3–5 wait on the crate
   being publishable (decision Q8).
+- **TypeScript 7 (2026-10-24, PM-accepted exception to the latest-dependencies rule):** blocked on Astro stable support. `astro check`
+  exits "does not currently support TypeScript 7.0" (experimental support needs TS 7.1+, still beta), and TS 7 no longer exports the
+  compiler API that `hidden-at-read-guard.node.test.ts` and `login-bar-after-verify.node.test.ts` import. Stay on 6.0.3; revisit when
+  `astro check` supports 7.x.
 - **Legal entity** stays `[[LEGAL_ENTITY]]` everywhere until the registration is confirmed.
 - **D11 (recheck)**, the live-chat concept (`docs/superpowers/backlog/2026-07-21-live-chat-concept.md`) and the
   interaction-permissions maybes are post-launch and unstarted.
