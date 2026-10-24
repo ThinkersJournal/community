@@ -1,6 +1,6 @@
 # Thinker's Journal Community — roadmap
 
-**As of:** `origin/main` 06f90e0 (package version 0.1.67), 2026-10-18 (§3 only; §1 and §2 predate it). This is the project's own view of order and
+**As of:** `origin/main` e1c241c (package version 0.1.82), 2026-10-24 (§2 and §7 refreshed; §1 predates it). This is the project's own view of order and
 state. The portfolio roadmap sits above it and wins on priority; CireSnave's decisions win on everything. It is a
 plan, not a promise: items are in the order the lane intends to take them, and anything marked **held** waits on a
 person, not on code.
@@ -23,14 +23,10 @@ one, delete it. Re-read `git log origin/main` and `gh pr list` before relying on
 
 ## 2. In flight, and what each is waiting on
 
-| Item | State | Waits on |
-|---|---|---|
-| **Login Turnstile challenge**, implementation | built and reviewed locally, not pushed | rebase onto `main` (#160 merged in #201); design `2026-10-11-login-turnstile-challenge-design.md`, rulings in its §9 |
-| **Security alerting PR 3** | complete locally, not pushed | rebase onto `main`; renumber its migration after 0032 |
-| **Media ownership records** (clear `media.owner_id` on anonymisation, keep hashes, hold-aware) | plan approved, nothing written | a version from the PM, then a migration CireSnave applies before merge (#161 merged) |
-| **Idempotency key on `POST /posts`** (for the CodeRipper "post results" flow) | design note next | a version from the PM, then a migration CireSnave applies before merge |
-| **HMS_A_BASE_URL origin-only** (upload-scan design §8.3) | #170 open, docs only | gate |
-| **Moderation notice outbox** (#57; board 194 ruled: window from delivery, 365-day retention, dispute@ in every notice, types 1–5) | design note #197 open, docs only | gate, then implementation PRs each needing a migration CireSnave applies |
+Nothing is in flight apart from the open PRs on the forge. The rows this section used to carry are all merged: the login Turnstile
+challenge (#203), security alerting PR 3 (#204), media ownership records (#207), the idempotency key on `POST /posts` (#211),
+`HMS_A_BASE_URL` origin-only (#170) and the moderation notice outbox (#197, #205, #210, #213, #214, #215). Migrations 0033-0038 are on
+`main`; which of them are applied to production is not recorded in this repository (the PM's notices are the source).
 
 ## 3. Unblocked, in the order I would take them
 
@@ -101,3 +97,49 @@ SafeImage publishing (Q8) and where the provider profiles live (Q9).
 Dependencies at their latest versions; versions change with every pushed change (the PM allocates the number);
 nothing runs against production from a lane; migrations are applied to production before the PR that needs them
 merges; every vendor name stays out of this public repo.
+
+## 7. Spec-to-roadmap audit (2026-10-24, PM request)
+
+Method: every document under `docs/` (specs, designs, audits, legal drafts, ops, runbooks, backlog, spikes), plus `README.md` and
+the glossary, was read at `origin/main` e1c241c and each piece of described work checked against the code (`git grep` with a positive
+control) and the merged PRs. Plans were read for their deferred and follow-up sections only. Documents read: 60 (the plan files
+grep-only, on top). Items already rows above (R1-R7, #114, upload scan, SafeImage, TypeScript 7, live chat, D11) are not repeated.
+**Status:** open (unblocked), held (by whom), done (PR). **CC** = needs a CireSnave decision, filed on the PM's board by the PM.
+Each claim is from one read of the code at that ref, so re-check before relying on a row.
+
+| Row | Work and source | Status |
+|---|---|---|
+| S1 | **M3 Reference engine** (connectors, snapshot capture, @-picker, refresh sweep; design spec §4, README tagline). No code, no migration, and no row until now | open; **CC**: is it still launch scope, or is launch Pillar A plus M4? |
+| S2 | **DMCA takedown, counter-notice and repeat-infringer process** (design spec M4; `dmca-policy.md` promises it). Only a legal-hold category exists in code | open; **CC**: build it, or run it by hand through the designated agent |
+| S3 | **README Deploy gate dashboard items**: WAF block on `/internal/*`, WAF rate-limit on public reads, CDN Cache Rule, `nosniff` Transform Rule, CSAM Scanning Tool on the CDN zone, Postmark and purge log alerts, `workers_dev` off on the web Worker (the api has it) | held by CireSnave; **CC**: which are done |
+| S4 | App-level rate limit on the other `/public/*` reads (`posts`, `recent`, `discover`, `tag(s)`, `authors`, `comments`); search (#117) and profile are done | open |
+| S5 | Sitemap index and real pagination of `/public/recent` (`RECENT_MAX = 1000`, `public.ts:71`) | open, post-launch |
+| S6 | Signup 16+ attestation and a Terms-acceptance record at signup (design spec decision 15; the Terms say account creation is agreement, and nothing records it) | open; **CC** |
+| S7 | Privacy policy omits what the code does: the device cookie and known-device list (#201), the client-country header, the notice outbox and stored notice text (365 days), permanent original-upload hashes with the owner cleared (#161, #207); alerting spec D5 | open; **CC** (legal text) |
+| S8 | Alerting phase 1b and 2: set `ACCOUNT_NOTICES_ENABLED` to 1 (needs `DEVICE_HASH_KEY` in production), the alert transport and `SECURITY_ALERT_*` secrets, flip `SECURITY_ALERTS_ENABLED`, review a week of `security-alert:` log lines (D3), accept the held-row caps (D6) | held by CireSnave (board 131, D1) |
+| S9 | External uptime monitor and the one-time paging proof (`docs/ops/uptime-monitor-spec.md`; alerting D2) | held by CireSnave (signup) |
+| S10 | Turn `LOGIN_CHALLENGE` on (ships `"0"`; one-line PR once the web side is live); check WCAG 3.3.8 and keyboard reach of the widget; the optional privacy sentence | open; **CC** on timing |
+| S11 | `dispute@` contact line on the `/appeal` page (outbox design §8; the emails already carry it) | open, small |
+| S12 | Route the auto-hide notice through the outbox (kind `author_auto_hide` is in the 0034 CHECK and has no enqueue site; `reports.ts` still sends best effort) | open |
+| S13 | Content decisions never record a duration (`decide.ts` does not pass `actionExpiresAt`; recorded only, nothing un-hides) | open, low |
+| S14 | Notice wording rulings: say the hide was automated, an outcome email to a member reporter, restore and appeal-denied treatment (art17 facts Q4, Q10, Q11) | held; **CC** |
+| S15 | Deploy: confirm the one-time Cloudflare build-command change for the migration gate was made; auto-rollback needs a deploy credential; a notification channel for pipeline failures (`deploy-automation-design` §3, §4) | held by CireSnave; **CC** |
+| S16 | Ruling (f): the number of Access admins, a precondition for both two-person rules in #114 (csam design §0) | held by CireSnave; **CC** |
+| S17 | Upload-scan decisions D1-D4, D6, D7, D11, D12, D16, D17, and `anim: false` in `toWebp` (flatten animation, Q4/D2) | held by CireSnave; **CC** |
+| S18 | VPS image service: the 13-item host checklist, the ICC-warning rule, a real-world corpus for the flat-image share (C8) | held by CireSnave; **CC** |
+| S19 | `docs/runbooks/csam.md` (destruction request, incident, NIST mapping; upload-scan US9 additions) | held with #114 |
+| S20 | `fast-xml-parser` in `apps/api`, the version-pinned characterisation test and the response byte cap (xml-parser decision §6) | held with #114 |
+| S21 | SafeImage Q7: the workerd proof of the pdq `.wasm` (cold start, memory) and the hash self-test identity gaining the crate version | waits on a published `@thinkersjournal/safeimage` (board 247) |
+| S22 | Page-audit leftovers: F4 `/appeal` for a banned or lost-email user, F7 no "Report illegal content" link on live-inserted comments or in the footer, F8 no `robots.txt` or RSS link, F9 auth redirects drop `?next=`, F10 `/admin/queue` undocumented | open, small |
+| S23 | Fill `[[REAPER_WINDOW]]` in the legal drafts: the code is 7 days (`reap-unverified.ts:70`) | open, tiny |
+| S24 | Renew the DMCA agent registration every 3 years (the README gives no date) | open, time-gated; **CC** for the date |
+| S25 | Post-launch backlog, unqueued: @-mentions, notification pruning, KV unread count, Postmark bounce webhook, digest timezone, "Mark all read", search snippets and autocomplete, tag curation and rename, per-post OG images, About page, trending and a follow recommender, who-reacted lists, mute, avatar variants, dropping CSP `style-src 'unsafe-inline'`, a per-account post rate limit, "More" paging in follow lists | open, post-launch |
+| S26 | Old design decisions never built and never withdrawn: tag creation gated to accounts older than 7 days, spam heuristics and pre-publish moderation scoring (`[[MODERATION_SCORER]]` is still in the privacy draft) | **CC**: drop or keep |
+| S27 | Guidelines promises versus the product: restore the "immediate termination" statement now that the terminate route exists (#212; needs a version bump), a different reviewer for appeals (`appeals.ts` reports `sameReviewer` and never refuses), change announcements and an acceptance record | held; **CC** |
+| S28 | `pgmigrations` tightening for the runtime role (least-privilege spec §8 item 3, never recorded as answered) | open, undecided |
+| S29 | Docs that contradict the code, to correct (docs only): README status line and baseline table; glossary appeal window and Turnstile lines; `pre-launch-fixes.md` #6 and #7 (the appeal form exists); design spec §3 "nothing writes those columns"; queue design §5 and §11.2; deploy-automation header against its §7; NCMEC notes §3 against the pipeline design; csam design "next migration is 0026" and "gated on CireSnave"; the 10-14 outbox design (superseded, no banner); safeimage-split §1; guidelines-intentions rows 1 and 11; the outbox design's `author_auto_hide` appeal link; `legal/README.md:76`; `dmca-policy.md` §4 ladder; `deploy.md` order constraint | open |
+
+Done and verified while auditing (no row needed): the pre-launch fixes (#18, #19, #20, #118, #144), block and report retrofits (#30, #31, #94),
+queue and admin (#96, #97, #125), enforcement ladder (#132), appeals (#144), DSA intake (#134), legal hold (#139), terminate route (#212),
+notice outbox (#205, #210, #213, #214, #215), media ownership (#207), idempotency key (#211), login challenge (#203), alerting phase 1
+(#157, #201, #204), upload-scan schema (#161), the deploy gate (#136).
