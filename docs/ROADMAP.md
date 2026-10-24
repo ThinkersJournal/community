@@ -39,8 +39,17 @@ Rows from the advisory CodeRipper check (#221, `portfolio` job, run 40005620570,
    PR that adds source files.
 3. **SEC-002:** DONE in #225 (0.1.74): the 3 fixture hits are waived by `[[allow]]` entries in `.coderipper.toml`.
 
-Nothing is unblocked (`origin/main` b8f3dc2, 2026-10-24). Open issues: #114 (NCMEC pipeline; waits on
-CireSnave's inputs, board 119) and #72 (file-picker report, environment-suspected, low; no work until it recurs).
+Rows (PM ruling 2026-10-24: R1-R6 as listed, R2 first). Open issues: #114 (NCMEC pipeline; waits on CireSnave's inputs, board 119) and #72 (file-picker report, environment-suspected, low; no work until it recurs).
+
+| Row | Work | Status |
+|---|---|---|
+| R1 | `/terms`, `/privacy`, `/dmca` routes and footer links (section 3b #3) | waiting: the legal texts are not decided (CireSnave) |
+| R2 | Render the cited legal and contractual grounds in the author decision notice (#57 Art. 17; section 3b #4 follow-up) | in progress (adverse decisions only; the appeal page still does not show them: R7) |
+| R3 | Audit row for a notice resend (needs a new `moderation_actions` kind, so a CHECK migration) | parked: PM ruling 2026-10-17, not now |
+| R4 | Drop `moderation_notice_records` (0032) and its purge cron once its rows have aged out | open, unblocked only after the retention window passes |
+| R5 | `APPEAL_WINDOW_DAYS` is 30 but DSA Art. 20(1) needs complaint access for at least 6 months | held by the PM |
+| R6 | SafeImage adoption steps 3-5 and the workerd proof (cold start, memory) | waiting: package not published (decision Q8, board 247) |
+| R7 | Show the cited grounds on the appeal page (`AppealTarget`, `routes/appeals.ts`, `appeal.astro`) so both surfaces state the same grounds | open, after R2 |
 
 Closed since the last refresh: #57 (outbox, #197 and follow-ups), #78, #148, #156, #39, #40, #59, #60, #65, #85
 (already fixed by #182), #84 (unmigrated local dev DB; #218 adds an e2e preflight) and #74 (audit refreshed in

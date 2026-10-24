@@ -23,7 +23,7 @@
  */
 import type { Client } from "pg";
 
-import { MODERATION_NOTICE_RETENTION_DAYS } from "@thinkersjournal/shared";
+import { MODERATION_NOTICE_RETENTION_DAYS, type ContractualGround, type LegalGround } from "@thinkersjournal/shared";
 
 import type { DecisionKind } from "./decide";
 import { mintAppealUrl, mintNoticeLinks } from "./notice-links";
@@ -40,6 +40,8 @@ export interface AuthorDecisionNoticeInput {
   readonly subject: "post" | "comment";
   readonly postTitle: string;
   readonly reason: string;
+  readonly legalGround?: LegalGround;
+  readonly contractualGround?: ContractualGround;
   /** The verification-link origin, computed from the request (`verificationLinkOrigin`). */
   readonly origin: string;
 }
@@ -56,6 +58,8 @@ export async function enqueueAuthorDecisionNotice(c: Client, input: AuthorDecisi
     subject: input.subject,
     postTitle: input.postTitle,
     reason: input.reason,
+    legalGround: input.legalGround,
+    contractualGround: input.contractualGround,
     appealUrl: appealUrl ?? undefined,
   });
   if (rendered === null) return false;

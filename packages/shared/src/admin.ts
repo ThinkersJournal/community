@@ -152,6 +152,29 @@ export const CONTRACTUAL_GROUNDS = [
 ] as const;
 export type ContractualGround = (typeof CONTRACTUAL_GROUNDS)[number];
 
+/**
+ * How each ground reads to the author in a decision notice (#57 Art. 17 follow-up).
+ * ⚠️ #57 Q2: none of these names a report, a notice or a reporter. Provisional
+ * wording, with the lists above, pending attorney / CireSnave review.
+ */
+export const LEGAL_GROUND_LABELS: Readonly<Record<LegalGround, string>> = {
+  csam: "child sexual abuse material",
+  copyright_infringement: "copyright infringement",
+  illegal_content_other: "content that is illegal",
+};
+
+export const CONTRACTUAL_GROUND_LABELS: Readonly<Record<ContractualGround, string>> = {
+  guidelines_threats_harassment: "Community Guidelines: threats and harassment",
+  guidelines_hate_speech: "Community Guidelines: hate speech",
+  guidelines_ncii: "Community Guidelines: non-consensual intimate imagery",
+  guidelines_doxxing: "Community Guidelines: sharing private information",
+  guidelines_spam: "Community Guidelines: spam",
+  guidelines_malware_phishing: "Community Guidelines: malware and phishing",
+  guidelines_impersonation: "Community Guidelines: impersonation",
+  guidelines_ip: "Community Guidelines: intellectual property",
+  terms_other: "a breach of our Terms of Service",
+};
+
 /** `POST /admin/decision`. */
 export interface AdminDecisionRequest {
   readonly subject: "post" | "comment";
