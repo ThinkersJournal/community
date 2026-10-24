@@ -17,3 +17,13 @@ check = "SEC-002"
 file = "apps/api/test/moderation-notice-outbox-drain.test.ts"
 lines = "29"
 reason = "test fixture: base64url of the literal foobar_BAZ-123?ABC, not a secret. Owner: Community lane."
+
+[[allow]]
+check = "licence"
+file = "apps/api/src/worker-configuration.d.ts"
+reason = "wrangler-generated (`wrangler types`), Apache-2.0 only and not ours to relicense (LICENSE.md section 1); regenerated on every run. Owner: Community lane."
+
+[[allow]]
+check = "licence"
+file = "apps/web/worker-configuration.d.ts"
+reason = "wrangler-generated (`wrangler types`), Apache-2.0 only and not ours to relicense (LICENSE.md section 1); regenerated on every run. Owner: Community lane."
