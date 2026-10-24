@@ -1,6 +1,6 @@
 {
   "name": "@thinkersjournal/web",
-  "version": "0.1.81",
+  "version": "0.1.82",
   "private": true,
   "license": "MIT OR Apache-2.0",
   "type": "module",
@@ -20,7 +20,7 @@
     "astro": "7.4.2"
   },
   "devDependencies": {
-    "@astrojs/check": "0.9.10",
+    "@astrojs/check": "0.9.12",
     "@playwright/test": "1.63.0",
     "fast-xml-parser": "5.11.2",
     "jsonc-parser": "3.3.1",
