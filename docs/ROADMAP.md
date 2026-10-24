@@ -39,16 +39,11 @@ Rows from the advisory CodeRipper check (#221, `portfolio` job, run 40005620570,
 1. **version-and-changelog:** DONE in the changelog PR (0.1.72); keep `CHANGELOG.md` current with every version.
 2. **licence:** DONE in the SPDX PR (0.1.73): `scripts/add-spdx-headers.mjs` (idempotent; `--check` lists what is missing) added
    `SPDX-License-Identifier: MIT OR Apache-2.0` to 643 files. The 2 wrangler-generated `worker-configuration.d.ts` files stay headerless on
-   purpose (Apache-2.0 only, not ours to relicense per LICENSE.md section 1, rewritten by `wrangler types`), so CodeRipper keeps
-   reporting 2: waive them with an `[[allow]]` (reason and owner) in `.coderipper.toml`, a follow-up row. Run `--check` before merging a
+   purpose (Apache-2.0 only, not ours to relicense per LICENSE.md section 1, rewritten by `wrangler types`), waived by `[[allow]]` in `.coderipper.toml` (0.1.77). Run `--check` before merging a
    PR that adds source files.
-3. **SEC-002: no action, verdict 2026-10-23.** The 3 gitleaks `generic-api-key` hits are test fixtures, not secrets:
-   `new-post-page.test.ts:531` and `editor-prefill.test.ts:14` are the RFC 4122 sample UUID `0f8fad5b-d9cb-469f-a165-70867728950e`
-   (36 chars) used as an idempotency key; `moderation-notice-outbox-drain.test.ts:29` is base64url of the literal `foobar_BAZ-123?ABC`
-   (24 chars). Checked by length, prefix and decoding; no value compared against a secret store. Silence them by an
-   `[[allow]]` with reason and owner in `.coderipper.toml` or a gitleaks allowlist, not by weakening the rule.
+3. **SEC-002:** DONE in #225 (0.1.74): the 3 fixture hits are waived by `[[allow]]` entries in `.coderipper.toml`.
 
-Otherwise nothing is unblocked (`origin/main` 06f90e0, 2026-10-18). Open issues: #114 (NCMEC pipeline; waits on
+Nothing is unblocked (`origin/main` b8f3dc2, 2026-10-24). Open issues: #114 (NCMEC pipeline; waits on
 CireSnave's inputs, board 119) and #72 (file-picker report, environment-suspected, low; no work until it recurs).
 
 Closed since the last refresh: #57 (outbox, #197 and follow-ups), #78, #148, #156, #39, #40, #59, #60, #65, #85
