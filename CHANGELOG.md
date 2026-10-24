@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.78
+
+Raised astro 7.3.5 to 7.4.2 and @astrojs/cloudflare 14.3.3 to 14.4.2 (build, typecheck and the web suite pass; the no-store guard in `workers-cache.test.ts` still finds the adapter stamp).
+
 ## 0.1.77
 
 Waived the two wrangler-generated `worker-configuration.d.ts` files from the CodeRipper `licence` rule in `.coderipper.toml`.
