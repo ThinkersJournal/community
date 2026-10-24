@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { describe, expect, it } from "vitest";
 import { DEFAULT_NOTIFICATION_PREFS, NotificationPrefsInput } from "../src";
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /** Handles that would let an account impersonate the platform or a role. */
 export const RESERVED_USERNAMES: ReadonlySet<string> = new Set([
   "admin", "administrator", "support", "help", "official", "staff", "team",

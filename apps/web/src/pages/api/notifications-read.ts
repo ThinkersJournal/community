@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for MARK NOTIFICATIONS READ (M2.3a). Same pattern
  * as /api/react: forwards the HttpOnly session cookie + the browser's Origin +

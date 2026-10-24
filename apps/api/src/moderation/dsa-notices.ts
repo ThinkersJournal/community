@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * DSA notices (spec §3.3, §8). ⚠️ AC-1: NOTHING here touches `reports`,
  * `hidden_at` or `maybeAutoHide`. A notice is queue input for a human only.

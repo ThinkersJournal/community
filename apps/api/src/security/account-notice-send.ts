@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Sends one account-holder notice (security-alerting spec §4.2, §4.4). Used by
  * the routes (an immediate notice) and by `UserSecurityDO`'s alarm (a deferred

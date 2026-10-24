@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Password-reset tokens (#70) — a single-use, expiring, server-side token
  * delivered to the address being proven, redeemed to set a NEW password the

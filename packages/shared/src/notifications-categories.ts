@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The kind → category mapping (M2.3c). PURE and zod-free: shared by the email
  * drain (api) and any web surface. The three categories are the units the user

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 4 (write-up section 4, C7 WebP determinism), distro half only: run1 vs run2 (fresh socket-activated instance), MAGICK_THREAD_LIMIT=1, and 8 with
 #   OMP_NUM_THREADS=8 over the fixture set. The container comparisons are done by cmp7.py from files this script does not make.
 # INPUTS: SPIKE_DIR (spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/) via lib.sh (fixtures/set, fixtures/big) and SPIKE_PASS2 (this pass2 directory,

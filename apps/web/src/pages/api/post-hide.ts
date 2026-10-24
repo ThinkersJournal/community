@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for POST hide (#61 follow-up / #73). Same pattern
  * as /api/post-delete: forwards HttpOnly cookie + browser Origin + double-

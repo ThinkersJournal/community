@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The two byte/digest encoding primitives the `api` Worker's auth paths share.
  *

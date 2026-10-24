@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for UNFOLLOW. Forwards to DELETE /follows/:id.
  */

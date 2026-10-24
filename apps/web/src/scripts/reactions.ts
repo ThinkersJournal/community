@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE REACTIONS ISLAND — hydrates every chip row on the post page (the post's
  * and each comment's) from ONE /api/reactions round trip: public counts always,

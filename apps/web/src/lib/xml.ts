@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * XML generation for `sitemap.xml` and `rss.xml` — the escaper, and the two feed
  * BODIES themselves.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 7 (write-up section 7): local latency, 20 sequential runs per input over loopback (p50/p95/max) for photo4mp.jpg, p05.jpg, d_alpha.png, d_anim.gif,
 #   d_lossy.webp, s_50mp.png, s_50mp.jpg.
 # INPUTS: SPIKE_DIR (spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/) via lib.sh and SPIKE_PASS2 (this pass2 directory, to find lib.sh); /srv/fix/*

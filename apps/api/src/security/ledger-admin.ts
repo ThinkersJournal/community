@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The ledger's two admin reads (security-alerting spec §2.6 N6, F2), PR 3.
  * Synchronous over the ledger's SQLite.

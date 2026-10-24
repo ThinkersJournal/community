@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE ROUTE TABLE — the single inventory of everything this Worker answers.
  *

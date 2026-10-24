@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE NAV BELL ISLAND — hydrates the hidden `[data-notify-bell]` placeholder
  * that ships with every cached page (Nav.astro). The placeholder's SSR default

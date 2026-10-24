@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The account half of the enforcement ladder (spec §5, #113 plan A).
  * Same trust domain and the same inline-checkOrigin shape as routes/admin.ts.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /** Daily media-owner sweep (Worker side; the SQL and the hold rule are in ./owner-clearing.ts). */
 import { withClient } from "../db/client";
 

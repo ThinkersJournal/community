@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * "Is this media key still reachable through a publicly visible post or
  * comment?" — the reachability rule that decides whether a hide/restore

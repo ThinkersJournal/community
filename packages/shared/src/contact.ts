@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Public contact addresses, in ONE place so a change is one edit. Consumed by
  * apps/api (notice emails) and apps/web. CireSnave 2026-10-14: "All

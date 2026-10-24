@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /health/db` — the read side of the DB-reachability probe
  * (src/health/probe.ts). Detection only; notification/alerting is a separate,

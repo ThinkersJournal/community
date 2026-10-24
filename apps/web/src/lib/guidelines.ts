@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The published Community Guidelines text, read from the repo file at BUILD time
  * (`?raw`), so the page and docs/legal/community-guidelines.md cannot differ.

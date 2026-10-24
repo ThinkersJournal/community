@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER read hop for block state. Two modes, mirroring /api/social.ts:
  *   ?status=id,id,…  → { blocked, viewerLoggedIn, csrfToken, viewerId }  (per-viewer, batched)

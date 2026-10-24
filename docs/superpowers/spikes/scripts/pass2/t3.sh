@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 3 (write-up section 3): a unique marker in EXIF/COM/PNG text/bad-file bytes never reaches the journal, dmesg or any file; runs A (approved unit), B
 #   (positive control WRAP_LOG_MARKER=1) and C (logger plus /var/tmp file control for the greps).
 # INPUTS: SPIKE_DIR (spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/) via lib.sh, and SPIKE_PASS2 (this pass2 directory, to find lib.sh);

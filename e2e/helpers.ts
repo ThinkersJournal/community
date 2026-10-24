@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * SHARED E2E HELPERS — the two-Worker spine, factored out of the specs.
  *

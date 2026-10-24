@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * What /verify-email shows a visitor who arrives WITHOUT a `?token=` — the
  * "missing" outcome. Extracted from the page so it can be tested in plain Node

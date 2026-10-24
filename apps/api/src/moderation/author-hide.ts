@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE ONE WAY an author hides or unhides their OWN post — the other case in
  * CireSnave's ruling on #26 (community#66's design note), stacked on that

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `NotifyDO` — a per-user WebSocket relay, one Durable Object instance per user
  * (addressed via `getByName(userId)`). Holds hibernating WebSocket connections

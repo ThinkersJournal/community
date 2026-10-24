@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * One-click unsubscribe (M2.3c, RFC 8058). Token-authed, NO session / CSRF /
  * Origin check: the POST comes cross-origin from a mail provider with no cookie,

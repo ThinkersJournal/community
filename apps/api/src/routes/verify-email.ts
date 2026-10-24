@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /verify-email?token=…` — redeem an emailed verification token and mark
  * the user's address as verified.

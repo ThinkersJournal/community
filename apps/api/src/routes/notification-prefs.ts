@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Per-user notification email preferences (M2.3c). GET is a session read
  * (defaults when the user has no row — absent row means defaults). PUT runs the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /health/security-ledger` — the PUBLIC readout of the security ledger's
  * liveness (security-alerting spec §2.6 R2), proxied over the Service Binding

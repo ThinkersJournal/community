@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE workerd COMPATIBILITY GATE. Bundles src/index.ts exactly as workerd would
  * see it and asserts TWO independent properties. Exits non-zero if either fails.

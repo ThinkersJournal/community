@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER read hop for comment edit-prefill. ANONYMOUS on purpose — the api's
  * `GET /public/comments` reads no session, so forwarding the browser's cookie

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE BLOCK/UNBLOCK CONTROL — hydrates the profile page's SSR-hidden
  * `[data-block-btn]` for a signed-in, non-owner viewer. Cached HTML carries

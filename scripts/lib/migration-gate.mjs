@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * PURE HELPERS for the deploy-time migration gate (#116, shape A) — split out
  * of `scripts/check-migrations-applied.mjs` itself (fix round 2 ruling).

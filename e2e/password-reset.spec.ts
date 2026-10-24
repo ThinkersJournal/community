@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { expect, test } from "@playwright/test";
 
 import { API_URL } from "../playwright.config";

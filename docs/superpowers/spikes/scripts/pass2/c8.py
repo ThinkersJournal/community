@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 5 (write-up section 5, C8: share of PDQ quality <= 49): part 1 measures every fixture through the approved scan-frame pipeline, part 2 generates and
 #   measures the 120-image seeded non-photographic corpus (not a screenshot corpus, not a launch estimate).
 # INPUTS: arguments FIXROOT (with set/ and big/ subdirectories) and OUTDIR; no env vars. Runs inside the Docker container tjspike2-pdq (needs magick, pdqtool and the

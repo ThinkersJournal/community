@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { describe, expect, it } from "vitest";
 
 import { PUBLIC_PAGE_CSP, SIGNUP_PAGE_CSP, setPublicPageCsp } from "../src/lib/csp";

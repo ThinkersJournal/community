@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `SecurityCounterDO`'s tables (security-alerting spec §2.4). Every table with a
  * composite key is `WITHOUT ROWID` (R6). One addition to the spec's illustrative

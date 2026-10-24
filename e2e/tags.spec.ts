@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * e2e Tags spine (M2.4c Task 9) — the end-to-end proof that a freeform tag
  * carried through the editor actually reaches every reader-facing surface:

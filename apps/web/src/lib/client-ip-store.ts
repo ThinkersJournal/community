@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Carries the real browser IP from the Astro middleware (which sees the
  * incoming request's `CF-Connecting-IP`) to `apiFetch` (which has only a

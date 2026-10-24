@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * NOTIFICATION WIRE TYPES (M2.3a) + the read-time collapsing helper, shared by
  * both Workers. `NotificationItem`/`NotificationsPage` are viewer-scoped (the

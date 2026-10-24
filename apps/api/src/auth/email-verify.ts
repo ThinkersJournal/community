@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Email-verification tokens + the Postmark send for the `api` Worker.
  *

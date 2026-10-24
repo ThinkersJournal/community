@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage A, section 4b (files larger than 512 px, non-EXIF): names the fixtures over the d>10 (quality >= 80) and d>16 bars per config, lists quality <= 49 files ('never sent'), and prints min/median/p95/max for quality >= 50. Inferred from the code; the write-up does not name this script.
 # INPUTS: no arguments; reads /o/results.jsonl (the output mount of the pass 1 container, written by sweep.py).
 # EFFECTS: reads one file and prints to stdout; writes nothing.

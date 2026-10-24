@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `POST /auth/reset-password` — redeem a token from `forgot-password.ts` for
  * a new, chosen password (#70).

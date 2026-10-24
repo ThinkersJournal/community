@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE PER-POST LIVE SPINE, END TO END (M2.3b-live's final task) — two tabs on
  * the SAME post, one acts (comments, reacts, edits, deletes), the other sees

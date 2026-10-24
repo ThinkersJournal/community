@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 6 teardown (write-up sections 6 'Teardown' and 10): stops the tunnel and reads back that no cloudflared, strace or inotifywait processes and no listeners
 #   remain in the distro.
 # INPUTS: SPIKE_PASS2 (this pass2 directory, to find lib.sh) and SPIKE_DIR (via lib.sh); state from t6a.sh: /srv/work/t6/cf.pid, ino.pid, cf_strace.pid, cf.log. Runs

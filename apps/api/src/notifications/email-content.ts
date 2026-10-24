@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Render a recipient's collapsed notifications into a Postmark email body (M2.3c).
  * Reuses the SAME shared copy helpers as the bell (notificationLabel/Href) so

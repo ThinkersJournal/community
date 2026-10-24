@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The admin gate. Returns an `AdminIdentity`, or a `Response` the caller must
  * return unchanged — the same shape as `runMutatingPipeline`.

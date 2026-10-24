@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage B, section 5 first row, causes (1) and (2): path-rule variants A-F (order of 'path none *' versus allow for '-' / fd:*) and module-allow variants G-H (lower-case versus UPPER-CASE coder names), each tested with stdin to stdout, fd:0 to fd:3, a file-write attempt and a read-by-path. By its content; the write-up does not name this script.
 # INPUTS: no arguments. Container mounts seen in the scripts: /fix = fixtures, /s = the scripts directory, /o = output. Reads /s/pol/prod.xml and /fix/set/p05.jpg; runs magick with MAGICK_CONFIGURE_PATH=/tmp/p/<label>.
 # EFFECTS: writes /tmp/base.xml, /tmp/p/<label>/policy.xml, /tmp/e, /tmp/e2, /tmp/o3; the 'file-write attempt' tries to write /tmp/leak.png and then rm -f /tmp/leak.png. Prints one line per variant. No network, no strace/ptrace.

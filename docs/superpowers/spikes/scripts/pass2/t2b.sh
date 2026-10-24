@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 2 (cont.), write-up sections 2e (VmSwap and MemorySwapMax, parts A and B), 2f (SEGV and core, part C) and 2g (oversize decode, part D). These are the
 #   write-up checks matching this script; 'checklist item 6' is the PM's label and is not a term used in the write-up.
 # INPUTS: SPIKE_DIR (spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/) via lib.sh, and SPIKE_PASS2 (this pass2 directory, to find lib.sh); /srv/fix/*.

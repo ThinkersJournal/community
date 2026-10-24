@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Postgres SQLSTATE predicates — the errors this Worker treats as CLIENT errors
  * rather than crashes.

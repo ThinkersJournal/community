@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE POST-VIEW HIDE CONTROL — hydrates the hidden `[data-post-visibility-view]`
  * placeholder that ships with every cached post page ([handle]/[slug].astro),

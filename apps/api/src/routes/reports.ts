@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * REPORT — a verified member flags a post or comment for review. Idempotent by
  * construction: `INSERT ... ON CONFLICT DO NOTHING` against the migration

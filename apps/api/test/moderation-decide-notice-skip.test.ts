@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * T1 of the moderation author-notices design (#138, #135): `applyDecision`
  * reports, from the SAME row its UPDATE wrote, whether an author notice has

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 6 (write-up section 6, quick tunnel), setup half: stages cloudflared and starts the wrapper and an strace'd quick tunnel for the disk checks. LEAVES
 #   EVERYTHING RUNNING; t6b.sh analyses and t6c.sh tears down.
 # INPUTS: SPIKE_DIR (spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/) via lib.sh (reads vendor2/cloudflared-dl/cloudflared-linux-amd64) and

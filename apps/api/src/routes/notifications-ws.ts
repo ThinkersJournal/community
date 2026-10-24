@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /notifications/ws` — the authenticated WebSocket upgrade for the
  * realtime bell (M2.3b).

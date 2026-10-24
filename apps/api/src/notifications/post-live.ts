@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * PER-POST LIVE PUSH SEAM. Fires a content-free {type} nudge at a post's
  * PostLiveDO so every open post-page tab refetches. Same discipline as

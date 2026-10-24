@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Reveals a Report control for THIS post, for any signed-in verified viewer
  * (NOT owner-gated, unlike post-delete/post-visibility-view — reporting is a

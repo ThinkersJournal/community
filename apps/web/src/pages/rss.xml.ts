@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /rss.xml` — the site-wide feed of the 20 most recent published posts.
  *

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { env, evictAllDurableObjects } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 

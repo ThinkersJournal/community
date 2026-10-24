@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: unclear from the write-up; see section 6 (disk checks). Same job as t6a2.sh (re-attach strace to the wrapper) but started with setsid and without the liveness
 #   checks.
 # INPUTS: SPIKE_PASS2 (this pass2 directory, to find lib.sh) and SPIKE_DIR (via lib.sh); needs /srv/work/t6 from t6a.sh. Runs inside the throwaway distro

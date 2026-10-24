@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE PUBLISHING SPINE — the integration capstone. A real browser drives
  * signup -> verify -> PUBLISH -> the public `/@user/slug` page RENDERING the

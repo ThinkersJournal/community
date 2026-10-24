@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: unclear from the write-up; see section 6 (disk checks). It re-attaches strace to the wrapper MainPID after t6a.sh and checks that the earlier inotifywait and
 #   cloudflared are alive.
 # INPUTS: SPIKE_PASS2 (this pass2 directory, to find lib.sh) and SPIKE_DIR (via lib.sh); needs the state from t6a.sh in /srv/work/t6 (ino.pid, cf.pid). Runs inside the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for UNBLOCK. Forwards to DELETE /blocks/:id.
  * Same pattern as /api/unfollow.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE API ERROR ENVELOPE — a WIRE CONTRACT shared by the `api` Worker (which
  * emits it) and the `web` Worker (which branches on it).

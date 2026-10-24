@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE POST WIRE TYPES — shared by the `api` Worker (which emits them) and the
  * `web` Worker (which renders them).

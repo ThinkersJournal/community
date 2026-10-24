@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: C8 real-corpus measurement (2026-10-08-c8-real-corpus-measurement.md, Method): builds the corpus of benign free-licensed Commons images (CC0, public domain, CC BY, CC BY-SA, up to 3 MB, at most 8 per category over 12 categories, with a title blocklist) and the manifest. The five title exclusions in the write-up were made outside this script.
 # INPUTS: argv[1] = OUTDIR (must already exist); env SPIKE_CONTACT (required, a contact string for the Wikimedia User-Agent; the script fails with KeyError if unset). Runs on the host. Network access to Wikimedia Commons only: the API at commons.wikimedia.org plus the image URLs the API returns.
 # EFFECTS: downloads images into OUTDIR (1 s pause per file, 4 retries on failure) and OVERWRITES manifest.tsv in OUTDIR's parent directory (OUTDIR/../manifest.tsv). No docker, no strace.

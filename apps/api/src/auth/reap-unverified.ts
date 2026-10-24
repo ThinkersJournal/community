@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The daily "reaper" (handle-at-signup Task 8). Because a handle is now claimed
  * at signup, BEFORE email verification (see src/routes/signup.ts), an

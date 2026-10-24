@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Search wire types (M2.4a). Anonymous /public/search returns one page of either
  * posts or people (the tab the caller asked for), offset-paginated with a

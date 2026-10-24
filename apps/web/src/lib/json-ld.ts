@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Serialize data for a `<script type="application/ld+json">` block.
  *

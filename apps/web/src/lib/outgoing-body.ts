@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The `body` (JSON) / `rawBody` (passthrough) merge for `apiFetch` — pulled out
  * of src/lib/api.ts and given its own test corpus for the same reason

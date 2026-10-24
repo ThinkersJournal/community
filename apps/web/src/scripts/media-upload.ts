@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE ONE ISLAND on new-post.astro. Everything else on that page is a plain
  * form POST; a file is the one thing that cannot reach the server without JS.

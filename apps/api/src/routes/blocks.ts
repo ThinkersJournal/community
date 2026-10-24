@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BLOCK / UNBLOCK — interaction-control between two users. This task only
  * writes/removes the `blocks` row and tears down the relationship's follow

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /health/security-ledger` (security-alerting spec §2.6 R2). Reads ONE KV
  * key, `security-ledger:ok`, which the ledger's alarm writes first on every run.

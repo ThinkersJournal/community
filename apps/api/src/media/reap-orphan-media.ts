@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The daily orphan-media reclaimer (content-deletion + media-reclamation,
  * Task 4). Media has NO foreign key to posts — the only link between a

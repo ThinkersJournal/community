@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for REACTION REMOVE. Same pattern as /api/react:
  * forwards HttpOnly cookie + browser Origin + double-submit CSRF over the

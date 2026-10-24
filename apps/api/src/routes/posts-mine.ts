@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The author's OWN posts, beyond a single one by id (routes/posts.ts):
  *

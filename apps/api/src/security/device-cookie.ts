@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The device cookie on the api's response path (security-alerting spec §4.1).
  * A well-formed `__Host-tj_device` (dev/CI: `tj_device_dev`) is reused; anything

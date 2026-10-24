@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE REPORT CONTROL — a small reusable island wiring a "Report" button that
  * reveals an inline reason picker (mirrors comments.ts's Reply/Edit

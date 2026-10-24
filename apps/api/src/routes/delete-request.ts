@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * #50 Q4 — a barred user's way to ask for deletion (CireSnave: "can we provide
  * them the ability to dispute their ban and offer the ability to request

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { DISPUTE_EMAIL } from "./contact";
 /**
  * Wire types + the one cross-Worker constant for the Cloudflare Access-gated

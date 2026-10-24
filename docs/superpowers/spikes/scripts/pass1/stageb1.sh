@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage B part 1, section 5 (labels B0-B5 in the script): the design policy as written (FAIL), the working policy under stdin/fd pipelines, disk 0 / map 0 / memory limits on a 50 MP decode, -list resource, the ignored policy 'time' key, forced resource-error shapes, gif/webp frame [0] from stdin, and the single-pass clone with rgb:fd:3.
 # INPUTS: no arguments. Container mounts seen in the scripts: /fix = fixtures, /s = the scripts directory, /o = output. Reads /s/pol/{prod,prod2,open}.xml and fixtures under /fix/set; needs /usr/bin/time.
 # EFFECTS: installs policy variants under /tmp/pol/<name>; generates /fix/big/s_50mp.png and s_50mp.jpg (7071x7071, under the 'open' policy with 8GiB limits) if absent; writes /tmp/out.raw, err.txt, tm.txt, fd3.raw, o.raw, o.webp, wide.png. The disk-0 tests expect no temp files. No network, no strace/ptrace.

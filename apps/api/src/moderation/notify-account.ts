@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Tell a user an action was taken on their ACCOUNT (spec §5, §7).
  *

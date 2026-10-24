@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: nothing itself; it is the test wrapper (harness only, not the product) that Tasks 1-4, 6 and 7 exercise (write-up section 1): body -> memfd -> one magick run
 #   -> framed result; any stderr or non-zero exit is a 422.
 # INPUTS: runs inside the distro as the tj-wrapper.service process (fd 3 from the socket when LISTEN_FDS=1, else binds 127.0.0.1:$PORT, default 8088). Env: MAX_BODY,

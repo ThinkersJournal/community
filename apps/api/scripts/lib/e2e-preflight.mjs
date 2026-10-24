@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * PURE LOGIC of the e2e preflight (#84), split from `scripts/e2e-preflight.mjs`
  * so a test can drive it with a fake ledger query and no Postgres.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * ⚠️ ASSERT ON THE PARSED TREE, NEVER A SUBSTRING.
  *

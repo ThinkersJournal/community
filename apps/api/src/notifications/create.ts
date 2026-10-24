@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE NOTIFICATION WRITE SEAM (M2.3a) + REALTIME PUSH (M2.3b). The ONLY place a
  * notification row is born. Called AFTER the triggering write commits, on the

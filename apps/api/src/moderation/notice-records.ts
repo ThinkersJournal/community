@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * #57 Q9 — keep what a moderation notice actually said, for a bounded period.
  *

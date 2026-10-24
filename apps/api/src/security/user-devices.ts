@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `UserSecurityDO`'s device list and notice tables (security-alerting spec §4.1,
  * §4.4). Synchronous functions over the DO's SQLite, so `UserSecurityDO` can run

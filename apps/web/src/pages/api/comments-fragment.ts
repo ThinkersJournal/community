@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER read hop for the LIVE comment-window reconcile (M2.3b-live). When a
  * "comment" nudge arrives over `/api/posts-live`, the client cannot render

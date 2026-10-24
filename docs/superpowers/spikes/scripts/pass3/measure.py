@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: C8 real-corpus measurement (2026-10-08-c8-real-corpus-measurement.md, Method and Result): runs each corpus file through the scan-frame pipeline (alpha off, sRGB, sample:offset=0 sample to 512x512 only when a side exceeds 512, 8-bit rgb) and reports reference PDQ quality; output columns file fmt w h native_le512 quality status.
 # INPUTS: argv[1] = corpus directory (the write-up says it was mounted read-only into a throwaway container with --network none). Needs magick and pdqtool on PATH; the script sets no MAGICK_CONFIGURE_PATH, so the container's default policy applies.
 # EFFECTS: writes /tmp/q.raw (overwritten per file) and prints TSV rows to stdout. No network, no strace/ptrace.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE M0 ACCEPTANCE TEST: a real browser drives signup -> verify -> post across
  * BOTH Workers, against real Postgres and real workerd.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `SecurityLedgerDO` — decides (security-alerting spec §2.6). One instance,
  * `ledger`. It receives only threshold crossings, never raw events, so a flood

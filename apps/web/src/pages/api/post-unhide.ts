@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for POST unhide (#61 follow-up / #73). Same
  * pattern as /api/post-delete and /api/post-hide: forwards HttpOnly cookie +

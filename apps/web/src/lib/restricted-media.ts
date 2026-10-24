@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Rewrites public CDN image URLs in rendered post HTML to the restricted-media
  * proxy (`/api/media-restricted`), for the ONE case they stop being fetchable

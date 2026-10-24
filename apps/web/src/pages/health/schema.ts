@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /health/schema?migration=<name>` — the PUBLIC proxy to the api's
  * migration-applied readout (#116, the deploy-time migration gate, shape A).

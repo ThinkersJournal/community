@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `POST /media-upload` — the same-origin proxy the editor uploads through.
  *

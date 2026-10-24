@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 4 (write-up section 4, C7): the per-file sweep whose output t4.sh compares (status, shortened sha256 of scan frame and of stored WebP, WebP length).
 #   Usage: sweep.py PORT DIR OUT.
 # INPUTS: arguments PORT, DIR (every regular file in it is POSTed to 127.0.0.1:PORT) and OUT; no env vars. Runs inside the distro.

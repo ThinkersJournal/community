@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage B, section 5 'Proof step 1, syscall trace': scans strace -f -y logs and flags any write-capable open, memfd_create (unless allowed), filesystem mutation, shared writable mmap, or write to anything other than pipes, sockets, /dev/null (and the memfd when allowed).
 # INPUTS: argv[1:] = strace trace files; env ALLOW_MEMFD=1 counts memfd_create and writes to /memfd: targets as allowed. Ran inside the container, called by stageb2.sh.
 # EFFECTS: reads the traces and prints one summary line plus up to 6 violations; exits 1 when there is any violation; writes nothing. It does not run strace itself.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Magic-byte type sniffing for uploaded images — an ALLOWLIST of exactly four
  * formats.

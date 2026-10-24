@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * #50 Q2 — what the login page tells a banned or suspended user.
  *

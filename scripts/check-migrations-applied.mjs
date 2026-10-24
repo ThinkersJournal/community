@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE DEPLOY-TIME MIGRATION GATE (#116, shape A) — run as the FIRST step of
  * each Worker's Cloudflare Workers Builds build command, so code that depends

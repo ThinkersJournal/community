@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage A, write-up section 4 (2026-10-08-imagemagick-pdq-spike.md): by reading the code, it condenses sweep.py results into the Hamming-distance tables of 4a-4c (per-config min/median/p95/max, counts over the d>10 and d>16 bars, small-image, EXIF and alpha cases). The write-up does not name this script.
 # INPUTS: argv[1] = results JSONL produced by sweep.py; needs numpy. No container-specific paths; the write-up does not say where it ran.
 # EFFECTS: reads one file and prints tables to stdout; writes nothing.

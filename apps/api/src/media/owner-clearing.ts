@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Media ownership records on anonymisation (design:
  * docs/superpowers/specs/2026-10-16-media-ownership-records-design.md).

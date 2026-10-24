@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Held subjects: one row each, versioned, capped, reported in bounded pages
  * (security-alerting spec §2.6, R1/F2/F3). Synchronous; callers run these inside

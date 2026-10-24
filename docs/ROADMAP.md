@@ -37,8 +37,11 @@ one, delete it. Re-read `git log origin/main` and `gh pr list` before relying on
 Rows from the advisory CodeRipper check (#221, `portfolio` job, run 40005620570, 2026-10-23; the check is not required):
 
 1. **version-and-changelog:** create `CHANGELOG.md` (the repo has none; the rule fails for any version).
-2. **licence:** 645 of 645 source files lack an `SPDX-License-Identifier` in their first 15 lines. Write a script that adds the header
-   to the files `git ls-files` lists (not a disk walk), idempotent, and run it once; mind CRLF and `.astro` frontmatter.
+2. **licence:** DONE in the SPDX PR (0.1.73): `scripts/add-spdx-headers.mjs` (idempotent; `--check` lists what is missing) added
+   `SPDX-License-Identifier: MIT OR Apache-2.0` to 643 files. The 2 wrangler-generated `worker-configuration.d.ts` files stay headerless on
+   purpose (Apache-2.0 only, not ours to relicense per LICENSE.md section 1, rewritten by `wrangler types`), so CodeRipper keeps
+   reporting 2: waive them with an `[[allow]]` (reason and owner) in `.coderipper.toml`, a follow-up row. Run `--check` before merging a
+   PR that adds source files.
 3. **SEC-002: no action, verdict 2026-10-23.** The 3 gitleaks `generic-api-key` hits are test fixtures, not secrets:
    `new-post-page.test.ts:531` and `editor-prefill.test.ts:14` are the RFC 4122 sample UUID `0f8fad5b-d9cb-469f-a165-70867728950e`
    (36 chars) used as an idempotency key; `moderation-notice-outbox-drain.test.ts:29` is base64url of the literal `foobar_BAZ-123?ABC`

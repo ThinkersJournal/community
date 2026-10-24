@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The ONE regex that finds a media reference inside stored markdown.
  *

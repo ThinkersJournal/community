@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Account-holder notices (security-alerting spec §4): the spec's §4.1 block
  * followed by its §4.2 block, verbatim. PR 1 shipped only `PostmarkOutcome` and

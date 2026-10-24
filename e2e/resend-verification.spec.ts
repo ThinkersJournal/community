@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE REVOCATION-COOKIE E2E for `POST /auth/resend-verification` (M1 Task 10).
  *

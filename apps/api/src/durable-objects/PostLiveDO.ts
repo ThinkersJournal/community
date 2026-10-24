@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `PostLiveDO` — a per-post WebSocket relay, one Durable Object instance per
  * post (addressed via `getByName(postId)`). Holds hibernating WebSocket

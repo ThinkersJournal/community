@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Prefill the CREATE form of new-post.astro from the URL fragment (design
  * 2026-10-13, section 4; route A agreed with the CodeRipper lane 2026-10-12):

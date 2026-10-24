@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api hop that streams a RESTRICTED media object (#61 / #73) back
  * to the browser — the author viewing their own hidden post's images. See

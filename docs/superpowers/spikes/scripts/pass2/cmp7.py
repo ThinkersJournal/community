@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 4 (write-up section 4, C7 table rows 'two simultaneous containers' and 'container vs distro unit'): compares sweep outputs. KNOWN ISSUE, not fixed: the
 #   'webp differ' comparisons index field 3 of the status-stripped record, which is webp_len, not the WebP hash (field 2).
 # INPUTS: no arguments or env vars; reads, relative to the current directory, c7/ctr1.set.txt, c7/ctr1.big.txt, c7/ctr2.set.txt, c7/ctr2.big.txt and c7_distro_run1.txt.

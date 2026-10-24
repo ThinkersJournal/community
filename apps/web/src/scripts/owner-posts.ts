@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE PROFILE OWNER'S HIDDEN/DRAFT POSTS — #78 item 2, the other half of
  * CireSnave's ruling: "posts hidden by the user should still be visible to

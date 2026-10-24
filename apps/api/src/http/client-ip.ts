@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The client's real IP, for rate limiters and audit trails.
  *

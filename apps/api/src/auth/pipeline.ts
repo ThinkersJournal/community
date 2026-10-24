@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The MUTATING-REQUEST PIPELINE (M0, Task 16) — the one composition every
  * non-GET, session-bearing route runs before its handler sees a request, plus

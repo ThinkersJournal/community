@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage B, section 5 (no-disk / stdin handling): runs one ImageMagick decode with stdin given as a seekable regular file, an anonymous pipe, or a memfd, to show that pipe stdin spools to disk and file or memfd stdin does not. It is the helper driven by stageb2.sh and stageb3.sh.
 # INPUTS: argv: MODE (file|pipe|memfd) INPUT CODER POLDIR TMPDIR [extra magick args]. Sets MAGICK_CONFIGURE_PATH=POLDIR, MAGICK_TEMPORARY_PATH and TMPDIR=TMPDIR, HOME=/nonexistent. Ran inside the container (policy dirs under /tmp/pol or /s/pol).
 # EFFECTS: runs one magick (<coder>:fd:0 to rgb:fd:1, 512x512 sample) with captured output and prints one summary line. memfd mode creates an in-RAM memfd. Pipe mode deliberately reproduces the hazard: ImageMagick spools the input to a magick-* file in TMPDIR (or the cwd if TMPDIR does not exist) before the policy blocks the re-open.

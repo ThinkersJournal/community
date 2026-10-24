@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The zod input schemas for the report/block WRITES. Mirrors the pattern in
  * engagement-write.ts (one-target refine) and social.ts (single-field uuid

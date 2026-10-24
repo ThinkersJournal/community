@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import type { Client } from "pg";
 
 import { releaseReservedEmail } from "../auth/reserved-email";

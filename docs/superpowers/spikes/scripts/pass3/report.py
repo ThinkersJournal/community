@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: C8 real-corpus measurement (2026-10-08-c8-real-corpus-measurement.md, Result and per-category sections): turns measure.tsv and manifest.tsv into the markdown report (share of quality <= 49, Wilson 95% interval, quality percentiles, per-category table). Some narrative lines in it are fixed text, not computed.
 # INPUTS: argv[1] = root directory containing manifest.tsv and out/measure.tsv; argv[2] = output markdown path. Pure file processing; the write-up does not say where it ran.
 # EFFECTS: reads the two TSV files and writes the markdown report to argv[2] (overwrites it). No network.

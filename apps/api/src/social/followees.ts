@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE FOLLOWEE-GRAPH SEAM. Every feed read routes its "whose posts?" question
  * through this one function — now cache-aside over KV (followee-cache.ts) with a

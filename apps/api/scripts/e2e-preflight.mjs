@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // E2E PREFLIGHT (#84): run FIRST in the first Playwright webServer command, before
 // the web build and any `wrangler dev`, so an unmigrated local dev database fails in
 // seconds with the fix named instead of hanging until the webServer timeout.

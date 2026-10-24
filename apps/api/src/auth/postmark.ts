@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The generic Postmark transport (M2.3c). Extracted from email-verify.ts so both
  * the verification email (stream "outbound") and notification email (stream

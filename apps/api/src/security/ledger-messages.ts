@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The ledger's message builders (security-alerting spec §3.2). Pure apart from
  * reading counts through `LedgerStore`; every message is bounded and carries

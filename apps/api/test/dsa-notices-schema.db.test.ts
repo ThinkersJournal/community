@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { Client } from "pg";
 import { afterEach, beforeAll, afterAll, describe, expect, it } from "vitest";
 

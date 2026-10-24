@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `SecurityLedgerDO`'s tables (security-alerting spec §2.6, "Storage and
  * retention"). Additions to the spec's illustrative DDL (§8: not executed), each

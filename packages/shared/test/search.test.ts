@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { describe, expect, it } from "vitest";
 import { SEARCH_TYPES, SEARCH_PAGE_SIZE, SEARCH_Q_MIN, SEARCH_Q_MAX, SEARCH_MAX_OFFSET } from "../src";
 

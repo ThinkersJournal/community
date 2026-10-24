@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { fileURLToPath } from "node:url";
 
 import { runner } from "node-pg-migrate";

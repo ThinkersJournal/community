@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for FOLLOW. Same pattern as /media-upload: the
  * island fetches this same-origin endpoint, which forwards the HttpOnly session

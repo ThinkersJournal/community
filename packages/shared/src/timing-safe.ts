@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Constant-time string comparison that leaks neither WHERE two strings differ
  * nor HOW LONG either one is.

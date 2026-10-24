@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for `GET /posts` (#78) — every one of the
  * caller's own posts, any status. Same read-hop shape as api/me.ts:

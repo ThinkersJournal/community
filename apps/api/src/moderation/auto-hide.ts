@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * AUTO-HIDE — when a single post/comment draws >= AUTO_HIDE_REPORTER_THRESHOLD
  * distinct reporters within the last 24h, it is hidden pending review (design

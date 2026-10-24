@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * T3 of the moderation author-notices design (#56): an AUTO-HIDE tells the
  * author, once, that their content is hidden pending review.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Advance the caller's BADGE watermark (M2.3c). Opening the bell calls this
  * instead of marking everything read: seen_at drives the unread badge, read_at

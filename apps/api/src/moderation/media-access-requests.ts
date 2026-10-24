@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The two-person grant for fetching legally-held media (#61 / CireSnave's
  * ruling on #26: "should likely require multiple hands authorizing access").

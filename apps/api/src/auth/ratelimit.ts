@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Brute-force defense for the `api` Worker's signup/login flows, backed by
  * Cloudflare's rate-limiting bindings (`SIGNUP_LIMITER` / `LOGIN_LIMITER`, each

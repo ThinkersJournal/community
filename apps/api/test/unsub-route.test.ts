@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterAll, describe, expect, it } from "vitest";
 import worker from "../src";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Pure SQL strings for /public/search (M2.4a).
  *

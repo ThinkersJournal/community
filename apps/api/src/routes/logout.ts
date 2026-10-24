@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `POST /auth/logout` and `POST /auth/logout-all` — end a session (or, for
  * the latter, EVERY session belonging to its user).

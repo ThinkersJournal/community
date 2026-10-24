@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The web Worker's half of security counting (security-alerting spec §2.2 item
  * 4). The purge route is the web Worker's only `security:` source; its failures

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * One log shape for every security-relevant refusal, on BOTH Workers: a failed
  * authentication (wrong password, bad reset token, wrong purge secret) and every

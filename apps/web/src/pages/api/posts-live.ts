@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api WebSocket upgrade proxy (M2.3b) — per-post live channel.
  *

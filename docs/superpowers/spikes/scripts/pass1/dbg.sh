@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage B, section 5 first row ('Design policy.xml as first written: FAIL'): removes one policy domain at a time from pol/prod.xml to find which rules break a stdin decode. By its content; the write-up does not name this script.
 # INPUTS: no arguments. Container mounts seen in the scripts: /fix = fixtures, /s = the scripts directory, /o = output. Reads /s/pol/prod.xml and /fix/set/p05.jpg; runs magick with MAGICK_CONFIGURE_PATH=/tmp/p/<label>.
 # EFFECTS: writes /tmp/p/<label>/policy.xml, /tmp/*.xml variants and /tmp/e (stderr capture); prints one line per variant. No network, no strace/ptrace.

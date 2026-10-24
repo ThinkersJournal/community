@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE TURNSTILE DEPLOY-BUILD GUARD (#89 follow-up).
  *

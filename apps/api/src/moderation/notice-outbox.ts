@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The moderation notice OUTBOX drain and purge (notice outbox design, sections
  * 5-7; nothing here depends on the kind: the body is rendered at enqueue

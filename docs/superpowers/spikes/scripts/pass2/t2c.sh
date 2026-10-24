@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 2 (cont.), write-up sections 2e (MemorySwapMax control, rerun with --pipe), 2f (dmesg evidence that the kernel invokes the core pipe handler even with
 #   LimitCORE=0) and 2g (400 MP highly compressed PNG; 50 MP under MemoryMax=200M, who got killed). Matches t2b.sh parts B, C, D; 'checklist item 6' is the PM's label,
 #   not a write-up term.

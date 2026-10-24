@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THREADED COMMENTS — the write side. Path/depth are DERIVED HERE, never
  * client-supplied: parent is looked up (same post, not tombstoned, depth < 8)
