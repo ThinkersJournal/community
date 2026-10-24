@@ -21,7 +21,17 @@ import { withClient } from "../db/client";
 import type { AutoHideResult } from "./auto-hide";
 import type { DecisionKind } from "./decide";
 
-import { APPEAL_WINDOW_DAYS, DISPUTE_CONTACT_LINE, GUIDELINES_PATH, GUIDELINES_VERSION, REDRESS_SENTENCE } from "@thinkersjournal/shared";
+import {
+  APPEAL_WINDOW_DAYS,
+  CONTRACTUAL_GROUND_LABELS,
+  DISPUTE_CONTACT_LINE,
+  GUIDELINES_PATH,
+  GUIDELINES_VERSION,
+  LEGAL_GROUND_LABELS,
+  REDRESS_SENTENCE,
+  type ContractualGround,
+  type LegalGround,
+} from "@thinkersjournal/shared";
 
 export interface ModerationNotice {
   readonly decision: DecisionKind;
@@ -29,6 +39,9 @@ export interface ModerationNotice {
   readonly subject: "post" | "comment";
   readonly postTitle: string;
   readonly reason: string;
+  /** #57 Art. 17: the grounds the decision cites. Rendered on an adverse decision only, never on a restore. */
+  readonly legalGround?: LegalGround;
+  readonly contractualGround?: ContractualGround;
   /** #113 plan B. Omitted when the mint failed or the decision is `restore` — never rendered for a restore. */
   readonly appealUrl?: string;
 }
@@ -90,6 +103,14 @@ export interface RenderedNotice {
   readonly htmlBody: string;
 }
 
+/** One sentence per ground the decision cites (none, one or both). */
+function groundSentences(notice: ModerationNotice): string[] {
+  const out: string[] = [];
+  if (notice.legalGround !== undefined) out.push(`Legal ground: ${LEGAL_GROUND_LABELS[notice.legalGround]}.`);
+  if (notice.contractualGround !== undefined) out.push(`Contractual ground: ${CONTRACTUAL_GROUND_LABELS[notice.contractualGround]}.`);
+  return out;
+}
+
 /**
  * Render the author's decision notice. PURE: no I/O, no clock.
  *
@@ -126,6 +147,12 @@ ${REDRESS_SENTENCE}
 ` : "";
   const redressHtml = adverse ? `<p>${escapeHtml(REDRESS_SENTENCE)}</p>` : "";
 
+  // #57 Art. 17: the grounds cited, one line each, between the reason and the Guidelines link.
+  const groundLines = adverse ? groundSentences(notice) : [];
+  const groundsText = groundLines.map((l) => `
+${l}`).join("");
+  const groundsHtml = groundLines.map((l) => `<p>${escapeHtml(l)}</p>`).join("");
+
   // Only a lead that names the Guidelines (keep_hidden / remove) links to them.
   const guidelines = guidelinesLine();
   const namesGuidelines = lead.includes("Community Guidelines");
@@ -145,9 +172,9 @@ ${contentLine}
 Reason given by the reviewer:
 
 ${notice.reason}
-${guidelinesText}${redressText}${appealTextLine}
+${groundsText}${guidelinesText}${redressText}${appealTextLine}
 ${DISPUTE_CONTACT_LINE}`,
-    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>${guidelinesHtml}${redressHtml}${appealHtmlLine}<p>${escapeHtml(DISPUTE_CONTACT_LINE)}</p>`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p><strong>Reason given by the reviewer:</strong></p><p>${escapeHtml(notice.reason)}</p>${groundsHtml}${guidelinesHtml}${redressHtml}${appealHtmlLine}<p>${escapeHtml(DISPUTE_CONTACT_LINE)}</p>`,
   };
 }
 

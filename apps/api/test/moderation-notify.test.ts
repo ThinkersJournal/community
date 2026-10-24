@@ -4,7 +4,15 @@ import { env } from "cloudflare:test";
 
 import { escapeHtml } from "../src/auth/email-verify";
 import { renderModerationNotice, sendModerationNotice } from "../src/moderation/notify-author";
-import { DISPUTE_CONTACT_LINE, DISPUTE_EMAIL } from "@thinkersjournal/shared";
+import {
+  CONTRACTUAL_GROUNDS,
+  CONTRACTUAL_GROUND_LABELS,
+  DISPUTE_CONTACT_LINE,
+  DISPUTE_EMAIL,
+  LEGAL_GROUNDS,
+  LEGAL_GROUND_LABELS,
+  REDRESS_SENTENCE,
+} from "@thinkersjournal/shared";
 
 /**
  * Helper to capture sends with full request body inspection
@@ -473,5 +481,48 @@ describe("dispute contact line (notice outbox F4)", () => {
 
   it("a restore of never-hidden content renders nothing at all (null), so nothing is sent or queued", () => {
     expect(renderModerationNotice({ ...base, decision: "restore", wasHidden: false })).toBeNull();
+  });
+});
+
+// #57 Art. 17: the grounds a decision cites are shown to the author.
+describe("grounds in the author notice (#57 Art. 17)", () => {
+  const base = { subject: "post", postTitle: "T", reason: "r" } as const;
+
+  it("an adverse decision shows each cited ground, in text and html, between the reason and the redress line", () => {
+    const r = renderModerationNotice({
+      ...base,
+      decision: "remove",
+      wasHidden: false,
+      legalGround: "copyright_infringement",
+      contractualGround: "guidelines_ip",
+    })!;
+    expect(r.textBody).toContain("Legal ground: copyright infringement.");
+    expect(r.textBody).toContain("Contractual ground: Community Guidelines: intellectual property.");
+    expect(r.htmlBody).toContain("<p>Legal ground: copyright infringement.</p>");
+    expect(r.textBody.indexOf("Legal ground")).toBeGreaterThan(r.textBody.indexOf("Reason given by the reviewer"));
+    expect(r.textBody.indexOf("Legal ground")).toBeLessThan(r.textBody.indexOf(REDRESS_SENTENCE));
+  });
+
+  it("each ground is independent, and none cited renders no ground line (control: the notice itself rendered)", () => {
+    const only = renderModerationNotice({ ...base, decision: "keep_hidden", wasHidden: true, contractualGround: "guidelines_spam" })!;
+    expect(only.textBody).toContain("Contractual ground: Community Guidelines: spam.");
+    expect(only.textBody).not.toContain("Legal ground");
+    const none = renderModerationNotice({ ...base, decision: "keep_hidden", wasHidden: true })!;
+    expect(none.subject).toBe("Your content remains hidden after review");
+    expect(none.textBody).not.toMatch(/ground:/);
+  });
+
+  it("a restore never renders a ground, even when a caller passes one", () => {
+    const r = renderModerationNotice({ ...base, decision: "restore", wasHidden: true, legalGround: "csam" })!;
+    expect(r.subject).toBe("Your content has been restored");
+    expect(r.textBody).not.toMatch(/ground:/);
+  });
+
+  it("every ground has a label, and no label names a report, notice or reporter (#57 Q2)", () => {
+    for (const g of LEGAL_GROUNDS) expect(LEGAL_GROUND_LABELS[g], g).toMatch(/\S/);
+    for (const g of CONTRACTUAL_GROUNDS) expect(CONTRACTUAL_GROUND_LABELS[g], g).toMatch(/\S/);
+    for (const label of [...Object.values(LEGAL_GROUND_LABELS), ...Object.values(CONTRACTUAL_GROUND_LABELS)]) {
+      expect(label).not.toMatch(/report|notice|notif|complain|flag/i);
+    }
   });
 });
