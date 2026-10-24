@@ -1,6 +1,6 @@
 {
   // Pool test project: type-checks the workerd tests (health, password).
-  // `@cloudflare/vitest-pool-workers/types` declares the `cloudflare:test`
+  // `@cloudflare/vitest-plugin/types` declares the `cloudflare:test`
   // module (env, createExecutionContext, waitOnExecutionContext, ...). Runtime
   // globals + `Cloudflare.Env` come from `../src/worker-configuration.d.ts`.
   //
@@ -10,7 +10,7 @@
   // instead.
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "types": ["@cloudflare/vitest-pool-workers/types"]
+    "types": ["@cloudflare/vitest-plugin/types"]
   },
   "include": [
     "./**/*.ts",

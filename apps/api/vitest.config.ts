@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { configDefaults, defineConfig } from "vitest/config";
 
 // Two `pg` transitive deps ship an ESM entry that the pool's module-fallback
