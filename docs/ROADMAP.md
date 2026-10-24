@@ -36,7 +36,7 @@ one, delete it. Re-read `git log origin/main` and `gh pr list` before relying on
 
 Rows from the advisory CodeRipper check (#221, `portfolio` job, run 40005620570, 2026-10-23; the check is not required):
 
-1. **version-and-changelog:** create `CHANGELOG.md` (the repo has none; the rule fails for any version).
+1. **version-and-changelog:** DONE in the changelog PR (0.1.72); keep `CHANGELOG.md` current with every version.
 2. **licence:** 645 of 645 source files lack an `SPDX-License-Identifier` in their first 15 lines. Write a script that adds the header
    to the files `git ls-files` lists (not a disk walk), idempotent, and run it once; mind CRLF and `.astro` frontmatter.
 3. **SEC-002: no action, verdict 2026-10-23.** The 3 gitleaks `generic-api-key` hits are test fixtures, not secrets:
