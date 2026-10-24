@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 2 (write-up section 2, table of cases): no-disk proof against the unit. Usage: t2.sh CASE, CASE one of base, ro, neg_pipe, neg_spill, neg_probe,
 #   belt_spill (the last four are negative controls that are supposed to be flagged).
 # INPUTS: SPIKE_DIR (spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/) via lib.sh, and SPIKE_PASS2 (this pass2 directory, to find lib.sh); argument

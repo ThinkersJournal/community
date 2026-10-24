@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `POST /api/turnstile-signal` — the countable client-side failure signal
  * for the Turnstile widget (PM task, 2026-09-24, following the #89

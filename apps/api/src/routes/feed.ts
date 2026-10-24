@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE HOME FEED — pull-on-read, reverse-chronological, keyset-paginated. Per
  * viewer, so ALWAYS no-store and NEVER edge-cacheable (Cookie is not in the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Section 3 'Fixtures': searches the Wikimedia Commons API for candidate files and prints title, URL, size, licence and categories as JSON, the input that download.py uses to pick CC0 photos. Inferred from the code; the write-up does not name this script.
 # INPUTS: argv[1:] = Commons search queries. Network access to commons.wikimedia.org (w/api.php) only. The write-up does not say whether it ran in the container.
 # EFFECTS: network reads only; prints one JSON array to stdout; writes no files. Sends User-Agent 'tj-spike/1.0 (fixture research; contact via repo owner)'.

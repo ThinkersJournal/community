@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `hiddenReason` — computed inline, in SQL, from the SAME `moderation_actions`
  * log author-hide.ts's gate reads, filtered to the SAME visibility-action

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * #113 plan B — the moderators' appeal list and its resolution. Same Access
  * trust domain and inline-checkOrigin-then-requireAdmin shape as

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { anonymiseExpiredAccounts } from "./auth/anonymise-accounts";
 import { reapUnverifiedAccounts } from "./auth/reap-unverified";
 import { recordDbProbe } from "./health/probe";

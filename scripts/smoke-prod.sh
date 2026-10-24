@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # Post-deploy smoke check against the REAL production URL — not a local build,
 # not the Playwright e2e suite (which only ever tests a build artifact and
 # stayed green all night while production 404s went undetected).

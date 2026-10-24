@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { describe, expect, it } from "vitest";
 
 import { classify, networkKey, shardFor, SHARDS_PER_KIND, SIGNAL_RULES } from "../src/security-signals";

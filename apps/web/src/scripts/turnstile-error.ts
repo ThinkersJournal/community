@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Turnstile error/timeout UX (PM task, 2026-09-24, following the #89
  * outage-that-wasn't). Shared by signup.astro and forgot-password.astro —

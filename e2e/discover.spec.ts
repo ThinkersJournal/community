@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { expect, test } from "@playwright/test";
 
 import { publishPost, signUpAndVerify, uniqueHandle } from "./helpers";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import type { Client } from "pg";
 // `pg` is CommonJS; under `nodejs_compat` the robust interop form is the default
 // import (`module.exports`) with the constructor read off it as `pg.Client`.

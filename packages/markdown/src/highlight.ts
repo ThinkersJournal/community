@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * ⚠️ createHighlighterCore + the JAVASCRIPT REGEX ENGINE — NO WASM AT ALL.
  *

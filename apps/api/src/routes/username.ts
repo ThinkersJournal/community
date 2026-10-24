@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE VIEWER'S OWN PROFILE STATE. Handle selection itself now happens ONCE, at
  * signup (see apps/api/src/routes/signup.ts) — there is no more post-signup

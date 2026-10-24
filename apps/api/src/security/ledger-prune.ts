@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The ledger's prune step (security-alerting spec §2.6 step 7, F3): delete
  * aged-out covered `held` rows, expired cooldowns and refs, and old day rows, in

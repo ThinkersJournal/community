@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * REACTION TOGGLES — idempotent by construction, both directions:
  * on = INSERT … ON CONFLICT (reactions_target_unique) DO NOTHING; off = an

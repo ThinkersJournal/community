@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE HIDE/UNHIDE ISLAND — hydrates the `[data-post-visibility]` control on
  * the editor page (new-post.astro). Unlike post-delete.ts's island, this

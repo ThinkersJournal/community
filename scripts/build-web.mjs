@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Build the `web` Worker, and CLEAN UP AFTER THE BUILD. This is `apps/web`'s
  * `build` script — always go through it, never call `astro build` directly.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: unclear from the write-up; see section 1 (it only prints the last 10 minutes of the tj-wrapper.service journal, cut to 120 characters per line).
 # INPUTS: none (no env vars or arguments); run inside the throwaway distro as root.
 # EFFECTS: read-only (journalctl); writes nothing.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER read hop for the nav auth slot. Forwards the session cookie to the api
  * and reports whether the viewer is signed in (+ their handle and a CSRF token

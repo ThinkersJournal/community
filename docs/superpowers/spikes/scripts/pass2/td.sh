@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: the distro-side teardown readings of write-up sections 6 and 10 (no tj-*/tjspike2-* units, no TCP listeners, no cloudflared/inotifywait/strace/wrapper/magick
 #   processes). The write-up does not say that this exact script produced its numbers.
 # INPUTS: none (no env vars or arguments); run inside the throwaway distro.

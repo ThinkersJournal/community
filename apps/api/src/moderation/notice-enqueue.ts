@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Render a moderation notice and INSERT it into the notice outbox, INSIDE the
  * decision's own transaction (notice outbox design, section 4). One entry

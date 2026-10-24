@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The zod input schema for `POST /notifications/read`, split out of
  * notifications.ts so that consumers of the PURE display helpers

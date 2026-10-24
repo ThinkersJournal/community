@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Typed access to `SecurityLedgerDO`'s SQLite tables (security-alerting spec
  * §2.6). Every method is synchronous, so callers can compose them inside one

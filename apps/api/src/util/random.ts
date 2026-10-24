@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * A ~64-bit random value in base36 — the uniqueness half of a generated name.
  *

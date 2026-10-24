@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `UserSecurityDO` — a per-user monotonic "security epoch" counter, one
  * Durable Object instance per user (addressed via `getByName(userId)`).

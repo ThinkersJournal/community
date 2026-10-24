@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `POST /auth/signup` — the route that composes every auth primitive built so
  * far. The ORDER of its steps is load-bearing and must not be rearranged:

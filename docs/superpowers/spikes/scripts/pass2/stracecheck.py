@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 2 (write-up section 2, 'Checker blind spot found and fixed'): the strace checker. Flags write-capable opens (the openat regex accepts strace -y output),
 #   fs mutations, shared-writable mmap and writes to anything but pipe, socket, /dev/null (and memfd with ALLOW_MEMFD=1); exits 1 on any violation.
 # INPUTS: arguments: one or more strace trace files; env ALLOW_MEMFD=1 permits memfd_create and writes to /memfd: targets. Runs inside the distro (pure text parsing).

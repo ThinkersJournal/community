@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER read hop for the reactions island. Merges two upstream reads plus a
  * CSRF fetch, mirroring /api/social's ?status= mode:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The backfill statement (spec §5, AH-5), split into its own IMPORT-FREE leaf
  * module. `test/account-legal-holds-schema.db.test.ts` runs in the Node

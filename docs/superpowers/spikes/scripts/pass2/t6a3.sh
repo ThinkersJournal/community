@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: unclear from the write-up; see section 6 (disk checks). It restarts the inotifywait watcher over /srv/cfwork /tmp /var/tmp /dev/shm and runs a touch control.
 # INPUTS: none from env; needs the state from t6a.sh in /srv/work/t6 (ino.pid, wstrace.pid, cf.pid). Does not source lib.sh. Runs inside the throwaway distro
 #   (tjspike2-systemd) as root.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER read hop for the social island. Three modes:
  *   ?status=id,id,…            → { following, viewerLoggedIn, csrfToken }  (per-viewer)

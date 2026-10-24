@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // Windows-safe migration CLI wrapper.
 //
 // pnpm/npm scripts run under cmd.exe on Windows, where `$DATABASE_URL` does NOT

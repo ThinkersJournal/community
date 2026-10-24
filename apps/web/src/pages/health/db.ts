@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /health/db` — the PUBLIC, pollable readout of the DB-reachability probe.
  *

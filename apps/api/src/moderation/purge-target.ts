@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The edge-cache tags a moderation visibility change must purge.
  *

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /auth/csrf` — hand the authenticated caller the CSRF token their session
  * must echo in `X-CSRF-Token` on every mutating request (src/auth/csrf.ts).

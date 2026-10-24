@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { USERNAME_PATTERN } from "@thinkersjournal/shared";
 import { RESERVED_USERNAMES } from "./reserved-usernames";
 import type { Client } from "pg";

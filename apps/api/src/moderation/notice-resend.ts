@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The admin "undelivered notices" list and RESEND (notice outbox design,
  * section 5, "A decision that is never delivered"; PR 3).

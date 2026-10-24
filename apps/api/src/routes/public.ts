@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * ANONYMOUS public reads — the only api routes the `web` Worker calls WITHOUT
  * forwarding the browser's cookie, and the ones whose output the edge caches.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The published Community Guidelines (docs/legal/community-guidelines.md): the
  * version stamp and the public path, in ONE place so the page, the notice

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage A, section 4c 'Small images (both sides <= 512)': hashing the native-size frame (no resize) against the reference for the d_small*, e_o*_400x300 and d_anim* fixtures (write-up: d = 0 on all 12 such fixtures).
 # INPUTS: no arguments. Container mounts seen in the scripts: /fix = fixtures, /s = the scripts directory, /o = output. Globs /fix/set/d_small*, /fix/set/e_o*_400x300.jpg, /fix/set/d_anim*; needs magick and pdqtool on PATH.
 # EFFECTS: writes /tmp/n.raw (overwritten per file) and prints one line per fixture. No network, no strace/ptrace.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Astro middleware: the ONLY place that reads `CF-Connecting-IP` on this
  * side. Everything downstream (every page, `apiFetch`) sees the IP only via

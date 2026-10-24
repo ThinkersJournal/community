@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for COMMENT DELETE. Same pattern as /api/comment:
  * forwards HttpOnly cookie + browser Origin + double-submit CSRF over the

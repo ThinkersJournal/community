@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The ONE way this Worker builds a non-2xx response. See the envelope contract
  * in packages/shared/src/errors.ts.

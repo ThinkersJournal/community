@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: nothing itself; builds the Task 3 marker input (write-up section 3): a JPEG with the marker in EXIF ImageDescription and Artist plus a COM segment. Also used
 #   by t6a.sh for the tunnel marker.
 # INPUTS: arguments in.jpg out.jpg MARKER (no env vars); in.jpg must be a JPEG. Runs inside the distro.

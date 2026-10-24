@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The browser's device cookie, and ONLY that cookie, for the api's login,
  * signup and reset calls (security-alerting spec §4.1; final review C-1).

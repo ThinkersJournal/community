@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * FOLLOW / UNFOLLOW — the write side of the social graph. Idempotent by
  * construction: the edge is `INSERT ... ON CONFLICT DO NOTHING` and the delete

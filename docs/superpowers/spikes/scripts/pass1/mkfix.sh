@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Section 3 'Fixtures': derives and generates the non-photo fixtures from the downloaded photos (format variants, animated GIF/WebP, EXIF orientation 1-8 JPEGs at 400x300 and 3000x2000, synthetic images, and the 8-bit reference copy /fix/ref/d_rgb16.png).
 # INPUTS: no arguments. Container mounts seen in the scripts: /fix = fixtures, /s = the scripts directory, /o = output. Reads /fix/orig/p*.jpg (from download.py) and calls /s/tagexif.py; sets MAGICK_TEMPORARY_PATH=/tmp; uses the default ImageMagick policy (no MAGICK_CONFIGURE_PATH set); has set -eu.
 # EFFECTS: creates /fix/set (copies of p*.jpg plus d_*, e_o*, s_* files) and /fix/ref/d_rgb16.png; writes and removes its own temporary _base_*.png and _p.png in /fix/set; prints the file count. No network, no strace/ptrace.

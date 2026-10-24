@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for SIGN OUT. Forwards the session cookie + Origin +
  * CSRF token to POST /auth/logout, propagates the cleared session cookie back.

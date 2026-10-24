@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * ANONYMOUS social reads. Like src/routes/public.ts these read NO session and
  * are viewer-independent — BUT unlike the post/profile reads they are NOT

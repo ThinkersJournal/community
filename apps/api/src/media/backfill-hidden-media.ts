@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The ONE-OFF backfill for #61: every post/comment that was ALREADY hidden or
  * removed before this shipped has its media sitting on the public bucket,

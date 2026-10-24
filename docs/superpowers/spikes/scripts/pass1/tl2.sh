@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage B, section 5 row 'Exit status on time-limit or damaged input': -regard-warnings does not change the exit code on a time-limited decode or a truncated JPEG, and benign photos give empty stderr. By its content; the write-up does not name this script.
 # INPUTS: no arguments. Container mounts seen in the scripts: /fix = fixtures, /s = the scripts directory, /o = output. Reads /s/pol/prod2.xml, /fix/big/s_50mp.png and s_50mp.jpg, /fix/set/p01-p06.jpg; exports MAGICK_CONFIGURE_PATH=/tmp/pol/prod2.
 # EFFECTS: writes /tmp/pol/prod2, /tmp/o.raw, /tmp/e and /tmp/trunc.jpg (the first 2,000,000 bytes of p05.jpg); prints exit codes and byte counts. No network, no strace/ptrace.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { SecurityEventBuffer, setSecurityEventObserver } from "@thinkersjournal/shared";

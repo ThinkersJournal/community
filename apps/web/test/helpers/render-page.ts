@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { experimental_AstroContainer as AstroContainer } from "astro/container";
 
 import { env } from "./cloudflare-workers-stub";

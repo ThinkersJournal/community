@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 // Writes the dummy PURGE_SECRET for the AUXILIARY web Worker of the single-process
 // `ledger` e2e project (#156), as `<web build>/server/.dev.vars`.
 //

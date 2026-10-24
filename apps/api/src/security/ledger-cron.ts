@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The cron's one ledger call (security-alerting spec §2.6 m-d): if the ledger's
  * alarm stopped, the next two-minute tick sets one. Idempotent; never throws,

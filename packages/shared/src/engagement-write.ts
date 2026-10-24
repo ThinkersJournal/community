@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The zod input schemas for comment/reaction WRITES, split out of
  * engagement.ts so consumers of the PURE display constants (REACTION_KINDS,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Mint the per-purpose links for one action's notice (#113 plan B). Called by
  * the notice outbox INSIDE the action's transaction (notice-enqueue.ts).

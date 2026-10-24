@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * CSRF defense for the `api` Worker, enforced on every non-GET request before
  * it touches the DB (wired into the request pipeline elsewhere). Two

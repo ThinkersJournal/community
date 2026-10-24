@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { describe, expect, it } from "vitest";
 
 import { SEARCH_MAX_OFFSET, SEARCH_PAGE_SIZE } from "@thinkersjournal/shared";

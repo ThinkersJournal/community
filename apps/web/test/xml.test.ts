@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { describe, expect, it } from "vitest";
 
@@ -161,7 +162,7 @@ describe("buildRssXml — well-formedness", () => {
   it("is valid XML with zero posts", () => {
     const xml = buildRssXml([]);
     expect(XMLValidator.validate(xml)).toBe(true);
-    expect(xml).toContain(`<title>${FEED_TITLE}</title>`.replace("'", "&apos;"));
+    expect(xml).toContain(`<title>${FEED_TITLE}</title>`.replaceAll("'", "&apos;"));
   });
 
   it("carries the channel's atom:link self-reference and one <item> per post", () => {

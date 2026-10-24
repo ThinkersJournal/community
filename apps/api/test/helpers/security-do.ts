@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, expect, vi, type MockInstance } from "vitest";
 

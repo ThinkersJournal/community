@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for MARK-SEEN (M2.3c). Advances the caller's badge
  * watermark; same forward-cookie+Origin+CSRF shape as notifications-read. No

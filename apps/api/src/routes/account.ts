@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Account deletion (board item 59 = Option C): request / cancel / status.
  *

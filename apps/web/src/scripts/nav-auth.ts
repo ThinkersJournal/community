@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Upgrades the nav's [data-auth-slot] for a signed-in viewer. The slot ships a
  * logged-OUT default in SSR (Sign in / Sign up) — cache-safe and functional

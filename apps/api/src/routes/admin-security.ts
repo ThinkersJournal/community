@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The security admin routes (security-alerting spec §2.6 N6, R4, F2). Same
  * trust domain as routes/admin.ts: Cloudflare Access via `requireAdmin`. Both

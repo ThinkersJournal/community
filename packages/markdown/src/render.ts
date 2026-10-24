@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE MARKDOWN RENDER PIPELINE — the highest-risk surface in the platform.
  * User-authored Markdown, rendered in workerd (NO DOM), EDGE-CACHED, and

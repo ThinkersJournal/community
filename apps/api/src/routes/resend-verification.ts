@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `POST /auth/resend-verification` — mint and mail a fresh verification token.
  *

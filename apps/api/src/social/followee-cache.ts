@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * KV cache for a viewer's followee-id list — the read side of the follow graph
  * behind getFolloweeIds (social/followees.ts). Cache-aside: read here, fall back

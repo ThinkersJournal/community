@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * ENGAGEMENT WIRE TYPES (M2.2) — comments + reactions, shared by both Workers.
  * Same viewer-scoping discipline as posts.ts: `CommentRow`/`CommentsPage`/

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage B, section 5 rows 'time policy key enforces: FAIL' and 'Exit status on time-limit: FAIL (important)': a 50 MP decode with MAGICK_TIME_LIMIT=1/2 and -limit time 1 exits 0 with garbage output. By its content; the write-up does not name this script.
 # INPUTS: no arguments. Container mounts seen in the scripts: /fix = fixtures, /s = the scripts directory, /o = output. Reads /s/pol/prod2.xml, /fix/big/s_50mp.png and s_50mp.jpg; exports MAGICK_CONFIGURE_PATH=/tmp/pol/prod2.
 # EFFECTS: writes /tmp/pol/prod2, /tmp/o.raw (a 786,432-byte or larger raw output, overwritten) and /tmp/e; prints exit codes and byte counts. No network, no strace/ptrace.

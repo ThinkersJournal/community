@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `POST /dsa-notice` — DSA Art. 16 notice-and-action intake (spec §8,
  * decision #6, part of #113).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE POST-DELETE ISLAND — hydrates the hidden `[data-post-delete]` placeholder
  * that ships with every cached post page ([handle]/[slug].astro). The

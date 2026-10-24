@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Account legal holds (account-legal-hold spec, migration 0022).
  *

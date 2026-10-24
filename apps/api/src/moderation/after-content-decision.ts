@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The post-commit steps of a content decision, shared by `handleAdminDecision`
  * (routes/admin.ts) and an appeal grant that restores content

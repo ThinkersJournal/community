@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: nothing on its own; stages the inputs for Tasks 1-7 (write-up section 1: wrapper at /opt/tj, policy at /opt/tj/magick/policy.xml, unit files) and prints
 #   sha256 of wrapper.py and the policy, cgroup controllers, swap, core_pattern and suid_dumpable for the record.
 # INPUTS: SPIKE_DIR (spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/); reads pass2/{wrapper,client,mkmarker}.py, pass2/units/*, pass1/pol/prod2.xml,

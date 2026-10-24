@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage A, section 4a (real photos p01-p27 only, alpha off): per-config table, worst file per config, reference quality of the p files, and the Sample0 pixel-equality list behind the frame check. Inferred from the code; the write-up does not name this script.
 # INPUTS: argv[1] = results JSONL produced by sweep.py; needs numpy. No container-specific paths; the write-up does not say where it ran.
 # EFFECTS: reads one file and prints to stdout; writes nothing.

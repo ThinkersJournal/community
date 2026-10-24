@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { checkOrigin } from "../auth/csrf";
 import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
 import { BEGIN_BOUNDED_TX, withClient } from "../db/client";

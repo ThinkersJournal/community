@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The email OUTBOX drain (M2.3c). One pass per disposition ('instant' every 2 min,
  * 'digest' daily). Single-flight via the email_drain_lock lease row (NOT a session

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Cloudflare Turnstile server-side verification for the `api` Worker's signup
  * flow (bot defense). The client solves a Turnstile challenge and hands us its

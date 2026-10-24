@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE ENGAGEMENT SPINE — a real browser drives comment + reaction life-cycles
  * across both Workers: author A publishes; reader B comments, replies, edits,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The api Worker's dispatch primitives. Deliberately ~40 lines and dependency-
  * free: a router is not where this project spends its complexity budget.

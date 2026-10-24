@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /health/build` — the `api` Worker's OWN build identity, independent
  * of `web`'s (endpoint/UI audit follow-up, 2026-09-24; CireSnave: "get it

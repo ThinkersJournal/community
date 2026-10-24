@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Notice outbox PR 3 — the moderators' undelivered-notices list and resend.
  * Same Access trust domain and inline-checkOrigin-then-requireAdmin shape as

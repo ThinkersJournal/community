@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { __resetJwksCacheForTests, verifyAccessJwt } from "../src/admin/access-jwt";

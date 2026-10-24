@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BLOCK-ENFORCEMENT PREDICATE (design doc
  * docs/superpowers/specs/2026-09-02-m4-report-block-design.md §7): "is ACTOR

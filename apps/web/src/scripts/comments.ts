@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE COMMENTS ISLAND — hydrates per-viewer comment affordances onto the CACHED
  * post page: the comment form (or the right gate affordance), Reply/Edit/Delete

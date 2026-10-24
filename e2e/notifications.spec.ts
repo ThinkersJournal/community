@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE NOTIFICATION SPINE — a real browser drives an engagement on one user's
  * content and asserts the OTHER user's nav bell reflects it, across both Workers

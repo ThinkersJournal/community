@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { describe, expect, it } from "vitest";
 
 import { CLIENT_IP_HEADER } from "@thinkersjournal/shared";

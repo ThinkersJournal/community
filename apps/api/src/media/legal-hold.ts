@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Per-OBJECT legal holds (issue #61 / CireSnave's ruling on #26): "a post
  * hidden or removed for legal reasons must not be fetchable by anyone other

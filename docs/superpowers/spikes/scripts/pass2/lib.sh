@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: nothing by itself; shared helpers (sync_files, start_case, drive_all) sourced by t2, t2b, t2c, t3, t4, t6a, t6a2, t6a4, t6b, t6c and t7.
 # INPUTS: sourced inside the throwaway distro as root; needs SPIKE_DIR (the shell aborts if unset: spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/).
 #   Sets SP, OUT, W=/srv/work, SIX, SC, DROP.

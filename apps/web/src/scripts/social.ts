@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE SOCIAL ISLAND — hydrates viewer-specific social UI onto CACHED, anonymous
  * pages (profile, authors). The page HTML is shared across all viewers, so this

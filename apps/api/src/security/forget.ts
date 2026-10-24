@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The reapers' security clean-up for one account (security-alerting spec §4.5,
  * §2.6 N7, m-e): forget its browsers, end its pending notices as

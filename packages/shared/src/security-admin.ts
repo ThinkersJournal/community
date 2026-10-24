@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import type { SecurityAlertSignal, SecurityAlertSubject, SignalClass } from "./security-alert";
 
 /** `GET /admin/security/account-ref/:ref` (security-alerting spec §2.6 N6). Admin-only. */

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for the notification LIST (M2.3a). Same pattern as
  * /api/social's authed reads: forwards the HttpOnly session cookie over the

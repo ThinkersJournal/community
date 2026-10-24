@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Tell a DSA notice's REPORTER the outcome of the decision they reported
  * (spec §8, DSA Art. 17-style statement of reasons to the notifier).

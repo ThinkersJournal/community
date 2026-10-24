@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * GET /posts/live?postId=<uuid> — the UNAUTHENTICATED per-post live channel.
  * Origin-checked (WS carries cookies, bypasses CORS) but no session: the post is

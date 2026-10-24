@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Per-purpose, single-use links carried by a moderation notice (#113 plan B).
  *

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for REPORT. Forwards to POST /reports, whose
  * response is already a bare 201 in every outcome (new report, duplicate,

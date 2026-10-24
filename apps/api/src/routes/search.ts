@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * ANONYMOUS SEARCH (M2.4a). A /public/* read — no session, viewer-independent,
  * HYPERDRIVE_FRESH, response no-store (the /search PAGE is short-TTL edge-cached;

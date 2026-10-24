@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { resolve } from "node:path";
 
 import { defineConfig, devices } from "@playwright/test";

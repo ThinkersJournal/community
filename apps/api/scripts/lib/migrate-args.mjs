@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * PURE argument parsing and target resolution for `apps/api/scripts/migrate.mjs`
  * (#116 fix round 2 ruling — split out so that file can run with no entry-point

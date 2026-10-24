@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import {
   createExecutionContext,
   env,
@@ -151,6 +152,7 @@ async function fetchWorker(request: Request): Promise<Response> {
  * re-commenting the file does not fail the pin; changing what it DOES will.
  */
 const DISPATCHER_BODY = indexSource
+  .replace(/^\/\/ SPDX-License-Identifier:.*$/m, "")
   .replace(/\/\*[\s\S]*?\*\//g, "")
   .replace(/\s+/g, " ")
   .trim();

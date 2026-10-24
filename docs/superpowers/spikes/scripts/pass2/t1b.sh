@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: unclear from the write-up; see section 1 (directive findings). It reinstalls the unit file and wrapper.py, restarts the socket and sends p05.jpg once, so it
 #   is a re-test step.
 # INPUTS: SPIKE_DIR (spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/); reads pass2/units/tj-wrapper.service, pass2/wrapper.py, /srv/work/client.py and

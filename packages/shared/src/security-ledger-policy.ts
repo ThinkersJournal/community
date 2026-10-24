@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import type { HeldEntry, SecurityAlertSignal, SignalClass } from "./security-alert";
 
 export interface ClassPolicy {

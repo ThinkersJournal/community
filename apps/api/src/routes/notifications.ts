@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * IN-APP NOTIFICATION READS (M2.3a). Every query scopes to
  * recipient_id = session.userId — that is the IDOR boundary and it lives in the

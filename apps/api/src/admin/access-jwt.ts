@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { b64urlToBytes, b64urlToJson } from "../auth/encoding";
 
 /**

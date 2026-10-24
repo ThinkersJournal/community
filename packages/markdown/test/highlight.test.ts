@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import rehypeShikiFromHighlighter from "@shikijs/rehype/core";
 import rehypeStringify from "rehype-stringify";
 import remarkParse from "remark-parse";

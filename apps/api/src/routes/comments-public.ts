@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * ANONYMOUS comment read — the post page's SSR source. Like social-public.ts:
  * viewer-independent, HYPERDRIVE_FRESH, NO cache-tag of its own — the EDGE

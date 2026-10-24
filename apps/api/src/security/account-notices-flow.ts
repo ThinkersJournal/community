@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * What login, signup and a completed reset do AFTER their response is built,
  * inside one `ctx.waitUntil` (security-alerting spec §4.1 "The flow on login").

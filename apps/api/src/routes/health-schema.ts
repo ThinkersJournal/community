@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /health/schema?migration=<name>` — the deploy-time migration gate's
  * ONLY data source (#116, shape A: CireSnave ruled no standing CI credential —

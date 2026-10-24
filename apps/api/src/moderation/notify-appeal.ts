@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The appeal-outcome notice: what the appellant is told when a moderator
  * grants or denies their appeal (#113 plan B). Moved out of

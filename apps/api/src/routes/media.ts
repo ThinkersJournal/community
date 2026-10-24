@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `POST /media` — the upload pipeline. Raw image bytes in, a CDN URL out.
  *

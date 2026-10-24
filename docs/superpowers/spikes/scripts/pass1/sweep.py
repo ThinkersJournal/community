@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage A, section 4 (hash fidelity, C6): the 28-configuration sweep (7 resizes x 2 orientation modes x 2 alpha modes) comparing reference PDQ on the original with reference PDQ core on the ImageMagick frame, producing one JSONL row per file and config (the 28 x 64 = 1792 runs).
 # INPUTS: argv[1] = fixtures dir, argv[2] = results JSONL path; env REFDIR (optional dir of alternative reference-input files, default /nonexistent so the fixture itself is used) and JOBS (threads, default 8); needs magick, pdqtool and numpy on PATH. No hard-coded container paths except /tmp; the write-up does not say where it ran.
 # EFFECTS: spawns many magick and pdqtool processes (8 threads by default); creates /tmp/sweep and writes then deletes raw frame files there; writes the results JSONL. No network, no strace/ptrace.

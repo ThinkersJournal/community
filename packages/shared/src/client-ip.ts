@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Header the `web` Worker sets, on every call over the `API` Service Binding,
  * carrying the ORIGINAL BROWSER'S IP across that hop.

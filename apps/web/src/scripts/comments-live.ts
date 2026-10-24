@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE LIVE COMMENTS CLIENT (M2.3b-live) — the centerpiece of the milestone.
  * Holds ONE WebSocket to `/api/posts-live?postId=<id>` for the open post page

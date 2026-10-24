@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { describe, expect, it } from "vitest";
 
 import { CANONICAL_ORIGIN, postUrl, profileUrl } from "../src/lib/canonical";

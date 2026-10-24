@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The ONLY way this app's admin pages talk to the api's Access-gated `/admin/*`
  * surface. A DELIBERATELY SEPARATE code path from `apiFetch` (src/lib/api.ts),

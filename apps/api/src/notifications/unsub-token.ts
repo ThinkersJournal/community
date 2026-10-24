@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Stateless HMAC unsubscribe tokens (M2.3c). token = base64url(userId) "."
  * base64url(HMAC_SHA256(userId, UNSUBSCRIBE_SIGNING_KEY)). No storage, idempotent,

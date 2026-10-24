@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Post authoring routes. The M0 stub is gone; the auth around it is unchanged.
  *

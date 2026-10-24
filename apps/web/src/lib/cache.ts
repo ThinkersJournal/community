@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * CACHEABILITY — the ONE place this app decides what the edge may hold.
  *

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Section 4c 'EXIF orientation' fixtures (8 tags x 2 sizes): inserts a minimal EXIF APP1 with the Orientation tag into a JPEG. Called by mkfix.sh. Inferred from the code; the write-up does not name this script.
 # INPUTS: argv[1] = JPEG path, argv[2] = orientation value 1-8. Ran inside the container via mkfix.sh (/s/tagexif.py).
 # EFFECTS: rewrites the given JPEG IN PLACE (adds the APP1 segment after the JFIF APP0 if present).

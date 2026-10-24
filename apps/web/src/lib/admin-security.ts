@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { HELD_ROW_CAP, type SignalClass } from "@thinkersjournal/shared";
 
 /**

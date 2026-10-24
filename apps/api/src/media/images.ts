@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The ONLY place `env.IMAGES` is touched. One module so the binding's surface is
  * in one place — and so a toolchain without a local Images simulation has a

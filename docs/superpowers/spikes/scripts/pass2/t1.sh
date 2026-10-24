@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 1 (write-up section 1; summary item 1): systemd-analyze security exposure of tj-wrapper.service, the unit properties, and the six inputs (p05.jpg,
 #   d_alpha.png, d_anim.gif, d_lossy.webp, s_50mp.png, s_50mp.jpg) returning results through the hardened unit.
 # INPUTS: SPIKE_DIR (spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/) (used for out2/ only); needs the unit already started (e.g. by start_case) and

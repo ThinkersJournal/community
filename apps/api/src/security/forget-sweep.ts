@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The nightly N7 sweep (security-alerting spec §2.6 N7, m-e; PM ruling R2-1).
  *

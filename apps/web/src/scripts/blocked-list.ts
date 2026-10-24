@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Wires each Unblock button on /settings/blocked. This page is authed +
  * server-rendered (not cached), but the CSP on public pages forbids inline

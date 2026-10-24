@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE ONE WAY an account action is applied (spec §5, #113 plan A).
  *

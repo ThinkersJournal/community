@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * A banned account's email reservation (account-legal-hold spec §4a; PM ruling B, 2026-10-01;
  * keyed by migration 0023, 2026-10-02).

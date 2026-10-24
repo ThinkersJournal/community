@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage B part 1 follow-ups, section 5: single pass with -write rgb:fd:3 inside parentheses (frame byte-identical to the separate-process frame), the policy 'time' key versus MAGICK_TIME_LIMIT and -limit time, blocked reads (path, @file, jpeg:path), and coder confusion (SVG payload to jpeg:fd:0, jpeg bytes under png:).
 # INPUTS: no arguments. Container mounts seen in the scripts: /fix = fixtures, /s = the scripts directory, /o = output. Reads /s/pol/prod2.xml, /fix/set/p05.jpg, /fix/big/s_50mp.png; exports MAGICK_CONFIGURE_PATH, MAGICK_TEMPORARY_PATH=/nonexistent, TMPDIR=/nonexistent, HOME=/nonexistent.
 # EFFECTS: writes /tmp/pol/prod2, /tmp/pol/t1, /tmp/fd3.raw, /tmp/o.webp, /tmp/two.raw, /tmp/lst.txt, /tmp/x.svg; runs a 50 MP decode several times and a 4000x4000 plasma blur. No network, no strace/ptrace.

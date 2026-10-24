@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { describe, expect, it } from "vitest";
 
 import { sniffImageFormat, SNIFF_HEADER_BYTES } from "../src/media/sniff";

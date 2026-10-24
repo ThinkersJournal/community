@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The IP part of a PER-IP rate-limit key (brute-force review 1, I1).
  *

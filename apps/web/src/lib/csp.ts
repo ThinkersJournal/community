@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The Content-Security-Policy for public, CACHED pages.
  *

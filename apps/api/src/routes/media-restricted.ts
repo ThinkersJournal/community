@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /media/restricted/:sha256` — serves media that #61's visibility hook
  * moved out of the public bucket, after re-checking (on EVERY request, never

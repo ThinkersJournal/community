@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `SecurityCounterDO` — counts security events (security-alerting spec §2.4).
  *

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE REALTIME SPINE — the WS-delivered sibling of ./notifications.spec.ts.
  * That spec proves the POLL path (M2.3a): A must navigate/reload to pick up a

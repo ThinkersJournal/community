@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: nothing itself; test client used by t1, t2*, t3, t6b, t7 and lib.sh drive_all against the wrapper. Usage: client.py PORT FILE [runs] [outprefix].
 # INPUTS: arguments PORT and FILE (an image path), optional runs and an output file path (the 4th argument); connects to 127.0.0.1:PORT only. Runs inside the distro. No
 #   env vars.

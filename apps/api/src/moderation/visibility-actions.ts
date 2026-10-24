@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The `moderation_actions` action kinds that actually change or explain a
  * post/comment's VISIBILITY — the ONE list `author-hide.ts`'s gate and

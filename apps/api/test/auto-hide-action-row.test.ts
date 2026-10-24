@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * DSA Art. 17 / #57 (CireSnave Q4=B): an AUTO-HIDE appends a `moderation_actions`
  * row — actor 'system', kind `content_auto_hide` — and that row is an AUDIT

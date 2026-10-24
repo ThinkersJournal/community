@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * THE PURGE HOP'S DECISION LOGIC — who may invalidate our cached renders, and
  * with which tags. `src/pages/internal/purge.ts` is the route; this is what it

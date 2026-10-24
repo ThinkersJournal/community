@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { classify, SIGNAL_RULES } from "./security-signals";
 import type { CounterIncrement } from "./security-signals";
 import type { SecurityAlertSignal } from "./security-alert";

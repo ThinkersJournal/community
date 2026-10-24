@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * POST-DEPLOY SMOKE CHECK — run against a DEPLOYED, PUBLIC hostname.
  *

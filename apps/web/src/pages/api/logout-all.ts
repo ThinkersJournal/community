@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * BROWSER → api authed hop for SIGN OUT EVERYWHERE (#74 audit, batch B).
  * Same shape as /api/logout: forwards the session cookie + Origin + CSRF

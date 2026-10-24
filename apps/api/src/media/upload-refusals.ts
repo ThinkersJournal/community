@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * The durable record of a refused upload (issue #148, item 3). A refusal of
  * restricted bytes is evidence, and a `console.warn` does not outlive Workers

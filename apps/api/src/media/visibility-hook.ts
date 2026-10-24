@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Reacts to a post/comment's visibility (or legal-hold status) changing by
  * moving its referenced media between the public and restricted buckets

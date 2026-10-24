@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Notification email preferences (M2.3c). The zod schema is isolated in this
  * module — NEVER import it from notifications.ts, which the bell island bundles

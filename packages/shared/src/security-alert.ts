@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /** Every signal this design counts. §1.3's table is the source of truth. */
 export type SecurityAlertSignal =
   | "login_ip_burst"

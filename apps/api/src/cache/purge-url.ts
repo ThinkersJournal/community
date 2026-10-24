@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Purges the CDN's edge cache for specific media URLs (issue #61).
  *

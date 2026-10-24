@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 import { limiterIpKey } from "./limiter-ip-key";
 import type { SecurityAlertSignal, SignalClass } from "./security-alert";
 import type { SecurityEvent, SecurityEventCounting } from "./security-log";

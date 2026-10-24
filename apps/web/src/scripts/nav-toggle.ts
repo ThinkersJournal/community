@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Reflects the mobile nav disclosure's open/closed state to assistive tech.
  * The menu itself opens with pure CSS (checkbox-hack, zero-JS); this only

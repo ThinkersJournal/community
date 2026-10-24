@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Task 6 (write-up section 6, disk checks and marker through the tunnel): tunnel response equals a direct response; strace-check of the wrapper; cloudflared
 #   write/open classification; inotify, before/after file listings; marker hits.
 # INPUTS: SPIKE_DIR (spike work dir holding fixtures/, vendor2/, out2/, pass1/, pass2/) via lib.sh (reads out2/tunnel_out_noise16.bin and tunnel_out_marker.bin, which

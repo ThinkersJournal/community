@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Shared by test/route-protection.test.ts (default-deny) and
  * test/pipeline-barred.test.ts (issue #50): both enumerate ROUTES minus this

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * `GET /health/build` — the `web` Worker's OWN build identity. Deliberately
  * NOT a proxy to the api's `/health/build` (see api's health-build.ts) — the

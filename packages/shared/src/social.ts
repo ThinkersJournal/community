@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * SOCIAL-GRAPH WIRE TYPES — shared by the `api` Worker (which emits them) and
  * the `web` Worker (which renders/consumes them). Public reads are anonymous

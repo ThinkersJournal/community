@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 /**
  * Node stand-in for the `cloudflare:workers` virtual module, aliased in by
  * vitest.config.ts. `src/lib/api.ts` does `import { env } from "cloudflare:workers"`

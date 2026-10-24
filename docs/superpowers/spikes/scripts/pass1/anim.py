@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
 # PROVES: Stage A, section 4c 'Animated GIF/WebP frame 0': Hamming distance of frame 0 and frame 1 of d_anim.gif / d_anim.webp against stills built from p01 and p02 (the write-up reports 2 and 6 for frame 0 vs its still, 130 for frame 0 vs the other still).
 # INPUTS: no arguments. Container mounts seen in the scripts: /fix = fixtures, /s = the scripts directory, /o = output. Reads /fix/orig/p01.jpg, /fix/orig/p02.jpg, /fix/set/d_anim.gif, /fix/set/d_anim.webp; needs magick and pdqtool on PATH.
 # EFFECTS: writes /tmp/a.raw (overwritten per call) and prints one result line per animated file. No network, no strace/ptrace.
