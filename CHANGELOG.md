@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.81
+
+Refreshed HANDOFF to the post-dependency-upgrade state.
+
 ## 0.1.80
 
 Raised vitest 4.1.11 to 5.0.5 and moved `@cloudflare/vitest-pool-workers` 0.22.0 (renamed upstream, 0.23.0 is its last release and caps vitest at ^4) to its successor `@cloudflare/vitest-plugin` 1.4.7. TypeScript stays on 6.0.3: `astro check` refuses TypeScript 7.
