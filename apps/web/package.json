@@ -20,7 +20,7 @@
     "astro": "7.4.2"
   },
   "devDependencies": {
-    "@astrojs/check": "0.9.10",
+    "@astrojs/check": "0.9.12",
     "@playwright/test": "1.63.0",
     "fast-xml-parser": "5.11.2",
     "jsonc-parser": "3.3.1",

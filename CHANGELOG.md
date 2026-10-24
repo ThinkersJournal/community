@@ -7,6 +7,10 @@ All five workspace packages carry one version number. The log starts at 0.1.68; 
 
 Author decision notices now state the legal and contractual grounds a moderator cited (adverse decisions only; a restore never shows them), and ROADMAP section 3 lists rows R1-R7.
 
+## 0.1.82
+
+Raised @astrojs/check 0.9.10 to 0.9.12 and repinned the CodeRipper `portfolio.yml` workflow to 0.9.24 (ee9c3950). TypeScript stays on 6.0.3: @astrojs/check 0.9.12 still peers `typescript ^5 || ^6`.
+
 ## 0.1.81
 
 Refreshed HANDOFF to the post-dependency-upgrade state.
