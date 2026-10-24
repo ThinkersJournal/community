@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.84
+
+Spec-to-roadmap audit: ROADMAP section 7 lists the work found in the docs and not on the roadmap (S1-S29), and section 2 drops the rows that have since merged. Docs only.
+
 ## 0.1.82
 
 Raised @astrojs/check 0.9.10 to 0.9.12 and repinned the CodeRipper `portfolio.yml` workflow to 0.9.24 (ee9c3950). TypeScript stays on 6.0.3: @astrojs/check 0.9.12 still peers `typescript ^5 || ^6`.

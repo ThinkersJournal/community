@@ -1,6 +1,6 @@
 {
   "name": "@thinkersjournal/web",
-  "version": "0.1.82",
+  "version": "0.1.84",
   "private": true,
   "license": "MIT OR Apache-2.0",
   "type": "module",
