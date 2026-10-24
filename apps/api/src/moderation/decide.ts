@@ -272,6 +272,8 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
       subject: input.subject,
       postTitle: row.title,
       reason: input.reason,
+      legalGround: input.legalGround,
+      contractualGround: input.contractualGround,
       origin: input.enqueueNotice.origin,
     });
   }
