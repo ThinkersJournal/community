@@ -36,7 +36,7 @@ one, delete it. Re-read `git log origin/main` and `gh pr list` before relying on
 
 Rows from the advisory CodeRipper check (#221, `portfolio` job, run 40005620570, 2026-10-23; the check is not required):
 
-1. **version-and-changelog:** create `CHANGELOG.md` (the repo has none; the rule fails for any version).
+1. **version-and-changelog:** DONE in the changelog PR (0.1.72); keep `CHANGELOG.md` current with every version.
 2. **licence:** DONE in the SPDX PR (0.1.73): `scripts/add-spdx-headers.mjs` (idempotent; `--check` lists what is missing) added
    `SPDX-License-Identifier: MIT OR Apache-2.0` to 643 files. The 2 wrangler-generated `worker-configuration.d.ts` files stay headerless on
    purpose (Apache-2.0 only, not ours to relicense per LICENSE.md section 1, rewritten by `wrangler types`), so CodeRipper keeps
