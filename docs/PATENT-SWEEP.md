@@ -103,7 +103,7 @@ Three hits (the third, hits 39 and 40, is in pass 3 below). (The upload scan's F
 ## Pass 3 (2026-10-25): the areas pass 1 and 2 left unsearched
 Requested by the PM after pass 2. Same method: Google Patents through a web-search tool, then the independent claims of every patent returned read with `tools/patent-claims.py`. **A search that returns nothing on an idea is not a clearance**; the places where that happened are named under "Zero-hit searches".
 
-### Ideas
+### Pass 3 ideas
 A1. **Trigram fuzzy search.** `pg_trgm` `word_similarity` over posts (title and body) and profiles (handle, name, bio), a tabbed Posts/People result, offset pagination with a `hasMore` sentinel, and a 60-second untagged edge cache keyed on the query string.
 A2. **Discover feed.** Newest published posts first, keyset-paginated on a time-ordered identifier (uuidv7), anonymous and edge-cached, purged through a shared `listing` tag on publish and edit.
 A3. **Freeform tags.** Author-typed tags normalised to a case-insensitive slug, at most 5 per post, a `/tags` index ordered by published-post count, and one cache tag per tag page.
@@ -117,7 +117,7 @@ A10. **CSAM report pipeline.** On a hash match the case is filed to the national
 A11. **PDQ port.** The PDQ perceptual hash computed in the Worker, with the hashes of the eight orientations of each upload recorded on the media row.
 A12. **DSA notice flow.** Notice intake, a statement of reasons with enumerated grounds, an outcome message to the reporter, and an internal complaint route (see ideas 3 to 5 for the token and outbox parts).
 
-### Queries (source, query, date)
+### Pass 3 queries (source, query, date)
 Google Patents, 2026-10-25. Most returned ten results; all of them were read, except where listed under "Unread".
 - A1: "patent fuzzy search trigram similarity word similarity ranking posts and user profiles typo tolerant social platform"
 - A2: "patent keyset pagination time-ordered identifiers public feed of newest posts edge cached anonymous page invalidated on publish"
@@ -132,7 +132,7 @@ Google Patents, 2026-10-25. Most returned ten results; all of them were read, ex
 - A11: "patent perceptual hash of uploaded image including rotated and flipped variants matched against database of known abusive image hashes at upload time"
 - A12: "patent statement of reasons notice to user of content moderation decision ground legal or terms of service Digital Services Act redress"; "patent notice and action mechanism illegal content submitted by third party, email verified, content identified by URL resolved to stored item, reporter notified of outcome" (extended mode)
 
-### Hits (independent claims read)
+### Pass 3 hits (independent claims read)
 | # | patent | claim 1 is about / the element we lack | verdict |
 |---|---|---|---|
 | 39 | **US8380930B2** (Disney, active, adjusted exp. 2030-12-27) | A presentation layer builds a page from content objects retrieved from a content-management system, **inserts an invalidation header listing content identifiers into the page content**, a caching layer **keeps a map of identifiers to generated pages**, and when a **content editor tool** updates an object the CMS sends an **invalidation message carrying that identifier**, so the cache finds and invalidates the pages through the map. Our web Worker puts `Cache-Tag` response headers (post id, listing, tag) on cacheable pages, the CDN keeps the tag-to-page map, and the api calls the purge-by-tag API when a post is edited, published or moderated. The pattern is close. We have no "content-management system" or "editor tool" in the claim's sense (an author edits a post), the header travels in the HTTP response and not "into the page content", and the map is the CDN vendor's. | **needs-review** (idea 13 and A2, A3) |
@@ -156,7 +156,7 @@ Google Patents, 2026-10-25. Most returned ten results; all of them were read, ex
 
 **Unread at the end of pass 3:** US8646072, US9503502 and WO2007076150A3. All three were read in pass 4 under the corrected kind codes (see below). Result lists also named arXiv papers and USPTO publication-only numbers (US11977588, US11321401, US12067047, US9721017, US9356574) that came up for the URL-fragment and hash queries; none was a candidate by title and none was read.
 
-### Zero-hit searches (not clearances)
+### Pass 3 zero-hit searches (not clearances)
 No patent was returned for these ideas, so nothing in this file says they are free of patents:
 - **A5**: an unread check at send time combined with a signed one-click unsubscribe link.
 - **A6**: scanning post markdown for image references before reclaiming media.
@@ -170,7 +170,7 @@ No patent was returned for these ideas, so nothing in this file says they are fr
 
 
 ## Pass 4 (2026-10-25): the rest of the product, and the last unread hits
-### Ideas
+### Pass 4 ideas
 A13. **Password reset.** A single-use reset link whose token is 32 random bytes, stored only as a SHA-256 hash, consumed by one atomic compare-and-set UPDATE; the same shape as the action tokens (idea 3).
 A14. **Notification bell.** A bell with an unread badge fed by a per-user Durable Object, a dropdown list, and read-on-click only (opening the bell marks nothing read).
 A15. **Comments and reactions.** Threaded comments stored as a materialized-path tree (the ancestor id chain, depth-capped), read in path order with a keyset cursor and a fixed page size, a tombstone row when a comment is deleted, a "gone post" placeholder in notifications, and four reaction tones that each user toggles independently on posts and comments.
@@ -178,7 +178,7 @@ A16. **Follows.** Follow and unfollow, follower and following lists with keyset 
 A17. **RSS and sitemap.** An RSS feed and a sitemap index built from the listing of published posts.
 A18. **Admin gate.** Admin routes sit behind Cloudflare Access; the application verifies the signed JWT header and checks the principal against an admin list (`admin/access-jwt.ts`, `admin/require-admin.ts`).
 
-### Queries (source, query, date)
+### Pass 4 queries (source, query, date)
 Google Patents, 2026-10-25.
 - A13: "patent password reset link single-use token hashed in database expires consumed by atomic update email scanner prefetch does not consume"
 - A14: "patent notification bell icon dropdown list of notifications mark as read on click unread badge web page"
@@ -187,7 +187,7 @@ Google Patents, 2026-10-25.
 - A17: "patent generating RSS feed and XML sitemap index of published posts for search engines paginated"
 - A18: "patent administrative interface access gated by identity-aware proxy signed JWT header verified by application admin principal allowlist"
 
-### Hits (independent claims read)
+### Pass 4 hits (independent claims read)
 | # | patent | claim 1 is about / the element we lack | verdict |
 |---|---|---|---|
 | 57 | US9355233B1, WO2006044151A2, US20120066752A1, US8078881B1, US8819810B1, US9600656B1, US7325064B2 | Password reset by chained hash functions after a **password-expiry notice**; one-time-password protocols; per-provider access codes; **choosing among reset procedures** by user preference; domain credentials; lock-manager tokens. Ours is a stored hash of a random token, consumed once. | clear (A13) |
@@ -201,7 +201,7 @@ Google Patents, 2026-10-25.
 | 64 | US20200228484A1, US8135392B2, JP2016535366A, CN103135967B, US7734704B2, US20160028677A1, US10140107B2, US5835084A, WO2000014686A1 | Mark-as-unread, badges on application icons, notification bars, lock-screen unread, redisplaying instant messages, mobile email notices, task-bar overlays, read/unread list styling, animated tickers. No bell dropdown fed by a per-user stateful object. | clear (A14) |
 | 65 | US8646072B1, US9503502B1, WO2007076150A2 (family of US7725492B2, hit 26), US10432633B1, US9876798B1 | Trusted-seal misuse detection; **identifying a third-party content provider** from feedback about malicious content; social timelines; a rights holder asking a content platform to **send a notice to another platform** (the opposite direction from ours: we receive notices). These were the unread items of passes 2 and 3; the earlier fetches failed on the wrong kind code. | clear (ideas 5 and A12) |
 
-### Zero-hit searches (not clearances)
+### Pass 4 zero-hit searches (not clearances)
 - **A13**: a scanner-safe reset link (peek never consumes). The results cover hashing and procedures, not link scanners.
 - **A14**: a bell icon that opens a dropdown of notifications. The results cover badges and mark-as-unread.
 - **A15**: an author hiding comments on their own post, a gone-post placeholder and cascaded notifications, and a tombstone that keeps replies of a deleted comment. Only the generic hide/delete patents and US11921797B2 (above) came back.
