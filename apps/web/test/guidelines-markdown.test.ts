@@ -33,10 +33,14 @@ describe("published Community Guidelines: public-text guard", () => {
 
   it("does not promise what the code does not do (see 2026-10-15-guidelines-intentions.md)", () => {
     expect(md).not.toMatch(/NCMEC|CSAM/);
-    expect(md).not.toMatch(/terminat/i);
+    // S27-1 (CireSnave 2026-10-25): the terminate route exists (#212), so the "immediate termination" sentence is true and published.
     expect(md).not.toMatch(/reclaim/i);
     expect(md).not.toMatch(/machine-scored|scoring/i);
     expect(md).not.toMatch(/bad faith/i);
+  });
+
+  it("promises immediate termination for severe violations, which the terminate route does", () => {
+    expect(md).toContain("result in immediate termination of the");
   });
 
   it("links to no unpublished document", () => {

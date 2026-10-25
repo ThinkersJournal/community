@@ -53,6 +53,8 @@ legal decision:
     designated agent** — a notice sent to the published address would not reach the
     registered one — so these two must never be allowed to drift apart again. If the
     contact ever changes, the Copyright Office record and this file change *together*.
+  - **Registered 2026-09-05; renew by 2029-09-05** (CireSnave, via the PM, 2026-10-25;
+    the PM keeps the reminder). The renewal date was missing from this file until now.
   - The **registration number is recorded here for renewal tracking only** (the
     registration must be renewed every three years) and is deliberately **not published
     in the policy** — §512(c)(3) does not require it in the notice-and-takedown text.
