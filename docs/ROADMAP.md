@@ -50,6 +50,9 @@ Rows (PM ruling 2026-10-24: R1-R6 as listed, R2 first). Open issues: #114 (NCMEC
 | R5 | `APPEAL_WINDOW_DAYS` is 30 but DSA Art. 20(1) needs complaint access for at least 6 months | held by the PM |
 | R6 | SafeImage adoption steps 3-5 and the workerd proof (cold start, memory) | waiting: package not published (decision Q8, board 247) |
 | R7 | Show the cited grounds on the appeal page (`AppealTarget`, `routes/appeals.ts`, `appeal.astro`) so both surfaces state the same grounds | done (0.1.87): `AppealTarget` carries both grounds, the appeal page renders them |
+| R8 | Patent sweep, the areas not yet searched (theming, editor UI, Postmark integration, deploy pipeline): at most 1 Google Patents query per minute, back off on a 503 and say so in the record; read claims with `tools/patent-claims.py`; areas not searched stay listed as unsearched in `docs/PATENT-SWEEP.md` (PM 2026-10-25) | open, unblocked |
+| R9 | DMCA takedown, counter-notice and repeat-infringer flow (S2): one-page design note first, then intake, hide and notify, counter-notice, restore timer, strike count; numbers are placeholders for the attorney | open (CireSnave ruled "build it", 2026-10-25) |
+| R10 | Terms acceptance record at signup (S6): checkbox, stored account/time/Terms version, one migration CireSnave applies; the minimum age (13 in the drafts, 16 in design decision 15) must be settled first | open (CireSnave ruled yes); age waits on CireSnave |
 
 Closed since the last refresh: #57 (outbox, #197 and follow-ups), #78, #148, #156, #39, #40, #59, #60, #65, #85
 (already fixed by #182), #84 (unmigrated local dev DB; #218 adds an e2e preflight) and #74 (audit refreshed in
@@ -110,11 +113,11 @@ Each claim is from one read of the code at that ref, so re-check before relying 
 | Row | Work and source | Status |
 |---|---|---|
 | S1 | **M3 Reference engine** (connectors, snapshot capture, @-picker, refresh sweep; design spec §4, README tagline). No code, no migration, and no row until now | open; **CC**: is it still launch scope, or is launch Pillar A plus M4? |
-| S2 | **DMCA takedown, counter-notice and repeat-infringer process** (design spec M4; `dmca-policy.md` promises it). Only a legal-hold category exists in code | open; **CC**: build it, or run it by hand through the designated agent |
+| S2 | **DMCA takedown, counter-notice and repeat-infringer process** (design spec M4; `dmca-policy.md` promises it). Only a legal-hold category exists in code | open; ruled 2026-10-25: build it (row R9) |
 | S3 | **README Deploy gate dashboard items**: WAF block on `/internal/*`, WAF rate-limit on public reads, CDN Cache Rule, `nosniff` Transform Rule, CSAM Scanning Tool on the CDN zone, Postmark and purge log alerts, `workers_dev` off on the web Worker (the api has it) | held by CireSnave; **CC**: which are done |
 | S4 | App-level rate limit on the other `/public/*` reads (`posts`, `recent`, `discover`, `tag(s)`, `authors`, `comments`); search (#117) and profile are done | open |
 | S5 | Sitemap index and real pagination of `/public/recent` (`RECENT_MAX = 1000`, `public.ts:71`) | open, post-launch |
-| S6 | Signup 16+ attestation and a Terms-acceptance record at signup (design spec decision 15; the Terms say account creation is agreement, and nothing records it) | open; **CC** |
+| S6 | Signup 16+ attestation and a Terms-acceptance record at signup (design spec decision 15; the Terms say account creation is agreement, and nothing records it) | open; ruled yes 2026-10-25 (row R10); age still **CC** |
 | S7 | Privacy policy omits what the code does: the device cookie and known-device list (#201), the client-country header, the notice outbox and stored notice text (365 days), permanent original-upload hashes with the owner cleared (#161, #207); alerting spec D5 | open; **CC** (legal text) |
 | S8 | Alerting phase 1b and 2: set `ACCOUNT_NOTICES_ENABLED` to 1 (needs `DEVICE_HASH_KEY` in production), the alert transport and `SECURITY_ALERT_*` secrets, flip `SECURITY_ALERTS_ENABLED`, review a week of `security-alert:` log lines (D3), accept the held-row caps (D6) | held by CireSnave (board 131, D1) |
 | S9 | External uptime monitor and the one-time paging proof (`docs/ops/uptime-monitor-spec.md`; alerting D2) | held by CireSnave (signup) |
