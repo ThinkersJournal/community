@@ -269,7 +269,7 @@ solved Turnstile token before it looks at the password
 (`docs/superpowers/specs/2026-10-11-login-turnstile-challenge-design.md`).
 `LOGIN_CHALLENGE` in `apps/api/wrangler.jsonc` `vars` is its switch: `"1"` is on,
 anything else is off, and off means the soft limiters are not even consumed, so
-the route is exactly what it was before the challenge. **It ships `"0"`.** It is
+the route is exactly what it was before the challenge. **It ships `"1"` (on since S10, CireSnave 2026-10-25).** It is
 an **api-only** change in both directions: the web Worker (which renders the
 widget) is never redeployed to flip it, and a web that is live before the api
 flag is on is harmless.

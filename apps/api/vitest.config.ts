@@ -157,6 +157,10 @@ export default defineConfig({
                 // A SECRET (see src/auth/turnstile.ts). Cloudflare's published
                 // dummy "always passes" secret.
                 TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
+                // S10: wrangler.jsonc ships LOGIN_CHALLENGE "1", but the suite keeps it OFF by
+                // default so unrelated login tests never meet a challenge (3 attempts a minute
+                // is the soft threshold). test/login-challenge.test.ts turns it on itself.
+                LOGIN_CHALLENGE: "0",
                 // A SECRET (see src/auth/email-verify.ts). Never used against
                 // the real API: test/email-verify.test.ts stubs global `fetch`
                 // and asserts this exact value is sent as the Postmark header.

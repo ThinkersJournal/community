@@ -603,7 +603,7 @@ describe("LOGIN_CHALLENGE off", () => {
   // the challenge was written (this test passed against it unchanged), so what it
   // pins is "byte-for-byte today's behaviour" and not the new code's own idea of it.
   const OFF: { name: string; env: Env }[] = [
-    { name: "as shipped (\"0\")", env },
+    { name: "suite default (\"0\", vitest.config.ts)", env },
     { name: "unset", env: { ...env, LOGIN_CHALLENGE: undefined } as unknown as Env },
     { name: "\"true\"", env: { ...env, LOGIN_CHALLENGE: "true" } },
     { name: "\"on\"", env: { ...env, LOGIN_CHALLENGE: "on" } },
