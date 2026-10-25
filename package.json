@@ -1,6 +1,6 @@
 {
   "name": "thinkersjournal-community",
-  "version": "0.1.102",
+  "version": "0.1.103",
   "private": true,
   "license": "MIT OR Apache-2.0",
   "workspaces": [
