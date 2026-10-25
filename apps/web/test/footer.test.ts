@@ -36,3 +36,9 @@ describe("Footer: RSS link (S22 F8)", () => {
     expect(src()).toContain('href="/rss.xml"');
   });
 });
+
+describe("Footer: DSA notice link (S22 F7)", () => {
+  it("links the target-less notice form", () => {
+    expect(src()).toContain('href="/dsa-notice"');
+  });
+});

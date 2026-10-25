@@ -91,3 +91,25 @@ describe("BlockInput", () => {
     expect(BlockInput.safeParse({ blockedId: "nope" }).success).toBe(false);
   });
 });
+
+describe("DsaNoticeInput: contentUrl (S22 F7b)", () => {
+  const base = {
+    reason: "spam" as const,
+    statement: "s",
+    reporterName: "n",
+    reporterEmail: "a@example.com",
+    goodFaith: true as const,
+    turnstileToken: "t",
+  };
+
+  it("accepts a contentUrl as the one target", () => {
+    expect(DsaNoticeInput.safeParse({ ...base, contentUrl: "https://x.test/@a/b" }).success).toBe(true);
+  });
+
+  it("rejects contentUrl with postId, and no target at all", () => {
+    expect(
+      DsaNoticeInput.safeParse({ ...base, contentUrl: "https://x.test/@a/b", postId: crypto.randomUUID() }).success,
+    ).toBe(false);
+    expect(DsaNoticeInput.safeParse(base).success).toBe(false);
+  });
+});

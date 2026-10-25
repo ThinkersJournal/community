@@ -56,6 +56,11 @@ describe("dsa-notice.astro", () => {
   it("forwards the browser's Origin verbatim, never this app's own", () => {
     expect(dsaNoticeSource).toContain('origin: Astro.request.headers.get("Origin") ?? ""');
   });
+  it("asks for the content's address only when the link carried no target (S22 F7b)", () => {
+    expect(dsaNoticeSource).toContain('name="contentUrl"');
+    expect(dsaNoticeSource).toMatch(/postId === "" && commentId === ""/);
+    expect(dsaNoticeSource).toContain('isFieldError(response.data, "contentUrl")');
+  });
 });
 
 describe("dsa-notice/confirm.astro", () => {
