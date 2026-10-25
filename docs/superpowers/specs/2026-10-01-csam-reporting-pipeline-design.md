@@ -976,7 +976,7 @@ Who can review: any Access admin. Access to the **images** keeps #61's two-perso
 
 Plan A (#132) and plan B (#144: `applyDecisionInTx`, `afterContentDecision`) are merged; so are #126 (snapshots,
 `0021`), the account legal hold (#139: `imposeAccountHoldInTx`, holds gate the reapers, `0022`), #141 (reserved-email
-HMAC under `RESERVED_EMAIL_KEY`, `0023`) and #145 (`0025`). The next migration is **`0026`**. This work's own
+HMAC under `RESERVED_EMAIL_KEY`, `0023`) and #145 (`0025`). The next migration is **`0026`** [update 2026-10-25: 0026 and 0028 stayed unused; the last migration on main is 0038, so number this work's migrations after it, and original-upload hashes are no longer gated on CireSnave: #161 (0027) merged them]. This work's own
 prerequisites, the first tasks of its plan: the `applyAccountActionInTx` split, the shared media-key helper and the
 `fast-xml-parser` dependency. The reaper's legal-hold exclusion and the upload route's held-key refusal are already
 on main (#147, `f3533af`). Plan C (DSA) is independent.

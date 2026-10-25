@@ -6,7 +6,7 @@ The flagship of [Thinker's Journal](https://thinkersjournal.com): a public **soc
 
 > **▶ New session / new agent?** Start with **[`HANDOFF.md`](HANDOFF.md)** — the self-contained entry point (this repo's Claude memory is separate from the marketing-site project).
 
-> **Status:** **M0 (foundations) + M1 (publishing) are built** and not yet deployed; **M2** (social graph) is next. This repository is **private** and stays quiet until the launch scope (M0–M4) is complete.
+> **Status:** **M0 (foundations), M1 (publishing) and all of M2 (social graph, engagement, notifications, search, discover, tags) are built and live** at community.thinkersjournal.com (DNS cut over 2026-09-02); M4 (moderation) is in progress and gates the public launch (`docs/ROADMAP.md`). The M3 reference engine is not built. This repository is **private** and stays quiet until the launch scope is complete.
 
 ## Two pillars
 
@@ -182,8 +182,7 @@ pnpm typecheck                               # all packages
 pnpm test:e2e                                # Playwright: real browser, both Workers
 ```
 
-**Green baseline (M1)** — match these before and after any change (`HANDOFF.md` carries
-the authoritative table):
+**Green baseline (M1, historical: these counts predate M2 to M4 and are stale; CI is the authority now)** — the numbers below are what M1 shipped with:
 
 | Suite | Command | Expected |
 | --- | --- | --- |

@@ -580,12 +580,13 @@ any rollback automation.
 
 ## Current order constraint
 
-Production migrations apply in numeric order. **0001-0025, 0027 and 0029-0032 are
-already applied** (0026 and 0028 are unused numbers: PR 3's migration was
-renumbered from 0026 to 0033 after 0027 and 0029-0032 landed). **0033
-(`security_ref_resolved`) is the only one still to apply, and it goes before
-the PR 3 deploy.** Do not apply a later migration before an earlier one has
-landed.
+Production migrations apply in numeric order. **0001-0025, 0027 and 0029-0032 were
+applied** when this section was written (0026 and 0028 are unused numbers: PR 3's
+migration was renumbered from 0026 to 0033 after 0027 and 0029-0032 landed), and
+0033 (`security_ref_resolved`) was then the only one still to apply, before the
+PR 3 deploy. Migrations 0033-0038 now exist on `main`; this repository does not
+record which are applied to production, so read `GET /health/schema` before a
+deploy. Do not apply a later migration before an earlier one has landed.
 
 ## Adding a cross-script binding (web → an api Durable Object)
 

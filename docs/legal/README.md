@@ -73,7 +73,7 @@ legal decision:
   - ⚠️ **This does NOT settle `[[LEGAL_ENTITY]]`.** "Thinker's Journal" is the *service
     provider name on the DMCA registration*, which is not the same thing as the
     operating entity's legal name; that still waits on the 501(c)(3) question below.
-- `[[EFFECTIVE_DATE]]` — set at finalization. (Not for the Guidelines: its version and effective date are constants in `packages/shared/src/guidelines.ts` and a test keeps the file equal to them. The published Guidelines carry no legal-entity or contact line.)
+- `[[EFFECTIVE_DATE]]` — set at finalization. (Not for the Guidelines: its version and effective date are constants in `packages/shared/src/guidelines.ts` and a test keeps the file equal to them. The published Guidelines carry no legal-entity line; they end with a Contact section naming contact@thinkersjournal.com.)
 
 ## Grounding
 
