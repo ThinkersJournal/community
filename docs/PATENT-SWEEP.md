@@ -19,7 +19,7 @@ Process: `C:\Projects\PATENT-SWEEP-PROCESS.md` (CireSnave, board 286 item 1). Th
 13. **Tag-based edge-cache purge** on write, with stale-while-revalidate.
 14. **Editor prefill from a URL fragment** (`/new-post#cr=<base64url JSON>`), with an idempotency key carried in the payload.
 15. **Login challenge** shown after failed attempts.
-Ideas A1 to A12 (search, discover, tags, markdown, email, media reclamation, signup and sessions, the moderation queue, report and block, the CSAM report pipeline, the PDQ port, the DSA notice flow) were added in pass 3 below.
+Ideas A1 to A18 (A13 to A18 are pass 4, below; A1 to A12: search, discover, tags, markdown, email, media reclamation, signup and sessions, the moderation queue, report and block, the CSAM report pipeline, the PDQ port, the DSA notice flow) were added in pass 3 below.
 
 ## Queries (source, query, date)
 All run 2026-10-25 against Google Patents (`patents.google.com`) through a web-search tool with a domain filter, plus one run unfiltered. Patent pages were then read for status, dates and claims.
@@ -154,7 +154,7 @@ Google Patents, 2026-10-25. Most returned ten results; all of them were read, ex
 | 55 | US9031919B2, US9436810B2, US8010511B2 (hit 7), US20090144824A1, US20080120533A1, US9929995B2, US6690294B1 | Audio and video fingerprint compliance flows, attribution rules, parental-monitoring services, repairing embedded content, domain-expiry notices, traffic cameras. None is a hash-match reporting workflow with evidence access control. | clear (A10, A12) |
 | 56 | US7406195B2 (Microsoft, "Expired - Lifetime", exp. 2021-04-24), US20100008589A1, CN105260676A, US11321389B2 | Frequency-domain perceptual hashing of a signal (claim 1 is broad enough to read on a DCT-based hash like PDQ, and the patent is expired); an invariant image descriptor; a social-network privacy hash; video frame hashing. | clear (A11; expired) |
 
-**Unread, with the reason:** US8646072B2 and US9503502B2 (the fetch 404s; by title, trusted-seal detection and contextual feedback mechanisms), WO2007076150A3 (no claim text, from pass 2). Result lists also named arXiv papers and USPTO publication-only numbers (US11977588, US11321401, US12067047, US9721017, US9356574) that came up for the URL-fragment and hash queries; none was a candidate by title and none was read.
+**Unread at the end of pass 3:** US8646072, US9503502 and WO2007076150A3. All three were read in pass 4 under the corrected kind codes (see below). Result lists also named arXiv papers and USPTO publication-only numbers (US11977588, US11321401, US12067047, US9721017, US9356574) that came up for the URL-fragment and hash queries; none was a candidate by title and none was read.
 
 ### Zero-hit searches (not clearances)
 No patent was returned for these ideas, so nothing in this file says they are free of patents:
@@ -168,10 +168,54 @@ No patent was returned for these ideas, so nothing in this file says they are fr
 ## Needs review (to the PM), pass 3 additions
 3. **Hits 39 and 40, US8380930B2 (Disney, 2030) and US9648125B2 (Akamai, 2034), idea 13, A2 and A3, the tag-based edge purge.** Live in every cacheable page. The structure our code uses (identifiers in a response header, a cache that maps them to pages, an invalidation message by identifier when content is edited) is what both claims describe, and a lawyer could find that both read. The differences above are real but not large. Three points to give a lawyer if one is ever bought: both claims describe what a **CDN vendor's feature** does, and Cloudflare, not we, operates the cache; US7076608B2 (priority 2003) and US6584548B1 (priority 1999) look older than both and are the first prior art to read; and a purge-by-tag feature is offered by several CDNs, so any assertion would reach far beyond us. I recommend (a) accept, and (c) put these two on the same lawyer's list as hits 10 and 23.
 
+
+## Pass 4 (2026-10-25): the rest of the product, and the last unread hits
+### Ideas
+A13. **Password reset.** A single-use reset link whose token is 32 random bytes, stored only as a SHA-256 hash, consumed by one atomic compare-and-set UPDATE; the same shape as the action tokens (idea 3).
+A14. **Notification bell.** A bell with an unread badge fed by a per-user Durable Object, a dropdown list, and read-on-click only (opening the bell marks nothing read).
+A15. **Comments and reactions.** Threaded comments stored as a materialized-path tree (the ancestor id chain, depth-capped), read in path order with a keyset cursor and a fixed page size, a tombstone row when a comment is deleted, a "gone post" placeholder in notifications, and four reaction tones that each user toggles independently on posts and comments.
+A16. **Follows.** Follow and unfollow, follower and following lists with keyset pagination.
+A17. **RSS and sitemap.** An RSS feed and a sitemap index built from the listing of published posts.
+A18. **Admin gate.** Admin routes sit behind Cloudflare Access; the application verifies the signed JWT header and checks the principal against an admin list (`admin/access-jwt.ts`, `admin/require-admin.ts`).
+
+### Queries (source, query, date)
+Google Patents, 2026-10-25.
+- A13: "patent password reset link single-use token hashed in database expires consumed by atomic update email scanner prefetch does not consume"
+- A14: "patent notification bell icon dropdown list of notifications mark as read on click unread badge web page"
+- A15: "patent threaded comments on posts with reactions counts per emoji one reaction per user toggle social platform"; "patent comment moderation author can hide comments on own post delete cascade notifications gone post placeholder"; "patent threaded comment tree stored with materialized path ancestor id chain depth cap pagination tombstone for deleted comment keeps replies"
+- A16: "patent follow another user unfollow follower counts mutual follow social graph lists paginated followers following"
+- A17: "patent generating RSS feed and XML sitemap index of published posts for search engines paginated"
+- A18: "patent administrative interface access gated by identity-aware proxy signed JWT header verified by application admin principal allowlist"
+
+### Hits (independent claims read)
+| # | patent | claim 1 is about / the element we lack | verdict |
+|---|---|---|---|
+| 57 | US9355233B1, WO2006044151A2, US20120066752A1, US8078881B1, US8819810B1, US9600656B1, US7325064B2 | Password reset by chained hash functions after a **password-expiry notice**; one-time-password protocols; per-provider access codes; **choosing among reset procedures** by user preference; domain credentials; lock-manager tokens. Ours is a stored hash of a random token, consumed once. | clear (A13) |
+| 58 | US10871877B1 (Meta), US8918339B2 and US20140279418A1 (Meta), US10540431B2 (Microsoft), US11159458B1, US6792448B1, US20210097468A1 | Contextual reaction icons chosen from a **topic hierarchy of the post**; **paid emoji** attached to content; emoji menus inside an office-document activity feed; summarising emoji into text; chat sequencing; emoji sentiment metrics. Ours is four fixed tones toggled independently, with no payment, topic hierarchy or suggestions. | clear (A15) |
+| 59 | US20170139920A1, US9152675B2, US9639628B2, US8321463B2, US20150052087A1, US8402357B1, US8782157B1, US20130275857A1, US20150163184A1 (family of hit 52), US7194679B1 | Ranking comments by audience, score or quality; a reader-comment area added to a third-party page; binning blog comments with the same adverse element; proscribed-content filters; file review. We read comments in thread-path order and rank nothing. | clear (A15) |
+| 59a | **US11921797B2** (Atlassian, active, adjusted exp. 2041-12-03), US8522168B2, US8140983B2, US20030052066A1, US8996985B1 | Atlassian: a **thread identification string** whose portions give a comment's hierarchical position, an ordered **comment index file**, and **pagination computed from the number of content lines the comment field can show**. The shape is close to our materialized path read in path order. The pagination element is what we lack: our page size is a fixed count of 50 rows (a page may cut mid-thread and the cursor continues it), not derived from display lines. The others: parent-post copy navigators, auto-created forum threads at a comment threshold, a wire screen (matched on the word "threaded"), document comment threads with emailed links. | clear (A15), thin |
+| 60 | US9646267B1 (Google) | A follow relationship that is **disabled in the other direction until the first is made**, with **limited visibility** of the follow and omission from the followed entity's list. Our follows are public, symmetric in mechanics and show in lists. | clear (A16) |
+| 61 | US20120324004A1, US20130041860A1, US20110231296A1, US20150120717A1, US20150032504A1, US9443024B2, US20160071161A1, US9294576B2, US20130198275A1 | Analytics over a social graph: influencers, outliers, target audiences, impact, follower groups, aggregation of other services. No follow-list mechanics. | clear (A16) |
+| 62 | US20070156809A1 and US8606845B2 (RSS feed generator), US7747604B2 (dynamic sitemap), US20060161845A1, US8140482B2, US7930290B2, US9158855B2, US8037055B2 (sitemap generating client), US8868691B2, US7818659B2 | Generating an RSS feed from a **scope and attribute definition**; sitemaps from application-instance data; feed storage and state; RSS archives; virtual feeds built by a crawler; extracting posts from weblogs; a **client** that builds sitemaps for a crawler; merging feed items; feed search. We write the feed and the sitemap with fixed code from a listing query. | clear (A17) |
+| 63 | US11108763B2, US11394710B1, US20220224535A1, EP3257193A1, US20210084020A1, EP4390743A1, WO2015027298A1, US20160142409A1, US20230412596A1, US9509692B2 | Identity-aware proxies that **issue a session cookie after an authorisation token** and relay traffic; identity gateways; sidecar checks of JWTs against an internal CA; secure tunnels; role-aware enrichment; token-for-token exchange; access-token attachment; proxy authentication. We **verify a JWT that a third-party proxy already attached** and check the principal against a list; we do not proxy, issue cookies or exchange tokens. | clear (A18) |
+| 64 | US20200228484A1, US8135392B2, JP2016535366A, CN103135967B, US7734704B2, US20160028677A1, US10140107B2, US5835084A, WO2000014686A1 | Mark-as-unread, badges on application icons, notification bars, lock-screen unread, redisplaying instant messages, mobile email notices, task-bar overlays, read/unread list styling, animated tickers. No bell dropdown fed by a per-user stateful object. | clear (A14) |
+| 65 | US8646072B1, US9503502B1, WO2007076150A2 (family of US7725492B2, hit 26), US10432633B1, US9876798B1 | Trusted-seal misuse detection; **identifying a third-party content provider** from feedback about malicious content; social timelines; a rights holder asking a content platform to **send a notice to another platform** (the opposite direction from ours: we receive notices). These were the unread items of passes 2 and 3; the earlier fetches failed on the wrong kind code. | clear (ideas 5 and A12) |
+
+### Zero-hit searches (not clearances)
+- **A13**: a scanner-safe reset link (peek never consumes). The results cover hashing and procedures, not link scanners.
+- **A14**: a bell icon that opens a dropdown of notifications. The results cover badges and mark-as-unread.
+- **A15**: an author hiding comments on their own post, a gone-post placeholder and cascaded notifications, and a tombstone that keeps replies of a deleted comment. Only the generic hide/delete patents and US11921797B2 (above) came back.
+- **A16**: unfollow handling, cursor pagination of follow lists and follow-count consistency.
+- **A17**: paginated sitemap indexes built from a publishing listing: the building blocks all exist, which the search summary could not confirm for the combination.
+- **A18**: a verification step plus an admin allowlist behind an identity-aware proxy.
+
+## Unread at the end of pass 4
+None among the results of the 28 queries. Results that came back as arXiv papers or USPTO numbers without a Google Patents page (US11977588, US11321401, US12067047, US9721017, US9356574 and the like) were not candidates by title and were not read.
+
 ## Limitations
 - AI-assisted search and read, by one lane in one session. It is not legal advice and not a freedom-to-operate opinion; a lawyer's review is a separate, later purchase.
 - Search coverage is **thin**: about one query per idea, on Google Patents through a general web-search tool, so ranking is the tool's, not a patent search engine's. No USPTO, Espacenet or WIPO queries were run. No classification-code (CPC) search, no assignee-driven search (Meta, Google, Microsoft, Cloudflare, Trust & Safety vendors), no citation chasing.
 - Claims for hits 1-22 were read from `tools/patent-claims.py`'s full-claims output (machine-converted text; the official record was not checked). I read independent claims only. Dependent claims were not weighed. Legal status and expiry come from Google Patents and can be wrong; they ignore terminal disclaimers, term adjustments and maintenance-fee lapses I did not verify. Pending applications and applications published since the pages were indexed are not covered.
-- Ideas 11 to 15 were searched once (12 to 14 twice). Pass 3 added one or two queries for each of A1 to A12; zero-hit results are listed and are not clearances. Password reset, the notification-bell page UI, comment threading and reactions, follows, RSS and sitemap generation, and the admin Access gate were not searched.
+- Ideas 11 to 15 were searched once (12 to 14 twice). Passes 3 and 4 added one or two queries for each of A1 to A18; zero-hit results are listed and are not clearances. Not searched: the web theming system, the editor page UI, the Postmark integration, the deploy pipeline, and the design of the public pages as such.
 - Third-party components bring their own patents that this file does not cover: PDQ (the perceptual hash), PhotoDNA and hash-matching service A (licensed under that service's terms), Cloudflare Workers, Durable Objects, KV, Hyperdrive, R2 and Turnstile (licensed under Cloudflare's terms), Postmark, and the open-source libraries in `pnpm-lock.yaml`. CodeRipper's `patent-index-match` rule covers dependencies and was not run for this file.
 - The DSA and NCMEC compliance mechanisms are mandated by law; a patent on a mandated process is a legal question for counsel, not for this sweep.
