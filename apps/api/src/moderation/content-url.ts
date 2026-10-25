@@ -20,10 +20,10 @@ export function parsePostUrl(raw: string): { username: string; slug: string } | 
   }
   if (url.origin !== CANONICAL_ORIGIN) return null;
 
-  const m = /^\/@([^/]+)\/([^/]+)\/?$/.exec(url.pathname);
-  if (m === null) return null;
+  const [, rawUsername, rawSlug] = /^\/@([^/]+)\/([^/]+)\/?$/.exec(url.pathname) ?? [];
+  if (rawUsername === undefined || rawSlug === undefined) return null;
   try {
-    return { username: decodeURIComponent(m[1]!), slug: decodeURIComponent(m[2]!) };
+    return { username: decodeURIComponent(rawUsername), slug: decodeURIComponent(rawSlug) };
   } catch {
     return null;
   }
