@@ -127,10 +127,19 @@ async function seedComment(userId: string, postId: string, hiddenAt?: Date): Pro
   });
 }
 
+/**
+ * A report that exists only to put the content in the queue. S14(c): a ruling now
+ * emails every member reporter it answers, and these tests count the AUTHOR's
+ * emails, so the fixture report is seeded as already answered (a random
+ * `outcome_action_id`). test/member-reporter-outcome.test.ts owns the reporter's side.
+ */
 async function seedReport(postId: string): Promise<void> {
   const reporterId = await seedUser();
   await ctxRun(async (c) => {
-    await c.query(`INSERT INTO reports (post_id, reporter_id, reason) VALUES ($1, $2, $3)`, [postId, reporterId, "spam"]);
+    await c.query(
+      `INSERT INTO reports (post_id, reporter_id, reason, outcome_action_id) VALUES ($1, $2, $3, gen_random_uuid())`,
+      [postId, reporterId, "spam"],
+    );
   });
 }
 

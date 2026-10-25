@@ -23,7 +23,7 @@ import type { ContractualGround, LegalGround } from "@thinkersjournal/shared";
 import type { LegalHoldCategory } from "../media/legal-hold";
 
 import { imposeAccountHoldInTx } from "./account-holds";
-import { enqueueAuthorDecisionNotice, enqueueReporterOutcomeNotices } from "./notice-enqueue";
+import { enqueueAuthorDecisionNotice, enqueueMemberReporterOutcomeNotices, enqueueReporterOutcomeNotices } from "./notice-enqueue";
 import { recordModerationAction, type ModerationActionKind, type ModerationSource, type ViolationCategory } from "./actions";
 import { loadPostTagSlugs, type PurgeTarget } from "./purge-target";
 
@@ -252,6 +252,24 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
     reporters: dsaRows.map((r) => ({ email: r.reporter_email, noticeId: r.id })),
     decision: input.decision,
     reason: input.reason,
+    subject: input.subject,
+    postTitle: row.title,
+  });
+
+  // S14(c): every MEMBER report on this content that no earlier ruling answered is
+  // answered by this one, in this transaction, and its reporter is queued the outcome.
+  // `outcome_action_id IS NULL` makes it once per report. Not gated on `noticeSkip`:
+  // the reporter is owed the outcome whatever became of the author's account.
+  const { rows: answeredReports } = await c.query<{ reporter_id: string }>(
+    `UPDATE reports SET outcome_action_id = $2
+      WHERE ${targetCol} = $1 AND outcome_action_id IS NULL
+      RETURNING reporter_id`,
+    [row.id, actionId],
+  );
+  await enqueueMemberReporterOutcomeNotices(c, {
+    actionId,
+    reporterIds: answeredReports.map((r) => r.reporter_id),
+    decision: input.decision,
     subject: input.subject,
     postTitle: row.title,
   });
