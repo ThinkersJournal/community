@@ -15,6 +15,8 @@ import {
   type AdminAppeal,
   type AppealTarget,
   type AppealableAction,
+  type ContractualGround,
+  type LegalGround,
 } from "@thinkersjournal/shared";
 
 export type FileAppealOutcome =
@@ -32,6 +34,8 @@ interface ActionRow {
   subject_user_id: string | null;
   /** When the appeal window closes (see `loadAction`). */
   closes_at: Date;
+  legal_ground: LegalGround | null;
+  contractual_ground: ContractualGround | null;
   in_window: boolean;
   appealed: boolean;
 }
@@ -53,7 +57,7 @@ interface ActionRow {
  */
 async function loadAction(c: Client, actionId: string): Promise<ActionRow | null> {
   const { rows } = await c.query<ActionRow>(
-    `SELECT ma.id, ma.action, ma.reason, ma.created_at, ma.subject_user_id, w.closes_at,
+    `SELECT ma.id, ma.action, ma.reason, ma.created_at, ma.subject_user_id, ma.legal_ground, ma.contractual_ground, w.closes_at,
             w.closes_at > now() AS in_window,
             EXISTS (SELECT 1 FROM appeals a WHERE a.action_id = ma.id) AS appealed
        FROM moderation_actions ma
@@ -86,6 +90,8 @@ export async function describeAppealTarget(c: Client, actionId: string): Promise
     createdAt: a.created_at.toISOString(),
     alreadyAppealed: a.appealed,
     windowClosesAt: a.closes_at.toISOString(),
+    ...(a.legal_ground !== null ? { legalGround: a.legal_ground } : {}),
+    ...(a.contractual_ground !== null ? { contractualGround: a.contractual_ground } : {}),
   };
 }
 

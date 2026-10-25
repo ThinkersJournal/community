@@ -26,7 +26,7 @@ import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
 
-import type { AppealTarget } from "@thinkersjournal/shared";
+import { CONTRACTUAL_GROUND_LABELS, LEGAL_GROUND_LABELS, type AppealTarget } from "@thinkersjournal/shared";
 
 // Per-viewer: a token's target, a signed-in session's CSRF token, and an
 // unsaved textarea all belong to exactly one reader. See src/lib/cache.ts.
@@ -183,6 +183,16 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
           <p class="target-summary">
             <strong>Reason given:</strong> {target.reason}
           </p>
+          {target.legalGround !== undefined && (
+            <p class="target-summary">
+              <strong>Legal ground:</strong> {LEGAL_GROUND_LABELS[target.legalGround]}
+            </p>
+          )}
+          {target.contractualGround !== undefined && (
+            <p class="target-summary">
+              <strong>Contractual ground:</strong> {CONTRACTUAL_GROUND_LABELS[target.contractualGround]}
+            </p>
+          )}
           <p class="target-summary">You can appeal until {windowClosesAtText}.</p>
 
           <form method="POST" class="form">

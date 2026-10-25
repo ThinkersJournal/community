@@ -97,6 +97,24 @@ const file = (userId: string, actionId: string) => run((c) => fileAppeal(c, { ac
 const target = (actionId: string) => run((c) => describeAppealTarget(c, actionId));
 const DAY = 86_400_000;
 
+describe("the appeal target states the grounds the decision cited (R7)", () => {
+  it("returns both grounds when the action cites them, and neither key when it cites none", async () => {
+    const u = await mkUser();
+    const plain = await mkAction(u, 1);
+    const grounded = await mkAction(u, 1);
+    await run((c) =>
+      c.query(`UPDATE moderation_actions SET legal_ground = 'copyright_infringement', contractual_ground = 'guidelines_spam' WHERE id = $1`, [grounded]),
+    );
+    const g = await target(grounded);
+    expect(g!.legalGround).toBe("copyright_infringement");
+    expect(g!.contractualGround).toBe("guidelines_spam");
+    const p = await target(plain);
+    expect(p).not.toBeNull();
+    expect("legalGround" in p!).toBe(false);
+    expect("contractualGround" in p!).toBe(false);
+  });
+});
+
 describe("the appeal window starts at delivery", () => {
   it("a notice delivered 20 days ago keeps a 40-day-old decision appealable, and the page says delivered_at + window", async () => {
     const u = await mkUser();

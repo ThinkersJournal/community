@@ -374,6 +374,9 @@ export interface AppealTarget {
   readonly createdAt: string;
   readonly alreadyAppealed: boolean;
   readonly windowClosesAt: string;
+  /** #57 Art. 17: the grounds the decision cited, so the appeal page states what the notice stated. */
+  readonly legalGround?: LegalGround;
+  readonly contractualGround?: ContractualGround;
 }
 
 /** One open appeal in `GET /admin/appeals`, oldest first. ISO strings. */
