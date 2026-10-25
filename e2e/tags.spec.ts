@@ -11,10 +11,20 @@
  */
 import { expect, test } from "@playwright/test";
 
+import { API_URL, WEB_URL } from "../playwright.config";
 import { publishPost, signUpAndVerify, uniqueHandle } from "./helpers";
 
 test("a tagged post appears on its /tag page, the post page, and /tags", async ({ page, request }) => {
-  await signUpAndVerify(page, request);
+  const { email } = await signUpAndVerify(page, request);
+
+  // S26: tag CREATION is gated to accounts older than 7 days, and this account is seconds
+  // old, so age it through the test seam first (the same gate and Origin as the other
+  // /__test/* seams). Without this the tag below would not be created.
+  const aged = await request.post(`${API_URL}/__test/age-account`, {
+    headers: { Origin: WEB_URL },
+    data: { email },
+  });
+  expect(aged.status(), "POST /__test/age-account failed - is TEST_ROUTES=1 set on the api dev server?").toBe(204);
 
   // uniqueHandle() returns `<prefix>_<hex>` — the underscore is NOT a valid
   // slug character (the server's slugify maps [^a-z0-9]+ to "-"), so a

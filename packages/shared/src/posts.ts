@@ -177,3 +177,11 @@ export interface TagCount {
   label: string;
   count: number;
 }
+
+/**
+ * Tag CREATION is gated to accounts older than this many days (design decision 13,
+ * CireSnave 2026-10-25, ROADMAP S26). A newer account can still apply tags that
+ * already exist; a label that does not exist yet is simply not applied. The gate
+ * is a spam brake on the shared tag namespace, not a content rule.
+ */
+export const TAG_CREATION_MIN_ACCOUNT_AGE_DAYS = 7;
