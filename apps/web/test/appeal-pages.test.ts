@@ -45,6 +45,14 @@ describe("appeal.astro — never POSTs on a GET", () => {
     expect(source).toContain("request: Astro.request");
   });
 
+  it("always shows the shared dispute@ line, outside every state conditional (outbox design section 8)", () => {
+    expect(source).toContain("DISPUTE_CONTACT_LINE");
+    const at = source.indexOf("{DISPUTE_CONTACT_LINE}");
+    expect(at).toBeGreaterThan(source.indexOf("Log in</a>"));
+    // The last `!filed`/state guard closes before the line: no conditional wraps it.
+    expect(source.slice(source.lastIndexOf("</p>", at - 1), at)).not.toMatch(/&&/);
+  });
+
   it("awaiting-review copy for a null target on the post path", () => {
     expect(source).toContain("This post is awaiting a moderator's review. Once they decide, you can appeal from here.");
   });
