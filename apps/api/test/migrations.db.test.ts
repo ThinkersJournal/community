@@ -239,6 +239,10 @@ describe("0001 users + profiles migration", () => {
       expect(await indexExists(client, "media_upload_refusals_key_idx")).toBe(true);
       // 0039_terms_acceptances.sql — the signup terms-acceptance record.
       expect(await tableExists(client, "terms_acceptances")).toBe(true);
+      // 0040_dmca.sql — DMCA notices, counter-notices and the moderation_actions link.
+      expect(await tableExists(client, "dmca_notices")).toBe(true);
+      expect(await tableExists(client, "dmca_counter_notices")).toBe(true);
+      expect(await columnExists(client, "moderation_actions", "dmca_notice_id")).toBe(true);
     });
 
     await migrate("down");
@@ -339,6 +343,9 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "media_upload_refusals")).toBe(true);
       // 0039 — re-applied by the round-trip.
       expect(await tableExists(client, "terms_acceptances")).toBe(true);
+      // 0040 — re-applied by the round-trip.
+      expect(await tableExists(client, "dmca_notices")).toBe(true);
+      expect(await columnExists(client, "moderation_actions", "dmca_notice_id")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });

@@ -164,6 +164,10 @@ and only then for both Workers.
 
 `0039_terms_acceptances.sql` adds the `terms_acceptances` table (one row per account and Terms version). It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above. The new signup writes a row inside its transaction, so deploying the code against a database without `0039` fails every signup. **Rollback** is the file's `-- Down Migration`.
 
+## DMCA notices: `0040` must be applied BEFORE the deploy
+
+`0040_dmca.sql` adds `dmca_notices`, `dmca_counter_notices`, `moderation_actions.dmca_notice_id` (with the `dmca_notice` source) and the two DMCA outbox kinds, for the whole DMCA feature (ROADMAP R9) in one go. It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above. The new intake writes `dmca_notices`, so deploying the code against a database without `0040` fails every notice (and the daily cron's reaper logs an error). **Rollback** is the file's `-- Down Migration`; it refuses once a DMCA-sourced action row exists (the log is append-only).
+
 ## Upload refusal record: `0038` must be applied BEFORE the deploy
 
 `0038_media_upload_refusals.sql` adds the `media_upload_refusals` table (one row per refused upload of held or
