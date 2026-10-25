@@ -98,7 +98,7 @@ later deleted, the notice and that captured title or excerpt are kept.
 
 ## 5. Retention
 
-- **Unverified accounts** are automatically deleted after [[REAPER_WINDOW]] if the
+- **Unverified accounts** are automatically deleted after 7 days if the
   email is never verified.
 - **Individual content you delete** (a post or comment) is removed from the live
   Service, and any images that become unreferenced as a result are
