@@ -212,10 +212,53 @@ Google Patents, 2026-10-25.
 ## Unread at the end of pass 4
 None among the results of the 28 queries. Results that came back as arXiv papers or USPTO numbers without a Google Patents page (US11977588, US11321401, US12067047, US9721017, US9356574 and the like) were not candidates by title and were not read.
 
+## Pass 5 (2026-10-25): the areas passes 1-4 left unsearched, and the capabilities added since
+
+Run by the community lane (Claude Sonnet 5.5) for ROADMAP R8, with the same limits as the earlier passes. Google Patents was reached through the general web-search tool, one query a minute at most, and claims were read with `tools/patent-claims.py` at one patent a minute; no 503 was met. Added since the version swept in pass 1: the DMCA flow (R9, 0.1.102-0.1.106), the terms-acceptance record (0.1.100), the post-deploy smoke check and automatic rollback (0.1.108).
+
+### Pass 5 ideas
+A19. **Theming.** One stylesheet of design tokens (CSS custom properties on `:root`) shared by both Workers; a single dark theme, no per-user theme switching.
+A20. **Editor page.** A Markdown editor page whose title, body, tags and an idempotency key can be prefilled from a base64url JSON URL fragment (`#cr=`); the prefill only fills the form and never publishes; the key makes a double submit publish once.
+A21. **Postmark integration and the notice outbox.** A transactional email outbox: a row is written in the deciding transaction, a cron drain leases rows with an opaque token, retries on a backoff schedule, re-reads the account recipient's address at send time, and replaces live links in the stored body with a marker once delivered.
+A22. **Deploy pipeline.** (a) A build-command gate that refuses to deploy unless the live site's schema endpoint says the newest migration is applied; (b) a post-deploy smoke check of real pages by content marker; (c) an automatic rollback after three failed re-checks that is skipped when the push changed a Worker config.
+A23. **DMCA flow.** A takedown notice confirmed by email; a moderator takedown that emails the author a copy of the notice and a single-use counter-notice link; a restore timer in business days cancelled by a recorded court action; a count of standing takedowns per author, flagged at a threshold for a human; erasure of personal details three years after a case closes.
+A24. **Terms acceptance record.** At signup a checkbox stores the account, time, text version and attested minimum age.
+
+### Pass 5 queries (source, query, date)
+Google Patents (via web search), 2026-10-25.
+- A20: "patent markdown editor web page prefilled from URL fragment encoded JSON title body tags idempotency key prevents duplicate publish"
+- A21: "patent transactional email outbox table rows leased by worker with lease token expiry retry backoff schedule recipient address re-read at send time stored body links redacted after delivery"
+- A22: "patent deployment pipeline refuses to deploy application code unless database migration reported applied by querying live service health endpoint, then post-deployment smoke test and automatic rollback to previous version"
+- A23: "patent online service provider copyright takedown notice counter-notification content restored after waiting period unless complainant files court action repeat infringer count"
+- A19: "patent web theme design tokens CSS custom properties dark mode user preference stylesheet shared by two web applications consistent theme"
+- A24: "patent recording user acceptance of terms of service version timestamp at account registration age attestation checkbox stored record re-acceptance on material change"
+
+### Pass 5 hits (independent claims read)
+| # | patent | claim 1 is about / the element we lack | verdict |
+|---|---|---|---|
+| 66 | US9760366B2 (Amazon, expired) | Maintaining a deployment pipeline from a **live pipeline template**: a changed template instance is turned into a fully specified application definition and **pipeline synthesis drivers** reconfigure the services. We have no pipeline templates or drivers; our gate and rollback are a script and a workflow. | clear (A22) |
+| 67 | US20170046146A1 (IBM, application) | Autonomous healing of a **microservice application**: on **performance degradation**, deploy a **prior version of a microservice** and **route part of the traffic** to it instead of the current version. Ours is a smoke check on a content marker, then Cloudflare's 100% rollback of whole Workers; there is no degradation metric, no traffic split (the script refuses split deployments), and no per-microservice routing. The shape ("detect a fault, redeploy the prior version") is close at the highest level. | clear on the claim as read (A22); the pending application should be watched for a granted claim that drops the traffic-routing element |
+| 68 | US20250028703A1 (multi-tenant transactional outbox, application) | An atomic transaction that updates the database **and logs to a per-tenant event outbox**, then **publishes a notification to a stream partition** identifying the outbox row, handled by one processing thread per tenant. Ours writes the notice row in the decision's transaction (the same transactional-outbox idea) but is drained by a cron with a lease token, with no stream, partition or per-tenant thread. | clear (A21); the outbox pattern itself is long-published prior art |
+| 69 | US11070511B2 | Sending a **batch of emails** through a message transfer authority: a **delivery-readiness indicator** per recipient, a locked recipient list, **customised messages scored by a probability of engagement**. Ours sends individual transactional notices with no list, readiness score or engagement model. | clear (A21) |
+| 70 | AU2018319444A1 / CA3060362A1 (Wix) | A site editor that **previews virtual web pages** of a website before they go live, with an editing tool that updates a back-end database. Ours is a post editor with no virtual-page preview of a site. | clear (A20) |
+| 71 | US20150143466A1 (family of US9614850B2, hit C1) | **Marking an object as containing prohibited content, storing an incident in a per-user incident history, limiting access to the object**; dependent claims modify the user's privileges by **rules applied to the incident history** (for example terminating sharing). The DMCA flow now also keeps a per-author record of standing takedowns and flags a threshold, so the C1 overlap reaches this feature as well. The difference we rely on is unchanged from C1: no rule modifies a privilege; the flag only prompts a moderator, who decides by hand. | **needs-review**, folded into C1 (already with the PM) |
+| 72 | US20100299586A1, US10977427B2 (Wix) | Open theme builder: a **schematic representation** of a page for visual customisation; a website-builder device that locks third-party **templates** for editing. We offer no theme builder. | clear (A19) |
+| 73 | US8301555B2 (Bank of America), US20070088736A1 (FileNet, abandoned) | Pre-approved offers read from a payment device with an **electronic signature**; a **transcript** of an approval event linked to a managed record. Ours stores a version, a time and an age with the account at signup. | clear (A24) |
+
+### Pass 5 zero-hit searches (not clearances)
+- **A20**: no patent about prefilling an editor from a URL fragment, or about an idempotency key for a publish.
+- **A22 (a), (b)**: no patent claiming a deploy gate keyed on a live schema-status endpoint, nor a content-marker smoke check; the results covered pipelines, data migration and rollback generally.
+- **A23**: no patent on the notice, counter-notice and restore-timer sequence itself; the one relevant family is hit 71.
+- **A19, A24**: only general theming and attestation results.
+
+### Needs review (to the PM), pass 5 addition
+- **C1 widened (hit 71):** the Microsoft family (US9614850B2 and US20150143466A1) now touches the DMCA strike count as well as the enforcement ladder. Same reasoning, same owner.
+- **Watch (hit 67):** IBM's US20170046146A1 is a pending application; re-read if it is granted.
+
 ## Limitations
 - AI-assisted search and read, by one lane in one session. It is not legal advice and not a freedom-to-operate opinion; a lawyer's review is a separate, later purchase.
 - Search coverage is **thin**: about one query per idea, on Google Patents through a general web-search tool, so ranking is the tool's, not a patent search engine's. No USPTO, Espacenet or WIPO queries were run. No classification-code (CPC) search, no assignee-driven search (Meta, Google, Microsoft, Cloudflare, Trust & Safety vendors), no citation chasing.
 - Claims for hits 1-22 were read from `tools/patent-claims.py`'s full-claims output (machine-converted text; the official record was not checked). I read independent claims only. Dependent claims were not weighed. Legal status and expiry come from Google Patents and can be wrong; they ignore terminal disclaimers, term adjustments and maintenance-fee lapses I did not verify. Pending applications and applications published since the pages were indexed are not covered.
-- Ideas 11 to 15 were searched once (12 to 14 twice). Passes 3 and 4 added one or two queries for each of A1 to A18; zero-hit results are listed and are not clearances. Not searched: the web theming system, the editor page UI, the Postmark integration, the deploy pipeline, and the design of the public pages as such.
+- Ideas 11 to 15 were searched once (12 to 14 twice). Passes 3 and 4 added one or two queries for each of A1 to A18; zero-hit results are listed and are not clearances. Pass 5 searched the web theming system, the editor page UI, the Postmark integration, the deploy pipeline, the DMCA flow and the terms record (one or two queries each). Still not searched: the design of the public pages as such, and the moderation-scoring and M3 reference-engine designs (not built).
 - Third-party components bring their own patents that this file does not cover: PDQ (the perceptual hash), PhotoDNA and hash-matching service A (licensed under that service's terms), Cloudflare Workers, Durable Objects, KV, Hyperdrive, R2 and Turnstile (licensed under Cloudflare's terms), Postmark, and the open-source libraries in `pnpm-lock.yaml`. CodeRipper's `patent-index-match` rule covers dependencies and was not run for this file.
 - The DSA and NCMEC compliance mechanisms are mandated by law; a patent on a mandated process is a legal question for counsel, not for this sweep.
