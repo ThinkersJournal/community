@@ -14,6 +14,7 @@ import SettingsNav from "../../components/SettingsNav.astro";
 import { apiFetch } from "../../lib/api";
 import { markPrivate } from "../../lib/cache";
 import { setPublicPageCsp } from "../../lib/csp";
+import { loginHrefFor } from "../../lib/next-url";
 
 import type { BlockedList } from "@thinkersjournal/shared";
 
@@ -22,7 +23,7 @@ setPublicPageCsp(Astro);
 
 const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
 const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
-if (csrfToken === null) return Astro.redirect("/login");
+if (csrfToken === null) return Astro.redirect(loginHrefFor(Astro.url));
 
 const listResp = await apiFetch<BlockedList>("/blocks", { request: Astro.request });
 const users = listResp.status === 200 && listResp.data ? listResp.data.users : [];

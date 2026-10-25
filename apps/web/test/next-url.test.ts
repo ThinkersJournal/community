@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 import { describe, expect, it } from "vitest";
 
-import { resolveNext } from "../src/lib/next-url";
+import { loginHrefFor, resolveNext } from "../src/lib/next-url";
 
 /**
  * Open-redirect regression corpus for `resolveNext` (login.astro's `?next=`).
@@ -107,5 +107,17 @@ describe("resolveNext — absent / unparseable", () => {
     // scheme); the guard must fail closed rather than 500 the login page.
     expect(() => resolveNext("http://[", BASE)).not.toThrow();
     expect(landingOrigin("http://[")).toBe(BASE.origin);
+  });
+});
+
+describe("loginHrefFor — S22 F9 (unauthenticated redirects keep the destination)", () => {
+  it("encodes path and query into ?next=", () => {
+    expect(loginHrefFor(new URL("https://good.test/feed?cursor=a b"))).toBe("/login?next=%2Ffeed%3Fcursor%3Da%2520b");
+  });
+
+  it("round-trips through resolveNext to the same page", () => {
+    const here = new URL("https://good.test/settings/blocked?x=1");
+    const login = new URL(loginHrefFor(here), here);
+    expect(resolveNext(login.searchParams.get("next"), login)).toBe("https://good.test/settings/blocked?x=1");
   });
 });
