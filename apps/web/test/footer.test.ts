@@ -30,3 +30,9 @@ describe("Footer: Community Guidelines link", () => {
     expect(src()).toContain('href="/guidelines"');
   });
 });
+
+describe("Footer: RSS link (S22 F8)", () => {
+  it("shows a visible link to the site-wide feed", () => {
+    expect(src()).toContain('href="/rss.xml"');
+  });
+});

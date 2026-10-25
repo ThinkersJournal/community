@@ -11,6 +11,7 @@ import BaseLayout from "../components/BaseLayout.astro";
 import { apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
+import { loginHrefFor } from "../lib/next-url";
 
 import type { Feed } from "@thinkersjournal/shared";
 
@@ -41,7 +42,7 @@ const response = await apiFetch<Feed>(
 if (response.status === 401) {
   const redirect = new Response(null, {
     status: 302,
-    headers: { Location: "/login" },
+    headers: { Location: loginHrefFor(Astro.url) },
   });
   applyCookies(redirect.headers, response.setCookies);
   return redirect;

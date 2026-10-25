@@ -15,7 +15,7 @@ const island = strip(
 describe("settings/blocked.astro", () => {
   it("is authed (markPrivate), redirects to /login without a session, and reads GET /blocks", () => {
     expect(page).toContain("markPrivate(");
-    expect(page).toContain('Astro.redirect("/login")');
+    expect(page).toContain("Astro.redirect(loginHrefFor(Astro.url))");
     expect(page).toContain('apiFetch<BlockedList>("/blocks"');
   });
 

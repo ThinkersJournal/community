@@ -75,3 +75,13 @@ export function resolveNext(raw: string | null, base: URL): string {
     return home;
   }
 }
+
+/**
+ * `/login?next=<this page>` for an unauthenticated visit to a member-only page,
+ * so login.astro (via `resolveNext`) sends the member back where they were
+ * headed. Relative and built from `pathname + search` only; login re-validates
+ * `next` with `resolveNext`, so this never needs to be trusted itself.
+ */
+export function loginHrefFor(url: URL): string {
+  return `/login?next=${encodeURIComponent(url.pathname + url.search)}`;
+}

@@ -17,13 +17,14 @@ import SettingsNav from "../../components/SettingsNav.astro";
 import { apiFetch } from "../../lib/api";
 import { markPrivate } from "../../lib/cache";
 import { setPublicPageCsp } from "../../lib/csp";
+import { loginHrefFor } from "../../lib/next-url";
 
 markPrivate(Astro);
 setPublicPageCsp(Astro);
 
 const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
 const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
-if (csrfToken === null) return Astro.redirect("/login");
+if (csrfToken === null) return Astro.redirect(loginHrefFor(Astro.url));
 ---
 <BaseLayout title="Settings">
   <div class="wrap form-page">

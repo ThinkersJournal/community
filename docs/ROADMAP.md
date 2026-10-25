@@ -130,7 +130,7 @@ Each claim is from one read of the code at that ref, so re-check before relying 
 | S19 | `docs/runbooks/csam.md` (destruction request, incident, NIST mapping; upload-scan US9 additions) | held with #114 |
 | S20 | `fast-xml-parser` in `apps/api`, the version-pinned characterisation test and the response byte cap (xml-parser decision §6) | held with #114 |
 | S21 | SafeImage Q7: the workerd proof of the pdq `.wasm` (cold start, memory) and the hash self-test identity gaining the crate version | waits on a published `@thinkersjournal/safeimage` (board 247) |
-| S22 | Page-audit leftovers: F4 `/appeal` for a banned or lost-email user, F7 no "Report illegal content" link on live-inserted comments or in the footer, F8 no `robots.txt` or RSS link, F9 auth redirects drop `?next=`, F10 `/admin/queue` undocumented | open, small |
+| S22 | Page-audit leftovers: F4 `/appeal` for a banned or lost-email user, F7 no "Report illegal content" link on live-inserted comments or in the footer, F8, F9, F10 done (0.1.90) | open: F4 and F7 (need a design call) |
 | S23 | Fill `[[REAPER_WINDOW]]` in the legal drafts: the code is 7 days (`reap-unverified.ts:70`) | done (0.1.88) |
 | S24 | Renew the DMCA agent registration every 3 years (the README gives no date) | open, time-gated; **CC** for the date |
 | S25 | Post-launch backlog, unqueued: @-mentions, notification pruning, KV unread count, Postmark bounce webhook, digest timezone, "Mark all read", search snippets and autocomplete, tag curation and rename, per-post OG images, About page, trending and a follow recommender, who-reacted lists, mute, avatar variants, dropping CSP `style-src 'unsafe-inline'`, a per-account post rate limit, "More" paging in follow lists | open, post-launch |

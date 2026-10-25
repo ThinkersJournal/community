@@ -27,7 +27,7 @@ describe("feed.astro", () => {
   });
 
   it("redirects a logged-out viewer to /login", () => {
-    expect(code).toMatch(/["']\/login["']/);
+    expect(code).toContain("loginHrefFor(Astro.url)");
   });
 
   /**
@@ -42,11 +42,11 @@ describe("feed.astro", () => {
   it("⚠️ does NOT use Astro.redirect for the 401 case — builds a manual 302 and applies cookies to it", () => {
     // Negative: the naive, cookie-dropping form is never used for this page's
     // login bounce.
-    expect(code).not.toMatch(/Astro\.redirect\(\s*["']\/login["']/);
+    expect(code).not.toMatch(/Astro\.redirect\(/);
     // Positive, mirroring login.astro's idiom: a
     // hand-built Response with a 302 status and a Location header...
     expect(code).toMatch(/status:\s*302/);
-    expect(code).toMatch(/Location:\s*["']\/login["']/);
+    expect(code).toMatch(/Location:\s*loginHrefFor\(Astro\.url\)/);
     // ...that has cookies applied to IT (the manual redirect), not to
     // Astro.response.headers.
     expect(code).toMatch(/applyCookies\(\s*redirect\.headers/);
