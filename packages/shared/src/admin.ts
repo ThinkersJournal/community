@@ -283,7 +283,7 @@ export interface AdminDsaNoticesResponse {
  */
 export interface AdminUndeliveredNotice {
   readonly id: string;
-  readonly kind: "author_decision" | "author_auto_hide" | "account_action" | "appeal_outcome" | "reporter_outcome";
+  readonly kind: "author_decision" | "author_auto_hide" | "account_action" | "appeal_outcome" | "reporter_outcome" | "dmca_author_notice" | "dmca_claimant_notice";
   readonly actionId: string;
   readonly subject: string;
   readonly createdAt: string;

@@ -38,3 +38,31 @@ export type DmcaNoticeInputT = z.infer<typeof DmcaNoticeInput>;
  * change reviewed like any other; none is stored per row.
  */
 export const DMCA_CONFIRM_WINDOW_DAYS = 7;
+
+/**
+ * A row in `GET /admin/dmca-notices`: a CONFIRMED notice awaiting a moderator
+ * (apps/api/src/moderation/dmca-decisions.ts `OpenDmcaNotice`, with `Date`s as ISO
+ * strings). Carries the complainant's contact details and statements because the
+ * moderator decides on them; this surface is Access-gated.
+ */
+export interface AdminDmcaNotice {
+  id: string;
+  kind: 'post' | 'comment';
+  /** `null` once the target was deleted by its author: only a rejection is possible. */
+  targetId: string | null;
+  excerpt: string;
+  contentDeleted: boolean;
+  workDescription: string;
+  complainantName: string;
+  complainantEmail: string;
+  complainantAddress: string;
+  complainantPhone: string;
+  signature: string;
+  createdAt: string;
+  /** Takedowns of this author that stand (taken down, not restored), for the repeat-infringer record. */
+  authorStrikes: number;
+}
+
+export interface AdminDmcaNoticesResponse {
+  notices: AdminDmcaNotice[];
+}

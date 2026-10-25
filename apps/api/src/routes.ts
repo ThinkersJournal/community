@@ -61,6 +61,7 @@ import {
 } from "./routes/delete-request";
 import { handleConfirmDsaNotice, handleDsaNotice, handlePeekDsaToken } from "./routes/dsa-notice";
 import { handleConfirmDmcaNotice, handleDmcaNotice, handlePeekDmcaToken } from "./routes/dmca-notice";
+import { handleDmcaReject, handleDmcaTakedown, handleListDmcaNotices } from "./routes/admin-dmca";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
 import { handleForgotPassword } from "./routes/forgot-password";
@@ -454,6 +455,12 @@ export const ROUTES: readonly RouteDef[] = [
   // migration 0020). Same Access trust domain/inline-checkOrigin shape as
   // /admin/decision and the media-access-requests routes above.
   { method: "POST", pattern: "/admin/dsa-notices/:id/close", handler: handleCloseOrphanedDsaNotice },
+
+  // DMCA notices (R9): the confirmed-notice list and a moderator's two decisions.
+  // Same Access trust domain / inline-checkOrigin shape as the DSA routes above.
+  { method: "GET", pattern: "/admin/dmca-notices", handler: handleListDmcaNotices },
+  { method: "POST", pattern: "/admin/dmca-notices/:id/takedown", handler: handleDmcaTakedown },
+  { method: "POST", pattern: "/admin/dmca-notices/:id/reject", handler: handleDmcaReject },
 
   // Notice outbox PR 3 — the undelivered-notices list and RESEND. Same Access
   // trust domain / inline-checkOrigin shape as /admin/dsa-notices above.

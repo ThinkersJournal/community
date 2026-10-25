@@ -1,0 +1,129 @@
+---
+/**
+ * `/admin/dmca-notices` — the DMCA notice queue and a moderator's two decisions
+ * (ROADMAP R9). Modelled on `admin/dsa-notices.astro`; read that file's header
+ * for the reasoning this page reuses.
+ *
+ * ⚠️⚠️ THE PROPERTY THIS FILE MUST NEVER LOSE: no notice content (a complainant's
+ * name, address, phone, email, statement) reaches the HTML on any request that
+ * does not carry a verified Access JWT. The guard is therefore the FIRST
+ * statement in the frontmatter, before markPrivate, the CSP and any api call.
+ *
+ * Takedown and reject are the ONLY mutating calls, each to its own api route
+ * (`/admin/dmca-notices/:id/takedown`, `/reject`). A notice is queue INPUT for a
+ * human only (AC-1): nothing on this page, or anywhere, hides content until a
+ * moderator presses Take down.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { adminApiErrorCode, adminApiFetch } from "../../lib/admin-api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+import { ACCESS_JWT_HEADER, type AdminDmcaNoticesResponse } from "@thinkersjournal/shared";
+
+// ⚠️⚠️ THE GUARD — see this file's header.
+const accessJwt = Astro.request.headers.get(ACCESS_JWT_HEADER);
+if (accessJwt === null || accessJwt === "") {
+  return new Response(null, { status: 401 });
+}
+
+/** Mirrors the api's own UUID_RE: the only validation `noticeId` gets before it is put in an api path. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+let decisionError: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const action = form.get("action");
+  const noticeId = form.get("noticeId");
+  if (typeof noticeId !== "string" || !UUID_RE.test(noticeId) || (action !== "takedown" && action !== "reject")) {
+    decisionError = "INVALID_INPUT";
+  } else {
+    const res = await adminApiFetch(`/admin/dmca-notices/${noticeId}/${action}`, {
+      method: "POST",
+      accessJwt,
+      origin: Astro.request.headers.get("Origin") ?? "",
+      ...(action === "reject" ? { body: { reason: form.get("reason") } } : {}),
+    });
+    if (res.status !== 200 && res.status !== 204) {
+      decisionError = adminApiErrorCode(res) ?? "DECISION_FAILED";
+    }
+  }
+}
+
+const noticesResp = await adminApiFetch<AdminDmcaNoticesResponse>("/admin/dmca-notices", { accessJwt });
+const notices = noticesResp.status === 200 && noticesResp.data ? noticesResp.data.notices : [];
+const noticesError =
+  noticesResp.status !== 200 ? (adminApiErrorCode(noticesResp) ?? "NOTICES_LOAD_FAILED") : null;
+---
+<BaseLayout title="DMCA notices">
+  <div class="wrap admin-page">
+    <h1>DMCA notices</h1>
+    <p class="admin-nav"><a class="link" href="/admin/queue">Moderation queue →</a> · <a class="link" href="/admin/dsa-notices">DSA notices →</a></p>
+    <p class="hint">
+      Take down removes the material, tells its author (with a copy of the notice and a counter-notice link) and tells the
+      complainant. Reject tells the complainant why. Neither is automatic: an undecided notice hides nothing.
+    </p>
+    {decisionError && <p class="err">Decision failed: {decisionError}</p>}
+    {noticesError && <p class="err">Could not load the notices: {noticesError}</p>}
+    {
+      notices.length === 0 ? (
+        <p id="no-items">Nothing open.</p>
+      ) : (
+        <ul class="queue">
+          {notices.map((n) => (
+            <li class="queue-item">
+              <p class="excerpt">{n.excerpt}</p>
+              <p class="meta">
+                {n.kind} · sent by {n.complainantName} ({n.complainantEmail}) · {n.createdAt}
+              </p>
+              <p class="meta">{n.complainantAddress} · {n.complainantPhone} · signed: {n.signature}</p>
+              <p class="statement"><strong>Work claimed:</strong> {n.workDescription}</p>
+              <p class="meta">This author's standing takedowns: {n.authorStrikes}</p>
+              {n.contentDeleted && (
+                <p class="orphan-flag">The material is already gone — there is nothing to take down. Reject to answer the complainant.</p>
+              )}
+              <div class="decision-row">
+                {!n.contentDeleted && (
+                  <form method="POST">
+                    <input type="hidden" name="action" value="takedown" />
+                    <input type="hidden" name="noticeId" value={n.id} />
+                    <button type="submit" class="btn btn-primary">Take down</button>
+                  </form>
+                )}
+                <form method="POST" class="reject-form">
+                  <input type="hidden" name="action" value="reject" />
+                  <input type="hidden" name="noticeId" value={n.id} />
+                  <label>
+                    Why the notice is not acted on (shown to the complainant)
+                    <textarea name="reason" required maxlength="2000" />
+                  </label>
+                  <button type="submit" class="btn btn-ghost">Reject</button>
+                </form>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .admin-page{padding:clamp(40px,7vw,80px) 0}
+  .admin-nav{margin:4px 0 20px}
+  .hint{color:var(--muted);font-size:14px;margin:0 0 20px}
+  .err{color:var(--red, #e5484d)}
+  .queue{list-style:none;display:flex;flex-direction:column;gap:24px;margin-top:24px}
+  .queue-item{border:1px solid var(--line);border-radius:8px;padding:16px}
+  .queue-item .excerpt{font-weight:600}
+  .queue-item .meta{color:var(--muted);font-size:13px;margin:6px 0}
+  .queue-item .statement{color:var(--text);margin:8px 0;white-space:pre-wrap}
+  .orphan-flag{color:var(--red, #e5484d);font-size:13px;margin:0 0 12px}
+  .decision-row{display:flex;flex-direction:column;gap:12px;margin-top:8px}
+  .reject-form{display:flex;flex-direction:column;gap:8px}
+  .reject-form textarea{width:100%;background:var(--ink2);border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;color:var(--text);font:inherit;margin-top:4px}
+</style>

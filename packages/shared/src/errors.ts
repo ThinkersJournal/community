@@ -80,6 +80,11 @@ export type ApiErrorCode =
   // that), or the notice is already resolved. A nonexistent notice id is
   // NOT_FOUND, not this.
   | "DSA_NOTICE_NOT_ORPHANED"
+  // 409 - POST /admin/dmca-notices/:id/takedown and /reject (R9): the notice is
+  // unconfirmed or already decided (DMCA_NOT_PENDING), or the material is gone
+  // so only a rejection is possible (DMCA_TARGET_GONE).
+  | "DMCA_NOT_PENDING"
+  | "DMCA_TARGET_GONE"
   // --- payloads ------------------------------------------------------------
   | "PAYLOAD_TOO_LARGE"      // 413 — over the streaming size cap (T8)
   | "UNSUPPORTED_MEDIA_TYPE" // 415 — failed the magic-byte allowlist (T7/T8)

@@ -51,6 +51,13 @@ export interface DecisionInput {
   /** Spec §3 T1: the author's account is held in THIS SAME transaction. */
   readonly accountHold?: { readonly category: LegalHoldCategory };
   /**
+   * R9: the DMCA notice this decision answers (`dmca-decisions.ts`). When set the
+   * source is `dmca_notice` and the action row carries the notice id. The DSA
+   * notice / member-report derivation below is skipped for the source only; any
+   * open DSA notices about the same content are still resolved as before.
+   */
+  readonly dmcaNoticeId?: string;
+  /**
    * Notice outbox PR 1: when set, the author's notice is rendered and queued
    * (and the appeal token minted) IN THIS SAME TRANSACTION, unless
    * `noticeSkip` says there is no one to tell or the decision is a restore of
@@ -184,7 +191,9 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
   // report is open when no content_* decision on the target is newer than it
   // (the queue's `ma.created_at > newest_report_at` test, applied per report).
   let source: ModerationSource;
-  if (noticeRows.length > 0) {
+  if (input.dmcaNoticeId !== undefined) {
+    source = "dmca_notice";
+  } else if (noticeRows.length > 0) {
     source = "dsa_notice";
   } else {
     const { rows } = await c.query<{ unhandled: boolean }>(
@@ -218,7 +227,8 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
     // Several notices resolved by one ruling: the OLDEST (lowest created_at) is
     // the one stored; every one is still linked from its own side
     // (`dsa_notices.resolution_action_id`).
-    dsaNoticeId: noticeRows[0]?.id,
+    dsaNoticeId: input.dmcaNoticeId === undefined ? noticeRows[0]?.id : undefined,
+    dmcaNoticeId: input.dmcaNoticeId,
   });
 
   // DSA (spec §8): a ruling on this content answers every CONFIRMED, open

@@ -112,6 +112,18 @@ reported comment (captured when you filed the notice), and, once a moderator
 has resolved it, a record of how it was resolved. If the reported content is
 later deleted, the notice and that captured title or excerpt are kept.
 
+**Copyright (DMCA) notices.** If you send a copyright notice through the
+`/dmca/report` form, we collect your name, email address, postal address, phone
+number, a typed signature, a description of the work and the two statements the
+law requires. Unlike a DSA notice, **a copy of a DMCA notice, including your
+name and contact details, is sent to the person whose material it concerns**
+when we remove that material, because the law lets them answer it with a
+counter-notice and they cannot do so without knowing who sent it. If they send a
+counter-notice, a copy of it, including their name, address and phone number, is
+sent to you. Unconfirmed notices are deleted after 7 days. We keep confirmed
+notices and counter-notices as a legal record and do not delete them
+automatically today.
+
 ## 5. Retention
 
 - **Unverified accounts** are automatically deleted after 7 days if the
