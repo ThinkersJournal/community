@@ -135,7 +135,9 @@ CSP block, not unfinished, not a bug (`apps/api/src/routes/media.ts:64,225`
 hardcode the CDN origin; `apps/web/src/lib/csp.ts:58` allows it). No action
 beyond the DNS step.
 
-## 6. Moderation notice has no appeal route   `#53 — Fix before launch`
+## 6. Moderation notice has no appeal route   `#53 — SHIPPED (#144: the /appeal page, the notice link and the editor banner link)`
+
+*Historical record below; the text describes the state when it was written.*
 
 **What:** The notice an author receives after a moderation decision
 (`apps/api/src/moderation/notify-author.ts`) gives the decision and the
@@ -156,7 +158,9 @@ whichever comes first.
 
 ---
 
-## 7. A moderator's Restore can be undone by one new report   `#55 — Fix before launch`
+## 7. A moderator's Restore can be undone by one new report   `#55 — SHIPPED (#118)`
+
+*Historical record below; the text describes the state when it was written.*
 
 **What:** `apps/api/src/moderation/auto-hide.ts` counts **every** report from
 the last 24h against the auto-hide threshold, including the reports a moderator

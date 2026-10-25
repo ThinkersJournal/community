@@ -23,6 +23,12 @@ This policy explains what we collect, why, who processes it, and your choices.
 - **A session cookie** — an opaque identifier that keeps you logged in. It is
   strictly necessary for the Service; we do not use advertising or cross-site
   tracking cookies.
+- **A device cookie** — a random identifier (`__Host-tj_device`, set when you sign
+  up or sign in, kept for 400 days) that lets us recognise a browser you have
+  already used. For each account we keep a list of known browsers: a keyed hash of
+  that identifier with the dates it was first and last seen, deleted 400 days after
+  the browser was last seen. It is used for account security, not for advertising
+  or cross-site tracking.
 
 **DSA notices (legal complaints):**
 - If you report illegal content via the `/dsa-notice` form, we collect your name,
