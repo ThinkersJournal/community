@@ -29,6 +29,22 @@ This policy explains what we collect, why, who processes it, and your choices.
   that identifier with the dates it was first and last seen, deleted 400 days after
   the browser was last seen. It is used for account security, not for advertising
   or cross-site tracking.
+- **Your approximate country** — Cloudflare tells us which country a request came
+  from. When you sign up, sign in or reset your password we read it and use it for
+  one purpose: the account-security emails we send you (for example "a new browser
+  signed in from France") and the last-seen country kept against a known browser.
+  We do not store your IP address with it.
+- **Fingerprints of the images you upload** — we convert every upload to WebP and
+  discard the original, but first we compute and keep cryptographic hashes (MD5,
+  SHA-1 and SHA-256) of the original file. We keep them permanently so that we can
+  recognise a known illegal image if it is ever uploaded again. They cannot be
+  turned back into the image. When the account that uploaded a file is deleted, the
+  link between the hashes and that account is removed; the hashes stay.
+- **The text of moderation emails** — when we send you a moderation notice (for
+  example that a post was removed, with the reason), or send one to a person who
+  filed a legal complaint, we keep a copy of the message in a notice record for 365
+  days, then delete it. A link in the copy that lets you appeal is replaced with a
+  marker once the message has been delivered.
 
 **DSA notices (legal complaints):**
 - If you report illegal content via the `/dsa-notice` form, we collect your name,
