@@ -9,8 +9,8 @@
  * does not carry a verified Access JWT. The guard is therefore the FIRST
  * statement in the frontmatter, before markPrivate, the CSP and any api call.
  *
- * Takedown and reject are the ONLY mutating calls, each to its own api route
- * (`/admin/dmca-notices/:id/takedown`, `/reject`). A notice is queue INPUT for a
+ * The mutating calls are `/admin/dmca-notices/:id/takedown`, `/reject`,
+ * `/claimant-sued` and `/withdraw`, each its own api route. A notice is queue INPUT for a
  * human only (AC-1): nothing on this page, or anywhere, hides content until a
  * moderator presses Take down.
  */
@@ -39,7 +39,8 @@ if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
   const action = form.get("action");
   const noticeId = form.get("noticeId");
-  if (typeof noticeId !== "string" || !UUID_RE.test(noticeId) || (action !== "takedown" && action !== "reject")) {
+  const ACTIONS = ["takedown", "reject", "claimant-sued", "withdraw"];
+  if (typeof noticeId !== "string" || !UUID_RE.test(noticeId) || typeof action !== "string" || !ACTIONS.includes(action)) {
     decisionError = "INVALID_INPUT";
   } else {
     const res = await adminApiFetch(`/admin/dmca-notices/${noticeId}/${action}`, {
@@ -56,6 +57,7 @@ if (Astro.request.method === "POST") {
 
 const noticesResp = await adminApiFetch<AdminDmcaNoticesResponse>("/admin/dmca-notices", { accessJwt });
 const notices = noticesResp.status === 200 && noticesResp.data ? noticesResp.data.notices : [];
+const counters = noticesResp.status === 200 && noticesResp.data ? noticesResp.data.counters : [];
 const noticesError =
   noticesResp.status !== 200 ? (adminApiErrorCode(noticesResp) ?? "NOTICES_LOAD_FAILED") : null;
 ---
@@ -109,6 +111,49 @@ const noticesError =
         </ul>
       )
     }
+    <h2>Standing takedowns</h2>
+    <p class="hint">
+      Material taken down after a notice. When the author sends a counter-notice, the material is restored automatically
+      after the wait unless you record that the complainant filed suit. If the complainant withdraws the notice, restore at once.
+    </p>
+    {
+      counters.length === 0 ? (
+        <p id="no-standing">None.</p>
+      ) : (
+        <ul class="queue">
+          {counters.map((n) => (
+            <li class="queue-item">
+              <p class="excerpt">{n.label}</p>
+              <p class="meta">
+                {n.kind} · notice from {n.complainantName} · taken down {n.decidedAt}
+              </p>
+              {n.state === "counter_received" ? (
+                <p class="meta">
+                  Counter-notice received {n.counterReceivedAt} · restores after {n.restoreAfter}
+                  {n.claimantSuedAt ? ` · complainant filed suit (${n.claimantSuedAt}): will not restore automatically` : ""}
+                </p>
+              ) : (
+                <p class="meta">No counter-notice.</p>
+              )}
+              <div class="decision-row inline">
+                {n.state === "counter_received" && !n.claimantSuedAt && (
+                  <form method="POST">
+                    <input type="hidden" name="action" value="claimant-sued" />
+                    <input type="hidden" name="noticeId" value={n.id} />
+                    <button type="submit" class="btn btn-ghost">Complainant filed suit</button>
+                  </form>
+                )}
+                <form method="POST">
+                  <input type="hidden" name="action" value="withdraw" />
+                  <input type="hidden" name="noticeId" value={n.id} />
+                  <button type="submit" class="btn btn-ghost">Complainant withdrew: restore now</button>
+                </form>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )
+    }
   </div>
 </BaseLayout>
 <style>
@@ -124,6 +169,8 @@ const noticesError =
   .orphan-flag{color:var(--red, #e5484d);font-size:13px;margin:0 0 12px}
   .decision-row{display:flex;flex-direction:column;gap:12px;margin-top:8px}
   .reject-form{display:flex;flex-direction:column;gap:8px}
+  .decision-row.inline{flex-direction:row;flex-wrap:wrap;gap:10px}
+  h2{margin-top:40px}
   .reject-form textarea{width:100%;background:var(--ink2);border:1px solid var(--line);
     border-radius:8px;padding:9px 11px;color:var(--text);font:inherit;margin-top:4px}
 </style>

@@ -179,6 +179,11 @@ const CASES: readonly ErrorCase[] = [
     build: () => new Request("https://api.test/dmca-notice/confirm"),
   },
   {
+    name: "400 dmca counter-notice peek with no token",
+    route: "GET /dmca-counter",
+    build: () => new Request("https://api.test/dmca-counter"),
+  },
+  {
     name: "401 csrf route with no session",
     route: "GET /auth/csrf",
     build: () => new Request("https://api.test/auth/csrf"),

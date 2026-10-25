@@ -1,0 +1,153 @@
+---
+/**
+ * `/dmca/counter?token=…` — the author's DMCA counter-notice (ROADMAP R9; 17 U.S.C.
+ * §512(g)(3)). The single-use token in the takedown email is the credential, so
+ * this page needs no account and no Turnstile. Same server-side form-post-to-self
+ * shape as dmca/confirm.astro:
+ *
+ *  - GET only PEEKS (`GET /dmca-counter`), so an invalid, used or expired link
+ *    shows its outcome before anything is typed, and a mail client prefetching
+ *    the link never uses the token up.
+ *  - the only `method: "POST"` api call is inside the POST branch.
+ *
+ * The statement wording is the statute's and a placeholder for the attorney, like
+ * docs/legal/dmca-policy.md.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { apiErrorCode, apiFetch } from "../../lib/api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+// Per-viewer: the URL carries a secret and the outcome is per-author.
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+const tokenFromLink = Astro.url.searchParams.get("token") ?? "";
+/** The token the form carries: the link's on first view, the posted one when the form is shown again. */
+let activeToken = tokenFromLink;
+
+let target: { kind: "post" | "comment"; label: string } | null = null;
+let filed = false;
+let error: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const token = String(form.get("token") ?? "");
+  activeToken = token;
+  const response = await apiFetch("/dmca-counter", {
+    method: "POST",
+    body: {
+      token,
+      authorName: form.get("authorName"),
+      authorAddress: form.get("authorAddress"),
+      authorPhone: form.get("authorPhone"),
+      signature: form.get("signature"),
+      // An unticked checkbox is absent from the form data: `true` or `false`.
+      statementMistake: form.get("statementMistake") === "on",
+      consentJurisdiction: form.get("consentJurisdiction") === "on",
+    },
+    // The BROWSER's Origin, verbatim: the token is the credential, but
+    // `checkOrigin` is still this route's CSRF defense (see dsa-notice/confirm.astro).
+    origin: Astro.request.headers.get("Origin") ?? "",
+  });
+  if (response.status === 200) {
+    filed = true;
+  } else if (apiErrorCode(response) === "INVALID_TOKEN") {
+    error = "This link is invalid, has already been used, or has expired.";
+  } else if (response.status === 429) {
+    error = "Too many attempts. Please wait and try again.";
+  } else {
+    error = "Something went wrong. Check the form and try again.";
+  }
+  if (!filed && error !== "This link is invalid, has already been used, or has expired.") {
+    // Keep the form usable: re-peek so the page can show what the notice was about.
+    const peek = await apiFetch<{ kind: "post" | "comment"; label: string }>(
+      `/dmca-counter?token=${encodeURIComponent(token)}`,
+    );
+    target = peek.status === 200 && peek.data ? peek.data : null;
+  }
+} else if (tokenFromLink !== "") {
+  // GET — PEEK ONLY.
+  const peek = await apiFetch<{ kind: "post" | "comment"; label: string }>(
+    `/dmca-counter?token=${encodeURIComponent(tokenFromLink)}`,
+  );
+  target = peek.status === 200 && peek.data ? peek.data : null;
+}
+---
+
+<BaseLayout title="Counter-notice" description="Answer a copyright notice about your content on Thinker's Journal.">
+  <div class="wrap form-page">
+    <h1>Counter-notice</h1>
+
+    {
+      filed ? (
+        <p id="filed">
+          Thank you. We have sent your counter-notice to the person who sent the copyright
+          notice. Unless they tell us they have filed a court action, we may restore your
+          content in about ten business days.
+        </p>
+      ) : target === null ? (
+        <>
+          {error !== null && <p id="error" role="alert">{error}</p>}
+          <p id="invalid">This link is invalid, has already been used, or has expired.</p>
+        </>
+      ) : (
+        <>
+          <p class="intro">
+            We removed your {target.kind === "post" ? "post" : "comment"}
+            {" "}<strong>{target.label}</strong> after a copyright (DMCA) notice. If you
+            believe it was removed by mistake or misidentification, you can send a
+            counter-notice. We will send it, with your name, address and phone number,
+            to the person who sent the notice.
+          </p>
+          {error !== null && <p id="error" role="alert">{error}</p>}
+          <form method="POST" class="form">
+            <input type="hidden" name="token" value={activeToken} />
+            <label>
+              Your name
+              <input type="text" name="authorName" required maxlength="200" />
+            </label>
+            <label>
+              Your postal address
+              <textarea name="authorAddress" required maxlength="500" rows="3" />
+            </label>
+            <label>
+              Your phone number
+              <input type="tel" name="authorPhone" required maxlength="50" />
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" name="statementMistake" required />
+              I swear, under penalty of perjury, that I have a good-faith belief that the
+              material was removed or disabled as a result of mistake or misidentification
+              of the material.
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" name="consentJurisdiction" required />
+              I consent to the jurisdiction of the federal district court for the judicial
+              district where my address is located (or, if my address is outside the
+              United States, any judicial district in which Thinker's Journal may be
+              found), and I will accept service of process from the person who sent the
+              notice.
+            </label>
+            <label>
+              Your signature (type your full legal name)
+              <input type="text" name="signature" required maxlength="200" />
+            </label>
+            <button type="submit" class="btn btn-primary">Send counter-notice</button>
+          </form>
+        </>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .intro{color:var(--muted);margin:0 0 20px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .form input,.form textarea{background:var(--ink2);border:1px solid var(--line);
+    border-radius:8px;padding:11px 13px;color:var(--text);font:inherit}
+  .form input:focus-visible,.form textarea:focus-visible{border-color:var(--green)}
+  .checkbox-row{flex-direction:row;align-items:flex-start;gap:8px}
+  .checkbox-row input{flex:0 0 auto;margin-top:3px}
+</style>
