@@ -60,6 +60,12 @@ export const DsaNoticeInput = z
   .object({
     postId: z.string().uuid().optional(),
     commentId: z.string().uuid().optional(),
+    /**
+     * The exact URL of a post, for a notice filed without a per-item link
+     * (Art. 16(2)(b) "exact electronic location"). The api resolves it to a
+     * `postId`; it is never stored.
+     */
+    contentUrl: z.string().trim().min(1).max(2048).optional(),
     reason: z.enum(REPORT_REASONS),
     statement: z.string().trim().min(1).max(5000),
     reporterName: z.string().trim().min(1).max(200),
@@ -70,7 +76,8 @@ export const DsaNoticeInput = z
     goodFaith: z.literal(true),
     turnstileToken: z.string().min(1),
   })
-  .refine((t) => (t.postId === undefined) !== (t.commentId === undefined), {
-    message: "exactly one of postId/commentId",
-  });
+  .refine(
+    (t) => [t.postId, t.commentId, t.contentUrl].filter((v) => v !== undefined).length === 1,
+    { message: "exactly one of postId/commentId/contentUrl" },
+  );
 export type DsaNoticeInputT = z.infer<typeof DsaNoticeInput>;

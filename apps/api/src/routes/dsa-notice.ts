@@ -28,6 +28,7 @@ import { verifyTurnstile } from "../auth/turnstile";
 import { withClient } from "../db/client";
 import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
+import { parsePostUrl } from "../moderation/content-url";
 import {
   confirmDsaNotice,
   createDsaNotice,
@@ -67,9 +68,15 @@ export async function handleDsaNotice(
       fields: parsed.error.issues.map((issue) => issue.path.map(String).join(".")),
     });
   }
-  const { turnstileToken, postId, commentId, reason, statement, reporterName, reporterEmail } =
+  const { turnstileToken, contentUrl, commentId, reason, statement, reporterName, reporterEmail } =
     parsed.data;
-  const input = { postId, commentId, reason, statement, reporterName, reporterEmail };
+  // A `contentUrl` names the post by its exact address (S22 F7b). Parsed here,
+  // before the limiter and Turnstile, so a malformed URL costs the reporter
+  // neither; resolved to a `postId` at step 5 (it needs the database).
+  const urlTarget = contentUrl === undefined ? null : parsePostUrl(contentUrl);
+  if (contentUrl !== undefined && urlTarget === null) {
+    return errorResponse("INVALID_INPUT", 400, { fields: ["contentUrl"] });
+  }
 
   // ---- 3. Rate limit — TWO buckets, same reasoning as signup.ts's (a)/(b)
   // pair (see its own comment, which this mirrors): it runs AFTER parsing
@@ -123,7 +130,20 @@ export async function handleDsaNotice(
   }
 
   // ---- 5. Insert (FRESH), ONLY if the target is publicly visible ------------
-  const result = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => createDsaNotice(c, input));
+  const result = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    let postId = parsed.data.postId;
+    if (urlTarget !== null) {
+      const { rows } = await c.query<{ id: string }>(
+        `SELECT p.id FROM posts p JOIN profiles pr ON pr.user_id = p.author_id
+          WHERE pr.username = $1 AND p.slug = $2 AND p.status = 'published' AND p.hidden_at IS NULL`,
+        [urlTarget.username, urlTarget.slug],
+      );
+      // Same single 404 as every other non-public target (header above).
+      if (rows[0] === undefined) return null;
+      postId = rows[0].id;
+    }
+    return createDsaNotice(c, { postId, commentId, reason, statement, reporterName, reporterEmail });
+  });
   if (result === null) {
     return errorResponse("NOT_FOUND", 404);
   }
@@ -138,11 +158,11 @@ export async function handleDsaNotice(
 
   // ---- 6. Mail the confirmation link — DISPATCHED, not awaited ---------------
   const confirmUrl = `${verificationLinkOrigin(request)}/dsa-notice/confirm?token=${encodeURIComponent(result.token)}`;
-  const targetKind = input.postId !== undefined ? "post" : "comment";
+  const targetKind = commentId === undefined ? "post" : "comment";
   ctx.waitUntil(
     postmarkSend(env, {
       from: "noreply@thinkersjournal.com",
-      to: input.reporterEmail,
+      to: reporterEmail,
       subject: "Confirm your report to Thinkers Journal",
       textBody: `You reported a ${targetKind} on Thinkers Journal.\n\nTo confirm this report, open this link:\n\n${confirmUrl}\n\nIf you did not send this, ignore this email: nothing happens unless you confirm.`,
       htmlBody: `<p>You reported a ${escapeHtml(targetKind)} on Thinkers Journal.</p><p>To confirm this report, open this link:</p><p><a href="${escapeHtml(confirmUrl)}">${escapeHtml(confirmUrl)}</a></p><p>If you did not send this, ignore this email: nothing happens unless you confirm.</p>`,

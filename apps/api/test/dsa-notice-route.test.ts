@@ -143,6 +143,29 @@ async function postHiddenAt(postId: string): Promise<string | null> {
   return hiddenAt;
 }
 
+async function slugFor(postId: string): Promise<string> {
+  const ctx = createExecutionContext();
+  const slug = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ slug: string }>("SELECT slug FROM posts WHERE id = $1", [postId]);
+    return rows[0]!.slug;
+  });
+  await waitOnExecutionContext(ctx);
+  return slug;
+}
+
+async function noticePostId(reporterEmail: string): Promise<string | null> {
+  const ctx = createExecutionContext();
+  const id = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+    const { rows } = await c.query<{ post_id: string | null }>(
+      "SELECT post_id FROM dsa_notices WHERE reporter_email = $1",
+      [reporterEmail],
+    );
+    return rows[0]?.post_id ?? null;
+  });
+  await waitOnExecutionContext(ctx);
+  return id;
+}
+
 async function reportRowCount(postId: string): Promise<number> {
   const ctx = createExecutionContext();
   const n = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
@@ -567,4 +590,76 @@ describe("POST /dsa-notice", () => {
     },
     60_000,
   );
+
+  // S22 F7b — a notice with no per-item link names the content by its exact URL
+  // (DSA Art. 16(2)(b) "exact electronic location"); the api resolves it.
+  describe("contentUrl (a target-less notice)", () => {
+    const ORIGIN = "https://community.thinkersjournal.com";
+
+    it("202s and resolves a published post's URL to its post_id", async () => {
+      stubFetch(true);
+      const author = await createVerifiedActor();
+      const postId = await createPublished(author);
+      const url = `${ORIGIN}/@${author.username}/${await slugFor(postId)}`;
+      const body = validBody({});
+
+      const response = await dsaNotice({ ...body, contentUrl: url });
+      expect(response.status).toBe(202);
+      expect(await noticePostId(String(body.reporterEmail))).toBe(postId);
+    });
+
+    it("ignores a query string and fragment on the URL", async () => {
+      stubFetch(true);
+      const author = await createVerifiedActor();
+      const postId = await createPublished(author);
+      const url = `${ORIGIN}/@${author.username}/${await slugFor(postId)}/?utm=x#comments`;
+      const body = validBody({});
+
+      const response = await dsaNotice({ ...body, contentUrl: url });
+      expect(response.status).toBe(202);
+      expect(await noticePostId(String(body.reporterEmail))).toBe(postId);
+    });
+
+    it.each([
+      ["another origin", "https://evil.example/@someone/some-post"],
+      ["a lookalike host", "https://community.thinkersjournal.com.evil.example/@someone/some-post"],
+      ["a non-post path on our origin", "https://community.thinkersjournal.com/feed"],
+      ["not a URL", "not a url"],
+      ["a non-https scheme", "javascript:alert(1)"],
+    ])("400s INVALID_INPUT naming contentUrl for %s, with no row", async (_label, url) => {
+      stubFetch(true);
+      const body = { ...validBody({}), contentUrl: url };
+
+      const response = await dsaNotice(body);
+      expect(response.status).toBe(400);
+      const json = (await response.json()) as { code: string; fields?: string[] };
+      expect(json.code).toBe("INVALID_INPUT");
+      expect(json.fields).toContain("contentUrl");
+      expect(await noticeRowsFor(String(body.reporterEmail))).toHaveLength(0);
+    });
+
+    it("400s INVALID_INPUT when contentUrl is combined with postId", async () => {
+      stubFetch(true);
+      const author = await createVerifiedActor();
+      const postId = await createPublished(author);
+      const body = { ...validBody({ postId }), contentUrl: `${ORIGIN}/@${author.username}/x` };
+
+      const response = await dsaNotice(body);
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { code: string }).code).toBe("INVALID_INPUT");
+    });
+
+    it("404s a well-formed URL for a hidden post, like every other non-public target", async () => {
+      stubFetch(true);
+      const author = await createVerifiedActor();
+      const postId = await createPublished(author);
+      const url = `${ORIGIN}/@${author.username}/${await slugFor(postId)}`;
+      await hidePost(postId);
+      const body = { ...validBody({}), contentUrl: url };
+
+      const response = await dsaNotice(body);
+      expect(response.status).toBe(404);
+      expect(await noticeRowsFor(String(body.reporterEmail))).toHaveLength(0);
+    });
+  });
 });

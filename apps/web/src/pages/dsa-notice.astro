@@ -29,6 +29,12 @@ markPrivate(Astro);
 
 setPublicPageCsp(Astro, { turnstile: true });
 
+/** True when an api 400 envelope names `field` among its invalid `fields`. */
+function isFieldError(data: unknown, field: string): boolean {
+  const fields = (data as { fields?: unknown } | null)?.fields;
+  return Array.isArray(fields) && fields.includes(field);
+}
+
 const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY as string | undefined;
 
 const postIdFromLink = Astro.url.searchParams.get("post") ?? "";
@@ -39,17 +45,21 @@ let result: "sent" | null = null;
 let error: string | null = null;
 let postId = postIdFromLink;
 let commentId = commentIdFromLink;
+/** Only used when the link carried no target: the reporter pastes the content's address. */
+let contentUrl = "";
 
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
   postId = String(form.get("postId") ?? "");
   commentId = String(form.get("commentId") ?? "");
+  contentUrl = postId === "" && commentId === "" ? String(form.get("contentUrl") ?? "") : "";
 
   const response = await apiFetch("/dsa-notice", {
     method: "POST",
     body: {
       ...(postId !== "" ? { postId } : {}),
       ...(commentId !== "" ? { commentId } : {}),
+      ...(contentUrl !== "" ? { contentUrl } : {}),
       reason: form.get("reason"),
       statement: form.get("statement"),
       reporterName: form.get("reporterName"),
@@ -71,6 +81,11 @@ if (Astro.request.method === "POST") {
     // SAME 404 at the api — see routes/dsa-notice.ts's header. This page must
     // not try to distinguish them either.
     error = "That content isn't available to report.";
+  } else if (
+    response.status === 400 &&
+    isFieldError(response.data, "contentUrl")
+  ) {
+    error = "That isn't the address of a post on this site. Paste the post's full address.";
   } else if (response.status === 429) {
     error = "Too many attempts. Please wait and try again.";
   } else if (response.status === 403) {
@@ -101,6 +116,12 @@ if (Astro.request.method === "POST") {
           <form method="POST" class="form">
             <input type="hidden" name="postId" value={postId} />
             <input type="hidden" name="commentId" value={commentId} />
+            {postId === "" && commentId === "" && (
+              <label>
+                Link to the content
+                <input type="url" name="contentUrl" required maxlength="2048" value={contentUrl} />
+              </label>
+            )}
             <label>
               Your name
               <input type="text" name="reporterName" required maxlength="200" />
