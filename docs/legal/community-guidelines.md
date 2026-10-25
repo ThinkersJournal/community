@@ -1,6 +1,6 @@
 # Community Guidelines
 
-**Version:** 2026-10-15 · **Effective:** 2026-10-15
+**Version:** 2026-10-25 · **Effective:** 2026-10-25
 
 Thinker's Journal is a community for people who build and think in public. These
 Guidelines say what is not allowed and what happens when something breaks them.
@@ -70,7 +70,9 @@ or deleted afterwards, so that a decision can be explained and appealed.
 ## 4. Appeals
 
 - You can appeal a moderator's decision to keep your content hidden, to remove it, to
-  warn you, to suspend you or to ban you, **within 30 days** of the decision.
+  warn you, to suspend you or to ban you, **within 30 days** of the day we deliver
+  the email about the decision to you. If we cannot deliver it, the 30 days do not
+  start, and you can write to us instead (see Contact below).
 - The email we send about the decision carries the appeal link. For a post a moderator
   has hidden, the post's editor page also shows an "Appeal this decision" link. A
   suspended or banned account can still use the link from the email.

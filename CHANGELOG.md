@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.85
+
+Docs matched to the code: the privacy policy now describes the device cookie and known-browser list; the Community Guidelines (version 2026-10-25) say the 30-day appeal window starts when the decision email is delivered; the glossary and `pre-launch-fixes.md` no longer call the appeal form and login challenge unbuilt.
+
 ## 0.1.84
 
 Spec-to-roadmap audit: ROADMAP section 7 lists the work found in the docs and not on the roadmap (S1-S29), and section 2 drops the rows that have since merged. Docs only.
