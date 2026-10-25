@@ -9,10 +9,10 @@
  * markdown line) in the same commit. A stored moderation notice records the
  * version that was current when it was sent.
  */
-export const GUIDELINES_VERSION = "2026-10-15";
+export const GUIDELINES_VERSION = "2026-10-25";
 
 /** ISO date (YYYY-MM-DD) the published version took effect. */
-export const GUIDELINES_EFFECTIVE_DATE = "2026-10-15";
+export const GUIDELINES_EFFECTIVE_DATE = "2026-10-25";
 
 /** Public path of the page, relative to the community origin. */
 export const GUIDELINES_PATH = "/guidelines";

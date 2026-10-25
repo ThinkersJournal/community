@@ -10,7 +10,7 @@ This glossary defines the domain terms used across Thinker's Journal Community: 
 
 **Appeal**: A request, made through an in-app form (not email), to contest a moderation action. Granting an appeal writes `appeal_granted` to the audit log and applies the inverse action in the same transaction; denying writes `appeal_denied`. (see docs/superpowers/plans/2026-10-01-m4-2c-appeals.md)
 
-**Appeal window**: The 30 days from the moderation action during which it can be appealed (`APPEAL_WINDOW_DAYS = 30`). (see docs/superpowers/plans/2026-10-01-m4-2c-appeals.md)
+**Appeal window**: The 30 days from the day the decision notice is delivered during which a decision can be appealed (`APPEAL_WINDOW_DAYS = 30`, started at delivery by #214; a decision with no notice row counts from the decision). (see docs/superpowers/plans/2026-10-01-m4-2c-appeals.md)
 
 **Auto-hide**: The automatic hiding of a post or comment when it draws reports from at least 3 distinct reporters within 24 hours; it sets `hidden_at` and is global, not per viewer. Hidden content does not expire and stays hidden until a human reviews it. (see docs/superpowers/specs/2026-09-02-m4-report-block-design.md)
 
@@ -98,7 +98,7 @@ This glossary defines the domain terms used across Thinker's Journal Community: 
 
 **Tombstone**: A deleted comment that remains as a row with `deleted_at` set and its body emptied, rendered with `deleted: true` and a null author. A deleted post, by contrast, is hard-deleted; and an anonymised account's content is also shown as tombstones. (see docs/superpowers/specs/2026-10-14-moderation-author-notices-design.md)
 
-**Turnstile**: Cloudflare's bot challenge, used on signup, on unauthenticated DSA notice intake and (in design) on login, to throttle automated abuse. (see docs/superpowers/specs/2026-10-11-login-turnstile-challenge-design.md)
+**Turnstile**: Cloudflare's bot challenge, used on signup, on unauthenticated DSA notice intake and on login (built in #203 and flag-gated: `LOGIN_CHALLENGE` ships `"0"`), to throttle automated abuse. (see docs/superpowers/specs/2026-10-11-login-turnstile-challenge-design.md)
 
 **UserSecurityDO**: The per-user Durable Object whose `bumpEpoch()` invalidates a user's existing sessions; it does not by itself stop a suspended user logging back in, which the account status check does. (see docs/superpowers/specs/2026-09-06-m4-moderation-queue-design.md)
 
