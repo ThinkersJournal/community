@@ -1,6 +1,6 @@
 # Community Guidelines
 
-**Version:** 2026-10-25 · **Effective:** 2026-10-25
+**Version:** 2026-10-25.2 · **Effective:** 2026-10-25
 
 Thinker's Journal is a community for people who build and think in public. These
 Guidelines say what is not allowed and what happens when something breaks them.
@@ -63,6 +63,10 @@ email the author the outcome and the moderator's written reason.
 Moderators choose according to how serious the violation is and what has happened on
 the account before. They do not have to start with a warning. We email the account
 holder the moderator's written reason.
+
+**Severe violations skip these steps.** Sexual exploitation or endangerment of
+children, and credible threats of violence, result in immediate termination of the
+account.
 
 **Record.** Moderator decisions are written to an internal log that cannot be edited
 or deleted afterwards, so that a decision can be explained and appealed.

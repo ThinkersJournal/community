@@ -6,6 +6,15 @@ Companion to `docs/superpowers/specs/2026-09-27-deploy-automation-design.md`
 `pgmigrations`). This document is the operational half: what actually runs,
 what CireSnave does by hand, and in what order.
 
+## Migrations waiting for CireSnave to apply to production
+
+One list, so they can be applied in one go. Add a row in the PR that adds a migration (its title says
+`NEW MIGRATION NNNN`); remove it once production has it (check `GET /health/schema`). Only CireSnave holds the credential.
+
+| Migration | PR | What it adds | Without it |
+|---|---|---|---|
+| (none) | | Applied through `0040_dmca.sql` on 2026-10-25 (PM, with CireSnave's approval); `0039` and `0040` must stay byte-identical to what was applied | |
+
 ## How a deploy works now
 
 Cloudflare Workers Builds deploys `main` for both Workers
