@@ -58,12 +58,12 @@ async function mkUser(): Promise<string> {
 }
 
 /** A `user_warn` created `ageDays` ago. */
-async function mkAction(userId: string, ageDays: number): Promise<string> {
+async function mkAction(userId: string, ageDays: number, grounds?: { legal: string; contractual: string }): Promise<string> {
   const id = await run(async (c) => {
     const { rows } = await c.query<{ id: string }>(
-      `INSERT INTO moderation_actions (actor_admin, action, subject_user_id, reason, created_at)
-       VALUES ('mod', 'user_warn', $1, 'r', now() - make_interval(days => $2::int)) RETURNING id`,
-      [userId, ageDays],
+      `INSERT INTO moderation_actions (actor_admin, action, subject_user_id, reason, created_at, legal_ground, contractual_ground)
+       VALUES ('mod', 'user_warn', $1, 'r', now() - make_interval(days => $2::int), $3, $4) RETURNING id`,
+      [userId, ageDays, grounds?.legal ?? null, grounds?.contractual ?? null],
     );
     return rows[0]!.id;
   });
@@ -96,6 +96,22 @@ async function mkNotice(userId: string, actionId: string, n: NoticeRow): Promise
 const file = (userId: string, actionId: string) => run((c) => fileAppeal(c, { actionId, appellantId: userId, body: "I disagree." }));
 const target = (actionId: string) => run((c) => describeAppealTarget(c, actionId));
 const DAY = 86_400_000;
+
+describe("the appeal target states the grounds the decision cited (R7)", () => {
+  it("returns both grounds when the action cites them, and neither key when it cites none", async () => {
+    const u = await mkUser();
+    const plain = await mkAction(u, 1);
+    // moderation_actions is append-only: the grounds go in at INSERT.
+    const grounded = await mkAction(u, 1, { legal: "copyright_infringement", contractual: "guidelines_spam" });
+    const g = await target(grounded);
+    expect(g!.legalGround).toBe("copyright_infringement");
+    expect(g!.contractualGround).toBe("guidelines_spam");
+    const p = await target(plain);
+    expect(p).not.toBeNull();
+    expect("legalGround" in p!).toBe(false);
+    expect("contractualGround" in p!).toBe(false);
+  });
+});
 
 describe("the appeal window starts at delivery", () => {
   it("a notice delivered 20 days ago keeps a 40-day-old decision appealable, and the page says delivered_at + window", async () => {

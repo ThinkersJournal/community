@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.87
+
+The appeal page states the legal and contractual grounds the decision cited (ROADMAP R7), so it matches the author notice: `AppealTarget` carries the optional grounds and `appeal.astro` renders them. No migration.
+
 ## 0.1.86
 
 Docs matched to the code (the rest of ROADMAP S29): README status line and stale baseline, dated update notes on the design spec, queue design, deploy-automation design, CSAM design, SafeImage split, guidelines-intentions and outbox design, `legal/README.md`, `deploy.md` order constraint, and superseded banners on the 10-14 outbox design and the NCMEC notes. Original text is kept; no published wording changed.
