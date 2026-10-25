@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 import { DISPUTE_EMAIL } from "./contact";
+import type { DmcaStrikes } from "./dmca";
 /**
  * Wire types + the one cross-Worker constant for the Cloudflare Access-gated
  * admin surface (M4 2b). A DIFFERENT trust domain from member sessions —
@@ -238,6 +239,8 @@ export interface AdminAccountResponse {
   readonly suggestedNext: AdminAccountActionKind;
   /** Newest first, active and released (account-legal-hold spec §3 T3). */
   readonly holds: readonly AdminAccountHold[];
+  /** R9: the author's DMCA takedown record (a flag for a person, never an action). */
+  readonly dmcaStrikes: DmcaStrikes;
 }
 
 /** `POST /admin/accounts/:handle/actions`. */

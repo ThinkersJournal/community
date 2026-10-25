@@ -22,6 +22,7 @@ import { base64urlEncode, sha256Hex } from "../auth/encoding";
 import { BEGIN_BOUNDED_TX } from "../db/client";
 import { applyDecisionInTx, type DecisionResult } from "./decide";
 import { enqueueDmcaAuthorNotice, enqueueDmcaClaimantNotice } from "./notice-enqueue";
+import { standingStrikeSql, strikesFrom } from "./dmca-strikes";
 import { renderDmcaAuthorNotice, renderDmcaClaimantOutcome } from "./notify-dmca";
 
 /** The restore wait named to the author, in business days. A placeholder for the attorney (policy: 10-14). */
@@ -42,13 +43,15 @@ export interface OpenDmcaNotice {
   readonly signature: string;
   readonly createdAt: Date;
   readonly authorStrikes: number;
+  readonly authorFlagged: boolean;
 }
 
 /**
  * Every CONFIRMED notice still `pending`, oldest first. LEFT JOIN: a notice whose
  * target was deleted still appears (a human may reject it). `authorStrikes` counts
- * the author's takedowns that stand (`taken_down` or `counter_received`; a
- * restored or withdrawn one does not count).
+ * the author's takedowns that stand inside the strike window (dmca-strikes.ts:
+ * `taken_down` or `counter_received`; a restored, withdrawn or rejected one does
+ * not count), and `authorFlagged` says that count has reached the threshold.
  */
 export async function listOpenDmcaNotices(c: Client): Promise<OpenDmcaNotice[]> {
   const { rows } = await c.query<{
@@ -66,7 +69,7 @@ export async function listOpenDmcaNotices(c: Client): Promise<OpenDmcaNotice[]> 
             n.complainant_phone, n.signature, n.created_at,
             (SELECT count(*) FROM dmca_notices s
               WHERE s.subject_user_id = COALESCE(p.author_id, cm.author_id)
-                AND s.state IN ('taken_down','counter_received')) AS author_strikes
+                AND ${standingStrikeSql("s")}) AS author_strikes
        FROM dmca_notices n
        LEFT JOIN posts p ON p.id = n.post_id
        LEFT JOIN comments cm ON cm.id = n.comment_id
@@ -87,6 +90,7 @@ export async function listOpenDmcaNotices(c: Client): Promise<OpenDmcaNotice[]> 
     signature: r.signature,
     createdAt: r.created_at,
     authorStrikes: Number(r.author_strikes),
+    authorFlagged: strikesFrom(Number(r.author_strikes)).flagged,
   }));
 }
 

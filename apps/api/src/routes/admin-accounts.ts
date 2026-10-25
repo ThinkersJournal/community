@@ -14,6 +14,7 @@ import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
 import { applyAccountAction, loadAccountHistory } from "../moderation/account-actions";
 import { imposeManualAccountHold, listAccountHolds, releaseAccountHold } from "../moderation/account-holds";
+import { loadDmcaStrikes } from "../moderation/dmca-strikes";
 
 import {
   ADMIN_ACCOUNT_ACTIONS,
@@ -68,6 +69,7 @@ export async function handleAdminGetAccount(
 
   const history = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => loadAccountHistory(c, account.id));
   const holds = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => listAccountHolds(c, account.id));
+  const dmcaStrikes = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => loadDmcaStrikes(c, account.id));
   const body: AdminAccountResponse = {
     userId: account.id,
     handle: account.username,
@@ -77,6 +79,7 @@ export async function handleAdminGetAccount(
     history,
     suggestedNext: suggestNextRung(history),
     holds,
+    dmcaStrikes,
   };
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }

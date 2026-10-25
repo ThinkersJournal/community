@@ -84,7 +84,13 @@ const noticesError =
               </p>
               <p class="meta">{n.complainantAddress} · {n.complainantPhone} · signed: {n.signature}</p>
               <p class="statement"><strong>Work claimed:</strong> {n.workDescription}</p>
-              <p class="meta">This author's standing takedowns: {n.authorStrikes}</p>
+              <p class="meta">This author's standing takedowns in the last 12 months: {n.authorStrikes}</p>
+              {n.authorFlagged && (
+                <p class="orphan-flag">
+                  Repeat-infringer flag: this author has reached the threshold. This is a prompt, not an action:
+                  a moderator decides whether to terminate the account (account page).
+                </p>
+              )}
               {n.contentDeleted && (
                 <p class="orphan-flag">The material is already gone — there is nothing to take down. Reject to answer the complainant.</p>
               )}
