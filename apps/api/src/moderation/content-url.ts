@@ -20,7 +20,9 @@ export function parsePostUrl(raw: string): { username: string; slug: string } | 
   }
   if (url.origin !== CANONICAL_ORIGIN) return null;
 
-  const [, rawUsername, rawSlug] = /^\/@([^/]+)\/([^/]+)\/?$/.exec(url.pathname) ?? [];
+  const match = /^\/@([^/]+)\/([^/]+)\/?$/.exec(url.pathname);
+  const rawUsername = match?.[1];
+  const rawSlug = match?.[2];
   if (rawUsername === undefined || rawSlug === undefined) return null;
   try {
     return { username: decodeURIComponent(rawUsername), slug: decodeURIComponent(rawSlug) };
