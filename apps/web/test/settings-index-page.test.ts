@@ -42,7 +42,7 @@ describe("settings/index.astro", () => {
     "settings/blocked.astro — both read a real session — rather than settings/notifications.astro, " +
     "which this file agrees with anyway (all three use the identical csrfToken-null check)", () => {
     expect(code).toContain("markPrivate(");
-    expect(code).toMatch(/if \(csrfToken === null\) return Astro\.redirect\("\/login"\);/);
+    expect(code).toContain("if (csrfToken === null) return Astro.redirect(loginHrefFor(Astro.url));");
   });
 
   it("never caches (private, per-viewer settings)", () => {
