@@ -41,7 +41,7 @@
  * auth + dup-email + read-after-write: Hyperdrive never invalidates on write,
  * so a `HYPERDRIVE_CACHED` read here would be a real security bug.
  */
-import { SignupInput } from "@thinkersjournal/shared";
+import { SIGNUP_MINIMUM_AGE, SignupInput, TERMS_VERSION } from "@thinkersjournal/shared";
 
 import { checkOrigin } from "../auth/csrf";
 import {
@@ -368,6 +368,18 @@ export async function handleSignup(
           `INSERT INTO profiles (user_id, username) VALUES ($1, $2)
            ON CONFLICT (user_id) DO UPDATE SET username = EXCLUDED.username`,
           [row.id, username],
+        );
+
+        // S6: the record that this person ticked the age + Terms box. Same
+        // transaction as the account, so "account exists" implies "agreement
+        // recorded". A re-signup of an unverified address re-states it (new time).
+        // The version and age come from the server's constants, never the client.
+        await c.query(
+          `INSERT INTO terms_acceptances (user_id, terms_version, minimum_age)
+                VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, terms_version) DO UPDATE
+                   SET accepted_at = now(), minimum_age = EXCLUDED.minimum_age`,
+          [row.id, TERMS_VERSION, SIGNUP_MINIMUM_AGE],
         );
 
         await c.query("COMMIT");

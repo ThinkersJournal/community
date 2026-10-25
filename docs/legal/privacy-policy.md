@@ -187,12 +187,15 @@ later deleted, the notice and that captured title or excerpt are kept.
 
 ## 7. Children
 
-You must be at least 13 years old, or older if the minimum age for consenting
+You must be at least 16 years old, or older if the minimum age for consenting
 to online services where you live is higher, to use the Service (Terms of
 Service §1). The Service is not directed to anyone below that age, and we do not
 knowingly collect their personal information. We do not ask for your date of
-birth and do not verify ages: signing up asks only for an email address, a
-handle and a password. If we learn that an account belongs to someone below that
+birth and do not verify ages: signing up asks for an email address, a handle and
+a password, and for you to tick a box confirming that you are at least 16 and
+agree to our Terms, Guidelines and this policy. We keep a record of that
+confirmation (your account, the date, the version of the text and the age you
+confirmed) for as long as the account exists. If we learn that an account belongs to someone below that
 age, we will delete the account and the personal information it holds.
 
 ## 8. Security

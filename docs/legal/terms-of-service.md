@@ -11,8 +11,10 @@ and the [DMCA Policy](dmca-policy.md). If you do not agree, do not use the Servi
 
 ## 1. Eligibility
 
-You must be at least **13 years old** (or the minimum digital-consent age in your
-jurisdiction, if higher) to use the Service. By using it you represent that you meet
+You must be at least **16 years old** (or the minimum digital-consent age in your
+jurisdiction, if higher) to use the Service. When you sign up, you confirm this and
+your agreement to these Terms by ticking a box; we record that you did, with the
+date and the version of the text. By using the Service you represent that you meet
 this requirement and that your use does not violate any applicable law.
 
 ## 2. Your account

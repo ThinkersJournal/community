@@ -13,6 +13,7 @@ export * from './notifications-prefs';
 export * from './notifications-read';
 export * from './posts';
 export * from './schemas';
+export * from './terms';
 export * from './search';
 export * from './security-log';
 export * from './social';

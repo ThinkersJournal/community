@@ -237,6 +237,8 @@ describe("0001 users + profiles migration", () => {
       // 0038_media_upload_refusals.sql — a refused upload of restricted bytes is recorded.
       expect(await tableExists(client, "media_upload_refusals")).toBe(true);
       expect(await indexExists(client, "media_upload_refusals_key_idx")).toBe(true);
+      // 0039_terms_acceptances.sql — the signup terms-acceptance record.
+      expect(await tableExists(client, "terms_acceptances")).toBe(true);
     });
 
     await migrate("down");
@@ -335,6 +337,8 @@ describe("0001 users + profiles migration", () => {
       expect(await indexExists(client, "posts_author_idempotency_key")).toBe(true);
       // 0038 — re-applied by the round-trip.
       expect(await tableExists(client, "media_upload_refusals")).toBe(true);
+      // 0039 — re-applied by the round-trip.
+      expect(await tableExists(client, "terms_acceptances")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });

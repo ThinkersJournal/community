@@ -14,6 +14,7 @@ describe('SignupInput', () => {
     password: 'correct-horse-battery',
     username: 'reader_1',
     turnstileToken: 'a-turnstile-token',
+    acceptedTerms: true,
   };
 
   it('accepts a valid payload', () => {
@@ -39,15 +40,22 @@ describe('SignupInput', () => {
     expect(result.success && result.data.email).toBe('reader@example.com');
   });
 
+  it('requires acceptedTerms to be literally true', () => {
+    const { acceptedTerms: _omitted, ...without } = validPayload;
+    expect(SignupInput.safeParse(without).success).toBe(false);
+    expect(SignupInput.safeParse({ ...validPayload, acceptedTerms: false }).success).toBe(false);
+    expect(SignupInput.safeParse({ ...validPayload, acceptedTerms: 'on' }).success).toBe(false);
+  });
+
   it('requires a valid normalized handle', () => {
     const ok = SignupInput.safeParse({
-      email: 'A@B.com', password: 'x'.repeat(12), username: '  Ada_1  ', turnstileToken: 't',
+      email: 'A@B.com', password: 'x'.repeat(12), username: '  Ada_1  ', turnstileToken: 't', acceptedTerms: true,
     });
     expect(ok.success).toBe(true);
     if (ok.success) expect(ok.data.username).toBe('ada_1'); // trimmed + lowercased
 
-    expect(SignupInput.safeParse({ email: 'a@b.com', password: 'x'.repeat(12), username: 'ab', turnstileToken: 't' }).success).toBe(false); // too short
-    expect(SignupInput.safeParse({ email: 'a@b.com', password: 'x'.repeat(12), username: 'bad handle', turnstileToken: 't' }).success).toBe(false); // space
+    expect(SignupInput.safeParse({ email: 'a@b.com', password: 'x'.repeat(12), username: 'ab', turnstileToken: 't', acceptedTerms: true }).success).toBe(false); // too short
+    expect(SignupInput.safeParse({ email: 'a@b.com', password: 'x'.repeat(12), username: 'bad handle', turnstileToken: 't', acceptedTerms: true }).success).toBe(false); // space
   });
 });
 

@@ -57,6 +57,9 @@ export const SignupInput = z.object({
   // 2026-08-13-handle-at-signup-design.md).
   username: z.string().trim().toLowerCase().regex(USERNAME_PATTERN),
   turnstileToken: z.string().min(1),
+  // S6: the person ticked "I am 16 or over and agree to the Terms…". Literal
+  // `true` — anything else (missing, false, "on") is a 400 naming this field.
+  acceptedTerms: z.literal(true),
 });
 
 /**
