@@ -26,7 +26,12 @@ import { apiErrorCode, apiFetch, applyCookies } from "../lib/api";
 import { markPrivate } from "../lib/cache";
 import { setPublicPageCsp } from "../lib/csp";
 
-import { CONTRACTUAL_GROUND_LABELS, LEGAL_GROUND_LABELS, type AppealTarget } from "@thinkersjournal/shared";
+import {
+  CONTRACTUAL_GROUND_LABELS,
+  DISPUTE_CONTACT_LINE,
+  LEGAL_GROUND_LABELS,
+  type AppealTarget,
+} from "@thinkersjournal/shared";
 
 // Per-viewer: a token's target, a signed-in session's CSRF token, and an
 // unsaved textarea all belong to exactly one reader. See src/lib/cache.ts.
@@ -215,6 +220,8 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
         <p><a class="link" href={loginHref}>Log in</a></p>
       )
     }
+
+    <p id="dispute-contact" class="target-summary">{DISPUTE_CONTACT_LINE}</p>
   </div>
 </BaseLayout>
 <style>
