@@ -519,8 +519,9 @@ if (post !== null) {
      display:flex beats the UA [hidden] rule) — same fix, applied here too. */
   .post-report{display:flex;align-items:center;gap:10px;margin:16px 0 0}
   .post-report[hidden]{display:none}
-  .dsa-notice-link{margin:8px 0 0;font-size:.85em}
-  .dsa-notice-link .link{color:var(--dim)}
+  /* :global — comments-live.ts inserts this link at runtime, without the scope attribute. */
+  :global(.dsa-notice-link){margin:8px 0 0;font-size:.85em}
+  :global(.dsa-notice-link .link){color:var(--dim)}
   .report-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .report-note{color:var(--dim);font-size:.9em}
   .post-visibility-error{color:var(--dim);margin:6px 0 0;font-size:.9em}

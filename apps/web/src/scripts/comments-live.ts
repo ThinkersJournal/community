@@ -147,6 +147,17 @@ function buildComment(c: FragmentComment): HTMLElement {
   actions.setAttribute("data-comment-actions", "");
   li.appendChild(actions);
 
+  // Same always-visible DSA notice link the SSR render carries (DSA Art. 16;
+  // [slug].astro), so a comment that arrives live is reportable without a reload.
+  const dsa = document.createElement("p");
+  dsa.className = "dsa-notice-link";
+  const dsaLink = document.createElement("a");
+  dsaLink.className = "link";
+  dsaLink.href = `/dsa-notice?comment=${encodeURIComponent(c.id)}`;
+  dsaLink.textContent = "Report illegal content (no account needed)";
+  dsa.appendChild(dsaLink);
+  li.appendChild(dsa);
+
   return li;
 }
 

@@ -47,3 +47,10 @@ describe("comments-live client", () => {
     expect(stripped).toMatch(/if \(ws !== null\) return/);
   });
 });
+
+describe("comments-live client: DSA notice link (S22 F7)", () => {
+  it("a live-inserted comment carries the same /dsa-notice?comment= link as the SSR render", () => {
+    expect(stripped).toContain("/dsa-notice?comment=${encodeURIComponent(c.id)}");
+    expect(stripped).toContain('"dsa-notice-link"');
+  });
+});
