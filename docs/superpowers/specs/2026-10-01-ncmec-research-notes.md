@@ -1,5 +1,7 @@
 # NCMEC CyberTipline / REPORT Act / Cloudflare CSAM research
 
+> **Update 2026-10-25:** the remark in section 3 that human-moderator-confirmed filing is "the correct design" predates `2026-10-01-csam-reporting-pipeline-design.md`, whose section 0 (Option B) files known-hash matches at the moment of the match. Read that design for what is planned; this file is research notes.
+
 Compiled 2026-10-01. Every claim marked VERIFIED was read via WebFetch directly against the cited
 primary-source URL (not from model memory); VERIFIED still means "the fetch tool's summary of that
 page," not a byte-for-byte quote I re-derived myself — treat exact field names/codes as needing a

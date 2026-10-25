@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.86
+
+Docs matched to the code (the rest of ROADMAP S29): README status line and stale baseline, dated update notes on the design spec, queue design, deploy-automation design, CSAM design, SafeImage split, guidelines-intentions and outbox design, `legal/README.md`, `deploy.md` order constraint, and superseded banners on the 10-14 outbox design and the NCMEC notes. Original text is kept; no published wording changed.
+
 ## 0.1.84
 
 Spec-to-roadmap audit: ROADMAP section 7 lists the work found in the docs and not on the roadmap (S1-S29), and section 2 drops the rows that have since merged. Docs only.

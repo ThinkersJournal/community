@@ -17,7 +17,7 @@ was sent, but only for sends that happened.
 | # | `kind` | Recipient | Trigger | Appeal link? |
 |---|---|---|---|---|
 | 1 | `author_decision` | content author | content keep_hidden / remove / restore-of-hidden | yes (not restore) |
-| 2 | `author_auto_hide` | content author | `content_auto_hide` system row | yes |
+| 2 | `author_auto_hide` | content author | `content_auto_hide` system row | no in the code: "nothing to appeal yet" (`notify-author.ts`); the outcome notice carries the link |
 | 3 | `account_action` | the account | warn / suspend / ban / terminate | yes (terminate: no; see #114 text) |
 | 4 | `appeal_outcome` | appellant | `appeal_granted` / `appeal_denied` | no |
 | 5 | `reporter_outcome` | DSA reporter (an address, maybe no account) | outcome of a confirmed notice | no |

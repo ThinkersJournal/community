@@ -20,7 +20,7 @@ thing, and neither repository names the vendor.
 
 At `e5916a6` no scanning, matching, evidence or report code exists on `main`. The upload-scan design (rev 3 + rev-4
 amendments), the D7 decoder-service design, and the CSAM reporting spec and plan are documents. `main` carries only the
-schema for original-upload hashes (US4, PR #161, held). So "moving" a module means **moving a design**, nothing in
+schema for original-upload hashes (US4, PR #161, merged; it is the scan feature built on it that is held). So "moving" a module means **moving a design**, nothing in
 production can regress, and the choice is cheap now and expensive after US1-US3 ship. Community's US1 (TypeScript PDQ
 port) and US3 (provider client + mock) are therefore **not started** and stay unstarted until this settles.
 

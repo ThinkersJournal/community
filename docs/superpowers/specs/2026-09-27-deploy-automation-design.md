@@ -275,6 +275,8 @@ true today.
 
 ## 7. Summary of what this design does and does not decide
 
+> **Update 2026-10-25:** the header above is current: option 2 is built as shape A (PR #136, `docs/runbooks/deploy.md`). The text of this section is the original proposal and is kept as written; §5's move of the deploy into GitHub Actions was NOT adopted (Workers Builds still deploys), and auto-rollback is not built.
+
 **Decided (recommended, not yet built):**
 - Expand-before-contract ordering, enforced by the pipeline rather than
   remembered by a human, with additive and destructive migrations sequenced

@@ -1,5 +1,7 @@
 # A durable outbox for due-process notices — design note (issue #57, gap 1)
 
+> **SUPERSEDED 2026-10-25** by `2026-10-15-moderation-notice-outbox-design.md`, which is what was built (#205, #210, #213, #214, #215). The `MODERATION_OUTBOX` flag and the notice kind names below were not used.
+
 **Status:** DESIGN ONLY. No code. Written 2026-10-14 against `origin/main` 373e77f (0.1.20). Every `file:line` is at
 that ref; re-read before building. **The implementation carries a migration that CireSnave applies to production
 before it merges** (§6).

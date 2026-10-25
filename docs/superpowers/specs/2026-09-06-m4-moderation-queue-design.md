@@ -342,7 +342,7 @@ justification** — that is the guard working as designed, not an obstacle to ro
 
 ## 5. 2c — The enforcement ladder
 
-**Status (2026-10-01):** warn/suspend/ban BUILT (#113 plan A, docs/superpowers/plans/2026-10-01-m4-2c-enforcement-ladder.md); terminate primitive built, unwired (#114); appeals §6 = plan B; DSA §8 = plan C.
+**Status (2026-10-01):** warn/suspend/ban BUILT (#113 plan A, docs/superpowers/plans/2026-10-01-m4-2c-enforcement-ladder.md); terminate primitive built, unwired (#114) [update 2026-10-25: the moderator route `POST /admin/accounts/:handle/terminate` is built (#212); only the detection-to-terminate wiring is left (#114)]; appeals §6 = plan B; DSA §8 = plan C.
 
 `warn → temporary suspension → permanent ban`, proportionate to severity and history, with
 **severe violations skipping the ladder** (Guidelines). Each rung is a separate deliberate
@@ -481,7 +481,7 @@ Mirrors the repo's existing patterns (`*.db.test.ts` in the Node project for sch
 
 1. ~~Admin surface home~~ — **CLOSED** (§9): API-first + thin server-rendered admin, no SPA.
    Ruled by the portfolio PM 2026-09-08.
-2. **Proposed defaults awaiting the founder's review**, all flagged inline above: suspension
+2. **Proposed defaults awaiting the founder's review** [update 2026-10-25: adopted by the PM on 2026-10-01 and in use in the code, `packages/shared/src/admin.ts`; these docs record no confirmation from the founder], all flagged inline above: suspension
    durations (24h/7d/30d, default 7d); ladder history stops escalating after 12 months (the log
    retains everything permanently); appeal window (30 days).
 3. **`[[APPEAL_CHANNEL]]`** in `docs/legal/community-guidelines.md` should be updated to name the
