@@ -59,8 +59,10 @@ export interface AdminDmcaNotice {
   complainantPhone: string;
   signature: string;
   createdAt: string;
-  /** Takedowns of this author that stand (taken down, not restored), for the repeat-infringer record. */
+  /** Takedowns of this author that stand in the strike window, for the repeat-infringer record. */
   authorStrikes: number;
+  /** `authorStrikes` has reached the threshold: a prompt for a moderator, never an action. */
+  authorFlagged: boolean;
 }
 
 export interface AdminDmcaNoticesResponse {
@@ -96,4 +98,26 @@ export interface AdminDmcaCounter {
   counterReceivedAt: string | null;
   restoreAfter: string | null;
   claimantSuedAt: string | null;
+}
+
+/**
+ * The repeat-infringer record (CireSnave decision 298 A, 2026-10-25): a count of an
+ * author's standing takedowns in a rolling window, FLAGGED at the threshold for a
+ * moderator to weigh. Nothing terminates an account automatically; termination is
+ * the moderator's `terminate` action (policy docs/legal/dmca-policy.md section 4).
+ */
+export const DMCA_STRIKE_THRESHOLD = 3;
+export const DMCA_STRIKE_WINDOW_MONTHS = 12;
+
+/** How long a closed case keeps the complainant's and author's personal details (decision 298 A). */
+export const DMCA_PII_RETENTION_YEARS = 3;
+
+/** An author's DMCA record, as the admin account page shows it. */
+export interface DmcaStrikes {
+  /** Takedowns in the window that have not been restored, withdrawn or rejected. */
+  readonly standing: number;
+  readonly threshold: number;
+  readonly windowMonths: number;
+  /** `standing >= threshold`: a prompt for a person, never an action. */
+  readonly flagged: boolean;
 }

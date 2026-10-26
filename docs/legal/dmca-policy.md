@@ -59,21 +59,32 @@ you may send our Designated Agent a written counter-notice including (§512(g)(3
    of the federal court for your district (or, if outside the U.S., [[JURISDICTION]]),
    and to accept service from the complainant.
 
-If we receive a valid counter-notice, we may **restore the material in 10–14 business
-days** unless the original complainant notifies us that they have filed a court
-action seeking to restrain the activity.
+When we remove material we email its author a copy of the notice and a link for sending
+a counter-notice. If we receive a valid counter-notice we send it to the original
+complainant and **restore the material 10 business days later** unless the complainant
+tells us before then that they have filed a court action seeking to restrain the
+activity. We do not restore material if a moderator has since ruled on it, or while
+the author's account is under a legal hold.
 
 ## 4. Repeat infringers
 
 Consistent with §512(i), we maintain a policy of **terminating, in appropriate
-circumstances, the accounts of users who are repeat infringers**. Valid
-copyright complaints are recorded against an account in our moderation log,
-and repeated valid complaints are weighed — along with the rest of an
-account's history — under the same human-reviewed warn → suspend → ban
-enforcement ladder described in the
-[Community Guidelines](community-guidelines.md). There is no separate,
-automatic strike counter: each step is a moderator decision informed by that
-record.
+circumstances, the accounts of users who are repeat infringers**. Every removal
+made on a copyright notice is recorded against the author's account. A removal
+counts while it stands: one that is restored (after a counter-notice, or because the
+complainant withdrew) or that we rejected does not. When an account has **three or
+more standing removals within twelve months**, it is flagged for a moderator to
+review. The count and the flag are an aid to a person: **no account is terminated
+automatically**. A moderator decides whether to terminate it, weighing the record
+together with the rest of the account's history and the
+[Community Guidelines](community-guidelines.md).
+
+## 4a. Records
+
+We keep a copyright case, including the details of the complainant and of the
+author, for three years after it closes. After that we erase the names, addresses,
+phone numbers, email addresses and signatures from it and keep only the case's
+number, dates and outcome.
 
 ## 5. Trademark and other complaints
 

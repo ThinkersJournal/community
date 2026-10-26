@@ -161,6 +161,11 @@ function stateLine(account: AdminAccountResponse): string {
           {!account.disabledAt && (
             <p class="suggested">Suggested next step: {account.suggestedNext} (advisory)</p>
           )}
+          <p class="state" id="dmca-strikes">
+            Copyright (DMCA) takedowns standing in the last {account.dmcaStrikes.windowMonths} months:
+            {" "}{account.dmcaStrikes.standing} (flag at {account.dmcaStrikes.threshold})
+            {account.dmcaStrikes.flagged && " — repeat-infringer flag: weigh termination (a moderator's decision, never automatic)"}
+          </p>
 
           <h2>History</h2>
           {

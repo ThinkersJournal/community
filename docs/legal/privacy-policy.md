@@ -120,9 +120,10 @@ name and contact details, is sent to the person whose material it concerns**
 when we remove that material, because the law lets them answer it with a
 counter-notice and they cannot do so without knowing who sent it. If they send a
 counter-notice, a copy of it, including their name, address and phone number, is
-sent to you. Unconfirmed notices are deleted after 7 days. We keep confirmed
-notices and counter-notices as a legal record and do not delete them
-automatically today.
+sent to you. Unconfirmed notices are deleted after 7 days. We keep a confirmed
+notice and any counter-notice as a legal record for three years after the case
+closes; then we erase the names, addresses, phone numbers, email addresses and
+signatures in it and keep only the case number, its dates and its outcome.
 
 ## 5. Retention
 
