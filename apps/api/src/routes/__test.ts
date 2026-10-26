@@ -67,6 +67,8 @@
  * other mutating route in src/routes.ts, even though `TEST_ROUTES` already
  * makes it unreachable outside dev/test.
  */
+import { TAG_CREATION_MIN_ACCOUNT_AGE_DAYS } from "@thinkersjournal/shared";
+
 import { anonymiseExpiredAccounts } from "../auth/anonymise-accounts";
 import { checkOrigin } from "../auth/csrf";
 import { TEST_LAST_TOKEN_KEY } from "../auth/email-verify";
@@ -182,6 +184,34 @@ export async function handleTestRoute(
       status: 200,
       headers: { "content-type": "application/json" },
     });
+  }
+
+  // S26 (tag creation gated to accounts older than TAG_CREATION_MIN_ACCOUNT_AGE_DAYS):
+  // e2e signs up a brand-new account, so a spec that needs to create a tag first ages
+  // the account here. Same gate and inline checkOrigin as the seams above. It sets
+  // `users.created_at` and nothing else.
+  if (request.method === "POST" && pathname === "/__test/age-account") {
+    if (!checkOrigin(env, request)) {
+      return errorResponse("FORBIDDEN", 403);
+    }
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return errorResponse("INVALID_JSON", 400);
+    }
+    const email = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>)["email"] : undefined;
+    if (typeof email !== "string") {
+      return errorResponse("INVALID_INPUT", 400);
+    }
+    const aged = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rowCount } = await c.query(
+        `UPDATE users SET created_at = now() - make_interval(days => $2::int) WHERE email = $1`,
+        [email, TAG_CREATION_MIN_ACCOUNT_AGE_DAYS + 1],
+      );
+      return (rowCount ?? 0) > 0;
+    });
+    return aged ? new Response(null, { status: 204 }) : notFoundResponse();
   }
 
   // #113 plan B (Task 7, e2e/appeal.spec.ts) — seeds a BAN on the account

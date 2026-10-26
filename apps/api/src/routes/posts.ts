@@ -38,7 +38,7 @@
  * M1 leans on the deploy gate's Cloudflare WAF rule. Recorded here so the
  * omission reads as a decision, like every other omission in this file.
  */
-import { CreatePostInput, IDEMPOTENCY_KEY_RE, UpdatePostInput } from "@thinkersjournal/shared";
+import { CreatePostInput, IDEMPOTENCY_KEY_RE, TAG_CREATION_MIN_ACCOUNT_AGE_DAYS, UpdatePostInput } from "@thinkersjournal/shared";
 
 import { sha256Hex } from "../auth/encoding";
 import { readCurrentSession, runMutatingPipeline } from "../auth/pipeline";
@@ -151,23 +151,30 @@ async function readTagSlugs(client: Client, postId: string): Promise<string[]> {
  * DELETE-then-reinsert (not a diff): a handful of rows, and it makes "the join
  * rows are exactly `slugs`" true by construction \u2014 no stale row can survive.
  */
-async function writeTags(client: Client, postId: string, labels: string[]): Promise<string[]> {
+async function writeTags(client: Client, postId: string, labels: string[], authorId: string): Promise<string[]> {
   const tags = normalizeTags(labels);
   const slugs = tags.map((t) => t.slug);
   await client.query(`DELETE FROM post_tags WHERE post_id = $1`, [postId]);
   if (slugs.length === 0) return [];
+  // S26 (CireSnave 2026-10-25, design decision 13): only an account older than
+  // TAG_CREATION_MIN_ACCOUNT_AGE_DAYS may CREATE a tag. A newer account can still use
+  // tags that exist; a label that does not exist yet is simply not applied (the post
+  // is published all the same). The age test is in the INSERT itself, so there is no
+  // check-then-act gap, and the join below can only reach tags that exist.
   await client.query(
     `INSERT INTO tags (slug, label)
      SELECT s, l FROM unnest($1::citext[], $2::text[]) AS x(s, l)
+      WHERE EXISTS (SELECT 1 FROM users u WHERE u.id = $3 AND u.created_at <= now() - make_interval(days => $4::int))
      ON CONFLICT (slug) DO NOTHING`,
-    [slugs, tags.map((t) => t.label)],
+    [slugs, tags.map((t) => t.label), authorId, TAG_CREATION_MIN_ACCOUNT_AGE_DAYS],
   );
-  await client.query(
+  const { rows } = await client.query<{ slug: string }>(
     `INSERT INTO post_tags (post_id, tag_id)
-     SELECT $1, id FROM tags WHERE slug = ANY($2::citext[])`,
+     SELECT $1, id FROM tags WHERE slug = ANY($2::citext[])
+     RETURNING (SELECT t.slug FROM tags t WHERE t.id = post_tags.tag_id) AS slug`,
     [postId, slugs],
   );
-  return slugs;
+  return rows.map((r) => String(r.slug));
 }
 
 /**
@@ -301,7 +308,7 @@ async function insertPost(
       // slug-retry loop: only `posts_author_slug_key` (23505) is retried, and
       // writeTags cannot raise it (tags upsert is ON CONFLICT DO NOTHING; the
       // join rows are deduped after a DELETE, so no PK collision either).
-      const newSlugs = await writeTags(client, id, tags);
+      const newSlugs = await writeTags(client, id, tags, authorId);
       return { kind: "created", id, slug: insertedSlug, username: await usernameFor(client, authorId), newSlugs };
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
@@ -506,7 +513,7 @@ export async function handleUpdatePost(
       // edit purge must cover a REMOVED tag's page (old ∪ new), so a tag dropped
       // by this edit still gets its now-shorter page invalidated.
       const oldSlugs = await readTagSlugs(c, row.id);
-      const newSlugs = await writeTags(c, row.id, input.tags);
+      const newSlugs = await writeTags(c, row.id, input.tags, authorId);
       return { id: row.id, slug: row.slug, username: await usernameFor(c, authorId), oldSlugs, newSlugs };
     });
   } catch (err) {

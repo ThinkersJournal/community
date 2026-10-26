@@ -63,8 +63,13 @@ async function insertUser(verified: boolean): Promise<{ userId: string; username
 
   const userId = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
     const { rows } = await c.query<{ id: string }>(
-      `INSERT INTO users (email, password_hash, email_verified_at)
-       VALUES ($1, $2, CASE WHEN $3 THEN now() ELSE NULL END)
+      // S26: a verified actor is an ESTABLISHED account (30 days old) so that tag
+      // creation, which is gated to accounts older than TAG_CREATION_MIN_ACCOUNT_AGE_DAYS,
+      // works by default; an unverified one stays brand-new (the reaper's tests need that).
+      // posts-tags.test.ts ages one back to "new" to test the gate.
+      `INSERT INTO users (email, password_hash, email_verified_at, created_at)
+       VALUES ($1, $2, CASE WHEN $3 THEN now() ELSE NULL END,
+               CASE WHEN $3 THEN now() - interval '30 days' ELSE now() END)
        RETURNING id`,
       [email, PASSWORD_HASH, verified],
     );
