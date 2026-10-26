@@ -60,6 +60,7 @@ import {
   handlePeekDeleteRequestToken,
 } from "./routes/delete-request";
 import { handleConfirmDsaNotice, handleDsaNotice, handlePeekDsaToken } from "./routes/dsa-notice";
+import { handleConfirmDmcaNotice, handleDmcaNotice, handlePeekDmcaToken } from "./routes/dmca-notice";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
 import { handleForgotPassword } from "./routes/forgot-password";
@@ -172,6 +173,12 @@ export const ROUTES: readonly RouteDef[] = [
   // route above; see src/routes/dsa-notice.ts.
   { method: "GET", pattern: "/dsa-notice/confirm", handler: handlePeekDsaToken },
   { method: "POST", pattern: "/dsa-notice/confirm", handler: handleConfirmDsaNotice },
+
+  // DMCA takedown notice intake (ROADMAP R9): the same unauthenticated shape as
+  // the DSA pair above, in src/routes/dmca-notice.ts.
+  { method: "POST", pattern: "/dmca-notice", handler: handleDmcaNotice },
+  { method: "GET", pattern: "/dmca-notice/confirm", handler: handlePeekDmcaToken },
+  { method: "POST", pattern: "/dmca-notice/confirm", handler: handleConfirmDmcaNotice },
 
   // Unlike signup/login these DO run the pipeline — they have a session — but
   // WITHOUT `requireVerifiedEmail`: an unverified user must still be able to

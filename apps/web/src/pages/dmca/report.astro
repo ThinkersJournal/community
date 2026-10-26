@@ -1,0 +1,201 @@
+---
+/**
+ * `POST /dmca-notice` through the Service Binding (ROADMAP R9) — the DMCA
+ * takedown notice form, 17 U.S.C. §512(c)(3). Same server-side form-post-to-self
+ * shape as dsa-notice.astro, and for the same reasons: no client `fetch`, the
+ * anonymous-form Turnstile widget and CSP, never cached.
+ *
+ * `?post=<id>` or `?comment=<id>` names the target and is carried across the POST
+ * re-render as a hidden field; with neither, the sender pastes the post's address.
+ *
+ * The wording of the two statements is the statute's (§512(c)(3)(A)(v), (vi)) and
+ * a placeholder for the attorney, like docs/legal/dmca-policy.md. The page does
+ * not carry the Designated Agent's phone or address: that is for the /dmca policy
+ * page only (test/dmca-phone-only-on-dmca-page.node.test.ts).
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { apiFetch, applyCookies } from "../../lib/api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+
+markPrivate(Astro);
+
+setPublicPageCsp(Astro, { turnstile: true });
+
+/** True when an api 400 envelope names `field` among its invalid `fields`. */
+function isFieldError(data: unknown, field: string): boolean {
+  const fields = (data as { fields?: unknown } | null)?.fields;
+  return Array.isArray(fields) && fields.includes(field);
+}
+
+const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY as string | undefined;
+
+/** `null` = first visit. `"sent"` is the ONLY other success state. */
+let result: "sent" | null = null;
+let error: string | null = null;
+let postId = Astro.url.searchParams.get("post") ?? "";
+let commentId = Astro.url.searchParams.get("comment") ?? "";
+let contentUrl = "";
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  postId = String(form.get("postId") ?? "");
+  commentId = String(form.get("commentId") ?? "");
+  contentUrl = postId === "" && commentId === "" ? String(form.get("contentUrl") ?? "") : "";
+
+  const response = await apiFetch("/dmca-notice", {
+    method: "POST",
+    body: {
+      ...(postId !== "" ? { postId } : {}),
+      ...(commentId !== "" ? { commentId } : {}),
+      ...(contentUrl !== "" ? { contentUrl } : {}),
+      workDescription: form.get("workDescription"),
+      complainantName: form.get("complainantName"),
+      complainantEmail: form.get("complainantEmail"),
+      complainantAddress: form.get("complainantAddress"),
+      complainantPhone: form.get("complainantPhone"),
+      signature: form.get("signature"),
+      // An unticked checkbox is absent from the form data: `true` or `false`.
+      statementGoodFaith: form.get("statementGoodFaith") === "on",
+      statementAccuracy: form.get("statementAccuracy") === "on",
+      turnstileToken: form.get("turnstileToken"),
+    },
+    // The BROWSER's Origin, verbatim: no session, so `checkOrigin` is this
+    // route's entire CSRF defense (see dsa-notice.astro).
+    origin: Astro.request.headers.get("Origin") ?? "",
+  });
+  applyCookies(Astro.response.headers, response.setCookies);
+
+  if (response.status === 202) {
+    result = "sent";
+  } else if (response.status === 404) {
+    // Every non-public target is the SAME 404 at the api; do not tell them apart.
+    error = "That content isn't available to report.";
+  } else if (response.status === 400 && isFieldError(response.data, "contentUrl")) {
+    error = "That isn't the address of a post on this site. Paste the post's full address.";
+  } else if (response.status === 429) {
+    error = "Too many attempts. Please wait and try again.";
+  } else if (response.status === 403) {
+    error = "Rejected (failed bot check).";
+  } else {
+    error = "Something went wrong. Check the form and try again.";
+  }
+}
+---
+
+<BaseLayout title="Copyright notice" description="Send a DMCA copyright notice about a post or comment on Thinker's Journal.">
+  <div class="wrap form-page">
+    <h1>Copyright (DMCA) notice</h1>
+
+    {
+      result === "sent" ? (
+        <p id="sent">
+          Check your email to confirm your notice. Nothing happens until you do.
+        </p>
+      ) : (
+        <>
+          <p class="intro">
+            Use this form if you are the copyright owner, or act for the owner, and
+            material on Thinker's Journal infringes the copyright. We will email you a
+            link to confirm the notice before anyone reviews it.
+          </p>
+          <p class="intro">
+            Under 17 U.S.C. §512(f), a person who knowingly and materially
+            misrepresents that material is infringing can be liable for damages. Do
+            not send a notice for work you do not hold the rights to.
+          </p>
+          {error !== null && <p id="error" role="alert">{error}</p>}
+          <form method="POST" class="form">
+            <input type="hidden" name="postId" value={postId} />
+            <input type="hidden" name="commentId" value={commentId} />
+            {postId === "" && commentId === "" && (
+              <label>
+                Link to the material
+                <input type="url" name="contentUrl" required maxlength="2048" value={contentUrl} />
+              </label>
+            )}
+            <label>
+              The copyrighted work you say was infringed
+              <textarea name="workDescription" required maxlength="5000" rows="5" />
+            </label>
+            <label>
+              Your name
+              <input type="text" name="complainantName" required maxlength="200" />
+            </label>
+            <label>
+              Your email
+              <input type="email" name="complainantEmail" required />
+            </label>
+            <label>
+              Your postal address
+              <textarea name="complainantAddress" required maxlength="500" rows="3" />
+            </label>
+            <label>
+              Your phone number
+              <input type="tel" name="complainantPhone" required maxlength="50" />
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" name="statementGoodFaith" required />
+              I have a good-faith belief that this use of the material is not authorized
+              by the copyright owner, its agent, or the law.
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" name="statementAccuracy" required />
+              The information in this notice is accurate, and, under penalty of perjury, I
+              am the copyright owner or authorized to act on the owner's behalf.
+            </label>
+            <label>
+              Your signature (type your full legal name)
+              <input type="text" name="signature" required maxlength="200" />
+            </label>
+            {
+              turnstileSiteKey ? (
+                <>
+                  <div
+                    class="cf-turnstile"
+                    data-sitekey={turnstileSiteKey}
+                    data-response-field-name="turnstileToken"
+                    data-error-callback="turnstileOnError"
+                    data-timeout-callback="turnstileOnTimeout"
+                  ></div>
+                  <p class="turnstile-error" data-turnstile-error hidden>
+                    Verification failed.{" "}
+                    <button type="button" data-turnstile-retry class="link">Tap to retry</button>
+                  </p>
+                </>
+              ) : (
+                <input type="text" name="turnstileToken" value="dummy-token" />
+              )
+            }
+            <button type="submit" class="btn btn-primary">Send notice</button>
+          </form>
+          {
+            turnstileSiteKey && (
+              <>
+                {/* NO Subresource Integrity, deliberately: see signup.astro. The
+                    integrity control is the CSP's script-src allowlist. */}
+                <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+                <script>
+                  import { initTurnstileErrorHandling } from "../../scripts/turnstile-error";
+                  initTurnstileErrorHandling();
+                </script>
+              </>
+            )
+          }
+        </>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:440px}
+  .turnstile-error{color:var(--red, #e5484d);font-size:14px;margin-top:-4px}
+  .intro{color:var(--muted);margin:0 0 20px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:14px}
+  .form input,.form select,.form textarea{background:var(--ink2);border:1px solid var(--line);
+    border-radius:8px;padding:11px 13px;color:var(--text);font:inherit}
+  .form input:focus-visible,.form select:focus-visible,.form textarea:focus-visible{border-color:var(--green)}
+  .checkbox-row{flex-direction:row;align-items:flex-start;gap:8px}
+  .checkbox-row input{flex:0 0 auto;margin-top:3px}
+</style>

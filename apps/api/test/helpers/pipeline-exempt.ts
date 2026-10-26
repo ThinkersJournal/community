@@ -40,6 +40,9 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // reporter who filed the notice above still has no session. Inline
   // checkOrigin, same as the intake route.
   "POST /dsa-notice/confirm",
+  // DMCA notice intake (R9): unauthenticated by design, like the DSA pair above.
+  "POST /dmca-notice",
+  "POST /dmca-notice/confirm",
   // Token-authed one-click unsubscribe (M2.3c, RFC 8058): cross-origin, no
   // session/CSRF by design — a mail provider's one-click POST carries no cookie,
   // so the HMAC token IS the auth (see src/routes/unsub.ts). Unlike signup/login

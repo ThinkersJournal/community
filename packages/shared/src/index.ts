@@ -27,3 +27,4 @@ export * from './security-signals';
 export * from './guidelines';
 export * from './contact';
 export * from './security-admin';
+export * from './dmca';
