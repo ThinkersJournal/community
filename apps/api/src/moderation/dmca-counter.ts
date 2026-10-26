@@ -51,8 +51,11 @@ export function addBusinessDays(date: Date, n: number): Date {
 async function rollback(c: Client): Promise<void> {
   try {
     await c.query("ROLLBACK");
-  } catch {
-    // The connection may already be dead; the caller's answer stands.
+  } catch (err) {
+    // The connection may already be dead, so this must never replace the caller's root
+    // error, but it is LOGGED: a transaction left open by a dying connection should leave
+    // a trace. The class only, never the message (it could carry SQL text).
+    console.error("DMCA counter-notice: ROLLBACK failed", { error: err instanceof Error ? err.name : "unknown" });
   }
 }
 
@@ -124,12 +127,7 @@ export async function fileCounterNotice(c: Client, input: CounterNoticeInput, no
       rendered: renderDmcaCounterToClaimant({
         subject: n.target_kind,
         label: n.target_label,
-        counter: {
-          authorName: input.authorName,
-          authorAddress: input.authorAddress,
-          authorPhone: input.authorPhone,
-          signature: input.signature,
-        },
+        counter: input,
         restoreAfter,
       }),
     });
@@ -219,27 +217,78 @@ export interface RestoreInput {
   readonly timer: boolean;
 }
 
+interface RestorableNotice {
+  id: string; state: string; target_kind: "post" | "comment"; post_id: string | null; comment_id: string | null;
+  takedown_action_id: string | null; subject_user_id: string | null; complainant_email: string;
+  restore_due: boolean; claimant_sued_at: Date | null;
+}
+
+async function lockRestorable(c: Client, noticeId: string): Promise<RestorableNotice | undefined> {
+  const { rows } = await c.query<RestorableNotice>(
+    `SELECT id, state, target_kind, post_id, comment_id, takedown_action_id, subject_user_id, complainant_email,
+            (restore_after IS NOT NULL AND restore_after <= now()) AS restore_due, claimant_sued_at
+       FROM dmca_notices WHERE id = $1 FOR UPDATE`,
+    [noticeId],
+  );
+  return rows[0];
+}
+
+/** The timer needs the wait over and no suit; a moderator's withdrawal may act from either standing state. */
+function eligibleToRestore(n: RestorableNotice, timer: boolean): boolean {
+  return timer
+    ? n.state === "counter_received" && n.restore_due && n.claimant_sued_at === null
+    : n.state === "taken_down" || n.state === "counter_received";
+}
+
+/** Has a later HUMAN ruling replaced the takedown on this material? (A missing target counts as superseded.) */
+async function takedownSuperseded(c: Client, n: RestorableNotice, subjectId: string | null): Promise<boolean> {
+  if (subjectId === null) return true;
+  const col = n.target_kind === "post" ? "post_id" : "comment_id";
+  const { rows } = await c.query(
+    `SELECT 1 FROM moderation_actions
+      WHERE ${col} = $1 AND action IN (${HUMAN_CONTENT_RULING_KINDS_SQL})
+        AND created_at > (SELECT created_at FROM moderation_actions WHERE id = $2)
+      LIMIT 1`,
+    [subjectId, n.takedown_action_id],
+  );
+  return rows.length > 0;
+}
+
+/** Nothing left to restore: close the notice as `withdrawn` and commit. */
+async function closeAsWithdrawn(c: Client, noticeId: string): Promise<RestoreOutcome> {
+  await c.query(`UPDATE dmca_notices SET state = 'withdrawn' WHERE id = $1`, [noticeId]);
+  await c.query("COMMIT");
+  return { kind: "closed" };
+}
+
+/** The two emails of a restoration, queued in its transaction (the author's is skipped when no one can receive it). */
+async function queueRestoreNotices(
+  c: Client,
+  n: RestorableNotice,
+  result: DecisionResult,
+  cause: RestoreInput["cause"],
+): Promise<void> {
+  const body = { subject: n.target_kind, postTitle: result.postTitle, cause } as const;
+  if (result.noticeSkip === null) {
+    await enqueueDmcaAuthorNotice(c, {
+      actionId: result.actionId,
+      authorId: result.authorId,
+      rendered: renderDmcaRestoreToAuthor(body),
+    });
+  }
+  await enqueueDmcaClaimantNotice(c, {
+    actionId: result.actionId,
+    email: n.complainant_email,
+    rendered: renderDmcaRestoreToClaimant(body),
+  });
+}
+
 /** Restore the material for one notice, in one transaction. */
 export async function restoreDmcaNotice(c: Client, input: RestoreInput): Promise<RestoreOutcome> {
   await c.query(BEGIN_BOUNDED_TX);
   try {
-    const { rows } = await c.query<{
-      id: string; state: string; target_kind: "post" | "comment"; post_id: string | null; comment_id: string | null;
-      takedown_action_id: string | null; subject_user_id: string | null; complainant_email: string;
-      restore_due: boolean; claimant_sued_at: Date | null;
-    }>(
-      `SELECT id, state, target_kind, post_id, comment_id, takedown_action_id, subject_user_id, complainant_email,
-              (restore_after IS NOT NULL AND restore_after <= now()) AS restore_due, claimant_sued_at
-         FROM dmca_notices WHERE id = $1 FOR UPDATE`,
-      [input.noticeId],
-    );
-    const n = rows[0];
-    const eligible =
-      n !== undefined &&
-      (input.timer
-        ? n.state === "counter_received" && n.restore_due && n.claimant_sued_at === null
-        : n.state === "taken_down" || n.state === "counter_received");
-    if (!eligible || n === undefined) {
+    const n = await lockRestorable(c, input.noticeId);
+    if (n === undefined || !eligibleToRestore(n, input.timer)) {
       await rollback(c);
       return { kind: "skipped" };
     }
@@ -247,26 +296,9 @@ export async function restoreDmcaNotice(c: Client, input: RestoreInput): Promise
       await rollback(c);
       return { kind: "skipped" };
     }
-
     const subjectId = n.target_kind === "post" ? n.post_id : n.comment_id;
-    const col = n.target_kind === "post" ? "post_id" : "comment_id";
     // The takedown must still be the latest HUMAN ruling on this material.
-    let superseded = subjectId === null;
-    if (!superseded) {
-      const { rows: later } = await c.query(
-        `SELECT 1 FROM moderation_actions
-          WHERE ${col} = $1 AND action IN (${HUMAN_CONTENT_RULING_KINDS_SQL})
-            AND created_at > (SELECT created_at FROM moderation_actions WHERE id = $2)
-          LIMIT 1`,
-        [subjectId, n.takedown_action_id],
-      );
-      superseded = later.length > 0;
-    }
-    if (superseded || subjectId === null) {
-      await c.query(`UPDATE dmca_notices SET state = 'withdrawn' WHERE id = $1`, [n.id]);
-      await c.query("COMMIT");
-      return { kind: "closed" };
-    }
+    if (subjectId === null || (await takedownSuperseded(c, n, subjectId))) return await closeAsWithdrawn(c, n.id);
 
     const result = await applyDecisionInTx(c, {
       subject: n.target_kind,
@@ -279,29 +311,13 @@ export async function restoreDmcaNotice(c: Client, input: RestoreInput): Promise
       actorAdmin: input.actorAdmin,
       dmcaNoticeId: n.id,
     });
-    if (result === null) {
-      await c.query(`UPDATE dmca_notices SET state = 'withdrawn' WHERE id = $1`, [n.id]);
-      await c.query("COMMIT");
-      return { kind: "closed" };
-    }
+    if (result === null) return await closeAsWithdrawn(c, n.id);
 
     await c.query(`UPDATE dmca_notices SET state = $2, restored_at = now() WHERE id = $1`, [
       n.id,
       input.cause === "withdrawn" ? "withdrawn" : "restored",
     ]);
-    const body = { subject: n.target_kind, postTitle: result.postTitle, cause: input.cause } as const;
-    if (result.noticeSkip === null) {
-      await enqueueDmcaAuthorNotice(c, {
-        actionId: result.actionId,
-        authorId: result.authorId,
-        rendered: renderDmcaRestoreToAuthor(body),
-      });
-    }
-    await enqueueDmcaClaimantNotice(c, {
-      actionId: result.actionId,
-      email: n.complainant_email,
-      rendered: renderDmcaRestoreToClaimant(body),
-    });
+    await queueRestoreNotices(c, n, result, input.cause);
     await c.query("COMMIT");
     return { kind: "restored", result, subject: n.target_kind };
   } catch (err) {
