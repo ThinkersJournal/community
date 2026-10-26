@@ -65,4 +65,35 @@ export interface AdminDmcaNotice {
 
 export interface AdminDmcaNoticesResponse {
   notices: AdminDmcaNotice[];
+  /** Standing takedowns, those waiting out the restore wait first. */
+  counters: AdminDmcaCounter[];
+}
+
+/**
+ * The author's counter-notice (§512(g)(3)). The credential is the single-use
+ * `token` from the takedown email, so no Turnstile and no account. The two
+ * statements must be literally `true`; the wording is on the form.
+ */
+export const DmcaCounterInput = z.object({
+  token: z.string().min(1).max(200),
+  authorName: z.string().trim().min(1).max(200),
+  authorAddress: z.string().trim().min(1).max(500),
+  authorPhone: z.string().trim().min(1).max(50),
+  signature: z.string().trim().min(1).max(200),
+  statementMistake: z.literal(true),
+  consentJurisdiction: z.literal(true),
+});
+export type DmcaCounterInputT = z.infer<typeof DmcaCounterInput>;
+
+/** A standing takedown (or one waiting out the restore wait), as `GET /admin/dmca-notices` returns it (ISO strings). */
+export interface AdminDmcaCounter {
+  id: string;
+  kind: 'post' | 'comment';
+  label: string;
+  complainantName: string;
+  state: 'taken_down' | 'counter_received';
+  decidedAt: string;
+  counterReceivedAt: string | null;
+  restoreAfter: string | null;
+  claimantSuedAt: string | null;
 }

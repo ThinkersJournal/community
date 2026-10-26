@@ -96,6 +96,10 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // R9: a moderator's DMCA decisions, same Access trust domain and inline checkOrigin.
   "POST /admin/dmca-notices/:id/takedown",
   "POST /admin/dmca-notices/:id/reject",
+  "POST /admin/dmca-notices/:id/claimant-sued",
+  "POST /admin/dmca-notices/:id/withdraw",
+  // R9: the author's counter-notice, token-authed like the DSA confirm above.
+  "POST /dmca-counter",
   // account-legal-hold spec §3 T3 (manual impose/release) — same Access trust
   // domain and inline checkOrigin defense as /admin/accounts/:handle/actions
   // directly above.

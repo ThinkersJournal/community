@@ -12,6 +12,7 @@ import { requireAdmin } from "../admin/require-admin";
 import { withClient } from "../db/client";
 import { errorResponse } from "../http/errors";
 import { afterContentDecision } from "../moderation/after-content-decision";
+import { listStandingTakedowns, recordClaimantSued, restoreDmcaNotice } from "../moderation/dmca-counter";
 import { listOpenDmcaNotices, rejectDmcaNotice, takedownDmcaNotice, type DmcaRefusal } from "../moderation/dmca-decisions";
 import type { RouteParams } from "../routing";
 
@@ -22,9 +23,21 @@ export async function handleListDmcaNotices(request: Request, env: Env, ctx: Exe
   const admin = await requireAdmin(request, env);
   if (admin instanceof Response) return admin;
 
-  const notices = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => listOpenDmcaNotices(c));
+  const { notices, counters } = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => ({
+    notices: await listOpenDmcaNotices(c),
+    counters: await listStandingTakedowns(c),
+  }));
   return new Response(
-    JSON.stringify({ notices: notices.map((n) => ({ ...n, createdAt: n.createdAt.toISOString() })) }),
+    JSON.stringify({
+      notices: notices.map((n) => ({ ...n, createdAt: n.createdAt.toISOString() })),
+      counters: counters.map((n) => ({
+        ...n,
+        decidedAt: n.decidedAt.toISOString(),
+        counterReceivedAt: n.counterReceivedAt === null ? null : n.counterReceivedAt.toISOString(),
+        restoreAfter: n.restoreAfter === null ? null : n.restoreAfter.toISOString(),
+        claimantSuedAt: n.claimantSuedAt === null ? null : n.claimantSuedAt.toISOString(),
+      })),
+    }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
 }
@@ -93,4 +106,56 @@ export async function handleDmcaReject(
   );
   if (outcome.kind !== "ok") return refusal(outcome);
   return new Response(null, { status: 204 });
+}
+
+/**
+ * `POST /admin/dmca-notices/:id/claimant-sued` — record that the claimant told us
+ * they filed a court action. The restore timer then leaves the notice alone. 204,
+ * or 409 when the notice is not waiting out the wait (or this was already recorded).
+ */
+export async function handleDmcaClaimantSued(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+  const id = params.id;
+  if (typeof id !== "string" || !UUID_RE.test(id)) return errorResponse("NOT_FOUND", 404);
+
+  const recorded = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => recordClaimantSued(c, id));
+  return recorded ? new Response(null, { status: 204 }) : errorResponse("DMCA_NOT_PENDING", 409);
+}
+
+/**
+ * `POST /admin/dmca-notices/:id/withdraw` — the claimant withdrew the notice: the
+ * material is restored at once (from `taken_down` or `counter_received`). 200 with
+ * `{ actionId }` when restored; 204 when there was nothing left to restore (the
+ * notice is closed); 409 when it is not in a state that can be withdrawn.
+ */
+export async function handleDmcaWithdraw(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  params: RouteParams,
+): Promise<Response> {
+  if (!checkOrigin(env, request)) return errorResponse("FORBIDDEN", 403);
+  const admin = await requireAdmin(request, env);
+  if (admin instanceof Response) return admin;
+  const id = params.id;
+  if (typeof id !== "string" || !UUID_RE.test(id)) return errorResponse("NOT_FOUND", 404);
+
+  const outcome = await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+    restoreDmcaNotice(c, { noticeId: id, actorAdmin: admin.email, cause: "withdrawn", timer: false }),
+  );
+  if (outcome.kind === "skipped") return errorResponse("DMCA_NOT_PENDING", 409);
+  if (outcome.kind === "closed") return new Response(null, { status: 204 });
+
+  await afterContentDecision(env, ctx, { subject: outcome.subject, result: outcome.result });
+  return new Response(JSON.stringify({ actionId: outcome.result.actionId }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 }

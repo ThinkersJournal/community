@@ -11,6 +11,8 @@
  * counter-notice cannot be made without them, and policy section 2 promises "a
  * copy of the notice". The privacy policy says so.
  */
+import { CONTACT_EMAIL } from "@thinkersjournal/shared";
+
 import { escapeHtml } from "../auth/email-verify";
 import type { RenderedNotice } from "./notify-author";
 
@@ -95,5 +97,75 @@ export function renderDmcaClaimantOutcome(input: DmcaClaimantOutcomeInput): Rend
     subject: "We did not act on your copyright notice",
     textBody: `${lead}\n\nReason:\n\n${why}\n\nYou can send a new notice if you can correct the problem.\n`,
     htmlBody: `<p>${escapeHtml(lead)}</p><p><strong>Reason:</strong></p><p>${escapeHtml(why)}</p><p>You can send a new notice if you can correct the problem.</p>`,
+  };
+}
+
+export interface DmcaCounterToClaimantInput {
+  readonly subject: "post" | "comment";
+  readonly label: string;
+  readonly counter: {
+    readonly authorName: string;
+    readonly authorAddress: string;
+    readonly authorPhone: string;
+    readonly signature: string;
+  };
+  /** The earliest the material can be restored; the claimant must tell us of a court action before it. */
+  readonly restoreAfter: Date;
+}
+
+/**
+ * The counter-notice, forwarded to the claimant (§512(g)(2)(B)): who sent it,
+ * their contact details, and the one thing that stops the restoration.
+ */
+export function renderDmcaCounterToClaimant(input: DmcaCounterToClaimantInput): RenderedNotice {
+  const about = input.subject === "post" ? `the post "${input.label}"` : `the comment on "${input.label}"`;
+  const c = input.counter;
+  const lead = `The person who posted ${about} sent us a counter-notice to your copyright notice. They say, under penalty of perjury, that they have a good-faith belief that the material was removed by mistake or misidentification, and they consent to the jurisdiction of the federal court for their district and will accept service of process from you.`;
+  const lines = [`From: ${c.authorName}, ${c.authorAddress}, ${c.authorPhone}`, `Signed: ${c.signature}`];
+  const date = input.restoreAfter.toISOString().slice(0, 10);
+  const next = `We may restore the material on or after ${date}, unless before then you tell us that you have filed a court action asking for an order to stop the person from infringing. To tell us, email ${CONTACT_EMAIL} with a copy of the filing.`;
+  return {
+    subject: "A counter-notice was sent in reply to your copyright notice",
+    textBody: `${lead}\n\n${lines.join("\n")}\n\n${next}\n`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><ul>${lines.map((l) => `<li>${escapeHtml(l)}</li>`).join("")}</ul><p>${escapeHtml(next)}</p>`,
+  };
+}
+
+export interface DmcaRestoreInput {
+  readonly subject: "post" | "comment";
+  readonly postTitle: string;
+  /** Why it was restored: a counter-notice that went unanswered, or the claimant withdrew. */
+  readonly cause: "counter_notice" | "withdrawn";
+}
+
+const RESTORE_CAUSE: Readonly<Record<DmcaRestoreInput["cause"], string>> = {
+  counter_notice: "We received your counter-notice and the person who sent the copyright notice did not tell us they had filed a court action in time.",
+  withdrawn: "The person who sent the copyright notice withdrew it.",
+};
+
+/** To the author: the material is visible again. */
+export function renderDmcaRestoreToAuthor(input: DmcaRestoreInput): RenderedNotice {
+  const what = input.subject === "post" ? `your post "${input.postTitle}"` : `your comment on "${input.postTitle}"`;
+  const lead = `We restored ${what}.`;
+  const why = RESTORE_CAUSE[input.cause];
+  return {
+    subject: "Your content is visible again",
+    textBody: `${lead}\n\n${why}\n`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(why)}</p>`,
+  };
+}
+
+/** To the claimant: what happened to the material their notice named. */
+export function renderDmcaRestoreToClaimant(input: DmcaRestoreInput): RenderedNotice {
+  const about = input.subject === "post" ? `the post "${input.postTitle}"` : `the comment on "${input.postTitle}"`;
+  const lead =
+    input.cause === "withdrawn"
+      ? `As you asked, we restored ${about} after you withdrew your copyright notice.`
+      : `We restored ${about}: the person who posted it sent a counter-notice and we did not hear from you that you had filed a court action in time.`;
+  const next = "If you believe the material still infringes your copyright, your remedy is a court action against the person who posted it.";
+  return {
+    subject: "The material in your copyright notice was restored",
+    textBody: `${lead}\n\n${next}\n`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(next)}</p>`,
   };
 }

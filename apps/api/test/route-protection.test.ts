@@ -175,6 +175,7 @@ const EXPECTED_DISPATCHER_BODY =
   'import { runOneBatch as runMediaBackfillBatch } from "./media/backfill-hidden-media"; ' +
   'import { reapUnconfirmedDsaNotices } from "./moderation/dsa-notices"; ' +
   'import { reapUnconfirmedDmcaNotices } from "./moderation/dmca-notices"; ' +
+  'import { restoreDueDmcaNotices } from "./moderation/dmca-counter"; ' +
   'import { purgeExpiredNoticeRecords } from "./moderation/notice-records"; ' +
   'import { drainNoticeOutbox, purgeExpiredNoticeOutbox } from "./moderation/notice-outbox"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
@@ -210,6 +211,7 @@ const EXPECTED_DISPATCHER_BODY =
   "ctx.waitUntil(reapUnverifiedAccounts(env, ctx)); " +
   "ctx.waitUntil(reapUnconfirmedDsaNotices(env, ctx)); " +
   "ctx.waitUntil(reapUnconfirmedDmcaNotices(env, ctx)); " +
+  "ctx.waitUntil(restoreDueDmcaNotices(env, ctx)); " +
   "ctx.waitUntil(purgeExpiredNoticeRecords(env, ctx)); " +
   // Notice outbox PR 1: rows past retain_until, beside the 0032 records purge.
   "ctx.waitUntil(purgeExpiredNoticeOutbox(env, ctx)); " +

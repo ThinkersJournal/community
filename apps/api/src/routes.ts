@@ -61,7 +61,8 @@ import {
 } from "./routes/delete-request";
 import { handleConfirmDsaNotice, handleDsaNotice, handlePeekDsaToken } from "./routes/dsa-notice";
 import { handleConfirmDmcaNotice, handleDmcaNotice, handlePeekDmcaToken } from "./routes/dmca-notice";
-import { handleDmcaReject, handleDmcaTakedown, handleListDmcaNotices } from "./routes/admin-dmca";
+import { handleDmcaClaimantSued, handleDmcaReject, handleDmcaTakedown, handleDmcaWithdraw, handleListDmcaNotices } from "./routes/admin-dmca";
+import { handleFileDmcaCounter, handlePeekDmcaCounter } from "./routes/dmca-counter";
 import { handleFeed } from "./routes/feed";
 import { handleFollow, handleFollowStatus, handleUnfollow } from "./routes/follows";
 import { handleForgotPassword } from "./routes/forgot-password";
@@ -180,6 +181,11 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "POST", pattern: "/dmca-notice", handler: handleDmcaNotice },
   { method: "GET", pattern: "/dmca-notice/confirm", handler: handlePeekDmcaToken },
   { method: "POST", pattern: "/dmca-notice/confirm", handler: handleConfirmDmcaNotice },
+
+  // The author's DMCA counter-notice (R9): the single-use token in the takedown email
+  // is the credential, so no session; origin check and a per-IP limit inline.
+  { method: "GET", pattern: "/dmca-counter", handler: handlePeekDmcaCounter },
+  { method: "POST", pattern: "/dmca-counter", handler: handleFileDmcaCounter },
 
   // Unlike signup/login these DO run the pipeline — they have a session — but
   // WITHOUT `requireVerifiedEmail`: an unverified user must still be able to
@@ -461,6 +467,8 @@ export const ROUTES: readonly RouteDef[] = [
   { method: "GET", pattern: "/admin/dmca-notices", handler: handleListDmcaNotices },
   { method: "POST", pattern: "/admin/dmca-notices/:id/takedown", handler: handleDmcaTakedown },
   { method: "POST", pattern: "/admin/dmca-notices/:id/reject", handler: handleDmcaReject },
+  { method: "POST", pattern: "/admin/dmca-notices/:id/claimant-sued", handler: handleDmcaClaimantSued },
+  { method: "POST", pattern: "/admin/dmca-notices/:id/withdraw", handler: handleDmcaWithdraw },
 
   // Notice outbox PR 3 — the undelivered-notices list and RESEND. Same Access
   // trust domain / inline-checkOrigin shape as /admin/dsa-notices above.
