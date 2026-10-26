@@ -128,7 +128,7 @@ Each claim is from one read of the code at that ref, so re-check before relying 
 | S14 | Notice wording rulings: say the hide was automated, an outcome email to a member reporter, restore and appeal-denied treatment (art17 facts Q4, Q10, Q11) | held; **CC** |
 | S15 | Deploy: confirm the one-time Cloudflare build-command change for the migration gate was made; auto-rollback needs a deploy credential; a notification channel for pipeline failures (`deploy-automation-design` §3, §4) | held by CireSnave; **CC** |
 | S16 | Ruling (f): the number of Access admins, a precondition for both two-person rules in #114 (csam design §0) | held by CireSnave; **CC** |
-| S17 | Upload-scan decisions D1-D4, D6, D7, D11, D12, D16, D17, and `anim: false` in `toWebp` (flatten animation, Q4/D2) | held by CireSnave; **CC** |
+| S17 | Upload-scan decisions D1-D4, D6, D7, D11, D12, D16, D17, and `anim: false` in `toWebp` (flatten animation, Q4/D2) | ruled 2026-10-25 (design section 0.4): D1, D2, D4, D17 yes, D3 block, D6 publish a cleared file tied to the list version (PM default), D7 ImageMagick on the VPS, D11 build (task US10, not a launch blocker), D16 join the live review case and hold; D5, D8-D10, D12-D15 are the PM's. Still held: the upload-scan build itself (D12, HMS-A registration) |
 | S18 | VPS image service: the 13-item host checklist, the ICC-warning rule, a real-world corpus for the flat-image share (C8) | held by CireSnave; **CC** |
 | S19 | `docs/runbooks/csam.md` (destruction request, incident, NIST mapping; upload-scan US9 additions) | held with #114 |
 | S20 | `fast-xml-parser` in `apps/api`, the version-pinned characterisation test and the response byte cap (xml-parser decision §6) | held with #114 |
