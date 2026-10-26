@@ -38,7 +38,7 @@ export type ViolationCategory =
   | "spam" | "harassment" | "hate" | "sexual" | "violence" | "ip_infringement" | "other";
 
 /** What prompted a content decision (#57 Art. 17; migration 0029). Never sent to the author. */
-export type ModerationSource = "dsa_notice" | "member_report" | "own_initiative";
+export type ModerationSource = "dsa_notice" | "member_report" | "own_initiative" | "dmca_notice";
 
 export interface ModerationActionInput {
   /** Access identity (email) of the acting human, or "system" for automation. */
@@ -61,6 +61,8 @@ export interface ModerationActionInput {
   readonly source?: ModerationSource;
   /** #57 — the DSA notice answered; only with `source: "dsa_notice"` (a CHECK enforces it). */
   readonly dsaNoticeId?: string;
+  /** R9 - the DMCA notice answered; only with `source: "dmca_notice"` (a CHECK enforces it, migration 0040). */
+  readonly dmcaNoticeId?: string;
   /** #57 Q5 - the legal ground cited (migration 0031; a CHECK enforces the list). */
   readonly legalGround?: LegalGround;
   /** #57 Q5 - the contractual (Terms / Guidelines) ground cited (migration 0031). */
@@ -77,8 +79,8 @@ export async function recordModerationAction(
     `INSERT INTO moderation_actions
        (actor_admin, action, post_id, comment_id, subject_user_id, subject_label,
         violation_category, action_expires_at, reason, internal_note,
-        source, dsa_notice_id, legal_ground, contractual_ground)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        source, dsa_notice_id, legal_ground, contractual_ground, dmca_notice_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      RETURNING id`,
     [
       input.actorAdmin,
@@ -95,6 +97,7 @@ export async function recordModerationAction(
       input.dsaNoticeId ?? null,
       input.legalGround ?? null,
       input.contractualGround ?? null,
+      input.dmcaNoticeId ?? null,
     ],
   );
   return rows[0]!.id;

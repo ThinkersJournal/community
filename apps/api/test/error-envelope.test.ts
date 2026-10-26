@@ -480,6 +480,11 @@ const CASES: readonly ErrorCase[] = [
     route: "GET /admin/dsa-notices",
     build: () => new Request("https://api.test/admin/dsa-notices"),
   },
+  {
+    name: "401 admin dmca-notices list with no Access header",
+    route: "GET /admin/dmca-notices",
+    build: () => new Request("https://api.test/admin/dmca-notices"),
+  },
   // Notice outbox PR 3 — same Access-gate shape as GET /admin/dsa-notices.
   {
     name: "401 admin undelivered-notices list with no Access header",

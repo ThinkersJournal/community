@@ -70,7 +70,7 @@ export async function enqueueAuthorDecisionNotice(c: Client, input: AuthorDecisi
 
 interface OutboxInsert {
   readonly actionId: string;
-  readonly kind: "author_decision" | "account_action" | "appeal_outcome" | "reporter_outcome";
+  readonly kind: "author_decision" | "account_action" | "appeal_outcome" | "reporter_outcome" | "dmca_author_notice" | "dmca_claimant_notice";
   readonly recipientUserId?: string;
   /** A DSA reporter only (no account); nulled once the row settles. */
   readonly recipientEmail?: string;
@@ -213,4 +213,40 @@ export async function enqueueReporterOutcomeNotices(c: Client, input: ReporterOu
       rendered,
     });
   }
+}
+
+/**
+ * Queue the takedown notice to the author (kind `dmca_author_notice`). The caller
+ * skips an anonymised author before calling. `actionId` is the takedown's
+ * `content_remove` row.
+ */
+export async function enqueueDmcaAuthorNotice(
+  c: Client,
+  input: { readonly actionId: string; readonly authorId: string; readonly rendered: RenderedNotice },
+): Promise<void> {
+  await insertOutbox(c, {
+    actionId: input.actionId,
+    kind: "dmca_author_notice",
+    recipientUserId: input.authorId,
+    rendered: input.rendered,
+  });
+}
+
+/**
+ * Queue an email to a DMCA claimant (kind `dmca_claimant_notice`). A claimant has
+ * no account, so the address is stored on the row and nulled when it settles.
+ * `actionId` is the action the email answers, or, for a notice that produced no
+ * action (a rejection, a forwarded counter-notice), the notice's or counter-notice's
+ * own id: the column is a bare uuid (0034), unique per `(action_id, kind)`.
+ */
+export async function enqueueDmcaClaimantNotice(
+  c: Client,
+  input: { readonly actionId: string; readonly email: string; readonly rendered: RenderedNotice },
+): Promise<void> {
+  await insertOutbox(c, {
+    actionId: input.actionId,
+    kind: "dmca_claimant_notice",
+    recipientEmail: input.email,
+    rendered: input.rendered,
+  });
 }

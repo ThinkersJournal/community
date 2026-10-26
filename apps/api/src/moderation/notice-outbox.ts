@@ -55,8 +55,9 @@ export function noticeRetryDelayMs(failures: number): number | null {
 }
 
 // The html body carries the link twice: as the href and as the anchor text.
-const ANCHOR_WITH_LINK_RE = /<a href="[^"]*\/(?:appeal|account\/delete-request)\?token=[^"]*">[^<]*<\/a>/g;
-const BARE_LINK_RE = /[^\s"'<>]*\/(?:appeal|account\/delete-request)\?token=[A-Za-z0-9_%~-]*/g;
+// R9: `dmca/counter` is the DMCA counter-notice link in a `dmca_author_notice`.
+const ANCHOR_WITH_LINK_RE = /<a href="[^"]*\/(?:appeal|account\/delete-request|dmca\/counter)\?token=[^"]*">[^<]*<\/a>/g;
+const BARE_LINK_RE = /[^\s"'<>]*\/(?:appeal|account\/delete-request|dmca\/counter)\?token=[A-Za-z0-9_%~-]*/g;
 
 /**
  * Replace every live appeal / delete-request link in a stored body (text or
