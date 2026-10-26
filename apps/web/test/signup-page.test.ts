@@ -51,6 +51,12 @@ describe("signup.astro", () => {
     expect(code).toMatch(/turnstileSiteKey \?/);
   });
 
+  it("S6: a required age + Terms checkbox, sent to the api as a boolean (an unticked box is absent from the form)", () => {
+    expect(rawSource).toContain('<input type="checkbox" name="acceptedTerms" required />');
+    expect(code).toContain('acceptedTerms: form.get("acceptedTerms") === "on"');
+    expect(rawSource).toContain("at least 16 years old");
+  });
+
   it("still forwards the real browser Origin, never a synthesized one, on the signup POST", () => {
     expect(code).toContain('Astro.request.headers.get("Origin")');
   });

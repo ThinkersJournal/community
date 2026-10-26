@@ -69,6 +69,7 @@ async function signUp(
   await page.fill('input[name="email"]', email);
   await page.fill('input[name="password"]', PASSWORD);
   await page.fill('input[name="turnstileToken"]', "dummy-turnstile-token");
+  await page.check('input[name="acceptedTerms"]');
   await page.click('button[type="submit"]');
   await expect(page.locator("#check-email")).toBeVisible();
 }

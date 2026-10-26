@@ -51,6 +51,9 @@ if (Astro.request.method === "POST") {
         email: form.get("email"),
         password: form.get("password"),
         turnstileToken: form.get("turnstileToken"),
+        // S6: an unticked checkbox is ABSENT from the form data, so this is
+        // `true` or `false`, never the raw "on". The api only accepts `true`.
+        acceptedTerms: form.get("acceptedTerms") === "on",
       },
       // ⚠️ The BROWSER's Origin, forwarded verbatim — never this app's own.
       // Like login, signup has no session yet and so no double-submit token:
@@ -142,6 +145,15 @@ if (Astro.request.method === "POST") {
               Password
               <input type="password" name="password" required />
             </label>
+            {/* S6 (CireSnave 2026-10-25): signup age is 16 and over, and the
+                api records this box with the Terms version. The Terms have no
+                page of their own yet (ROADMAP R1); link them here when they do. */}
+            <label class="check">
+              <input type="checkbox" name="acceptedTerms" required />
+              <span>I am at least 16 years old, and I agree to the Terms of Service,
+                the <a class="link" href="/guidelines">Community Guidelines</a> and the
+                <a class="link" href="https://thinkersjournal.com/privacy">Privacy Policy</a>.</span>
+            </label>
             {/*
               Cloudflare Turnstile. In PRODUCTION (turnstileSiteKey set at build
               time) the real widget renders and, via `data-response-field-name`,
@@ -218,4 +230,6 @@ if (Astro.request.method === "POST") {
   .form input{background:var(--ink2);border:1px solid var(--line);border-radius:8px;
     padding:11px 13px;color:var(--text);font:inherit}
   .form input:focus-visible{border-color:var(--green)}
+  .form .check{flex-direction:row;align-items:flex-start;gap:10px}
+  .form .check input{margin-top:3px;flex:none}
 </style>

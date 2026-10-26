@@ -99,6 +99,7 @@ export async function signUp(page: Page, email: string, handle: string): Promise
   // input, and the api runs with Cloudflare's always-passes dummy secret, so
   // any non-empty value clears the bot check.
   await page.fill('input[name="turnstileToken"]', "dummy-turnstile-token");
+  await page.check('input[name="acceptedTerms"]');
 
   await page.click('button[type="submit"]');
 }

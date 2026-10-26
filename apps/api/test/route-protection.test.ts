@@ -123,7 +123,7 @@ function probeBody(): string {
     // Satisfies SignupInput's now-required `username` (Task 1) — LoginInput has
     // no such field and simply ignores the extra key.
     username: `probe${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`,
-    turnstileToken: "dummy-turnstile-token",
+    turnstileToken: "dummy-turnstile-token", acceptedTerms: true,
   });
 }
 

@@ -547,7 +547,7 @@ async function signup(email: string): Promise<Response> {
   const res = await call("/auth/signup", {
     method: "POST",
     headers: { "content-type": "application/json", Origin: ALLOWED_ORIGIN },
-    body: JSON.stringify({ email, password: PASSWORD, username: handle, turnstileToken: "dummy" }),
+    body: JSON.stringify({ email, password: PASSWORD, username: handle, turnstileToken: "dummy", acceptedTerms: true }),
   });
   if (res.status === 201) {
     await ctxRun(async (c) => {

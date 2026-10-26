@@ -160,6 +160,10 @@ and only then for both Workers.
 4. **`prod-smoke.yml` runs after the push**, as it already does for every
    push to `main` (unchanged by this work — see that workflow).
 
+## Terms acceptance record: `0039` must be applied BEFORE the deploy
+
+`0039_terms_acceptances.sql` adds the `terms_acceptances` table (one row per account and Terms version). It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above. The new signup writes a row inside its transaction, so deploying the code against a database without `0039` fails every signup. **Rollback** is the file's `-- Down Migration`.
+
 ## Upload refusal record: `0038` must be applied BEFORE the deploy
 
 `0038_media_upload_refusals.sql` adds the `media_upload_refusals` table (one row per refused upload of held or

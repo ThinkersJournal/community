@@ -6,6 +6,8 @@ import {
 } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { SIGNUP_MINIMUM_AGE, TERMS_VERSION } from "@thinkersjournal/shared";
+
 import worker from "../src";
 import { envWithBrokenBump } from "./helpers/broken-bump";
 import { awaitLimiterBurstWindow } from "./helpers/limiter-window";
@@ -153,7 +155,7 @@ function uniqHandle(): string {
 }
 
 function validBody(email: string, password: string = VALID_PASSWORD) {
-  return { email, password, username: uniqHandle(), turnstileToken: "dummy-turnstile-token" };
+  return { email, password, username: uniqHandle(), turnstileToken: "dummy-turnstile-token", acceptedTerms: true };
 }
 
 /** The `Cookie` header value carrying the session a signup response just set. */
@@ -314,7 +316,7 @@ describe("POST /auth/signup", () => {
       email: uniqueEmail(),
       password: VALID_PASSWORD,
       username: handle,
-      turnstileToken: "dummy-turnstile-token",
+      turnstileToken: "dummy-turnstile-token", acceptedTerms: true,
     });
     expect(first.status).toBe(201);
 
@@ -322,7 +324,7 @@ describe("POST /auth/signup", () => {
       email: emailSecond,
       password: VALID_PASSWORD,
       username: handle,
-      turnstileToken: "dummy-turnstile-token",
+      turnstileToken: "dummy-turnstile-token", acceptedTerms: true,
     });
 
     expect(second.status).toBe(409);
@@ -351,7 +353,7 @@ describe("POST /auth/signup", () => {
       email,
       password: VALID_PASSWORD,
       username: "admin",
-      turnstileToken: "dummy-turnstile-token",
+      turnstileToken: "dummy-turnstile-token", acceptedTerms: true,
     });
 
     expect(response.status).toBe(400);
@@ -377,7 +379,7 @@ describe("POST /auth/signup", () => {
       email,
       password: VALID_PASSWORD,
       username: "deleted-user-anything",
-      turnstileToken: "dummy-turnstile-token",
+      turnstileToken: "dummy-turnstile-token", acceptedTerms: true,
     });
 
     expect(response.status).toBe(400);
@@ -406,7 +408,7 @@ describe("POST /auth/signup", () => {
           email,
           password: VALID_PASSWORD,
           username: h1,
-          turnstileToken: "dummy-turnstile-token",
+          turnstileToken: "dummy-turnstile-token", acceptedTerms: true,
         })
       ).status,
     ).toBe(201);
@@ -416,7 +418,7 @@ describe("POST /auth/signup", () => {
           email,
           password: "a-completely-different-password",
           username: h2,
-          turnstileToken: "dummy-turnstile-token",
+          turnstileToken: "dummy-turnstile-token", acceptedTerms: true,
         })
       ).status,
     ).toBe(201);
@@ -953,6 +955,52 @@ describe("POST /auth/signup", () => {
     },
     60_000,
   );
+
+  it("S6: records the terms acceptance with the server's version and age, in the signup transaction", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+    expect((await signup(validBody(email))).status).toBe(201);
+
+    const users = await query("SELECT id FROM users WHERE email = $1", [email]);
+    const rows = await query(
+      "SELECT terms_version, minimum_age, accepted_at FROM terms_acceptances WHERE user_id = $1",
+      [users[0]!.id],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.terms_version).toBe(TERMS_VERSION);
+    expect(rows[0]!.minimum_age).toBe(SIGNUP_MINIMUM_AGE);
+    expect(rows[0]!.accepted_at).not.toBeNull();
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["false", false],
+    ["the string 'on'", "on"],
+  ])("S6: 400s with the field named, and creates nothing, when acceptedTerms is %s", async (_label, value) => {
+    stubFetch(true);
+    const email = uniqueEmail();
+    const body: Record<string, unknown> = { ...validBody(email) };
+    if (value === undefined) delete body.acceptedTerms;
+    else body.acceptedTerms = value;
+
+    const response = await signup(body);
+
+    expect(response.status).toBe(400);
+    const json = (await response.json()) as { fields?: string[] };
+    expect(json.fields).toContain("acceptedTerms");
+    expect(await query("SELECT id FROM users WHERE email = $1", [email])).toHaveLength(0);
+  });
+
+  it("S6: a re-signup of an unverified address keeps ONE acceptance row for the version", async () => {
+    stubFetch(true);
+    const email = uniqueEmail();
+    expect((await signup(validBody(email))).status).toBe(201);
+    expect((await signup(validBody(email))).status).toBe(201);
+
+    const users = await query("SELECT id FROM users WHERE email = $1", [email]);
+    const rows = await query("SELECT 1 FROM terms_acceptances WHERE user_id = $1", [users[0]!.id]);
+    expect(rows).toHaveLength(1);
+  });
 
   it("400s a malformed JSON body (not a 500)", async () => {
     stubFetch(true);

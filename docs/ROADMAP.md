@@ -52,7 +52,7 @@ Rows (PM ruling 2026-10-24: R1-R6 as listed, R2 first). Open issues: #114 (NCMEC
 | R7 | Show the cited grounds on the appeal page (`AppealTarget`, `routes/appeals.ts`, `appeal.astro`) so both surfaces state the same grounds | done (0.1.87): `AppealTarget` carries both grounds, the appeal page renders them |
 | R8 | Patent sweep, the areas not yet searched (theming, editor UI, Postmark integration, deploy pipeline): at most 1 Google Patents query per minute, back off on a 503 and say so in the record; read claims with `tools/patent-claims.py`; areas not searched stay listed as unsearched in `docs/PATENT-SWEEP.md` (PM 2026-10-25) | open, unblocked |
 | R9 | DMCA takedown, counter-notice and repeat-infringer flow (S2): one-page design note first, then intake, hide and notify, counter-notice, restore timer, strike count; numbers are placeholders for the attorney | open (CireSnave ruled "build it", 2026-10-25) |
-| R10 | Terms acceptance record at signup (S6): checkbox, stored account/time/Terms version, one migration CireSnave applies; the minimum age (13 in the drafts, 16 in design decision 15) must be settled first | open (CireSnave ruled yes); age waits on CireSnave |
+| R10 | Terms acceptance record at signup (S6): checkbox, stored account/time/Terms version, one migration CireSnave applies; the minimum age (13 in the drafts, 16 in design decision 15) must be settled first | built (0.1.100): age 16 ruled by CireSnave 2026-10-25, migration 0039, both drafts say 16 |
 
 Closed since the last refresh: #57 (outbox, #197 and follow-ups), #78, #148, #156, #39, #40, #59, #60, #65, #85
 (already fixed by #182), #84 (unmigrated local dev DB; #218 adds an e2e preflight) and #74 (audit refreshed in

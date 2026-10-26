@@ -168,7 +168,7 @@ async function resignup(email: string): Promise<Response> {
     new Request("https://api.test/auth/signup", {
       method: "POST",
       headers: { "content-type": "application/json", Origin: ALLOWED_ORIGIN },
-      body: JSON.stringify({ email, password: NEW_PASSWORD, username: handle, turnstileToken: "dummy" }),
+      body: JSON.stringify({ email, password: NEW_PASSWORD, username: handle, turnstileToken: "dummy", acceptedTerms: true }),
     }),
   );
 }
@@ -380,7 +380,7 @@ describe("0023 — signup fails closed without RESERVED_EMAIL_KEY", () => {
       new Request("https://api.test/auth/signup", {
         method: "POST",
         headers: { "content-type": "application/json", Origin: ALLOWED_ORIGIN },
-        body: JSON.stringify({ email, password: NEW_PASSWORD, username: handle, turnstileToken: "dummy" }),
+        body: JSON.stringify({ email, password: NEW_PASSWORD, username: handle, turnstileToken: "dummy", acceptedTerms: true }),
       }),
       { ...env, RESERVED_EMAIL_KEY: key as unknown as string },
       ctx,
