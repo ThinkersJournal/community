@@ -33,8 +33,8 @@ const web = read(join(API_DIR, "../web"));
 const byName = (name: string) => api.ratelimits?.find((l) => l.name === name);
 
 describe("login challenge: wrangler.jsonc", () => {
-  it("ships the flag OFF, as the string \"0\" (anything but \"1\" is off)", () => {
-    expect(api.vars?.LOGIN_CHALLENGE).toBe("0");
+  it("ships the flag ON (S10, CireSnave 2026-10-25), as the string \"1\" (anything but \"1\" is off)", () => {
+    expect(api.vars?.LOGIN_CHALLENGE).toBe("1");
   });
 
   it("binds the soft limiters at 3/60s (ip:email and email) and 15/60s (ip)", () => {

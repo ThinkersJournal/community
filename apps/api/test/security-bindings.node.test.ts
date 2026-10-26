@@ -44,14 +44,14 @@ describe("api wrangler.jsonc", () => {
     expect(api.migrations?.at(-1)?.new_sqlite_classes).toEqual(["SecurityCounterDO", "SecurityLedgerDO"]);
   });
 
-  it("ships every flag off but counting (spec §6 phase 1), and never TEST_ROUTES", () => {
-    // LOGIN_CHALLENGE (the login Turnstile challenge) is the fourth flag, off too;
+  it("ships every flag off but counting and the login challenge (spec §6 phase 1 + S10), and never TEST_ROUTES", () => {
+    // LOGIN_CHALLENGE (the login Turnstile challenge) is the fourth flag, ON since S10 (CireSnave 2026-10-25);
     // its own pin is test/login-challenge-config.node.test.ts.
     expect(api.vars).toEqual({
       SECURITY_COUNTING: "on",
       SECURITY_ALERTS_ENABLED: "0",
       ACCOUNT_NOTICES_ENABLED: "0",
-      LOGIN_CHALLENGE: "0",
+      LOGIN_CHALLENGE: "1",
     });
   });
 });
