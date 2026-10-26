@@ -30,7 +30,7 @@ import { mintAppealUrl, mintNoticeLinks } from "./notice-links";
 import { renderAccountActionNotice, renderTerminationNotice } from "./notify-account";
 import { renderAppealOutcomeNotice } from "./notify-appeal";
 import { renderModerationNotice, type RenderedNotice } from "./notify-author";
-import { renderDsaOutcome } from "./notify-reporter";
+import { renderDsaOutcome, renderMemberReportOutcome } from "./notify-reporter";
 
 export interface AuthorDecisionNoticeInput {
   readonly actionId: string;
@@ -70,7 +70,7 @@ export async function enqueueAuthorDecisionNotice(c: Client, input: AuthorDecisi
 
 interface OutboxInsert {
   readonly actionId: string;
-  readonly kind: "author_decision" | "account_action" | "appeal_outcome" | "reporter_outcome" | "dmca_author_notice" | "dmca_claimant_notice";
+  readonly kind: "author_decision" | "account_action" | "appeal_outcome" | "reporter_outcome" | "dmca_author_notice" | "dmca_claimant_notice" | "member_reporter_outcome";
   readonly recipientUserId?: string;
   /** A DSA reporter only (no account); nulled once the row settles. */
   readonly recipientEmail?: string;
@@ -249,4 +249,31 @@ export async function enqueueDmcaClaimantNotice(
     recipientEmail: input.email,
     rendered: input.rendered,
   });
+}
+
+export interface MemberReporterOutcomeNoticesInput {
+  readonly actionId: string;
+  /** The members whose reports this ruling answered (`reports.reporter_id`). */
+  readonly reporterIds: readonly string[];
+  readonly decision: DecisionKind;
+  readonly subject: "post" | "comment";
+  readonly postTitle: string;
+}
+
+/**
+ * Queue one outcome per MEMBER reporter the ruling answered (kind
+ * `member_reporter_outcome`, S14c). An anonymised reporter is skipped (never mail a
+ * scrubbed account); the report is still marked answered by the caller. The email
+ * carries the outcome only, never the moderator's reason.
+ */
+export async function enqueueMemberReporterOutcomeNotices(c: Client, input: MemberReporterOutcomeNoticesInput): Promise<void> {
+  if (input.reporterIds.length === 0) return;
+  const { rows } = await c.query<{ id: string }>(
+    `SELECT id FROM users WHERE id = ANY($1::uuid[]) AND anonymised_at IS NULL ORDER BY id`,
+    [input.reporterIds],
+  );
+  const rendered = renderMemberReportOutcome({ decision: input.decision, subject: input.subject, postTitle: input.postTitle });
+  for (const r of rows) {
+    await insertOutbox(c, { actionId: input.actionId, kind: "member_reporter_outcome", recipientUserId: r.id, rendered });
+  }
 }

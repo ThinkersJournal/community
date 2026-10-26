@@ -243,6 +243,9 @@ describe("0001 users + profiles migration", () => {
       expect(await tableExists(client, "dmca_notices")).toBe(true);
       expect(await tableExists(client, "dmca_counter_notices")).toBe(true);
       expect(await columnExists(client, "moderation_actions", "dmca_notice_id")).toBe(true);
+      // 0041_member_reporter_outcome.sql — a member reporter is told the outcome.
+      expect(await columnExists(client, "reports", "outcome_action_id")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_member_reporter_key")).toBe(true);
     });
 
     await migrate("down");
@@ -346,6 +349,9 @@ describe("0001 users + profiles migration", () => {
       // 0040 — re-applied by the round-trip.
       expect(await tableExists(client, "dmca_notices")).toBe(true);
       expect(await columnExists(client, "moderation_actions", "dmca_notice_id")).toBe(true);
+      // 0041 — re-applied by the round-trip.
+      expect(await columnExists(client, "reports", "outcome_action_id")).toBe(true);
+      expect(await indexExists(client, "moderation_notice_outbox_member_reporter_key")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });

@@ -168,6 +168,10 @@ and only then for both Workers.
 
 `0040_dmca.sql` adds `dmca_notices`, `dmca_counter_notices`, `moderation_actions.dmca_notice_id` (with the `dmca_notice` source) and the two DMCA outbox kinds, for the whole DMCA feature (ROADMAP R9) in one go. It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above. The new intake writes `dmca_notices`, so deploying the code against a database without `0040` fails every notice (and the daily cron's reaper logs an error). **Rollback** is the file's `-- Down Migration`; it refuses once a DMCA-sourced action row exists (the log is append-only).
 
+## Member reporter outcome: `0041` must be applied BEFORE the deploy
+
+`0041_member_reporter_outcome.sql` adds `reports.outcome_action_id`, the outbox kind `member_reporter_outcome` and a second unique index on the outbox (S14c). It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above, and only after `0040`. The new decision code updates `reports.outcome_action_id` inside every content ruling, so deploying it against a database without `0041` fails every moderation decision. **Rollback** is the file's `-- Down Migration` (it deletes any queued `member_reporter_outcome` rows).
+
 ## Upload refusal record: `0038` must be applied BEFORE the deploy
 
 `0038_media_upload_refusals.sql` adds the `media_upload_refusals` table (one row per refused upload of held or

@@ -184,6 +184,7 @@ describe("auto-hide author notice (#56)", () => {
     // In plain words: nothing to appeal yet, and where the appeal will come from.
     for (const body of [m.text, m.html]) {
       expect(body).toContain("nothing to appeal yet");
+      expect(body).toContain("done automatically");
       expect(body).toContain("how to appeal");
     }
     // The post was already hidden, as seen from ANOTHER connection, when it went.
@@ -212,6 +213,7 @@ describe("auto-hide author notice (#56)", () => {
     expect(sent[0]!.html).not.toMatch(NO_LINK);
     for (const body of [sent[0]!.text, sent[0]!.html]) {
       expect(body).toContain("nothing to appeal yet");
+      expect(body).toContain("done automatically");
       expect(body).toContain("how to appeal");
     }
   });

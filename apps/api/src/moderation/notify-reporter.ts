@@ -61,6 +61,31 @@ export function renderDsaOutcome(outcome: DsaOutcome): RenderedNotice {
   };
 }
 
+/**
+ * S14(c): the short outcome for a MEMBER who used the Report button. The same three
+ * outcomes and leads as the DSA reporter's, but no moderator reason: that is a
+ * statement to the author (and, by law, to a DSA notifier), and a member reporter
+ * is owed the outcome only. Pure: queued inside the ruling's transaction.
+ */
+export function renderMemberReportOutcome(outcome: Omit<DsaOutcome, "reason">): RenderedNotice {
+  const lead = LEAD[outcome.decision];
+  const contentLine =
+    outcome.subject === "post"
+      ? `This is about the post you reported, "${outcome.postTitle}".`
+      : `This is about the comment you reported, on "${outcome.postTitle}".`;
+  const thanks = "Thank you for helping keep Thinker's Journal safe. A human moderator made this decision.";
+  return {
+    subject: "The content you reported has been reviewed",
+    textBody: `${lead}
+
+${contentLine}
+
+${thanks}
+`,
+    htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p>${escapeHtml(thanks)}</p>`,
+  };
+}
+
 export async function sendDsaOutcome(
   env: Env,
   to: string,
