@@ -129,9 +129,55 @@ async function lockNotice(c: Client, noticeId: string): Promise<LockedNotice | u
 async function rollback(c: Client): Promise<void> {
   try {
     await c.query("ROLLBACK");
-  } catch {
-    // The connection may already be dead (BEGIN_BOUNDED_TX's idle timeout); the caller's answer stands.
+  } catch (err) {
+    // The connection may already be dead (BEGIN_BOUNDED_TX's idle timeout), so this must
+    // never replace the caller's root error, but it is LOGGED: a transaction left open by a
+    // dying connection should leave a trace. The class only, never the message (it could
+    // carry SQL text).
+    console.error("DMCA decision: ROLLBACK failed", { error: err instanceof Error ? err.name : "unknown" });
   }
+}
+
+/**
+ * The two emails of a takedown, queued in the takedown's transaction: the author's (with a
+ * copy of the notice and the counter-notice link; skipped when no one can receive it, in
+ * which case the token hash stored on the notice is useless without the raw token) and the
+ * claimant's, who is owed an answer whatever became of the author's account.
+ */
+async function queueTakedownNotices(
+  c: Client,
+  n: LockedNotice,
+  result: DecisionResult,
+  counterToken: string,
+  origin: string,
+): Promise<void> {
+  if (result.noticeSkip === null) {
+    await enqueueDmcaAuthorNotice(c, {
+      actionId: result.actionId,
+      authorId: result.authorId,
+      rendered: renderDmcaAuthorNotice({
+        subject: n.target_kind,
+        postTitle: result.postTitle,
+        notice: {
+          complainantName: n.complainant_name,
+          complainantEmail: n.complainant_email,
+          complainantAddress: n.complainant_address,
+          complainantPhone: n.complainant_phone,
+          workDescription: n.work_description,
+          signature: n.signature,
+          sentAt: n.created_at,
+        },
+        counterUrl: `${origin}/dmca/counter?token=${encodeURIComponent(counterToken)}`,
+        restoreBusinessDays: DMCA_RESTORE_BUSINESS_DAYS,
+      }),
+    });
+  }
+  // The claimant is owed an answer whatever became of the author's account.
+  await enqueueDmcaClaimantNotice(c, {
+    actionId: result.actionId,
+    email: n.complainant_email,
+    rendered: renderDmcaClaimantOutcome({ outcome: "taken_down", subject: n.target_kind, postTitle: result.postTitle }),
+  });
 }
 
 export interface TakedownInput {
@@ -183,35 +229,7 @@ export async function takedownDmcaNotice(
       [n.id, input.actorAdmin, result.actionId, result.authorId, await sha256Hex(counterToken)],
     );
 
-    // The author's notice. Skipped (with no live credential left behind: the token
-    // hash above is useless without the raw token) when no one can receive it.
-    if (result.noticeSkip === null) {
-      await enqueueDmcaAuthorNotice(c, {
-        actionId: result.actionId,
-        authorId: result.authorId,
-        rendered: renderDmcaAuthorNotice({
-          subject: n.target_kind,
-          postTitle: result.postTitle,
-          notice: {
-            complainantName: n.complainant_name,
-            complainantEmail: n.complainant_email,
-            complainantAddress: n.complainant_address,
-            complainantPhone: n.complainant_phone,
-            workDescription: n.work_description,
-            signature: n.signature,
-            sentAt: n.created_at,
-          },
-          counterUrl: `${input.origin}/dmca/counter?token=${encodeURIComponent(counterToken)}`,
-          restoreBusinessDays: DMCA_RESTORE_BUSINESS_DAYS,
-        }),
-      });
-    }
-    // The claimant is owed an answer whatever became of the author's account.
-    await enqueueDmcaClaimantNotice(c, {
-      actionId: result.actionId,
-      email: n.complainant_email,
-      rendered: renderDmcaClaimantOutcome({ outcome: "taken_down", subject: n.target_kind, postTitle: result.postTitle }),
-    });
+    await queueTakedownNotices(c, n, result, counterToken, input.origin);
 
     await c.query("COMMIT");
     return { kind: "ok", value: { result, subject: n.target_kind } };
