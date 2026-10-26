@@ -32,17 +32,15 @@ jobs:
         run: bash scripts/smoke-prod.sh
 
   # Automatic rollback (docs/superpowers/specs/2026-10-25-auto-rollback-design.md).
-  # ⚠️ OFF BY DEFAULT. The Environment and its two secrets exist (board 305); this job still
-  # does nothing until the AUTO_ROLLBACK_ENABLED repository variable is "1", which is set
-  # only after the manual `rollback-check` workflow has proved the token works.
+  # ⚠️ INERT UNTIL CIRESNAVE CREATES THE `production-rollback` ENVIRONMENT and its
+  # token (the design note, section 4, lists exactly what to create). Without the
+  # secret this job only says so and does nothing else.
   #
   # Only after a PUSH to main whose smoke check failed: a scheduled failure has no
   # code change behind it, so rolling code back would fix nothing.
   rollback:
     needs: smoke
-    # OFF until the AUTO_ROLLBACK_ENABLED repository variable is "1" (board 305 step 3): set it only
-    # after the manual `rollback-check` workflow has passed against the real token.
-    if: ${{ always() && github.event_name == 'push' && needs.smoke.result == 'failure' && vars.AUTO_ROLLBACK_ENABLED == '1' }}
+    if: ${{ always() && github.event_name == 'push' && needs.smoke.result == 'failure' }}
     runs-on: ubuntu-latest
     # The secret lives in this Environment, restricted to the `main` branch, so no
     # pull-request workflow and no other branch can read it.
@@ -90,7 +88,7 @@ jobs:
         if: ${{ steps.recheck.outputs.recovered == 'false' && steps.guard.outputs.touches_wrangler == 'false' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           GITHUB_SHA: ${{ github.sha }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then

@@ -7,7 +7,7 @@
 # `pnpm install`, so a broken build cannot stop the rollback.
 #
 #   CLOUDFLARE_API_TOKEN   the Environment secret (Workers Scripts: Edit, one account)
-#   CLOUDFLARE_ACCOUNT_ID  the Environment secret
+#   CLOUDFLARE_ACCOUNT_ID  the Environment variable
 #   DRY_RUN=1              print what would be done; change nothing
 #   CF_API_BASE            test seam: the API origin (default: Cloudflare's)
 #

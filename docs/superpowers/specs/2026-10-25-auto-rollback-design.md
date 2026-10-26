@@ -50,7 +50,7 @@ Worker's runtime secrets. CireSnave chose this (option B); these are the control
   can run with the token. The job grants itself only `contents: read` and `issues: write`.
 - **Only the one step that needs it sees it.** The token is in that step's environment alone; it is never echoed (the script's
   test asserts the log never contains it), and actions are pinned by commit.
-- **The account id is a second Environment secret** (board 305: that is how it was created; the id is not sensitive on its own, but keeping both together costs nothing).
+- **The account id is a variable**, not a secret.
 
 ### What CireSnave creates (about ten minutes, in this order)
 
@@ -60,14 +60,9 @@ Worker's runtime secrets. CireSnave chose this (option B); these are the control
 2. **Cloudflare:** *My Profile, API Tokens, Create Token, Create Custom Token*. Name it `tj-ci-rollback`. Permissions: *Account,
    Workers Scripts, Edit*. Account Resources: *Include, the Thinker's Journal account only*. (Optional: a Client IP Address
    Filtering rule is not practical for GitHub-hosted runners, whose addresses change. Set a TTL of one year.) Copy the token once.
-3. **GitHub, in the `production-rollback` Environment:** add the *secrets* `CLOUDFLARE_API_TOKEN` (the token) and
-   `CLOUDFLARE_ACCOUNT_ID` (the account id, from the Cloudflare dashboard's right-hand column). **Done 2026-10-25/26 (board 305,
-   confirmed by the PM's read-back of names).**
-4. **Prove the token, then switch the job on (board 305).** Run the manual `rollback-check` workflow (Actions, `rollback-check`,
-   Run workflow, branch `main`). It makes GET requests only: it verifies the token, lists the Worker scripts the token can see and
-   counts each production Worker's deployments; it deploys and rolls back nothing. Only after it passes, set the repository
-   *variable* `AUTO_ROLLBACK_ENABLED` to `1` (Settings, Secrets and variables, Actions, Variables). Until then the `rollback` job is
-   skipped. Setting it to anything else, or deleting it, turns the automatic rollback off again.
+3. **GitHub, in the `production-rollback` Environment:** add the *secret* `CLOUDFLARE_API_TOKEN` (the token) and the *variable*
+   `CLOUDFLARE_ACCOUNT_ID` (the account id, from the Cloudflare dashboard's right-hand column).
+4. Nothing else. Until step 3 is done the job prints "Automatic rollback is not configured" and exits without acting.
 
 **Rotate** the token yearly (create a new one, replace the secret, delete the old). **Revoke** it at once in the Cloudflare
 dashboard if the repository's settings, the workflow or the token are ever suspected of exposure; the rollback is then manual
