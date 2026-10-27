@@ -116,3 +116,71 @@ describe("tags on create/edit", () => {
     expect(((await response.json()) as { code: string }).code).toBe("INVALID_INPUT");
   });
 });
+
+describe("tag creation is gated to accounts older than 7 days (S26)", () => {
+  async function setAccountAge(userId: string, age: string): Promise<void> {
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) =>
+      c.query(`UPDATE users SET created_at = now() - $2::interval WHERE id = $1`, [userId, age]),
+    );
+    await waitOnExecutionContext(ctx);
+  }
+
+  async function tagExists(slug: string): Promise<boolean> {
+    const ctx = createExecutionContext();
+    const found = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
+      const { rowCount } = await c.query(`SELECT 1 FROM tags WHERE slug = $1`, [slug]);
+      return (rowCount ?? 0) > 0;
+    });
+    await waitOnExecutionContext(ctx);
+    return found;
+  }
+
+  it("a NEW account's unknown tag is not created and not applied, and the post is published all the same", async () => {
+    const fresh = await createVerifiedActor();
+    await setAccountAge(fresh.userId, "1 day");
+    const slug = `gated-${crypto.randomUUID().slice(0, 8)}`;
+
+    const create = await fetchWorker(createPostRequest(fresh, "published", { tags: [slug] }));
+    expect(create.status).toBe(201);
+    const { id } = (await create.json()) as { id: string };
+    expect(await tagsOf(fresh, id)).toEqual([]);
+    expect(await tagExists(slug)).toBe(false);
+  });
+
+  it("a NEW account can still use a tag that already exists (control: the same label, made by an established account)", async () => {
+    const slug = `shared-${crypto.randomUUID().slice(0, 8)}`;
+    await createPublished(actor, { tags: [slug] }); // an established account creates it
+    expect(await tagExists(slug)).toBe(true);
+
+    const fresh = await createVerifiedActor();
+    await setAccountAge(fresh.userId, "1 day");
+    const id = await createPublished(fresh, { tags: [slug] });
+    expect((await tagsOf(fresh, id)).map((t) => t.slug)).toEqual([slug]);
+  });
+
+  it("the boundary: 8 days old creates, 6 days old does not", async () => {
+    const old = await createVerifiedActor();
+    await setAccountAge(old.userId, "8 days");
+    const young = await createVerifiedActor();
+    await setAccountAge(young.userId, "6 days");
+    const oldSlug = `old-${crypto.randomUUID().slice(0, 8)}`;
+    const youngSlug = `young-${crypto.randomUUID().slice(0, 8)}`;
+
+    const a = await createPublished(old, { tags: [oldSlug] });
+    const b = await createPublished(young, { tags: [youngSlug] });
+    expect((await tagsOf(old, a)).map((t) => t.slug)).toEqual([oldSlug]);
+    expect(await tagsOf(young, b)).toEqual([]);
+  });
+
+  it("an edit by a new account does not create a tag either", async () => {
+    const fresh = await createVerifiedActor();
+    await setAccountAge(fresh.userId, "1 day");
+    const id = await createPublished(fresh);
+    const slug = `edited-${crypto.randomUUID().slice(0, 8)}`;
+    const edit = await fetchWorker(patchPostRequest(fresh, id, "published", { tags: [slug] }));
+    expect(edit.status).toBe(200);
+    expect(await tagsOf(fresh, id)).toEqual([]);
+    expect(await tagExists(slug)).toBe(false);
+  });
+});
