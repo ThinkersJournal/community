@@ -97,7 +97,8 @@ verdict "nosniff transform rule" '(.action_parameters.headers["X-Content-Type-Op
 if [ -n "$ZONE_ID" ]; then
   get "/zones/$ZONE_ID/settings/csam_scanner_third_party"; out=$BODY
   if [ "$CODE" = "200" ]; then
-    en=$(jq -r '(.result.enabled // .result.value.enabled // empty) | tostring' <<<"$out" 2>/dev/null)
+    # NOT `a // b`: jq's // treats false as missing, so a disabled tool would read as "no flag".
+    en=$(jq -r '[.result.enabled, .result.value.enabled?] | map(select(. != null)) | if length == 0 then empty else (.[0] | tostring) end' <<<"$out" 2>/dev/null)
     case "$en" in
       true) report PRESENT "CSAM Scanning Tool" "enabled (email verification: $(jq -r '.result.email_verification // .result.value.email_verification // "not reported"' <<<"$out"))";;
       false) report ABSENT "CSAM Scanning Tool" "present but not enabled";;

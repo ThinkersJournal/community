@@ -98,9 +98,17 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/check-cloudflare-dashboard.sh again
     });
     const r = await run(base);
     expect(r.status, r.stdout + r.stderr).toBe(0);
-    for (const item of ["WAF block on /internal/*", "WAF rate limit on public reads", "CDN cache rule", "nosniff transform rule", "CSAM Scanning Tool", "postmark log alert", "purge log alert", "workers.dev off on the web Worker"]) {
-      expect(r.stdout, item).toMatch(new RegExp(`PRESENT\\s+${item.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}`));
-    }
+    const expected: RegExp[] = [
+      /PRESENT\s+WAF block on \/internal\/\*/,
+      /PRESENT\s+WAF rate limit on public reads/,
+      /PRESENT\s+CDN cache rule/,
+      /PRESENT\s+nosniff transform rule/,
+      /PRESENT\s+CSAM Scanning Tool/,
+      /PRESENT\s+postmark log alert/,
+      /PRESENT\s+purge log alert/,
+      /PRESENT\s+workers\.dev off on the web Worker/,
+    ];
+    for (const re of expected) expect(r.stdout).toMatch(re);
     expect(r.stdout).toContain("PRESENT: 8   ABSENT: 0   UNKNOWN: 0");
     expect(r.stdout).toContain("INFO     workers.dev on the api Worker is true");
     expect(seen.every((s) => s.method === "GET")).toBe(true);
