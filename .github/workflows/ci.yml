@@ -94,15 +94,30 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
+      # A hosted runner's apt mirror is sometimes slow: fail a stalled connection fast and retry
+      # inside apt, then (below) retry the whole install, instead of failing the PR on the step's
+      # 10-minute limit (#267, #270, 2026-10-27).
+      - name: Make apt tolerate a slow mirror
+        run: |
+          {
+            echo 'Acquire::Retries "5";'
+            echo 'Acquire::http::Timeout "30";'
+            echo 'Acquire::https::Timeout "30";'
+          } | sudo tee /etc/apt/apt.conf.d/80-ci-retries >/dev/null
+
       - name: Install Playwright browser + OS deps
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 10
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 14
+        env:
+          CI_RETRY_CLEANUP: sudo pkill -x apt-get; sudo pkill -x dpkg; true
+        run: bash scripts/ci-retry.sh 3 230 pnpm exec playwright install --with-deps chromium
 
       - name: Install Playwright OS deps only (browser cached)
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 10
-        run: pnpm exec playwright install-deps chromium
+        timeout-minutes: 14
+        env:
+          CI_RETRY_CLEANUP: sudo pkill -x apt-get; sudo pkill -x dpkg; true
+        run: bash scripts/ci-retry.sh 3 230 pnpm exec playwright install-deps chromium
 
       - name: Run tests
         run: pnpm -r run test
@@ -163,15 +178,30 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
+      # A hosted runner's apt mirror is sometimes slow: fail a stalled connection fast and retry
+      # inside apt, then (below) retry the whole install, instead of failing the PR on the step's
+      # 10-minute limit (#267, #270, 2026-10-27).
+      - name: Make apt tolerate a slow mirror
+        run: |
+          {
+            echo 'Acquire::Retries "5";'
+            echo 'Acquire::http::Timeout "30";'
+            echo 'Acquire::https::Timeout "30";'
+          } | sudo tee /etc/apt/apt.conf.d/80-ci-retries >/dev/null
+
       - name: Install Playwright browser + OS deps
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 10
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 14
+        env:
+          CI_RETRY_CLEANUP: sudo pkill -x apt-get; sudo pkill -x dpkg; true
+        run: bash scripts/ci-retry.sh 3 230 pnpm exec playwright install --with-deps chromium
 
       - name: Install Playwright OS deps only (browser cached)
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 10
-        run: pnpm exec playwright install-deps chromium
+        timeout-minutes: 14
+        env:
+          CI_RETRY_CLEANUP: sudo pkill -x apt-get; sudo pkill -x dpkg; true
+        run: bash scripts/ci-retry.sh 3 230 pnpm exec playwright install-deps chromium
 
       # Playwright's own webServer config builds web and starts BOTH wrangler dev
       # processes (api on 8788, web on 8787) plus a third, single-process api+web
