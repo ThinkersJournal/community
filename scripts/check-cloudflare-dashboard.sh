@@ -23,11 +23,11 @@ ZONE_NAME="${ZONE_NAME:-thinkersjournal.com}"
 CDN_HOST="cdn.${ZONE_NAME}"
 present=0; absent=0; unknown=0
 
-get() { # get <path> -> body on stdout; HTTP status in $CODE
+get() { # get <url-or-path>: sets BODY and CODE (NOT used in $(...): a subshell would lose CODE)
   local f
   f=$(mktemp)
   CODE=$(curl -sS -o "$f" -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$API$1" || true)
-  cat "$f"
+  BODY=$(cat "$f")
   rm -f "$f"
 }
 report() { # report PRESENT|ABSENT|UNKNOWN "item" "detail"
@@ -37,14 +37,14 @@ report() { # report PRESENT|ABSENT|UNKNOWN "item" "detail"
 errs() { jq -c '.errors // empty' <<<"$1" 2>/dev/null; }
 
 # ---- the zone and the account ------------------------------------------------------------------
-out=$(get "/zones?name=$ZONE_NAME")
+get "/zones?name=$ZONE_NAME"; out=$BODY
 ZONE_ID=""; ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
 if [ "$CODE" = "200" ]; then
   ZONE_ID=$(jq -r '.result[0].id // empty' <<<"$out" 2>/dev/null)
   [ -z "$ACCOUNT_ID" ] && ACCOUNT_ID=$(jq -r '.result[0].account.id // empty' <<<"$out" 2>/dev/null)
 fi
 if [ -z "$ACCOUNT_ID" ]; then
-  out=$(get "/accounts")
+  get "/accounts"; out=$BODY
   [ "$CODE" = "200" ] && [ "$(jq '.result | length' <<<"$out" 2>/dev/null)" = "1" ] && ACCOUNT_ID=$(jq -r '.result[0].id' <<<"$out")
 fi
 zs="NOT FOUND ($ZONE_NAME)"; [ -n "$ZONE_ID" ] && zs="found"
@@ -56,7 +56,7 @@ entrypoint() {
   ENTRY_STATUS="unknown:no-zone"; ENTRY_RULES=""
   [ -z "$ZONE_ID" ] && return
   local body
-  body=$(get "/zones/$ZONE_ID/rulesets/phases/$1/entrypoint")
+  get "/zones/$ZONE_ID/rulesets/phases/$1/entrypoint"; body=$BODY
   case "$CODE" in
     200) ENTRY_STATUS=ok; ENTRY_RULES=$(jq -c '.result.rules[]? | select(.enabled != false)' <<<"$body" 2>/dev/null);;
     404) ENTRY_STATUS=none;;
@@ -95,7 +95,7 @@ verdict "nosniff transform rule" '(.action_parameters.headers["X-Content-Type-Op
 
 # 5. CSAM Scanning Tool on the CDN zone
 if [ -n "$ZONE_ID" ]; then
-  out=$(get "/zones/$ZONE_ID/settings/csam_scanner_third_party")
+  get "/zones/$ZONE_ID/settings/csam_scanner_third_party"; out=$BODY
   if [ "$CODE" = "200" ]; then
     en=$(jq -r '(.result.enabled // .result.value.enabled // empty) | tostring' <<<"$out" 2>/dev/null)
     case "$en" in
@@ -112,7 +112,7 @@ fi
 
 # 6. Postmark / purge log alerts (Cloudflare Notifications only; alerts kept elsewhere are invisible here)
 if [ -n "$ACCOUNT_ID" ]; then
-  out=$(get "/accounts/$ACCOUNT_ID/alerting/v3/policies")
+  get "/accounts/$ACCOUNT_ID/alerting/v3/policies"; out=$BODY
   if [ "$CODE" = "200" ]; then
     for kw in postmark purge; do
       n=$(jq --arg k "$kw" '[.result[]? | select(((.name // "") + " " + (.description // "")) | ascii_downcase | contains($k))] | length' <<<"$out" 2>/dev/null)
@@ -128,7 +128,7 @@ fi
 # 7. workers.dev off on the web Worker (the api keeps it on)
 for w in thinkersjournal-web thinkersjournal-api; do
   if [ -z "$ACCOUNT_ID" ]; then report UNKNOWN "workers.dev on $w" "no account"; continue; fi
-  out=$(get "/accounts/$ACCOUNT_ID/workers/scripts/$w/subdomain")
+  get "/accounts/$ACCOUNT_ID/workers/scripts/$w/subdomain"; out=$BODY
   if [ "$CODE" != "200" ]; then report UNKNOWN "workers.dev on $w" "the token cannot read it (${CODE:-none})"; continue; fi
   en=$(jq -r '.result.enabled | tostring' <<<"$out" 2>/dev/null)
   if [ "$w" = "thinkersjournal-web" ]; then
