@@ -61,6 +61,9 @@ command's shell happens to be sitting.
 
 ## The one-time dashboard change (CireSnave)
 
+**Status: done.** CireSnave confirmed on 2026-10-25 (board 287, S15 a) that the build command carries the gate. If a Worker is ever
+re-created or its build settings reset, redo it from the steps below.
+
 For **each** Worker — `thinkersjournal-web` and `thinkersjournal-api` — open
 its Cloudflare Workers Builds settings and change the build command to (using
 the correct relative path for that Worker's root directory, per the section
@@ -596,8 +599,14 @@ For everything else: a manual `wrangler rollback` (or the equivalent in the Clou
 Deployments view) for the affected Worker. **The migration is never
 auto-reverted** (design §3 step 3: node-pg-migrate's `down` is not generally
 a safe automated action, and an additive migration left in place after a
-code rollback is inert, not harmful). This runbook does not add or propose
-any rollback automation.
+code rollback is inert, not harmful).
+
+**Automatic rollback (S15 b, ruled 2026-10-25).** After a push to `main` whose smoke check keeps failing, the `rollback` job in
+`.github/workflows/prod-smoke.yml` runs `scripts/auto-rollback.sh`: both Workers back to their previous deployment (api first),
+then a re-check and an issue. It does nothing until CireSnave creates the `production-rollback` Environment and token; what to
+create, and every guard, is in `docs/superpowers/specs/2026-10-25-auto-rollback-design.md`. It stops, and leaves the rollback
+to a person, when the push changed a `wrangler.jsonc` (the Durable Object case above). If the token is ever suspected of
+exposure, revoke it in the Cloudflare dashboard; the rollback is then the manual one above.
 
 ## Current order constraint
 

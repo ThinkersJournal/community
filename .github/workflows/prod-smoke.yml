@@ -30,3 +30,107 @@ jobs:
         run: sleep 90
       - name: Smoke-check production
         run: bash scripts/smoke-prod.sh
+
+  # Automatic rollback (docs/superpowers/specs/2026-10-25-auto-rollback-design.md).
+  # ⚠️ OFF BY DEFAULT. The Environment and its two secrets exist (board 305); this job still
+  # does nothing until the AUTO_ROLLBACK_ENABLED repository variable is "1", which is set
+  # only after the manual `rollback-check` workflow has proved the token works.
+  #
+  # Only after a PUSH to main whose smoke check failed: a scheduled failure has no
+  # code change behind it, so rolling code back would fix nothing.
+  rollback:
+    needs: smoke
+    # OFF until the AUTO_ROLLBACK_ENABLED repository variable is "1" (board 305 step 3): set it only
+    # after the manual `rollback-check` workflow has passed against the real token.
+    if: ${{ always() && github.event_name == 'push' && needs.smoke.result == 'failure' && vars.AUTO_ROLLBACK_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    # The secret lives in this Environment, restricted to the `main` branch, so no
+    # pull-request workflow and no other branch can read it.
+    environment: production-rollback
+    concurrency:
+      group: prod-rollback
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Is it still failing? (a single blip must not roll production back)
+        id: recheck
+        run: |
+          for attempt in 1 2 3; do
+            if bash scripts/smoke-prod.sh; then
+              echo "recovered=true" >> "$GITHUB_OUTPUT"
+              echo "Production answered on attempt $attempt: no rollback."
+              exit 0
+            fi
+            sleep 60
+          done
+          echo "recovered=false" >> "$GITHUB_OUTPUT"
+      - name: Did this push change a wrangler config?
+        id: guard
+        if: ${{ steps.recheck.outputs.recovered == 'false' }}
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          # A Durable Object class lifecycle change in wrangler.jsonc makes Cloudflare refuse
+          # a rollback across it (docs/runbooks/deploy.md), so a person rolls that back.
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && git diff --name-only "$BEFORE" "$AFTER" | grep -E '^apps/(api|web)/wrangler\.jsonc$'; then
+            echo "touches_wrangler=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::This push changed a wrangler.jsonc; not rolling back automatically. See docs/runbooks/deploy.md."
+          else
+            echo "touches_wrangler=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Roll both Workers back to the previous deployment
+        id: rollback
+        if: ${{ steps.recheck.outputs.recovered == 'false' && steps.guard.outputs.touches_wrangler == 'false' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::warning::Automatic rollback is not configured (no production-rollback token). Roll back by hand: docs/runbooks/deploy.md."
+            echo "attempted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
+          bash scripts/auto-rollback.sh
+      - name: Did the rollback bring production back?
+        id: after
+        if: ${{ always() && steps.rollback.outputs.attempted == 'true' }}
+        run: |
+          sleep 30
+          for attempt in 1 2 3; do
+            if bash scripts/smoke-prod.sh; then
+              echo "healthy=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 45
+          done
+          echo "healthy=false" >> "$GITHUB_OUTPUT"
+          exit 1
+      - name: Leave a note for CireSnave
+        if: ${{ always() && steps.rollback.outputs.attempted == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEALTHY: ${{ steps.after.outputs.healthy }}
+        run: |
+          if [ "$HEALTHY" = "true" ]; then
+            state="Production is healthy again on the previous deployment."
+          else
+            state="Production is STILL failing after the rollback attempt: act now."
+          fi
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Production rolled back automatically after ${SHA:0:7}" \
+            --body "The post-deploy smoke check failed after $SHA and stayed failing on three tries, so the Workers were rolled back to their previous deployments. $state
+
+          The code on main is now AHEAD of what is deployed: fix forward or revert, then the next push redeploys. The database was not touched (any migration stays; it is additive and inert for the older code).
+
+          Run: $RUN_URL"
