@@ -21,19 +21,19 @@ API="${CF_API_BASE:-https://api.cloudflare.com/client/v4}"
 WORKERS=(thinkersjournal-api thinkersjournal-web)
 failed=0
 
-get() { # get <url> -> body on stdout, HTTP code in $CODE
-  local body
-  body=$(mktemp)
-  CODE=$(curl -sS -o "$body" -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$1" || true)
-  cat "$body"
-  rm -f "$body"
+get() { # get <url-or-path>: sets BODY and CODE (NOT used in $(...): a subshell would lose CODE)
+  local f
+  f=$(mktemp)
+  CODE=$(curl -sS -o "$f" -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$1" || true)
+  BODY=$(cat "$f")
+  rm -f "$f"
 }
 
 # 1. Verify the token. A user token verifies at /user/tokens/verify, an account-owned one at
 # /accounts/<id>/tokens/verify; try the first, then the second, and say which answered.
 verified=""
 for path in "user/tokens/verify" "accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify"; do
-  out=$(get "$API/$path")
+  get "$API/$path"; out=$BODY
   if [ "$CODE" = "200" ] && [ "$(jq -r '.result.status // empty' <<<"$out" 2>/dev/null)" = "active" ]; then
     verified="$path"
     break
@@ -47,7 +47,7 @@ else
 fi
 
 # 2. Which Worker scripts can it see?
-out=$(get "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts")
+get "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts"; out=$BODY
 if [ "$CODE" = "200" ]; then
   names=$(jq -r '[.result[]?.id] | sort | join(", ")' <<<"$out" 2>/dev/null)
   count=$(jq '[.result[]?] | length' <<<"$out" 2>/dev/null)
@@ -59,7 +59,7 @@ fi
 
 # 3. The two reads the rollback itself makes.
 for name in "${WORKERS[@]}"; do
-  out=$(get "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$name/deployments")
+  get "$API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$name/deployments"; out=$BODY
   if [ "$CODE" = "200" ]; then
     echo "OK   $name: $(jq '.result.deployments | length' <<<"$out") deployment(s) readable"
   else
