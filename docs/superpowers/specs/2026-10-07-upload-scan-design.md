@@ -84,7 +84,7 @@ Source: the PM's task to the community lane, 2026-10-25, quoting CireSnave's rul
 | D6 | **publish a cleared file; the clearing is tied to the HMS-A list version** (PM default, "unless he says otherwise") | **Flips section 5.5's default** (it said refuse). A re-upload of a file whose only case two admins cleared is accepted and served like any clean upload, *provided the clearing was made under the list version that is still current*. The clearing records the list version it was made under; when the list version has changed since, the clearing no longer shields the file and the upload is scanned as new (so a file the new list now matches is caught). Consequence for the schema (US4/US5): `csam_case_files` (or the clearing record) gains the list version at clearing. |
 | D7 | **ImageMagick on the VPS; no Cloudflare Images plan** | Closes launch blocker 8 (section 11.2) and the "5,000 a month" question. The decoder behind the `ImageDecoder` seam (sections 3.3, US2) is the VPS image service's ImageMagick, not the Cloudflare Images binding; no Images transformations are bought or counted. The 13-item host checklist (S18) is the VPS's. |
 | D11 | **yes: build it, not a launch blocker** | New section 4.5 and task US10: when HMS-A's list version changes, re-check stored PDQ hashes. It supersedes section 0.3's "not carried forward". |
-| D16 | **yes, as CireSnave worded it: join the live review case, hold the upload unpublished until that review completes, raise the case to urgent. Do NOT report the uploader at the match** | Section 5.3 (a) is amended: its report-at-match is **not** built. The report waits for the review's outcome. Any report-at-match path stays out of the code, or sits behind a clearly named flag that defaults off (e.g. `REPORT_UPLOADER_AT_MATCH`), until CireSnave answers board 306 (A = this ruling; B adds report-at-match). |
+| D16 | **B, CireSnave verbatim 2026-10-26: "Decision 306: B".** A known-bad-hash upload that matches an open review case: **join the case, hold the upload unpublished until the review completes, raise the case to urgent, and REPORT the uploader AT THE MATCH.** (The 2026-10-25 hold on report-at-match is lifted.) | Section 5.3 (a) stands exactly as designed, including the report at match; the interim "A" wording is withdrawn and no flag `REPORT_UPLOADER_AT_MATCH` is needed. What the report contains and who receives it is spelled out in section 5.3 (a) below and is the already-designed NCMEC path (`2026-10-01-csam-reporting-pipeline-design.md` section 4.5). **No code for the reporting until that paragraph is reviewed**; the build rows (US5, US7) carry it. |
 | D17 | **yes** | Section 5.7 stands: a report whose evidence write failed is held, with an immediate alarm, until the bytes arrive or two admins file without them. |
 
 D5, D8-D10 and D12-D15 are the PM's and keep their defaults.
@@ -837,6 +837,23 @@ On a match verdict, in this order:
          `csam` account hold and an Option-B report (`queued_by = 'match'`) for their own file. A known-hash signal is
          what §12 treats as enough to report, so it isn't discarded because a weaker case got there first. This
          departs from rev-3 §3.6's "suppress" for machine detections on an undecided case, and is decision D16.
+         **Ruled B on 2026-10-26 (CireSnave: "Decision 306: B"): this paragraph stands as written, report at match
+         included.** The upload is held unpublished (it exists only as the case's evidence file and under the case's
+         `csam` hold) until the review completes.
+       - **What the match-time report is, exactly, and who receives it** (all of it is the already-designed path,
+         `2026-10-01-csam-reporting-pipeline-design.md` sections 3.7, 4 and 4.5; nothing new is invented here).
+         *To whom:* NCMEC's CyberTipline, through the report drain, from the `ncmec_reports` row created here
+         (`queued_by = 'match'`, `pending`, or `awaiting_credentials` until the registration exists). Nobody else is
+         told: not the uploader (no notice, the account stays active), not the other reporters. *What is sent:*
+         the incident type and the time of the earliest matched upload by this account; the reporting person's
+         details from the `NCMEC_REPORTER_*` secrets; **this uploader only** as the reported person (user id, handle,
+         profile URL, email; **no IP address**, none is stored); the URL of every page that embeds one of this
+         report's files; and **this report's own file(s) only**, each with `fileViewedByEsp = false` (no person here has
+         looked), the original's SHA-256 and `publiclyAvailable`. *What stays:* the evidence file and the report as
+         sent are preserved for at least a year after submission (csam design section 5). *If the review clears the
+         file,* the uploader's `csam` hold is released and the content restored as csam design section 7.2 says,
+         and our evidence of the report stays preserved. Any other uploader already in the case's uploader set gets
+         an attempt row and no second report (the re-upload rules above).
      - Serving keys found in step 1 that the case does not already hold are added to it through rev-3 §3.3 steps 3–8
        for those keys: hold, hidden embedding content, snapshots, targets, and their uploaders' holds and reports
        under R3.
@@ -2079,6 +2096,14 @@ Tests are appended to `apps/api/test/media.test.ts`.
 - [ ] Existing tests keep passing, with the fake decoder registered for their fixtures and the mock answering clean.
 - [ ] **Merge timing is the PM's:** merging blocks image uploads until the flag and secrets are set (§8.1).
 
+### D16 build note (ruled B, 2026-10-26)
+
+US5's test for branch (a) with an undecided review-first case covers, for a known-hash answer: the case's `priority`
+becomes `urgent`; this uploader gets the `csam` account hold and exactly one `ncmec_reports` row with `queued_by = 'match'`
+and one `ncmec_report_files` row for their own file with `viewed_by_esp = false`; a second upload by the same account adds
+an attempt row and no report; the upload is never served; and the report XML contains no IP field. **Mutation:** drop the
+report insert and the test fails. The reporting code waits for the paragraph in section 5.3 (a) to be reviewed.
+
 ### US7: Alarms U1–U11
 
 **Files:** `apps/api/src/csam/alarms.ts` (#114 Task 8), and `csam_condition_marks`; test `csam-alarms.test.ts`.
@@ -2150,7 +2175,7 @@ column on the clearing record (US4); test `apps/api/test/recheck-scan.test.ts`.
 | D13 | A low-quality image with the fallback off: refuse with 422 `IMAGE_UNSCANNABLE` ("try a different image"), or the 503? | the 422: a 503 would invite retries that can never succeed (§6.1) | PM |
 | D14 | Every held-key refusal (any category) answers the neutral 422, removing the category oracle? | yes (§5.1) | PM |
 | D15 | The PhotoDNA scan step's switch named `SECOND_SCAN_STEP_ENABLED`? | yes (§7) | PM |
-| D16 | A known-hash upload match on a file whose live case is an undecided review-first case: report this uploader at match and raise the case to urgent (departing from rev-3 §3.6's "suppress")? | yes (§5.3 (a), M3). **Ruled yes, 2026-10-25: join the live review case, hold, raise to urgent; no report at match until board 306 (§0.4)** | CireSnave |
+| D16 | A known-hash upload match on a file whose live case is an undecided review-first case: report this uploader at match and raise the case to urgent (departing from rev-3 §3.6's "suppress")? | yes (§5.3 (a), M3). **Ruled B, 2026-10-26 ("Decision 306: B"): join, hold unpublished until the review completes, raise to urgent, and report the uploader at the match (§0.4)** | CireSnave |
 | D17 | A report whose evidence write failed: hold it until the bytes arrive or two admins file without them, or file at once without the file? | hold, with an immediate alarm (§5.7). **Ruled yes, 2026-10-25** | CireSnave |
 
 ---
