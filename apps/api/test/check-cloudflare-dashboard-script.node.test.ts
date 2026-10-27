@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { join } from "node:path";
@@ -56,8 +56,20 @@ async function fakeApi(o: { phases?: Rules; csam?: unknown | number; policies?: 
   return { base: `http://127.0.0.1:${(server.address() as { port: number }).port}`, seen };
 }
 
-const run = (base: string) =>
-  spawnSync("bash", [PATH], { env: { PATH: process.env.PATH ?? "", CLOUDFLARE_API_TOKEN: "tok-secret-value", CF_API_BASE: base }, encoding: "utf8" });
+/**
+ * ASYNC on purpose. The fake API runs in THIS process; `spawnSync` would block the event loop,
+ * the script's curl would never get an answer, and the test job would hang until the runner
+ * cancelled it (the CI hang of 2026-10-27, run 40473334103).
+ */
+const run = (base: string): Promise<{ status: number | null; stdout: string; stderr: string }> =>
+  new Promise((resolve) => {
+    const p = spawn("bash", [PATH], { env: { PATH: process.env.PATH ?? "", CLOUDFLARE_API_TOKEN: "tok-secret-value", CF_API_BASE: base } });
+    let stdout = "";
+    let stderr = "";
+    p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+    p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+    p.on("close", (code) => resolve({ status: code, stdout, stderr }));
+  });
 
 const FULL: Rules = {
   http_request_firewall_custom: [{ enabled: true, action: "block", description: "block internal", expression: '(starts_with(http.request.uri.path, "/internal/"))' }],
@@ -84,7 +96,7 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/check-cloudflare-dashboard.sh again
       policies: [{ name: "Postmark send failures" }, { name: "Purge log alert" }],
       web: false,
     });
-    const r = run(base);
+    const r = await run(base);
     expect(r.status, r.stdout + r.stderr).toBe(0);
     for (const item of ["WAF block on /internal/*", "WAF rate limit on public reads", "CDN cache rule", "nosniff transform rule", "CSAM Scanning Tool", "postmark log alert", "purge log alert", "workers.dev off on the web Worker"]) {
       expect(r.stdout, item).toMatch(new RegExp(`PRESENT\\s+${item.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}`));
@@ -97,7 +109,7 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/check-cloudflare-dashboard.sh again
 
   it("reports ABSENT for what is missing or off", async () => {
     const { base } = await fakeApi({ phases: {}, csam: { enabled: false }, policies: [], web: true });
-    const r = run(base);
+    const r = await run(base);
     expect(r.stdout).toMatch(/ABSENT\s+WAF block on \/internal\/\*/);
     expect(r.stdout).toMatch(/ABSENT\s+CSAM Scanning Tool/);
     expect(r.stdout).toMatch(/ABSENT\s+workers\.dev off on the web Worker/);
@@ -110,7 +122,7 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/check-cloudflare-dashboard.sh again
       csam: 403,
       policies: 403,
     });
-    const r = run(base);
+    const r = await run(base);
     expect(r.stdout).toMatch(/UNKNOWN\s+WAF block on \/internal\/\*: the token cannot read this ruleset \(403\)/);
     expect(r.stdout).toMatch(/UNKNOWN\s+CSAM Scanning Tool: the token cannot read the setting \(403\)/);
     expect(r.stdout).toMatch(/UNKNOWN\s+Postmark\/purge log alerts/);
@@ -124,7 +136,7 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/check-cloudflare-dashboard.sh again
       http_response_headers_transform: [{ enabled: true, expression: "true", action_parameters: { headers: { "X-Content-Type-Options": { value: "other" } } } }],
     };
     const { base } = await fakeApi({ phases, csam: { enabled: true }, policies: [] });
-    const r = run(base);
+    const r = await run(base);
     expect(r.stdout).toMatch(/ABSENT\s+WAF block on \/internal\/\*/);
     expect(r.stdout).toMatch(/ABSENT\s+nosniff transform rule/);
   });
