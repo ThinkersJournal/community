@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 
@@ -55,17 +55,31 @@ async function fakeApi(o: Opts = {}): Promise<{ base: string; seen: Array<{ meth
   return { base: `http://127.0.0.1:${(server.address() as { port: number }).port}`, seen };
 }
 
-function run(base: string) {
-  return spawnSync("bash", [SCRIPT], {
-    env: { PATH: process.env.PATH ?? "", CLOUDFLARE_API_TOKEN: "tok-secret-value", CLOUDFLARE_ACCOUNT_ID: "acct1", CF_API_BASE: base },
-    encoding: "utf8",
+
+/**
+ * ASYNC on purpose. The fake API runs in THIS process; `spawnSync` would block the event loop,
+ * the script's curl would never get an answer, and the whole test job would hang until the
+ * runner cancelled it (the CI hang of 2026-10-27, run 40473334103).
+ */
+function runScript(args: string[], env: Record<string, string>): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const p = spawn("bash", args, { env });
+    let stdout = "";
+    let stderr = "";
+    p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+    p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+    p.on("close", (code) => resolve({ status: code, stdout, stderr }));
   });
+}
+
+function run(base: string) {
+  return runScript([SCRIPT], { PATH: process.env.PATH ?? "", CLOUDFLARE_API_TOKEN: "tok-secret-value", CLOUDFLARE_ACCOUNT_ID: "acct1", CF_API_BASE: base });
 }
 
 describe.skipIf(!HAVE_TOOLS && !CI)("scripts/rollback-check.sh", () => {
   it("passes when the token verifies and both Workers' deployments are readable; GET only; never prints the token", async () => {
     const { base, seen } = await fakeApi();
-    const r = run(base);
+    const r = await run(base);
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(seen.every((s) => s.method === "GET")).toBe(true);
     expect(r.stdout).toContain("thinkersjournal-api, thinkersjournal-web");
@@ -75,14 +89,14 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/rollback-check.sh", () => {
 
   it("falls back to the account verify endpoint for an account-owned token", async () => {
     const { base, seen } = await fakeApi({ accountVerifyOnly: true });
-    const r = run(base);
+    const r = await run(base);
     expect(r.status, r.stdout).toBe(0);
     expect(seen.some((s) => s.path === "/accounts/acct1/tokens/verify")).toBe(true);
   });
 
   it("fails (exit 1) when the token does not verify as active at either endpoint", async () => {
     const { base } = await fakeApi({ noVerify: true });
-    const r = run(base);
+    const r = await run(base);
     expect(r.status).toBe(1);
     expect(r.stdout).toContain("FAIL token did not verify");
     expect(r.stdout).toContain("RESULT: NOT ready");
@@ -90,7 +104,7 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/rollback-check.sh", () => {
 
   it("fails when a production Worker's deployments cannot be read (the read the rollback needs)", async () => {
     const { base } = await fakeApi({ deploymentsStatus: { "thinkersjournal-web": 403 } });
-    const r = run(base);
+    const r = await run(base);
     expect(r.status).toBe(1);
     expect(r.stdout).toContain("FAIL thinkersjournal-web");
     expect(r.stdout).toContain("RESULT: NOT ready");

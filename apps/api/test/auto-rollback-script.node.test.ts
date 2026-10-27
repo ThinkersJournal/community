@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { join } from "node:path";
 
@@ -59,11 +59,25 @@ async function fakeApi(deployments: Record<string, Deployment[]>, refuse: string
   return { base: `http://127.0.0.1:${port}`, seen };
 }
 
-function run(base: string, extra: Record<string, string> = {}) {
-  return spawnSync("bash", [SCRIPT], {
-    env: { PATH: process.env.PATH ?? "", CLOUDFLARE_API_TOKEN: "tok-secret-value", CLOUDFLARE_ACCOUNT_ID: "acct1", CF_API_BASE: base, ...extra },
-    encoding: "utf8",
+
+/**
+ * ASYNC on purpose. The fake API runs in THIS process; `spawnSync` would block the event loop,
+ * the script's curl would never get an answer, and the whole test job would hang until the
+ * runner cancelled it (the CI hang of 2026-10-27, run 40473334103).
+ */
+function runScript(args: string[], env: Record<string, string>): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const p = spawn("bash", args, { env });
+    let stdout = "";
+    let stderr = "";
+    p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+    p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+    p.on("close", (code) => resolve({ status: code, stdout, stderr }));
   });
+}
+
+function run(base: string, extra: Record<string, string> = {}) {
+  return runScript([SCRIPT], { PATH: process.env.PATH ?? "", CLOUDFLARE_API_TOKEN: "tok-secret-value", CLOUDFLARE_ACCOUNT_ID: "acct1", CF_API_BASE: base, ...extra });
 }
 
 const posts = (seen: Seen[]) => seen.filter((s) => s.method === "POST");
@@ -78,7 +92,7 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/auto-rollback.sh", () => {
       "thinkersjournal-api": [single("api-new"), single("api-old")],
       "thinkersjournal-web": [single("web-new"), single("web-old")],
     });
-    const r = run(base, { GITHUB_SHA: "abc123" });
+    const r = await run(base, { GITHUB_SHA: "abc123" });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     const p = posts(seen);
     expect(p.map((x) => x.path)).toEqual([
@@ -101,7 +115,7 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/auto-rollback.sh", () => {
       "thinkersjournal-api": [single("a2"), single("a1")],
       "thinkersjournal-web": [single("w2"), single("w1")],
     });
-    const r = run(base, { DRY_RUN: "1" });
+    const r = await run(base, { DRY_RUN: "1" });
     expect(r.status).toBe(0);
     expect(posts(seen)).toHaveLength(0);
     expect(r.stdout).toContain("would roll back a2 -> a1");
@@ -112,7 +126,7 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/auto-rollback.sh", () => {
       "thinkersjournal-api": [single("a2"), single("a1")],
       "thinkersjournal-web": [single("only")],
     });
-    const r = run(base);
+    const r = await run(base);
     expect(r.status).toBe(1);
     expect(posts(seen).map((x) => x.path)).toEqual(["/accounts/acct1/workers/scripts/thinkersjournal-api/deployments"]);
     expect(r.stdout).toContain("SKIP thinkersjournal-web");
@@ -123,7 +137,7 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/auto-rollback.sh", () => {
       { "thinkersjournal-api": [single("a2"), single("a1")], "thinkersjournal-web": [single("w2"), single("w1")] },
       ["thinkersjournal-api"],
     );
-    const r = run(base);
+    const r = await run(base);
     expect(r.status).toBe(1);
     expect(r.stdout).toContain("FAIL thinkersjournal-api");
     expect(r.stdout).toContain("10211");
@@ -137,14 +151,14 @@ describe.skipIf(!HAVE_TOOLS && !CI)("scripts/auto-rollback.sh", () => {
       "thinkersjournal-api": [split, single("a1")],
       "thinkersjournal-web": [single("w2"), single("w1")],
     });
-    const r = run(base);
+    const r = await run(base);
     expect(r.status).toBe(1);
     expect(posts(seen).map((x) => x.path)).toEqual(["/accounts/acct1/workers/scripts/thinkersjournal-web/deployments"]);
   });
 
   it("refuses to run without its token or account id", async () => {
     const { base } = await fakeApi({});
-    const noToken = spawnSync("bash", [SCRIPT], { env: { PATH: process.env.PATH ?? "", CLOUDFLARE_ACCOUNT_ID: "a", CF_API_BASE: base }, encoding: "utf8" });
+    const noToken = await runScript([SCRIPT], { PATH: process.env.PATH ?? "", CLOUDFLARE_ACCOUNT_ID: "a", CF_API_BASE: base });
     expect(noToken.status).not.toBe(0);
     expect(noToken.stderr).toContain("CLOUDFLARE_API_TOKEN");
   });
