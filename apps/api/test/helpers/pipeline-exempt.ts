@@ -115,6 +115,8 @@ export const PIPELINE_EXEMPT: ReadonlySet<string> = new Set([
   // TEST-ONLY (#113 plan B): the same TEST_ROUTES-gated seam shape, and the
   // same inline `checkOrigin`, as /__test/reap-unverified above.
   "POST /__test/mint-action-token",
+  // S26: ages an e2e account so it may create tags; same gate and inline checkOrigin.
+  "POST /__test/age-account",
   // TEST-ONLY (#156): TEST_ROUTES-gated, inline checkOrigin, like the seams above.
   "POST /__test/web-purge-bad-secret",
 ]);

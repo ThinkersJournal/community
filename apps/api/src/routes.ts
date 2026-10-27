@@ -567,6 +567,15 @@ export const ROUTES: readonly RouteDef[] = [
       (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
   },
 
+  // TEST-ONLY (S26, e2e/tags.spec.ts): ages an account past the tag-creation gate.
+  // Same null-means-404 contract and handler as the seams around it.
+  {
+    method: "POST",
+    pattern: "/__test/age-account",
+    handler: async (request, env, ctx) =>
+      (await handleTestRoute(request, env, ctx)) ?? notFoundResponse(),
+  },
+
   // TEST-ONLY (#113 plan B, e2e/appeal.spec.ts). Same null-means-404 contract
   // and same handler as the POST seams above — see src/routes/__test.ts.
   {
