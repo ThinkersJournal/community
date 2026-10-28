@@ -17,14 +17,14 @@ import type { Actor } from "./actor";
 
 const ORIGIN = "http://localhost:8787";
 
-async function call(request: Request): Promise<Response> {
+async function call(request: Request, flag = "1"): Promise<Response> {
   const ctx = createExecutionContext();
-  const res = await worker.fetch(request, env, ctx);
+  const res = await worker.fetch(request, { ...env, TERMS_NOTICE: flag }, ctx);
   await waitOnExecutionContext(ctx);
   return res;
 }
 
-const status = (a: Actor) => call(new Request("https://api.test/account/terms", { headers: { Cookie: a.cookie } }));
+const status = (a: Actor, flag = "1") => call(new Request("https://api.test/account/terms", { headers: { Cookie: a.cookie } }), flag);
 const accept = (a: Actor, body: unknown) =>
   call(
     new Request("https://api.test/account/terms", {
@@ -60,6 +60,16 @@ async function seedOld(a: Actor, version: string): Promise<void> {
 afterAll(deleteCreatedUsers);
 
 describe("GET/POST /account/terms (R12)", () => {
+  it("the notice is dark unless TERMS_NOTICE is \"1\" (control: the same member is told with it on)", async () => {
+    const a = await createVerifiedActor();
+    for (const flag of ["0", ""]) {
+      const off = (await (await status(a, flag)).json()) as { needsAcceptance: boolean };
+      expect(off.needsAcceptance).toBe(false);
+    }
+    const on = (await (await status(a, "1")).json()) as { needsAcceptance: boolean };
+    expect(on.needsAcceptance).toBe(true);
+  });
+
   it("a member with no acceptance needs to accept, and accepting records the server's version and age once", async () => {
     const a = await createVerifiedActor();
     const before = (await (await status(a)).json()) as { currentVersion: string; lastAcceptedVersion: string | null; needsAcceptance: boolean };
