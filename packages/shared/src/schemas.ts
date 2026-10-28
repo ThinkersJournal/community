@@ -110,3 +110,13 @@ export type SessionData = {
   csrfSecret: string;
   createdAt: number;
 };
+
+/**
+ * `POST /account/terms` (ROADMAP R12): a signed-in member accepts the CURRENT Terms text.
+ * Both boxes must be literally `true`; the server stamps the version and the age
+ * (`TERMS_VERSION`, `SIGNUP_MINIMUM_AGE`), never the client.
+ */
+export const TermsAcceptInput = z.object({
+  acceptedTerms: z.literal(true),
+  confirmedAge: z.literal(true),
+});

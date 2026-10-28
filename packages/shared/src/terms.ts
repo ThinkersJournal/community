@@ -16,3 +16,12 @@ export const TERMS_VERSION = '2026-10-25';
  * each acceptance so a later change of the age does not rewrite what was agreed.
  */
 export const SIGNUP_MINIMUM_AGE = 16;
+
+/** What `GET /account/terms` answers (ROADMAP R12): has this member accepted the CURRENT Terms text? */
+export interface TermsStatus {
+  readonly currentVersion: string;
+  /** The newest `terms_version` this member has accepted, or null if they never recorded one. */
+  readonly lastAcceptedVersion: string | null;
+  /** True when they have no acceptance of `currentVersion`: show the notice and the accept form. */
+  readonly needsAcceptance: boolean;
+}

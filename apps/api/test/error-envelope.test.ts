@@ -204,6 +204,11 @@ const CASES: readonly ErrorCase[] = [
   // GET /profile/me authenticates via readCurrentSession, same as GET
   // /posts/:id above — its only error path (M2.1).
   {
+    name: "401 account terms status with no session",
+    route: "GET /account/terms",
+    build: () => new Request("https://api.test/account/terms"),
+  },
+  {
     name: "401 profile/me with no session",
     route: "GET /profile/me",
     build: () => new Request("https://api.test/profile/me"),

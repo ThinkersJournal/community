@@ -1,0 +1,89 @@
+---
+/**
+ * `/settings/terms` — the "updated Terms" notice and re-acceptance (ROADMAP R12). Authed and
+ * never cached (markPrivate), same shape as settings/account.astro. Reads `GET /account/terms`;
+ * when the member has not accepted the CURRENT version it shows what to read and the accept
+ * form (`POST /account/terms`, both boxes required); otherwise it says they are up to date.
+ * A notice and a record, never a gate: nothing else on the site depends on this page.
+ */
+import BaseLayout from "../../components/BaseLayout.astro";
+import { apiErrorCode, apiFetch, applyCookies } from "../../lib/api";
+import { markPrivate } from "../../lib/cache";
+import { setPublicPageCsp } from "../../lib/csp";
+import { loginHrefFor } from "../../lib/next-url";
+
+import type { TermsStatus } from "@thinkersjournal/shared";
+
+markPrivate(Astro);
+setPublicPageCsp(Astro);
+
+const csrf = await apiFetch<{ csrfToken: string }>("/auth/csrf", { request: Astro.request });
+const csrfToken = csrf.status === 200 ? (csrf.data?.csrfToken ?? null) : null;
+if (csrfToken === null) return Astro.redirect(loginHrefFor(Astro.url));
+
+let error: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const res = await apiFetch("/account/terms", {
+    method: "POST",
+    request: Astro.request,
+    origin: Astro.request.headers.get("Origin") ?? "",
+    csrfToken: String(form.get("csrfToken") ?? ""),
+    // An unticked checkbox is absent from the form data: `true` or `false`, never "on".
+    body: { acceptedTerms: form.get("acceptedTerms") === "on", confirmedAge: form.get("confirmedAge") === "on" },
+  });
+  applyCookies(Astro.response.headers, res.setCookies);
+  if (res.status === 200) return Astro.redirect("/settings/terms");
+  error = apiErrorCode(res) === "INVALID_INPUT" ? "Tick both boxes to accept." : "Could not save. Try again.";
+}
+
+const status = await apiFetch<TermsStatus>("/account/terms", { request: Astro.request });
+const info = status.status === 200 ? status.data : null;
+---
+
+<BaseLayout title="Terms" description="Review and accept the current Terms.">
+  <div class="wrap form-page">
+    <p><a class="link" href="/settings">← Settings</a></p>
+    <h1>Terms</h1>
+    {error && <p class="err" role="alert" id="error">{error}</p>}
+    {
+      info === null ? (
+        <p>We could not load your Terms status. Try again.</p>
+      ) : info.needsAcceptance ? (
+        <>
+          <p id="needs-acceptance">
+            Our Terms of Service, Community Guidelines and Privacy Policy have been updated (version {info.currentVersion}).
+            Please read them and accept the updated version. You can keep using Thinker's Journal meanwhile;
+            this is a notice and a record.
+          </p>
+          <ul>
+            <li><a class="link" href="/guidelines">Community Guidelines</a></li>
+            <li><a class="link" href="https://thinkersjournal.com/privacy">Privacy Policy</a></li>
+          </ul>
+          <form method="POST" class="form">
+            <input type="hidden" name="csrfToken" value={csrfToken} />
+            <label class="check">
+              <input type="checkbox" name="acceptedTerms" required />
+              <span>I agree to the updated Terms of Service, Community Guidelines and Privacy Policy.</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" name="confirmedAge" required />
+              <span>I am at least 16 years old.</span>
+            </label>
+            <button type="submit" class="btn btn-primary">Accept</button>
+          </form>
+        </>
+      ) : (
+        <p id="up-to-date">You have accepted the current Terms (version {info.currentVersion}).</p>
+      )
+    }
+  </div>
+</BaseLayout>
+<style>
+  .form-page{padding:clamp(40px,7vw,80px) 0;max-width:560px}
+  .form{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+  .check{display:flex;flex-direction:row;align-items:flex-start;gap:10px;color:var(--muted);font-size:14px}
+  .check input{margin-top:3px;flex:none}
+  .err{color:var(--red, #e5484d)}
+</style>
