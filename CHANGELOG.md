@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.121
+
+ROADMAP S13 corrected: a moderator decision's duration is already recorded (`durationHours` -> `action_expires_at`, #189); the row was stale. Docs only; the version number is a placeholder, the PM allocates it.
+
 ## 0.1.120
 
 HANDOFF.md refreshed to current state (S12 merged, S4 closed). Docs only; the version number is a placeholder, the PM allocates it.
