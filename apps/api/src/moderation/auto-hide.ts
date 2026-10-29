@@ -41,6 +41,7 @@ import type { Client } from "pg";
 
 import { BEGIN_BOUNDED_TX } from "../db/client";
 import { recordModerationAction } from "./actions";
+import { enqueueAutoHideNotice } from "./notice-enqueue";
 import { loadPostTagSlugs, type PurgeTarget } from "./purge-target";
 import { HUMAN_CONTENT_RULING_KINDS_SQL } from "./visibility-actions";
 
@@ -112,16 +113,16 @@ async function hideAndRecord(c: Client, isPost: boolean, id: string): Promise<Au
   // The author's id and address ride the same UPDATE, exactly as decide.ts
   // fills `subject_user_id` / `subject_label` for a human decision.
   if (isPost) {
-    const { rows: postRows } = await c.query<{ id: string; author_id: string; email: string }>(
+    const { rows: postRows } = await c.query<{ id: string; author_id: string; email: string; title: string; anonymised: boolean }>(
       `UPDATE posts AS t SET hidden_at = now()
          FROM users u
         WHERE t.id = $1 AND t.hidden_at IS NULL AND u.id = t.author_id
-        RETURNING t.id, t.author_id, u.email`,
+        RETURNING t.id, t.author_id, u.email, t.title, u.anonymised_at IS NOT NULL AS anonymised`,
       [id],
     );
     const row = postRows[0];
     if (row === undefined) return null; // already hidden
-    await recordModerationAction(c, {
+    const actionId = await recordModerationAction(c, {
       actorAdmin: "system",
       action: "content_auto_hide",
       reason: AUTO_HIDE_ACTION_REASON,
@@ -129,6 +130,11 @@ async function hideAndRecord(c: Client, isPost: boolean, id: string): Promise<Au
       subjectUserId: row.author_id,
       subjectLabel: row.email,
     });
+    // S12: the author's notice is queued in THIS transaction (a hide that cannot
+    // be announced rolls back). An anonymised author is never mailed.
+    if (!row.anonymised) {
+      await enqueueAutoHideNotice(c, { actionId, authorId: row.author_id, subject: "post", postTitle: row.title });
+    }
     const tagSlugs = await loadPostTagSlugs(c, row.id);
     return {
       purge: { kind: "post", postId: row.id, authorId: row.author_id, tagSlugs },
@@ -136,16 +142,24 @@ async function hideAndRecord(c: Client, isPost: boolean, id: string): Promise<Au
       subjectId: row.id,
     };
   }
-  const { rows: commentRows } = await c.query<{ id: string; post_id: string; author_id: string; email: string }>(
+  const { rows: commentRows } = await c.query<{
+    id: string;
+    post_id: string;
+    author_id: string;
+    email: string;
+    title: string;
+    skip_notice: boolean;
+  }>(
     `UPDATE comments AS t SET hidden_at = now()
-       FROM users u
-      WHERE t.id = $1 AND t.hidden_at IS NULL AND u.id = t.author_id
-      RETURNING t.id, t.post_id, t.author_id, u.email`,
+       FROM users u, posts p
+      WHERE t.id = $1 AND t.hidden_at IS NULL AND u.id = t.author_id AND p.id = t.post_id
+      RETURNING t.id, t.post_id, t.author_id, u.email, p.title,
+                (u.anonymised_at IS NOT NULL OR t.deleted_at IS NOT NULL) AS skip_notice`,
     [id],
   );
   const row = commentRows[0];
   if (row === undefined) return null; // already hidden
-  await recordModerationAction(c, {
+  const actionId = await recordModerationAction(c, {
     actorAdmin: "system",
     action: "content_auto_hide",
     reason: AUTO_HIDE_ACTION_REASON,
@@ -153,6 +167,10 @@ async function hideAndRecord(c: Client, isPost: boolean, id: string): Promise<Au
     subjectUserId: row.author_id,
     subjectLabel: row.email,
   });
+  // S12: queued in this transaction; an anonymised author or a deleted comment is never mailed.
+  if (!row.skip_notice) {
+    await enqueueAutoHideNotice(c, { actionId, authorId: row.author_id, subject: "comment", postTitle: row.title });
+  }
   return {
     purge: { kind: "comment", postId: row.post_id },
     subject: "comment",

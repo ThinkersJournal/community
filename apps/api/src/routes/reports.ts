@@ -18,7 +18,6 @@ import { isForeignKeyViolation } from "../db/errors";
 import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 import { maybeAutoHide, type AutoHideResult } from "../moderation/auto-hide";
-import { notifyAutoHidden } from "../moderation/notify-author";
 import { purgeTagsFor } from "../moderation/purge-target";
 
 import { ReportInput } from "@thinkersjournal/shared";
@@ -109,13 +108,9 @@ export async function handleCreateReport(
   if (hidden !== undefined && hidden !== null) {
     await purgeTags(env, purgeTagsFor(hidden.purge));
 
-    // #56 — tell the author, ONCE, that their content is hidden pending review.
-    // ⚠️ AFTER the hide has been written and the purge awaited, and outside the
-    // response path: a mail outage must never fail a recorded report, exactly
-    // as for a moderator's decision notice (routes/admin.ts). `hidden` is
-    // non-null only when THIS report hid the content, so a later report on
-    // already-hidden content sends nothing. The recipient is read at send time.
-    ctx.waitUntil(notifyAutoHidden(env, ctx, hidden));
+    // #56 / S12 — the author's notice was queued in the hide's own transaction
+    // (auto-hide.ts) and the outbox drain delivers it; nothing is sent here, so a
+    // mail outage can neither fail a recorded report nor lose the notice.
   }
 
   return new Response(null, { status: 201 });

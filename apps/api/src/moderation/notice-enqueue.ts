@@ -29,7 +29,7 @@ import type { DecisionKind } from "./decide";
 import { mintAppealUrl, mintNoticeLinks } from "./notice-links";
 import { renderAccountActionNotice, renderTerminationNotice } from "./notify-account";
 import { renderAppealOutcomeNotice } from "./notify-appeal";
-import { renderModerationNotice, type RenderedNotice } from "./notify-author";
+import { renderAutoHideNotice, renderModerationNotice, type RenderedNotice } from "./notify-author";
 import { renderDsaOutcome, renderMemberReportOutcome } from "./notify-reporter";
 
 export interface AuthorDecisionNoticeInput {
@@ -68,9 +68,27 @@ export async function enqueueAuthorDecisionNotice(c: Client, input: AuthorDecisi
   return true;
 }
 
+/**
+ * Queue the auto-hide notice (kind `author_auto_hide`, S12) in the hide's own
+ * transaction. `actionId` is the `content_auto_hide` row. No appeal token is
+ * minted: an auto-hide is not a decision, and the later ruling's notice carries
+ * the link. The caller skips an anonymised author or a deleted comment.
+ */
+export async function enqueueAutoHideNotice(
+  c: Client,
+  input: { readonly actionId: string; readonly authorId: string; readonly subject: "post" | "comment"; readonly postTitle: string },
+): Promise<void> {
+  await insertOutbox(c, {
+    actionId: input.actionId,
+    kind: "author_auto_hide",
+    recipientUserId: input.authorId,
+    rendered: renderAutoHideNotice({ subject: input.subject, postTitle: input.postTitle }),
+  });
+}
+
 interface OutboxInsert {
   readonly actionId: string;
-  readonly kind: "author_decision" | "account_action" | "appeal_outcome" | "reporter_outcome" | "dmca_author_notice" | "dmca_claimant_notice" | "member_reporter_outcome";
+  readonly kind: "author_decision" | "author_auto_hide" | "account_action" | "appeal_outcome" | "reporter_outcome" | "dmca_author_notice" | "dmca_claimant_notice" | "member_reporter_outcome";
   readonly recipientUserId?: string;
   /** A DSA reporter only (no account); nulled once the row settles. */
   readonly recipientEmail?: string;
