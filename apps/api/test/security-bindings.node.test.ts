@@ -52,6 +52,7 @@ describe("api wrangler.jsonc", () => {
       SECURITY_ALERTS_ENABLED: "0",
       ACCOUNT_NOTICES_ENABLED: "0",
       LOGIN_CHALLENGE: "1",
+      TERMS_NOTICE: "0", // R12 updated-Terms notice, dark until /terms exists (R1)
     });
   });
 });
