@@ -1,6 +1,6 @@
 # Thinker's Journal Community — roadmap
 
-**As of:** `origin/main` e1c241c (package version 0.1.82), 2026-10-24 (§2 and §7 refreshed; §1 predates it). This is the project's own view of order and
+**As of:** `origin/main` f0eefddf (package version 0.1.116), 2026-10-28 (the rows in §3 and §7 reflect everything merged through #275; §1 and §2 predate it). This is the project's own view of order and
 state. The portfolio roadmap sits above it and wins on priority; CireSnave's decisions win on everything. It is a
 plan, not a promise: items are in the order the lane intends to take them, and anything marked **held** waits on a
 person, not on code.
@@ -44,16 +44,17 @@ Rows (PM ruling 2026-10-24: R1-R6 as listed, R2 first). Open issues: #114 (NCMEC
 | Row | Work | Status |
 |---|---|---|
 | R1 | `/terms`, `/privacy`, `/dmca` routes and footer links (section 3b #3) | waiting: the legal texts are not decided (CireSnave) |
-| R2 | Render the cited legal and contractual grounds in the author decision notice (#57 Art. 17; section 3b #4 follow-up) | in progress (adverse decisions only) |
+| R2 | Render the cited legal and contractual grounds in the author decision notice (#57 Art. 17; section 3b #4 follow-up) | done (0.1.83): `renderModerationNotice` states the cited legal and contractual grounds on adverse decisions (a restore never shows them) |
 | R3 | Audit row for a notice resend (needs a new `moderation_actions` kind, so a CHECK migration) | parked: PM ruling 2026-10-17, not now |
 | R4 | Drop `moderation_notice_records` (0032) and its purge cron once its rows have aged out | open, unblocked only after the retention window passes |
 | R5 | `APPEAL_WINDOW_DAYS` is 30 but DSA Art. 20(1) needs complaint access for at least 6 months | held by the PM |
 | R6 | SafeImage adoption steps 3-5 and the workerd proof (cold start, memory) | waiting: package not published (decision Q8, board 247) |
 | R7 | Show the cited grounds on the appeal page (`AppealTarget`, `routes/appeals.ts`, `appeal.astro`) so both surfaces state the same grounds | done (0.1.87): `AppealTarget` carries both grounds, the appeal page renders them |
 | R8 | Patent sweep, the areas not yet searched (theming, editor UI, Postmark integration, deploy pipeline): at most 1 Google Patents query per minute, back off on a 503 and say so in the record; read claims with `tools/patent-claims.py`; areas not searched stay listed as unsearched in `docs/PATENT-SWEEP.md` (PM 2026-10-25) | pass 5 done (0.1.113): theming, editor, Postmark outbox, deploy pipeline, DMCA, terms record searched; one item folded into C1 (needs-review, PM), one watch; the public-page design and the unbuilt scoring and M3 designs stay unsearched |
-| R9 | DMCA takedown, counter-notice and repeat-infringer flow (S2): one-page design note first, then intake, hide and notify, counter-notice, restore timer, strike count; numbers are placeholders for the attorney | in progress (CireSnave ruled "build it" 2026-10-25): intake + migration 0040 (0.1.102, applied); moderator decision, author and claimant notices, admin page, standing-takedown count (0.1.103); counter-notice, forward to the claimant, restore timer (10 business days, CireSnave 298 A), claimant-sued and withdrawn records (0.1.105); repeat-infringer count + flag (3 in 12 months, a moderator terminates) and 3-year erasure of closed cases (0.1.106). The `/dmca` policy page itself is R1 |
+| R9 | DMCA takedown, counter-notice and repeat-infringer flow (S2): one-page design note first, then intake, hide and notify, counter-notice, restore timer, strike count; numbers are placeholders for the attorney | done (0.1.102-0.1.106, merged; migration 0040 applied): intake, moderator takedown/reject with author and claimant notices, counter-notice, restore timer (10 business days), standing-takedown count and flag (3 in 12 months, no automatic termination), 3-year erasure of closed cases; the `/dmca` policy page is R1 |
 | R10 | Terms acceptance record at signup (S6): checkbox, stored account/time/Terms version, one migration CireSnave applies; the minimum age (13 in the drafts, 16 in design decision 15) must be settled first | built (0.1.100): age 16 ruled by CireSnave 2026-10-25, migration 0039, both drafts say 16 |
 | R11 | **M3 live-reference engine** (S1 b: launch is held until it exists): connectors, snapshot, access-driven refresh, picker, private-resource safety, per-source terms and budgets; tasks M3.0-M3.10 in `docs/superpowers/plans/2026-10-25-m3-reference-engine-plan.md` | plan written (0.1.109); M3.0 waits on Q1-Q5 (CireSnave, via the PM) |
+| R12 | Material-change notice and re-acceptance (S27, ruled 2026-10-25 "build it WITH S6"): when `TERMS_VERSION` changes, a signed-in member who accepted an older version sees a notice and re-accepts; stored in `terms_acceptances` (one row per version, no migration); the notice names what changed. Needs the Terms page (R1) to link to | open, unblocked for the mechanism; the link target waits on R1; built in #278 but dark (`TERMS_NOTICE`="0"): **enabling the notice is blocked by R1 (`/terms`), and signup has the same gap** (no Terms text to link). Set the flag to "1" only after `/terms` exists and the page links it |
 
 Closed since the last refresh: #57 (outbox, #197 and follow-ups), #78, #148, #156, #39, #40, #59, #60, #65, #85
 (already fixed by #182), #84 (unmigrated local dev DB; #218 adds an e2e preflight) and #74 (audit refreshed in
