@@ -17,8 +17,6 @@
  */
 import { postmarkSend } from "../auth/postmark";
 import { CANONICAL_ORIGIN, escapeHtml } from "../auth/email-verify";
-import { withClient } from "../db/client";
-import type { AutoHideResult } from "./auto-hide";
 import type { DecisionKind } from "./decide";
 
 import {
@@ -204,7 +202,7 @@ export async function sendModerationNotice(
 }
 
 /**
- * Tell an author their content was auto-hidden pending review (#56).
+ * Render the auto-hide notice (#56): the author's content is hidden pending review.
  *
  * ⚠️ THE COPY IS FIXED. It names the author's own post title and nothing else:
  * never a reporter, a reason, a count, or the threshold (disclosing the
@@ -213,14 +211,10 @@ export async function sendModerationNotice(
  * content is hidden pending review, a moderator will look, and the author will
  * be told the outcome (that notice carries the appeal link).
  *
- * Same stream as `sendModerationNotice` ("outbound", no unsubscribe): a user
- * cannot opt out of being told their content was actioned. NEVER THROWS.
+ * Queued through the notice outbox (`enqueueAutoHideNotice`, S12), so it is
+ * delivered on the "outbound" stream like every other due-process notice.
  */
-export async function sendAutoHideNotice(
-  env: Env,
-  to: string,
-  notice: { readonly subject: "post" | "comment"; readonly postTitle: string },
-): Promise<boolean> {
+export function renderAutoHideNotice(notice: { readonly subject: "post" | "comment"; readonly postTitle: string }): RenderedNotice {
   const lead = "Your content has been hidden pending review.";
   const contentLine =
     notice.subject === "post"
@@ -228,83 +222,9 @@ export async function sendAutoHideNotice(
       : `This is about your comment on "${notice.postTitle}".`;
   const next =
     "This was done automatically, after the content was reported. A moderator will review it, and we will tell you the outcome. This is not a final decision, so there is nothing to appeal yet. If a moderator decides to keep it hidden, that message will tell you how to appeal.";
-  return await postmarkSend(env, {
-    from: "noreply@thinkersjournal.com",
-    to,
+  return {
     subject: "Your content has been hidden pending review",
     textBody: `${lead}\n\n${contentLine}\n\n${next}`,
     htmlBody: `<p>${escapeHtml(lead)}</p><p>${escapeHtml(contentLine)}</p><p>${escapeHtml(next)}</p>`,
-    stream: "outbound",
-  });
-}
-
-interface AutoHideRecipient {
-  email: string;
-  anonymised_at: Date | null;
-  title: string;
-  deleted_at: Date | null;
-  hidden_at: Date | null;
-}
-
-/**
- * The auto-hide notice, end to end: read the recipient NOW, decide, send.
- *
- * ⚠️ READ AT SEND TIME, ON `HYPERDRIVE_FRESH`, not carried through the report
- * request. A comment the author deleted, content a moderator restored, or an
- * account anonymised between the hide and this send must not be mailed, and
- * the sentinel address of an anonymised account must never reach Postmark.
- * One SELECT, one definition of "gone": `anonymised_at`, `deleted_at`, and
- * "still hidden" (`hidden_at`).
- *
- * ⚠️ NEVER THROWS, so `ctx.waitUntil(...)` cannot surface an error and a
- * report that was recorded is never undone by a mail or database failure. The
- * skip line carries the reason and the subject kind only: no address, title,
- * or id. It is a `warn`, the level the codebase's other "refused" lines use
- * (routes/media.ts), not `info`, which nothing else here emits.
- */
-export async function notifyAutoHidden(env: Env, ctx: ExecutionContext, hidden: AutoHideResult): Promise<void> {
-  try {
-    const row = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) => {
-      const { rows } =
-        hidden.subject === "post"
-          ? await c.query<AutoHideRecipient>(
-              `SELECT u.email, u.anonymised_at, p.title, NULL::timestamptz AS deleted_at, p.hidden_at
-                 FROM posts p JOIN users u ON u.id = p.author_id
-                WHERE p.id = $1`,
-              [hidden.subjectId],
-            )
-          : await c.query<AutoHideRecipient>(
-              `SELECT u.email, u.anonymised_at, p.title, c.deleted_at, c.hidden_at
-                 FROM comments c JOIN users u ON u.id = c.author_id JOIN posts p ON p.id = c.post_id
-                WHERE c.id = $1`,
-              [hidden.subjectId],
-            );
-      return rows[0];
-    });
-
-    const warnSkipped = (reason: string): void => {
-      console.warn("moderation notice skipped", { reason, subject: hidden.subject });
-    };
-    if (row === undefined) {
-      warnSkipped("auto_hide_content_gone");
-      return;
-    }
-    const reason =
-      row.anonymised_at !== null
-        ? "auto_hide_author_anonymised"
-        : row.deleted_at !== null
-          ? "auto_hide_comment_deleted"
-          : row.hidden_at === null
-            ? "auto_hide_no_longer_hidden"
-            : null;
-    if (reason !== null) {
-      warnSkipped(reason);
-      return;
-    }
-
-    const ok = await sendAutoHideNotice(env, row.email, { subject: hidden.subject, postTitle: row.title });
-    if (!ok) console.error("auto-hide notice not sent", { subject: hidden.subject });
-  } catch (err) {
-    console.error("auto-hide notice failed", { err });
-  }
+  };
 }

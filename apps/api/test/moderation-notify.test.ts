@@ -338,9 +338,10 @@ describe("redress sentence (#57 Q8)", () => {
   });
 
   it("auto-hide pending-review notice does not carry it", async () => {
-    const { sendAutoHideNotice } = await import("../src/moderation/notify-author");
-    const sent = await captureSendFull(() => sendAutoHideNotice(env, "a@b.test", { subject: "post", postTitle: "T" }));
-    expect(String(sent.TextBody)).not.toContain("redress");
+    const { renderAutoHideNotice } = await import("../src/moderation/notify-author");
+    const rendered = renderAutoHideNotice({ subject: "post", postTitle: "T" });
+    expect(rendered.textBody).not.toContain("redress");
+    expect(rendered.htmlBody).not.toContain("redress");
   });
 
   it("names no statute or body, and is not a copy key (so the Q2 regexp is untouched)", async () => {
