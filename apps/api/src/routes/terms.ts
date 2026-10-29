@@ -38,7 +38,8 @@ export async function handleTermsStatus(request: Request, env: Env, ctx: Executi
   const status: TermsStatus = {
     currentVersion: TERMS_VERSION,
     lastAcceptedVersion: rows[0]?.terms_version ?? null,
-    needsAcceptance: !rows.some((r) => r.terms_version === TERMS_VERSION),
+    // Dark until `TERMS_NOTICE` is "1": the notice has no Terms page to point at before R1 (/terms).
+    needsAcceptance: env.TERMS_NOTICE === "1" && !rows.some((r) => r.terms_version === TERMS_VERSION),
   };
   return json(status);
 }

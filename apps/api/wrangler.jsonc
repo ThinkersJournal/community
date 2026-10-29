@@ -342,7 +342,11 @@
     // soft limiters are not even consumed. Turn it on only after the web Worker
     // that renders the widget is live (it is an api-only change either way:
     // docs/runbooks/deploy.md, "The login challenge flag").
-    "LOGIN_CHALLENGE": "1"
+    "LOGIN_CHALLENGE": "1",
+    // The "updated Terms" notice (ROADMAP R12; GET /account/terms). "1" = on; ANYTHING else, including a
+    // missing var, is off, and off means needsAcceptance is always false so no member is shown the notice.
+    // Keep it "0" until the Terms text has a page to link to (R1, /terms) and launch is open.
+    "TERMS_NOTICE": "0"
   },
   // Build-identity (2026-09-24) — GET /health/build reads this. Cloudflare's
   // OWN version registry populates `id`/`tag`/`timestamp` on every deploy
