@@ -119,6 +119,7 @@ import {
 } from "./routes/social-public";
 import { handleUnsub } from "./routes/unsub";
 import { handleGetMe } from "./routes/username";
+import { handleAcceptTerms, handleTermsStatus } from "./routes/terms";
 import { handleVerifyEmail } from "./routes/verify-email";
 
 import type { RouteDef } from "./routing";
@@ -319,6 +320,9 @@ export const ROUTES: readonly RouteDef[] = [
   // Account deletion (board item 59 = Option C) — request/cancel only stamp
   // deletion_requested_at; the scrub is a later cron. See src/routes/account.ts.
   { method: "GET", pattern: "/account", handler: handleAccountStatus },
+  // R12: has this member accepted the current Terms, and accept them (session-authed; the POST runs the mutating pipeline).
+  { method: "GET", pattern: "/account/terms", handler: handleTermsStatus },
+  { method: "POST", pattern: "/account/terms", handler: handleAcceptTerms },
   { method: "POST", pattern: "/account/delete", handler: handleRequestDeletion },
   { method: "POST", pattern: "/account/delete/cancel", handler: handleCancelDeletion },
 

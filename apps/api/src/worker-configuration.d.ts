@@ -45,6 +45,8 @@ interface __BaseEnv_Env {
 	LOGIN_CHALLENGE_LIMITER: RateLimit;
 	LOGIN_CHALLENGE_IP_LIMITER: RateLimit;
 	LOGIN_CHALLENGE: string;
+	// The R12 updated-Terms notice flag: a wrangler.jsonc `vars` entry, "1" is on, anything else is off.
+	TERMS_NOTICE: string;
 	IMAGES: ImagesBinding;
 	TURNSTILE_SECRET_KEY: string;
 	POSTMARK_SERVER_TOKEN: string;

@@ -87,6 +87,19 @@ export function initNavAuth(): void {
       slot.appendChild(settings);
       slot.appendChild(out);
       slot.appendChild(outAll);
+
+      // R12: if the Terms changed since this member last accepted them, say so, with a link to the
+      // page where they can read and accept. A notice, never a gate; any failure just shows nothing.
+      void fetch("/api/terms-status")
+        .then((r) => (r.ok ? (r.json() as Promise<{ needsAcceptance?: boolean }>) : null))
+        .then((t) => {
+          if (t === null || t.needsAcceptance !== true) return;
+          const terms = document.createElement("a");
+          terms.href = "/settings/terms";
+          terms.textContent = "Review updated Terms";
+          slot.insertBefore(terms, slot.firstChild);
+        })
+        .catch(() => { /* no notice */ });
     })
     .catch(() => { /* network failed → keep the SSR anonymous default */ });
 }
