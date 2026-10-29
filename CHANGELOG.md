@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.120
+
+HANDOFF.md refreshed to current state (S12 merged, S4 closed). Docs only; the version number is a placeholder, the PM allocates it.
+
 ## 0.1.119
 
 The auto-hide notice to the author goes through the notice outbox (ROADMAP S12): `maybeAutoHide` queues an `author_auto_hide` row in the hide's own transaction, so a hide that cannot be announced rolls back, the drain delivers it with retries, and the report route no longer sends mail. Same copy, no appeal link. No migration (the kind is already in the 0034 CHECK). The version number is a placeholder; the PM allocates it.
