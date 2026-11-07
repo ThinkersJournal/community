@@ -72,8 +72,10 @@ That document designed scanning **after** publication, from a cron. For **new up
 ### 0.4 Rulings of 2026-10-25 (board 287, via the PM), and what each changes
 
 Source: the PM's task to the community lane, 2026-10-25, quoting CireSnave's rulings from the first-hand PM session
-(`CIRESNAVE-DECIDED-ARCHIVE.md`, item 287). D6 and D7 were answered on the board; the PM's wording for D6 is a default
-"unless he says otherwise", so it is recorded as such. The decision table in section 14 carries the same answers.
+(`CIRESNAVE-DECIDED-ARCHIVE.md`, item 287). D6 and D7 were answered on the board. D6 was first recorded as the PM's default
+"unless he says otherwise"; **CireSnave confirmed it 2026-11-07, verbatim: "287: D6: A"**, relayed by the PM as: a cleared
+(two-admin) image may be published again; the clearing is tied to the hash service list version so a D11 list change
+re-checks it. The decision table in section 14 carries the same answers.
 
 | # | Ruling | What it changes in this design |
 |---|---|---|
@@ -81,7 +83,7 @@ Source: the PM's task to the community lane, 2026-10-25, quoting CireSnave's rul
 | D2 | **yes** | Section 4.1 stands: animated uploads are flattened at upload. The converter that does it is now the VPS's (D7). |
 | D3 | **block** | Section 8.1 stands: until HMS-A is registered, image uploads are refused. |
 | D4 | **yes** | Section 10.1 stands: the fallback, when its flag is on, sends the file as uploaded, disclosed. |
-| D6 | **publish a cleared file; the clearing is tied to the HMS-A list version** (PM default, "unless he says otherwise") | **Flips section 5.5's default** (it said refuse). A re-upload of a file whose only case two admins cleared is accepted and served like any clean upload, *provided the clearing was made under the list version that is still current*. The clearing records the list version it was made under; when the list version has changed since, the clearing no longer shields the file and the upload is scanned as new (so a file the new list now matches is caught). Consequence for the schema (US4/US5): `csam_case_files` (or the clearing record) gains the list version at clearing. |
+| D6 | **publish a cleared file; the clearing is tied to the HMS-A list version** (CireSnave, verbatim 2026-11-07: "287: D6: A"; first recorded as a PM default) | **Flips section 5.5's default** (it said refuse). A re-upload of a file whose only case two admins cleared is accepted and served like any clean upload, *provided the clearing was made under the list version that is still current*. The clearing records the list version it was made under; when the list version has changed since, the clearing no longer shields the file and the upload is scanned as new (so a file the new list now matches is caught). Consequence for the schema (US4/US5): `csam_case_files` (or the clearing record) gains the list version at clearing. |
 | D7 | **ImageMagick on the VPS; no Cloudflare Images plan** | Closes launch blocker 8 (section 11.2) and the "5,000 a month" question. The decoder behind the `ImageDecoder` seam (sections 3.3, US2) is the VPS image service's ImageMagick, not the Cloudflare Images binding; no Images transformations are bought or counted. The 13-item host checklist (S18) is the VPS's. |
 | D11 | **yes: build it, not a launch blocker** | New section 4.5 and task US10: when HMS-A's list version changes, re-check stored PDQ hashes. It supersedes section 0.3's "not carried forward". |
 | D16 | **B, CireSnave verbatim 2026-10-26: "Decision 306: B".** A known-bad-hash upload that matches an open review case: **join the case, hold the upload unpublished until the review completes, raise the case to urgent, and REPORT the uploader AT THE MATCH.** (The 2026-10-25 hold on report-at-match is lifted.) | Section 5.3 (a) stands exactly as designed, including the report at match; the interim "A" wording is withdrawn and no flag `REPORT_UPLOADER_AT_MATCH` is needed. What the report contains and who receives it is spelled out in section 5.3 (a) below and is the already-designed NCMEC path (`2026-10-01-csam-reporting-pipeline-design.md` section 4.5). **No code for the reporting until that paragraph is reviewed**; the build rows (US5, US7) carry it. |
@@ -150,7 +152,8 @@ The new order:
 6a    original hashes: SHA-256 of the request bytes (and MD5/SHA-1 if Task 12's ruling stands)
 6b    existing-case pre-check by the original's SHA-256 (§5.5)
         live case        → the re-upload rules, 422, no HMS-A call
-        only cleared     → D6's default: 422, an attempt row, no new case
+        only cleared     → D6 (A): clearing's list version current → publish like a clean upload, an attempt row, no new
+                           case; list version changed → the clearing lapses, continue to 6c as a new upload
 6c    a fresh passing decoder self-test must exist, or 503 (§3.6); then decode the original through the
       ImageDecoder seam to a 512 × 512 RGB frame, and check its geometry (§3.3, §3.5)
 6d    PDQ of that frame, and its 8 dihedral variants when HMS-A takes several hashes (§3.5)
@@ -980,10 +983,10 @@ SELECT f.id AS case_file_id, f.case_id, c.kind, c.review_outcome, f.cleared_at
 - **A live file comes back (`cleared_at IS NULL`).** Step 6b skips HMS-A and runs §5.3 directly with that case as
   branch (a). Its rules decide own-report or attempt-only. An identical file is already preserved, so no new evidence
   file is added.
-- **Only a cleared file comes back** (two admins cleared it as a false positive). **[Update 2026-10-25, D6: the default
-  below is flipped. A cleared file is published like any clean upload while the clearing's HMS-A list version is still
+- **Only a cleared file comes back** (two admins cleared it as a false positive). **[D6 ruled A by CireSnave, 2026-11-07
+  ("287: D6: A"). A cleared file is published like any clean upload while the clearing's HMS-A list version is still
   the current one; once the list version has changed, the clearing lapses and the file is scanned as new. See section
-  0.4. The original default follows, kept as written.]** **Default: refuse** with the 422,
+  0.4. The superseded default (refuse) follows, kept for the record only; do not build it.]** **Superseded default: refuse** with the 422,
   write a `csam_upload_attempts` row on the cleared case, open nothing and report nothing. That follows rev-3 §3.6's
   suppression of a same-strength re-detection of a cleared file. The alternative, publishing what two admins
   cleared, would match the rev-3 CLEAR's own effect (it puts the serving copy back, §7.2 step 6). That is D6.
@@ -2033,7 +2036,10 @@ test `apps/api/test/media-scan-schema.db.test.ts`.
   - a re-upload of bytes whose case was opened from a Cloudflare match on the WebP key → joins that case. No
     duplicate case.
 - **The cleared branch (I3):**
-  - only a cleared case for the SHA → 422, an attempt row, no HMS-A call, no new case or report;
+  - only a cleared case for the SHA, clearing made under the current list version → published like a clean upload, an
+    attempt row, no HMS-A call, no new case or report (D6 A);
+  - only a cleared case, clearing made under an older list version → the clearing does not shield; the upload goes
+    to HMS-A and is scanned as new (a file the new list now matches is caught);
   - a live case and a cleared case both present → the live one is chosen;
   - **mutation:** re-add `AND f.cleared_at IS NULL`, and the cleared-only case reaches HMS-A, so the test fails.
 - **Order (I4):**
@@ -2165,7 +2171,7 @@ column on the clearing record (US4); test `apps/api/test/recheck-scan.test.ts`.
 | D3 | Before registration: block image uploads, or allow them unscanned? | block (§8.1). **Ruled block, 2026-10-25** | CireSnave |
 | D4 | The fallback, when its flag is on, sends the file as uploaded (metadata included), or a stripped re-encode? | as uploaded, disclosed (§10.1). **Ruled yes, 2026-10-25** | CireSnave |
 | D5 | Is the harmful-or-abusive category rejected at upload as a review-first case, using the `classifier` kind? | yes (§5.4) | PM |
-| D6 | Re-upload of a file whose only case was **cleared** by two admins: refuse or publish? | refuse (§5.5). **Ruled the other way (PM default, 2026-10-25): publish a cleared file, the clearing tied to the HMS-A list version (§0.4)** | CireSnave |
+| D6 | Re-upload of a file whose only case was **cleared** by two admins: refuse or publish? | refuse (§5.5). **Ruled the other way: publish a cleared file, the clearing tied to the HMS-A list version (§0.4). PM default 2026-10-25; confirmed by CireSnave 2026-11-07, verbatim "287: D6: A"** | CireSnave |
 | D7 | Images transformations: the Images Paid plan, or a written volume ceiling under 5,000 a month (two per upload)? | decide before launch (§3.3). **Ruled 2026-10-25: ImageMagick on the VPS, no Cloudflare Images plan (§0.4)** | CireSnave |
 | D8 | `HMS_A_BASE_URL` as a secret, not a committed var? | secret (§8) | PM |
 | D9 | Scan after the quota check, so refused bytes aren't scanned? | yes (§1.2) | PM |
