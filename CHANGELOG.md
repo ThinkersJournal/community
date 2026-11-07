@@ -7,6 +7,10 @@ All five workspace packages carry one version number. The log starts at 0.1.68; 
 
 Upload-scan design: D6 ruled A by CireSnave (2026-11-07), so a cleared file may be published again while its clearing matches the current hash-service list version; the flow and test list no longer say refuse. Docs only, no code (upload-scan build still held). The version number is a placeholder, the PM allocates it.
 
+## 0.1.122
+
+HANDOFF.md refreshed for the M3.0/M3.1 task and the armed waits. Docs only; the version number is a placeholder, the PM allocates it.
+
 ## 0.1.121
 
 ROADMAP S13 corrected: a moderator decision's duration is already recorded (`durationHours` -> `action_expires_at`, #189); the row was stale. Docs only; the version number is a placeholder, the PM allocates it.
