@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.124
+
+Two one-page runbooks for CireSnave: registering the GitHub App (M3.3) and the GitLab OAuth application (M3.6), with exact settings, read-only permissions and vault names. Docs only. The version number is a placeholder, the PM allocates it.
+
 ## 0.1.123
 
 Upload-scan design: D6 ruled A by CireSnave (2026-11-07), so a cleared file may be published again while its clearing matches the current hash-service list version; the flow and test list no longer say refuse. Docs only, no code (upload-scan build still held). The version number is a placeholder, the PM allocates it.
