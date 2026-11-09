@@ -96,10 +96,11 @@ function parseStartTag(input: string, start: number): StartTag {
   }
 }
 
-const NAMED_ENTITIES: Readonly<Record<string, string>> = {
-  amp: "&", lt: "<", gt: ">", quot: """, apos: "'", nbsp: " ", ndash: "–", mdash: "—",
-  hellip: "…", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", copy: "©", middot: "·",
-};
+const NAMED_ENTITIES: ReadonlyMap<string, number> = new Map([
+  ["amp", 38], ["lt", 60], ["gt", 62], ["quot", 34], ["apos", 39], ["nbsp", 32],
+  ["ndash", 8211], ["mdash", 8212], ["hellip", 8230], ["lsquo", 8216], ["rsquo", 8217],
+  ["ldquo", 8220], ["rdquo", 8221], ["copy", 169], ["middot", 183],
+]);
 
 function decodeEntities(text: string): string {
   return text.replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z]{2,8});/gi, (whole, body: string) => {
@@ -107,7 +108,8 @@ function decodeEntities(text: string): string {
       const code = body[1] === "x" || body[1] === "X" ? Number.parseInt(body.slice(2), 16) : Number.parseInt(body.slice(1), 10);
       return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : "";
     }
-    return NAMED_ENTITIES[body.toLowerCase()] ?? whole;
+    const named = NAMED_ENTITIES.get(body.toLowerCase());
+    return named === undefined ? whole : String.fromCodePoint(named);
   });
 }
 
