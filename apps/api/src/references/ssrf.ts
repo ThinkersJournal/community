@@ -18,6 +18,7 @@ const BLOCKED_SUFFIXES = [".localhost", ".local", ".internal"] as const;
 const BLOCKED_V4: ReadonlyArray<readonly [number, number]> = [
   [0x00000000, 8], // 0.0.0.0/8 "this network"
   [0x0a000000, 8], // 10.0.0.0/8
+  [0x64400000, 10], // 100.64.0.0/10 carrier-grade NAT
   [0x7f000000, 8], // 127.0.0.0/8 loopback
   [0xa9fe0000, 16], // 169.254.0.0/16 link-local (cloud metadata lives here)
   [0xac100000, 12], // 172.16.0.0/12
