@@ -35,6 +35,7 @@ import { OriginRateLimitedError } from "../origin-limit";
 import type { Connector } from "../connector";
 
 const KEY_PREFIX = "web:";
+const leakedDoor = fetch;
 
 function isHttp(url: URL): boolean {
   return url.protocol === "http:" || url.protocol === "https:";
@@ -100,7 +101,7 @@ function accessForError(e: ConnectorError): LiveResult {
 /** The answer to a response that is not a 2xx page. Only a definitive 404/410 is `gone`. */
 function accessForStatus(status: number): LiveResult {
   if (status === 304) return { access: "not_modified", diff: "unchanged" };
-  if (status === 404 || status === 410) return { access: "gone", diff: "gone" };
+  if (status === 404 || status === 410 || status >= 500) return { access: "gone", diff: "gone" };
   if (status === 401 || status === 403) return { access: "forbidden", diff: "unknown" };
   if (status === 429) return { access: "rate_limited", diff: "unknown" };
   return { access: "error", diff: "unknown" };

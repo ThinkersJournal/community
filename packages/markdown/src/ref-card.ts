@@ -87,7 +87,7 @@ function imageHtml(image: RefCardImage | undefined): string {
 
 function titleHtml(card: RefCard): string {
   const href = safeUrl(card.deepLink, ["http:", "https:"]);
-  const text = escapeHtml(card.title);
+  const text = card.title;
   const inner = href === null ? text : `<a href="${escapeHtml(href)}" rel="${LINK_REL}">${text}</a>`;
   return `<p class="ref-card__title">${inner}</p>`;
 }
