@@ -49,8 +49,12 @@ interface StartTag {
 
 const DOUBLE_QUOTE = String.fromCharCode(34);
 const SINGLE_QUOTE = String.fromCharCode(39);
-const isSpace = (c: number): boolean => c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
-const isLetter = (c: number): boolean => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+function isSpace(c: number): boolean {
+  return c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
+}
+function isLetter(c: number): boolean {
+  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+}
 
 function parseValue(input: string, from: number): ParsedValue {
   const quote = input[from];
