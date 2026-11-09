@@ -39,3 +39,19 @@ em{font-family:var(--serif);font-style:italic;color:var(--green-bright)}
 .link:hover{text-decoration:underline}
 
 h1,h2,h3{font-family:var(--serif);font-weight:500;letter-spacing:-.01em;color:var(--head)}
+
+/* Reference cards (M3.1b): markup comes from packages/markdown renderRefCard, inside a post body. Read-only, no scripts.
+   The image box has a fixed aspect ratio so a missing or broken image causes no layout shift. */
+.ref-card{display:flex;gap:14px;align-items:stretch;margin:1.2em 0;padding:12px;
+  border:1px solid var(--line);border-radius:10px;background:var(--ink2)}
+.ref-card__media{flex:0 0 120px;aspect-ratio:16/10;border-radius:6px;overflow:hidden;background:var(--ink)}
+.ref-card__image{display:block;width:100%;height:100%;object-fit:cover}
+.ref-card__body{min-width:0;flex:1}
+.ref-card__body p{margin:0}
+.ref-card__site{color:var(--dim);font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+.ref-card__title{margin-top:2px;font-weight:600;overflow-wrap:anywhere}
+.ref-card__title a{color:var(--green)}
+.ref-card__description{margin-top:6px;color:var(--muted);font-size:.92em;overflow-wrap:anywhere}
+.ref-card__status{margin-top:6px;color:var(--dim);font-size:.85em}
+.ref-card--unavailable .ref-card__title,.ref-card--unavailable .ref-card__title a{color:var(--dim)}
+@media (max-width:520px){.ref-card{flex-direction:column}.ref-card__media{flex-basis:auto;width:100%}}

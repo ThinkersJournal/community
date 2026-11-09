@@ -92,7 +92,19 @@ const TURNSTILE_HOST = "https://challenges.cloudflare.com";
  */
 const CLOUDFLARE_INSIGHTS_HOST = "https://static.cloudflareinsights.com";
 
-function buildCsp(turnstile: boolean): string {
+/**
+ * `img-src`. Post images come from the R2 custom domain and nowhere else, EXCEPT on the post page, which opts in to
+ * `remoteImages` for reference-card unfurl images (M3.1b, spec docs/superpowers/specs/2026-11-09-m3-connector-contract.md
+ * section 4.3). Those are hotlinked: the reader's browser fetches an image from whatever https host the linked page named,
+ * so the allowance is `https:` (never `http:`, never `data:`). The card renders them with referrerpolicy="no-referrer"
+ * and only for https URLs (packages/markdown/src/ref-card.ts). The privacy cost (reader IPs reach third-party hosts) is
+ * M3.10's decision to revisit (spec 4.3 and 10); this is the single reviewed line that widens it.
+ */
+function imgSrc(remoteImages: boolean): string {
+  return remoteImages ? "img-src 'self' https:" : "img-src 'self' https://cdn.thinkersjournal.com";
+}
+
+function buildCsp(turnstile: boolean, remoteImages = false): string {
   return [
     "default-src 'self'",
     // ⚠️ STILL no 'unsafe-inline'. Turnstile's api.js and the Cloudflare
@@ -104,7 +116,7 @@ function buildCsp(turnstile: boolean): string {
     // Post images come from the R2 custom domain and nowhere else. No `data:`:
     // packages/markdown's schema blocks data: URLs in `src` outright, so allowing
     // them here would only widen what a sanitizer failure could reach.
-    "img-src 'self' https://cdn.thinkersjournal.com",
+    imgSrc(remoteImages),
     "font-src 'self'",
     `connect-src 'self'${turnstile ? ` ${TURNSTILE_HOST}` : ""}`,
     // `frame-src` exists ONLY when Turnstile is loaded (its challenge iframe);
@@ -124,6 +136,9 @@ export const PUBLIC_PAGE_CSP = buildCsp(false);
  * script-/connect-/frame-src. */
 export const SIGNUP_PAGE_CSP = buildCsp(true);
 
+/** The post page only: PUBLIC_PAGE_CSP plus `img-src https:` for reference-card images (see `imgSrc`). */
+export const POST_PAGE_CSP = buildCsp(false, true);
+
 /**
  * Apply the public-page security headers. Every SSR public page calls this.
  *
@@ -133,10 +148,10 @@ export const SIGNUP_PAGE_CSP = buildCsp(true);
  * on a response can rescue an edge leak once that happens.
  * test/page-cache-inventory.test.ts (sweep B) enforces this across all of src/.
  */
-export function setPublicPageCsp(context: CspContext, opts: { turnstile?: boolean } = {}): void {
+export function setPublicPageCsp(context: CspContext, opts: { turnstile?: boolean; remoteImages?: boolean } = {}): void {
   context.response.headers.set(
     "content-security-policy",
-    opts.turnstile ? SIGNUP_PAGE_CSP : PUBLIC_PAGE_CSP,
+    opts.turnstile ? SIGNUP_PAGE_CSP : opts.remoteImages ? POST_PAGE_CSP : PUBLIC_PAGE_CSP,
   );
   // Belt-and-braces for the media path too: never let a browser sniff a served
   // byte stream into something executable.

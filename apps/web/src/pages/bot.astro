@@ -1,0 +1,33 @@
+---
+/**
+ * `/bot` — what ThinkersJournalBot is. The User-Agent the reference connectors send is
+ * `ThinkersJournalBot/1.0 (+https://community.thinkersjournal.com/bot)` (apps/api/src/references/guarded-fetch.ts), so
+ * this is the page a site owner lands on from their logs. Static copy, no data; edge-cached under its own tag.
+ */
+import { CONTACT_EMAIL } from "@thinkersjournal/shared";
+import PageLayout from "../components/PageLayout.astro";
+import { markPublicCacheable } from "../lib/cache";
+import { setPublicPageCsp } from "../lib/csp";
+
+markPublicCacheable(Astro, ["bot"]);
+setPublicPageCsp(Astro);
+---
+<PageLayout
+  title="ThinkersJournalBot — Thinker's Journal"
+  eyebrow="Community"
+  heading="ThinkersJournalBot"
+  canonical="https://community.thinkersjournal.com/bot"
+>
+  <p class="copy">
+    ThinkersJournalBot is the crawler behind the link cards on Thinker's Journal Community. When a member adds a link to a
+    post, the bot makes one request to that page, reads only its title, description, site name, preview image and canonical
+    link, and shows them as a card. It identifies itself as <code>ThinkersJournalBot/1.0</code>, obeys your
+    <code>robots.txt</code> (use <code>User-agent: ThinkersJournalBot</code> to turn it off for your site), makes at most a
+    few requests a minute to any one site, and does not run scripts or follow more than a few redirects. To have a page left
+    out or to report a problem, write to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+  </p>
+</PageLayout>
+<style>
+  .copy{max-width:70ch;line-height:1.65}
+  code{background:var(--ink2);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+</style>

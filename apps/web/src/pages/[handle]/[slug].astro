@@ -122,7 +122,9 @@ if (post !== null) {
   // READ-TIME RENDER. markdown_source is the single source of truth; no HTML is
   // ever stored. This is what makes a sanitizer fix a DEPLOY (plus a
   // PIPELINE_VERSION bump) rather than a backfill of every row.
-  html = await renderMarkdown(post.markdownSource);
+  // M3.1b: the reference cards come from the api response (read from Postgres there, never a source API). `refs` is
+  // ALWAYS passed, even empty: that is what makes an unknown or removed {{ref:TOKEN}} render nothing instead of raw text.
+  html = await renderMarkdown(post.markdownSource, { refs: new Map(Object.entries(post.refs ?? {})) });
   // ⚠️ PLAIN TEXT, DELIBERATELY UNESCAPED (packages/markdown/src/excerpt.ts says so).
   // Escaping is THIS page's job. Every use below is either an Astro `{}` attribute
   // expression (Astro HTML-escapes those) or goes through jsonLdScript. Never
@@ -210,7 +212,8 @@ if (post !== null) {
     `post:${post.id}`,
     `author:${post.authorId}`,
   ]);
-  setPublicPageCsp(Astro);
+  // `remoteImages`: reference-card unfurl images are hotlinked https images (spec 4.3); see csp.ts imgSrc.
+  setPublicPageCsp(Astro, { remoteImages: true });
 
   // Byline (board item 59 = Option C's tombstone): title/body are untouched
   // above — only the author name/link change when the account was scrubbed.
