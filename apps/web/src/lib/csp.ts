@@ -95,18 +95,41 @@ const TURNSTILE_HOST = "https://challenges.cloudflare.com";
 const CLOUDFLARE_INSIGHTS_HOST = "https://static.cloudflareinsights.com";
 
 /**
- * `img-src`. Post images come from the R2 custom domain and nowhere else, EXCEPT on the post page, which opts in to
- * `remoteImages` for reference-card unfurl images (M3.1b, spec docs/superpowers/specs/2026-11-09-m3-connector-contract.md
- * section 4.3). Those are hotlinked: the reader's browser fetches an image from whatever https host the linked page named,
- * so the allowance is `https:` (never `http:`, never `data:`). The card renders them with referrerpolicy="no-referrer"
- * and only for https URLs (packages/markdown/src/ref-card.ts). The privacy cost (reader IPs reach third-party hosts) is
- * M3.10's decision to revisit (spec 4.3 and 10); this is the single reviewed line that widens it.
+ * `img-src`. Post images come from the R2 custom domain and nowhere else, EXCEPT the exact https ORIGINS of the
+ * reference-card images that THIS post's cards name (M3.1b, spec docs/superpowers/specs/2026-11-09-m3-connector-contract.md
+ * section 4.3), passed per request by the post page (`cardImageOrigins`). Never a bare `https:`: that would also let an
+ * author's or a commenter's own markdown images load from anywhere (tracking pixels, GET gadgets), which is blocked today.
+ * The card renders its image with referrerpolicy="no-referrer" and only for https URLs (packages/markdown/src/ref-card.ts).
+ * The privacy cost (readers' IPs reach those hosts) is M3.10's decision to revisit (spec 4.3 and 10).
  */
-function imgSrc(remoteImages: boolean): string {
-  return remoteImages ? "img-src 'self' https:" : "img-src 'self' https://cdn.thinkersjournal.com";
+function imgSrc(imageOrigins: readonly string[]): string {
+  return ["img-src 'self' https://cdn.thinkersjournal.com", ...imageOrigins].join(" ");
 }
 
-function buildCsp(turnstile: boolean, remoteImages = false): string {
+/** A scheme, a lower-case host (letters, digits, dots, hyphens) and an optional port: nothing that could add a directive. */
+const SAFE_ORIGIN = /^https:\/\/[a-z0-9.-]+(:\d{1,5})?$/;
+
+/**
+ * The https origins of the remote card images in `refs`, deduplicated, in first-seen order. Built ONLY from
+ * `URL.origin` and then re-checked against `SAFE_ORIGIN`, because a header value must never carry a `;` or `,`
+ * (URL parsing accepts `https://a.com;x.com` as a host). Anything else (http, javascript, data, stored images,
+ * unparseable) contributes nothing.
+ */
+export function cardImageOrigins(refs: Readonly<Record<string, RefCard | null>>): string[] {
+  const origins = new Set<string>();
+  for (const card of Object.values(refs)) {
+    if (card?.image?.storage !== "remote") continue;
+    try {
+      const url = new URL(card.image.url);
+      if (url.protocol === "https:" && SAFE_ORIGIN.test(url.origin)) origins.add(url.origin);
+    } catch {
+      // not a URL: no origin
+    }
+  }
+  return [...origins];
+}
+
+function buildCsp(turnstile: boolean, imageOrigins: readonly string[] = []): string {
   return [
     "default-src 'self'",
     // ⚠️ STILL no 'unsafe-inline'. Turnstile's api.js and the Cloudflare
@@ -118,7 +141,7 @@ function buildCsp(turnstile: boolean, remoteImages = false): string {
     // Post images come from the R2 custom domain and nowhere else. No `data:`:
     // packages/markdown's schema blocks data: URLs in `src` outright, so allowing
     // them here would only widen what a sanitizer failure could reach.
-    imgSrc(remoteImages),
+    imgSrc(imageOrigins),
     "font-src 'self'",
     `connect-src 'self'${turnstile ? ` ${TURNSTILE_HOST}` : ""}`,
     // `frame-src` exists ONLY when Turnstile is loaded (its challenge iframe);
@@ -138,9 +161,6 @@ export const PUBLIC_PAGE_CSP = buildCsp(false);
  * script-/connect-/frame-src. */
 export const SIGNUP_PAGE_CSP = buildCsp(true);
 
-/** The post page only: PUBLIC_PAGE_CSP plus `img-src https:` for reference-card images (see `imgSrc`). */
-export const POST_PAGE_CSP = buildCsp(false, true);
-
 /**
  * Apply the public-page security headers. Every SSR public page calls this.
  *
@@ -150,19 +170,12 @@ export const POST_PAGE_CSP = buildCsp(false, true);
  * on a response can rescue an edge leak once that happens.
  * test/page-cache-inventory.test.ts (sweep B) enforces this across all of src/.
  */
-/** STUB (red-first). */
-export function cardImageOrigins(_refs: Readonly<Record<string, RefCard | null>>): string[] {
-  return [];
-}
-
 export function setPublicPageCsp(
   context: CspContext,
-  opts: { turnstile?: boolean; remoteImages?: boolean; imageOrigins?: readonly string[] } = {},
+  opts: { turnstile?: boolean; imageOrigins?: readonly string[] } = {},
 ): void {
-  context.response.headers.set(
-    "content-security-policy",
-    opts.turnstile ? SIGNUP_PAGE_CSP : opts.remoteImages ? POST_PAGE_CSP : PUBLIC_PAGE_CSP,
-  );
+  const csp = opts.turnstile ? SIGNUP_PAGE_CSP : opts.imageOrigins?.length ? buildCsp(false, opts.imageOrigins) : PUBLIC_PAGE_CSP;
+  context.response.headers.set("content-security-policy", csp);
   // Belt-and-braces for the media path too: never let a browser sniff a served
   // byte stream into something executable.
   context.response.headers.set("x-content-type-options", "nosniff");

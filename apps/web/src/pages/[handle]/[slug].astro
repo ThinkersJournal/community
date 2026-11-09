@@ -48,7 +48,7 @@ import ReactionChips from "../../components/ReactionChips.astro";
 import { apiFetch } from "../../lib/api";
 import { markPublicCacheable } from "../../lib/cache";
 import { postUrl, profileUrl } from "../../lib/canonical";
-import { setPublicPageCsp } from "../../lib/csp";
+import { cardImageOrigins, setPublicPageCsp } from "../../lib/csp";
 import { jsonLdScript } from "../../lib/json-ld";
 import { FEED_TITLE } from "../../lib/xml";
 
@@ -212,8 +212,10 @@ if (post !== null) {
     `post:${post.id}`,
     `author:${post.authorId}`,
   ]);
-  // `remoteImages`: reference-card unfurl images are hotlinked https images (spec 4.3); see csp.ts imgSrc.
-  setPublicPageCsp(Astro, { remoteImages: true });
+  // Reference-card unfurl images are hotlinked https images (spec 4.3): allow exactly the origins THIS post's cards name,
+  // per request, never a blanket https: (see csp.ts imgSrc). Author and commenter images stay blocked.
+  const imageOrigins = cardImageOrigins(post.refs ?? {});
+  setPublicPageCsp(Astro, { imageOrigins });
 
   // Byline (board item 59 = Option C's tombstone): title/body are untouched
   // above — only the author name/link change when the account was scrubbed.
