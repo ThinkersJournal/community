@@ -35,6 +35,7 @@ import { visit } from "unist-util-visit";
 import { getHighlighter, HIGHLIGHT_THEME } from "./highlight";
 import { rehypeLanguageAllowlist } from "./lang-allowlist";
 
+import type { RefMap } from "./ref-card";
 import type { Element, Root } from "hast";
 import type { HighlighterCore } from "shiki/core";
 
@@ -234,7 +235,12 @@ async function buildRendererAsync(): Promise<ReturnType<typeof buildRenderer>> {
 }
 
 /** Render `markdown` to HTML that is safe to embed. */
-export async function renderMarkdown(markdown: string): Promise<string> {
+export interface RenderOptions {
+  /** Prepared by the caller from Postgres: a known token renders its card, an unknown one renders nothing. Omitted = tokens stay literal text. */
+  refs?: RefMap;
+}
+
+export async function renderMarkdown(markdown: string, _options: RenderOptions = {}): Promise<string> {
   rendererPromise ??= buildRendererAsync().catch((error: unknown) => {
     rendererPromise = null;
     throw error;
