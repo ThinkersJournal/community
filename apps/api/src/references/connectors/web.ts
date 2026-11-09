@@ -84,8 +84,14 @@ function keyOf(page: FetchedPage, selfHosts: readonly string[]): string {
   const final = new URL(page.finalUrl);
   const raw = parseOpenGraph(page.body, page.finalUrl, selfHosts).canonicalUrl;
   const canonical = raw === undefined ? null : parseOrNull(raw);
-  const trusted = canonical !== null && isHttp(canonical) && canonical.origin === final.origin && canonical.pathname === final.pathname && !selfHosts.includes(hostOf(canonical));
+  const trusted = canonical !== null && isHttp(canonical) && canonical.origin === final.origin && samePath(canonical, final) && !selfHosts.includes(hostOf(canonical));
   return KEY_PREFIX + normalise(trusted ? canonical : final);
+}
+
+/** Same path, ignoring query, hash and one trailing slash (`/a/` and `/a` are the same page). */
+function samePath(a: URL, b: URL): boolean {
+  const trim = (p: string): string => (p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p);
+  return trim(a.pathname) === trim(b.pathname);
 }
 
 function conditionalInit(ref: StoredReference): FetchInit {

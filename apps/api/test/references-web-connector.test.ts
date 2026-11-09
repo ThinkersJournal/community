@@ -114,9 +114,9 @@ describe("web connector: resolve", () => {
   });
 
   it("a same-origin canonical link becomes the resource key", async () => {
-    const { ctx } = ctxOf(() => page({ body: HTML('<title>t</title><link rel="canonical" href="https://example.com/post/1-canonical">') }));
+    const { ctx } = ctxOf(() => page({ body: HTML('<title>t</title><link rel="canonical" href="https://example.com/post/1/">') }));
     const out = await webConnector.resolve(identified(URL_A), ctx);
-    expect(out.resourceKey).toBe("web:https://example.com/post/1-canonical");
+    expect(out.resourceKey).toBe("web:https://example.com/post/1/");
   });
 
   // Mutation that must fail: trust any canonical (this is how one page claims another site's resource key and
@@ -141,6 +141,8 @@ describe("web connector: resolve", () => {
       (await webConnector.resolve(identified(URL_A), ctxOf(() => page({ body: HTML(`<title>t</title><link rel="canonical" href="${href}">`) })).ctx)).resourceKey;
     expect(await keyFor("https://example.com/post/1?utm=x")).toBe("web:https://example.com/post/1?utm=x");
     expect(await keyFor("https://example.com/post/1#frag")).toBe("web:https://example.com/post/1");
+    expect(await keyFor("https://example.com/post/1/")).toBe("web:https://example.com/post/1/");
+    expect(await keyFor("https://example.com/post/10")).toBe("web:https://example.com/post/1");
   });
 
   it("a canonical pointing at our own origin is ignored (spec 5 rule 8)", async () => {
