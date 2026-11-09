@@ -76,9 +76,11 @@ export function encodeBase32(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => BASE32.charAt(b & 31)).join("");
 }
 
-/** 12 characters of unpadded base32 from a CSPRNG, never derived from the URL (spec 2). `fill` is injectable for tests; never Math.random. */
-export function newRefToken(fill: (bytes: Uint8Array) => Uint8Array = (bytes) => crypto.getRandomValues(bytes)): string {
-  return encodeBase32(fill(new Uint8Array(TOKEN_LENGTH)));
+/** 12 characters of unpadded base32 from a CSPRNG, never derived from the URL (spec 2). `fill` fills the buffer in place and is injectable for tests; never Math.random. */
+export function newRefToken(fill: (bytes: Uint8Array<ArrayBuffer>) => void = (bytes) => void crypto.getRandomValues(bytes)): string {
+  const bytes = new Uint8Array(TOKEN_LENGTH);
+  fill(bytes);
+  return encodeBase32(bytes);
 }
 
 const fail = (reason: AttachFailure): AttachResult => ({ ok: false, reason });
