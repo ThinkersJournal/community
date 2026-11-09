@@ -343,7 +343,7 @@ describe("robots.txt", () => {
     const g = createGuardedFetch({ fetchImpl: rec.fetchImpl, resolveHost: async () => [PUBLIC_IP] });
     expect(await codeOf(g("https://example.com/private/x"))).toBe("blocked_target");
     expect((await g("https://example.com/public")).body).toBe("ok");
-    expect(rec.calls.filter((c) => c.url.endsWith("/robots.txt")).length).toBe(1);
+    expect(rec.calls.filter((c) => c.url.endsWith("/robots.txt")).length).toBe(2); // once per guarded call (the cache is per call), two calls here
     expect(rec.calls.some((c) => c.url === "https://example.com/private/x")).toBe(false);
   });
 

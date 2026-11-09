@@ -153,7 +153,7 @@ export const SNAPSHOT_CAPS = {
 /**
  * Characters that render as nothing or reorder text: bidi embeddings, overrides, isolates and marks (U+202A-202E,
  * U+2066-2069, U+200E, U+200F, U+061C), zero-width characters (U+200B-200D), U+180E, line/paragraph separators and the
- * byte order mark. Untrusted text must not carry them (an RLO makes "evil‮gnp.exe" display as "evilexe.png").
+ * byte order mark. Untrusted text must not carry them: a right-to-left override makes a file name display reversed.
  */
 export function isInvisibleControl(code: number): boolean {
   return (
