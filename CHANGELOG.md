@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.125
+
+M3.0: the connector contract spec (`docs/superpowers/specs/2026-11-09-m3-connector-contract.md`), Q1-Q5 recorded in the plan, ROADMAP R11 and S1 updated (launch set shrunk; unfurl images store the address only, with a seam for a stored copy). Docs only, no code. The version number is a placeholder, the PM allocates it.
+
 ## 0.1.124
 
 Two one-page runbooks for CireSnave: registering the GitHub App (M3.3) and the GitLab OAuth application (M3.6), with exact settings, read-only permissions and vault names. Docs only. The version number is a placeholder, the PM allocates it.

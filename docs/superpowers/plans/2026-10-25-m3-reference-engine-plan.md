@@ -1,6 +1,6 @@
 # M3 — the live-reference engine: plan
 
-**Status:** PLAN, 2026-10-25. Nothing in this plan is built. Source of the ruling: CireSnave, board 287 item S1, option b, via the PM
+**Status:** PLAN, 2026-10-25; Q1-Q5 answered 2026-11-07 (section 8); contract spec written 2026-11-09 (M3.0). Nothing in this plan is built. Source of the ruling: CireSnave, board 287 item S1, option b, via the PM
 (task of 2026-10-25): **launch is held until the M3 live-reference engine exists.** The design it implements is
 `docs/superpowers/specs/2026-07-13-community-platform-design.md` (Pillar B; decisions 3, 6, 17, 22; the M3 line of the build
 sequence), and this plan changes none of those decisions. Where this plan states an external fact (a rate limit, a term), it names
@@ -59,19 +59,19 @@ Each task is its own PR, with the repository's usual review and CI, and a migrat
 
 | # | Task | Why here |
 |---|---|---|
-| M3.0 | Settle Q1-Q5 below with CireSnave; write the connector contract as a spec | the decisions change the schema |
+| M3.0 | **DONE (2026-11-09):** Q1-Q5 settled (section 8); the connector contract is `docs/superpowers/specs/2026-11-09-m3-connector-contract.md` | the decisions change the schema |
 | M3.1 | Schema (migration), connector interface, the `{{ref:TOKEN}}` render in `packages/markdown`, and the **generic web unfurl** with SSRF controls, snapshot capture and a card component | needs no credentials, exercises every layer end to end, and is the safest fetcher to get right first |
 | M3.2 | The refresh engine on the generic connector: `live_state`, `next_check_at` taper, the Queue consumer, the per-author budget DO, the diff states | proves the access-driven design before an API with a budget is attached |
 | M3.3 | **GitHub App**, public resources only: issue, pull request, file and line range, CI check; ETag polling; webhook-ready | the highest-value source; public-only keeps secrets out of the first cut |
 | M3.4 | Authoring: paste-to-enrich and the `@` / slash picker (islands in the editor) | usable once there is a connector to pick from |
-| M3.5 | Private resources: `source_connections` envelope encryption, freeze-to-snapshot, the kill-switch, the 30-day purge after revoke | the riskiest data; built after the public path is proven |
+| M3.5 | **Fast-follow (not a launch blocker, Q1).** Private resources: `source_connections` envelope encryption, freeze-to-snapshot, the kill-switch, the 30-day purge after revoke | the riskiest data; built after the public path is proven |
 | M3.6 | **GitLab** OAuth connector, on the proposed (tighter) budget | same shape as GitHub |
-| M3.7 | **YouTube**, under the 30-day rule | after Q2 |
-| M3.8 | **X**, if Q3 says yes | last: cost and compliance weight |
+| M3.7 | **Fast-follow (Q1).** **YouTube**, under the 30-day rule | Q2 is moot for launch |
+| M3.8 | **Fast-follow (Q1).** **X** | Q3 is moot for launch; cost and compliance weight |
 | M3.9 | Reference-change notifications on the M2 pipeline | needs real change events |
 | M3.10 | Hardening and launch gates: egress alerting on the connector Workers, the privacy-policy and Terms additions for third-party content, moderation and DMCA coverage of reference cards, the patent re-sweep (a new family of capability: `docs/PATENT-SWEEP.md` says to re-sweep when M3 is added), load and budget tests | the closing gate for "launch is held until M3 exists" |
 
-**What "M3 exists" means for the launch hold** is itself Q1: the minimum connector set that lifts the hold.
+**What "M3 exists" means for the launch hold** (Q1, answered section 8): M3.1 foundation and generic web, M3.2 refresh, M3.3 GitHub, M3.4 picker, M3.6 GitLab, then M3.9 notifications and M3.10 hardening. M3.5, M3.7 and M3.8 are fast-follows.
 
 ## 6. Cross-cutting rules every M3 task inherits
 
@@ -97,3 +97,12 @@ Each task is its own PR, with the repository's usual review and CI, and a migrat
    the YouTube key. None can be created by a lane.
 5. **Q5 — images in unfurls.** Store only the image's address (cheap; the card breaks when the source moves it), or fetch and store a
    resized copy (robust; a copyright and storage question, and it needs the upload scan's decisions). Recommended: address only at first.
+
+## 8. Answers (CireSnave, via the PM, 2026-11-07)
+
+Verbatim: *"The shrink is confirmed.  Store only the image's address for now but we will likely store the image in the future.  Go ahead and restart the Community lane."*
+
+- **Q1:** the launch minimum is the foundation, the generic web unfurl, GitHub, GitLab and the picker, **public resources only**, live refresh kept. YouTube, X and private resources are fast-follows.
+- **Q2, Q3:** moot for launch.
+- **Q4:** the GitHub App and the GitLab OAuth application are CireSnave's to register; needed before M3.3. Checklists: `docs/runbooks/register-github-app.md`, `docs/runbooks/register-gitlab-oauth-app.md`.
+- **Q5:** unfurl images store only the address for now; the design must let a stored copy be added later (contract spec section 4.3).
