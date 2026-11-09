@@ -7,7 +7,11 @@ export interface LimiterLike {
   limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
-export class OriginRateLimitedError extends ConnectorError {}
+export class OriginRateLimitedError extends ConnectorError {
+  constructor() {
+    super("upstream", "limited", true);
+  }
+}
 
 export function withOriginLimit(inner: FetchCtx["fetch"], _limiter: LimiterLike): FetchCtx["fetch"] {
   return inner;
