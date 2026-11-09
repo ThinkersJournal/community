@@ -75,12 +75,16 @@ function snapshotOf(page: FetchedPage, selfHosts: readonly string[]): WebSnapsho
   return capped.kind === "web" ? capped : snapshot;
 }
 
-/** The key the row is stored under: the same-origin canonical link if the page has one, else the final URL. */
+/**
+ * The key the row is stored under: the canonical link if the page has one AND it is the same page (same origin and same
+ * path; query and hash may differ), else the final URL. Same origin alone is not enough on a shared host: /~evil could
+ * otherwise claim /~victim/post and plant its snapshot under that key.
+ */
 function keyOf(page: FetchedPage, selfHosts: readonly string[]): string {
   const final = new URL(page.finalUrl);
   const raw = parseOpenGraph(page.body, page.finalUrl, selfHosts).canonicalUrl;
   const canonical = raw === undefined ? null : parseOrNull(raw);
-  const trusted = canonical !== null && isHttp(canonical) && canonical.origin === final.origin && !selfHosts.includes(hostOf(canonical));
+  const trusted = canonical !== null && isHttp(canonical) && canonical.origin === final.origin && canonical.pathname === final.pathname && !selfHosts.includes(hostOf(canonical));
   return KEY_PREFIX + normalise(trusted ? canonical : final);
 }
 

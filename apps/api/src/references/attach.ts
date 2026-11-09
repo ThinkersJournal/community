@@ -71,15 +71,14 @@ interface AttachInput {
   url: string;
 }
 
-/** STUB (red-first). */
-export function encodeBase32(_bytes: Uint8Array): string {
-  return "";
+/** Each byte maps to a symbol with `b & 31`: 256 is a multiple of 32, so every symbol is equally likely (no bias). */
+export function encodeBase32(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => BASE32.charAt(b & 31)).join("");
 }
 
-/** 12 characters of unpadded base32 from a CSPRNG, never derived from the URL (spec 2). 256 is a multiple of 32: no bias. */
-export function newRefToken(_fill?: (bytes: Uint8Array) => Uint8Array): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(TOKEN_LENGTH));
-  return Array.from(bytes, (b) => BASE32.charAt(b & 31)).join("");
+/** 12 characters of unpadded base32 from a CSPRNG, never derived from the URL (spec 2). `fill` is injectable for tests; never Math.random. */
+export function newRefToken(fill: (bytes: Uint8Array) => Uint8Array = (bytes) => crypto.getRandomValues(bytes)): string {
+  return encodeBase32(fill(new Uint8Array(TOKEN_LENGTH)));
 }
 
 const fail = (reason: AttachFailure): AttachResult => ({ ok: false, reason });
@@ -165,6 +164,7 @@ async function store(
   referenceFor: () => Promise<string>,
   reused: boolean,
   newToken: () => string,
+  afterLock?: () => Promise<void>,
 ): Promise<AttachResult> {
   await db.query("BEGIN");
   try {
@@ -173,6 +173,7 @@ async function store(
       await rollback(db);
       return fail("post_not_found");
     }
+    if (afterLock !== undefined) await afterLock();
     if ((await useCount(db, input.postId)) >= MAX_REFERENCES_PER_POST) {
       await rollback(db);
       return fail("too_many_references");
@@ -197,6 +198,8 @@ async function attach(db: Client, input: AttachInput, deps: AttachDeps): Promise
   const hit = (deps.registry ?? defaultRegistry).identify(url);
   if (hit === null) return fail("unsupported");
   if (!(await ownsPost(db, input.postId, input.authorId))) return fail("post_not_found");
+  // The per-user limiter is charged BEFORE the cache lookup, so a reuse of a stored row costs a unit too. Deliberate:
+  // it keeps the check cheap and stops a user from probing which URLs are already stored.
   if (deps.limiter !== undefined) {
     const { success } = await deps.limiter.limit({ key: `refs-attach:${input.authorId}` });
     if (!success) return fail("rate_limited");
@@ -206,9 +209,9 @@ async function attach(db: Client, input: AttachInput, deps: AttachDeps): Promise
   const newToken = deps.newToken ?? newRefToken;
   const now = (deps.now ?? (() => new Date()))();
   const cached = await findFresh(db, hit.id.kind, hit.id.resourceKey, now);
-  if (cached !== null) return store(db, input, () => Promise.resolve(cached), true, newToken);
+  if (cached !== null) return store(db, input, () => Promise.resolve(cached), true, newToken, deps.afterLock);
   const resolved = await hit.connector.resolve(hit.id, deps.ctx); // OUTSIDE the transaction
-  return store(db, input, () => upsertReference(db, hit.id.kind, resolved), false, newToken);
+  return store(db, input, () => upsertReference(db, hit.id.kind, resolved), false, newToken, deps.afterLock);
 }
 
 export async function attachReference(db: Client, input: AttachInput, deps: AttachDeps): Promise<AttachResult> {
