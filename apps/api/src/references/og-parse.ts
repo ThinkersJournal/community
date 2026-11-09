@@ -56,16 +56,24 @@ function isLetter(c: number): boolean {
   return (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
 }
 
-function parseValue(input: string, from: number): ParsedValue {
-  const quote = input[from];
-  if (quote === DOUBLE_QUOTE || quote === SINGLE_QUOTE) {
-    const close = input.indexOf(quote, from + 1);
-    const stop = close < 0 ? input.length : close;
-    return { value: input.slice(from + 1, Math.min(stop, from + 1 + MAX_VALUE_CHARS)), next: close < 0 ? input.length : close + 1 };
-  }
+function quotedEnd(input: string, from: number, quote: string): number {
+  const close = input.indexOf(quote, from + 1);
+  return close < 0 ? input.length : close;
+}
+
+function unquotedEnd(input: string, from: number): number {
   let p = from;
-  while (p < input.length && !isSpace(input.charCodeAt(p)) && input[p] !== ">") p += 1;
-  return { value: input.slice(from, Math.min(p, from + MAX_VALUE_CHARS)), next: p };
+  while (p < input.length && !isSpace(input.charCodeAt(p)) && input.charCodeAt(p) !== 62) p += 1;
+  return p;
+}
+
+function parseValue(input: string, from: number): ParsedValue {
+  const quote = input.charAt(from);
+  const quoted = quote === DOUBLE_QUOTE || quote === SINGLE_QUOTE;
+  const start = quoted ? from + 1 : from;
+  const stop = quoted ? quotedEnd(input, from, quote) : unquotedEnd(input, from);
+  const next = quoted ? Math.min(stop + 1, input.length) : stop;
+  return { value: input.slice(start, Math.min(stop, start + MAX_VALUE_CHARS)), next };
 }
 
 /** `start` is the index of the first character of the tag name. */
