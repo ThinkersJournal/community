@@ -319,3 +319,23 @@ export async function contentHash(snapshot: Snapshot): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(canonicalJson(rendered)));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+/**
+ * What the render needs of one reference, prepared from Postgres (never a source API) and handed to
+ * `renderMarkdown(markdown, { refs })`. The wire shape of `PublicPost.refs`; packages/markdown declares the same
+ * shape structurally (it does not depend on this package), and the web app's typecheck pins that they agree.
+ */
+export interface RefCard {
+  kind: string;
+  /** The canonical human URL, never an API URL. */
+  deepLink: string;
+  title: string;
+  /** The description or excerpt (plain text, already capped). */
+  description?: string;
+  siteName?: string;
+  image?: ImageRef;
+  status?: { label: "changed" | "resolved" | "gone"; asOf?: string };
+}
+
+/** The most references one post may carry (spec 4.2). Copy: "a post can show up to 10 references". */
+export const MAX_REFERENCES_PER_POST = 10;

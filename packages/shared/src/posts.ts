@@ -12,6 +12,8 @@
  */
 import { z } from "zod";
 
+import type { RefCard } from "./references";
+
 export const PostStatus = z.enum(["draft", "published"]);
 export type PostStatusValue = z.infer<typeof PostStatus>;
 
@@ -80,6 +82,11 @@ export interface PublicPost {
   publishedAt: string;
   updatedAt: string;
   tags: TagRef[];
+  /**
+   * The reference cards the post's `{{ref:TOKEN}}` markers point at, keyed by token (M3.1b). Present only when the
+   * post has any; a null value is a known token whose card is unavailable. Read from Postgres, never a source API.
+   */
+  refs?: Record<string, RefCard | null>;
 }
 
 export interface PublicPostSummary {
