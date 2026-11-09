@@ -42,12 +42,14 @@ interface StartTag {
   end: number;
 }
 
+const DOUBLE_QUOTE = String.fromCharCode(34);
+const SINGLE_QUOTE = String.fromCharCode(39);
 const isSpace = (c: number): boolean => c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
 const isLetter = (c: number): boolean => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
 
 function parseValue(input: string, from: number): { value: string; next: number } {
   const quote = input[from];
-  if (quote === '"' || quote === "'") {
+  if (quote === DOUBLE_QUOTE || quote === SINGLE_QUOTE) {
     const close = input.indexOf(quote, from + 1);
     const stop = close < 0 ? input.length : close;
     return { value: input.slice(from + 1, Math.min(stop, from + 1 + MAX_VALUE_CHARS)), next: close < 0 ? input.length : close + 1 };
@@ -142,21 +144,24 @@ function recordLink(attrs: Map<string, string>, out: Collected): void {
 }
 
 /** Index just past a raw-text element's body (the position of its closing tag), or the end of input. */
-function skipRawText(input: string, name: string, from: number): number {
-  const closer = new RegExp(`</${name}`, "gi");
-  closer.lastIndex = from;
-  const found = closer.exec(input);
-  return found ? found.index : input.length;
+function skipRawText(lower: string, name: string, from: number): number {
+  const found = lower.indexOf(`</${name}`, from);
+  return found < 0 ? lower.length : found;
 }
 
-function readTitle(input: string, from: number, out: Collected): number {
-  const end = skipRawText(input, "title", from);
+/** ASCII-only lower-casing: unlike toLowerCase it never changes the string length, so indexes stay valid. */
+function asciiLower(text: string): string {
+  return text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+}
+
+function readTitle(input: string, lower: string, from: number, out: Collected): number {
+  const end = skipRawText(lower, "title", from);
   if (out.title === undefined) out.title = input.slice(from, Math.min(end, from + MAX_VALUE_CHARS * 2));
   return end;
 }
 
 /** Handle the markup starting at `lt` (an index of "<"). Returns the index to continue from; always greater than `lt`. */
-function handleMarkup(input: string, lt: number, out: Collected): number {
+function handleMarkup(input: string, lower: string, lt: number, out: Collected): number {
   const len = input.length;
   if (input.startsWith("<!--", lt)) {
     const close = input.indexOf("-->", lt + 4);
@@ -171,18 +176,19 @@ function handleMarkup(input: string, lt: number, out: Collected): number {
   const tag = parseStartTag(input, lt + 1);
   if (tag.name === "meta") recordMeta(tag.attrs, out);
   else if (tag.name === "link") recordLink(tag.attrs, out);
-  else if (tag.name === "title") return readTitle(input, tag.end, out);
-  else if (RAW_TEXT_TAGS.has(tag.name)) return skipRawText(input, tag.name, tag.end);
+  else if (tag.name === "title") return readTitle(input, lower, tag.end, out);
+  else if (RAW_TEXT_TAGS.has(tag.name)) return skipRawText(lower, tag.name, tag.end);
   return tag.end;
 }
 
 function scan(input: string): Collected {
   const out: Collected = { title: undefined, meta: new Map(), canonicalHref: undefined };
+  const lower = asciiLower(input);
   let i = 0;
   while (i < input.length) {
     const lt = input.indexOf("<", i);
     if (lt < 0) break;
-    i = handleMarkup(input, lt, out);
+    i = handleMarkup(input, lower, lt, out);
   }
   return out;
 }
