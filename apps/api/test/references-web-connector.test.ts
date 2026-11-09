@@ -150,7 +150,15 @@ describe("web connector: resolve", () => {
   );
 
   it("a 5xx and a 429 are retryable; a 404 is not", async () => {
-    const run = (status: number) => webConnector.resolve(identified(URL_A), ctxOf(() => page({ status, body: "" })).ctx).catch((e: unknown) => e as ConnectorError);
+    const run = async (status: number): Promise<ConnectorError> => {
+      try {
+        await webConnector.resolve(identified(URL_A), ctxOf(() => page({ status, body: "" })).ctx);
+      } catch (e) {
+        if (e instanceof ConnectorError) return e;
+        throw e;
+      }
+      throw new Error("resolve did not throw");
+    };
     expect((await run(503)).retryable).toBe(true);
     expect((await run(429)).retryable).toBe(true);
     expect((await run(404)).retryable).toBe(false);
@@ -209,7 +217,7 @@ describe("web connector: fetchLive keeps ACCESS apart from DIFF (spec 3)", () =>
   });
 
   it("our own per-origin limit is rate_limited / unknown", async () => {
-    const out = await webConnector.fetchLive(await snapshotOf(), ctxOf(() => new OriginRateLimitedError("upstream", "limited", true)).ctx);
+    const out = await webConnector.fetchLive(await snapshotOf(), ctxOf(() => new OriginRateLimitedError()).ctx);
     expect(out).toEqual({ access: "rate_limited", diff: "unknown" });
   });
 

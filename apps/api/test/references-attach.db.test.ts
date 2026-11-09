@@ -250,14 +250,14 @@ describe("attachReference: limits", () => {
   it("the cap holds for concurrent attaches (the post row is locked)", async () => {
     const a = await newAuthor();
     const d = door();
-    const clients = await Promise.all(Array.from({ length: 4 }, async () => {
+    const clients = await Promise.all(Array.from({ length: 12 }, async () => {
       const c = new Client({ connectionString: TEST_DATABASE_URL });
       await c.connect();
       return c;
     }));
     try {
       const results = await Promise.all(
-        Array.from({ length: 14 }, (_, i) => attachReference(clients[i % clients.length]!, { postId: a.postId, authorId: a.userId, url: unique() }, deps(d.ctx))),
+        clients.map((c) => attachReference(c, { postId: a.postId, authorId: a.userId, url: unique() }, deps(d.ctx))),
       );
       expect(results.filter((r) => r.ok)).toHaveLength(MAX_REFERENCES_PER_POST);
       expect(await useCount(a.postId)).toBe(MAX_REFERENCES_PER_POST);
