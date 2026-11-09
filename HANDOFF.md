@@ -13,6 +13,7 @@
 
 ## State (2026-10-29 15:45Z): no open PRs; #281 MERGED; main = 8b0798a8, version 0.1.121
 - **TASK from PM 2026-11-07 (supersedes soft-stop): M3.0 + M3.1** (live reference engine foundation). CireSnave verbatim: "The shrink is confirmed.  Store only the image's address for now but we will likely store the image in the future.  Go ahead and restart the Community lane." Launch minimum = foundation, generic web unfurl, GitHub, GitLab, picker, public resources only, live refresh kept; YouTube/X/private = fast-follows; Q5 unfurl images store address only, design must allow a stored copy later; Q4 (GitHub App + GitLab OAuth app, his to register) before M3.3. M3.0: connector contract spec, record answers in plan, update ROADMAP R11 + S1. M3.1: schema migration (PR title says NEW MIGRATION NNNN; PM applies before merge), connector interface, {{ref:TOKEN}} render, generic web unfurl with SSRF controls, snapshot capture, card component. PR per task, version bump placeholder each, [READY] per PR, [ASK] in plain language for anything needing him. Plan: docs/superpowers/plans/2026-10-25-m3-reference-engine-plan.md.
+- **Progress 2026-11-09:** #282/#283/#284 merged (D6=A recorded in the upload-scan design; GitHub/GitLab registration checklists in docs/runbooks). M3.0 spec PR open (0.1.125). NEXT: M3.1 per the spec (migration 0042 placeholder, PM numbers it), red-first, one PR; [READY] per PR.
 - S12 merged (#279). S4 closed by PM ruling (rely on the S3 WAF rule; reopen only if the S3 checker reports it ABSENT). S13 was already built (#189), #281 only corrects the row.
 - Merged earlier this stretch: S15 auto-rollback (#267), M3 plan, verify-host, tag gate, scoring design, patent pass 5 + corrections, D16-B design, S3 dashboard checker, CI hardening (#276), #277 ROADMAP refresh (adds R12), #278 R12 re-acceptance (`/account/terms`, `/settings/terms`, nav link). **R12 notice is DARK:** wrangler var `TERMS_NOTICE`="0"; enabling it is blocked by R1 (`/terms` page), same gap at signup. When R1 lands: add the Terms link on `settings/terms.astro` and signup, drop the "Terms text: coming with R1" line, then flip the flag in a reviewed one-line PR.
 - Replied to PM censuses (ant-fit, platform-fit) 2026-10-28/29: nothing pending from them.
@@ -25,6 +26,6 @@
 Read THROTTLE.md; `git fetch`; send [STATUS] with `model=sonnet`; `gh pr list`; read `docs/ROADMAP.md` for the next unblocked row (check it is not already fixed at origin/main); take a PM TASK, else that row and send [READY].
 
 ## Waits (armed at each start with `lane-restart waits`)
-WAIT: R1 legal texts exist (PM says so) | check: git fetch -q && git ls-tree --name-only origin/main docs/legal/ && gh pr list --state open | wake: 2026-11-08T15:00:00Z
-WAIT: rollback-check run on main by CireSnave, then PM sets AUTO_ROLLBACK_ENABLED=1 | check: gh run list --branch main --limit 10 | wake: 2026-11-08T15:00:00Z
-WAIT: PM reports S3 checker UNKNOWN field shapes (CSAM scanner response) | check: read PM messages; git fetch -q && git log origin/main --oneline -5 | wake: 2026-11-08T15:00:00Z
+WAIT: R1 legal texts exist (PM says so) | check: git fetch -q && git ls-tree --name-only origin/main docs/legal/ && gh pr list --state open | wake: 2026-11-10T15:00:00Z
+WAIT: rollback-check run on main by CireSnave, then PM sets AUTO_ROLLBACK_ENABLED=1 | check: gh run list --branch main --limit 10 | wake: 2026-11-10T15:00:00Z
+WAIT: PM reports S3 checker UNKNOWN field shapes (CSAM scanner response) | check: read PM messages; git fetch -q && git log origin/main --oneline -5 | wake: 2026-11-10T15:00:00Z
