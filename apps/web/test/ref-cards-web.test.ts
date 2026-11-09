@@ -7,7 +7,7 @@ import { CONTACT_EMAIL, type RefCard } from "@thinkersjournal/shared";
 import { describe, expect, it, vi } from "vitest";
 
 import Bot from "../src/pages/bot.astro";
-import { POST_PAGE_CSP, PUBLIC_PAGE_CSP, SIGNUP_PAGE_CSP, setPublicPageCsp, type CspContext } from "../src/lib/csp";
+import { cardImageOrigins, PUBLIC_PAGE_CSP, SIGNUP_PAGE_CSP, setPublicPageCsp, type CspContext } from "../src/lib/csp";
 import { json, renderPage } from "./helpers/render-page";
 
 /**
@@ -33,7 +33,7 @@ function directive(csp: string, name: string): string {
   return found.slice(name.length).trim();
 }
 
-const cspFor = (opts: { turnstile?: boolean; remoteImages?: boolean }): string => {
+const cspFor = (opts: { turnstile?: boolean; imageOrigins?: readonly string[] }): string => {
   const ctx: CspContext = { response: { headers: new Headers() } };
   setPublicPageCsp(ctx, opts);
   const header = ctx.response.headers.get("content-security-policy");
@@ -41,27 +41,87 @@ const cspFor = (opts: { turnstile?: boolean; remoteImages?: boolean }): string =
   return header as string;
 };
 
-describe("CSP img-src for reference-card images", () => {
-  // Mutation that must fail: widen img-src on the shared public policy instead of the post page's opt-in.
-  it("the default and signup policies keep their narrow img-src", () => {
-    expect(directive(PUBLIC_PAGE_CSP, "img-src")).toBe("'self' https://cdn.thinkersjournal.com");
-    expect(directive(SIGNUP_PAGE_CSP, "img-src")).toBe("'self' https://cdn.thinkersjournal.com");
-    expect(cspFor({})).toBe(PUBLIC_PAGE_CSP);
+describe("CSP img-src for reference-card images: per request, exact origins only", () => {
+  const card = (url: string, storage: "remote" | "stored" = "remote"): RefCard =>
+    storage === "remote"
+      ? { kind: "web", deepLink: "https://example.com/p", title: "T", image: { storage: "remote", url } }
+      : { kind: "web", deepLink: "https://example.com/p", title: "T", image: { storage: "stored", key: "k", width: 1, height: 1 } };
+  const CDN = "https://cdn.thinkersjournal.com";
+  const imgSrcOf = (imageOrigins: string[]) => directive(cspFor({ imageOrigins }), "img-src");
+
+  // Mutation that must fail: widen img-src to a bare https: (author and commenter images would load too).
+  it("never emits a bare https: or a wildcard", () => {
+    const imgSrc = imgSrcOf(["https://i.example.com"]);
+    expect(imgSrc.split(" ")).not.toContain("https:");
+    expect(imgSrc).not.toContain("*");
+    expect(imgSrc).not.toContain("data:");
+    expect(imgSrc).not.toContain("http:/");
   });
 
-  // Mutation that must fail: allow http: or data: images, or remove the https: allowance (cards would be blank).
-  it("the post page allows https: images and nothing broader", () => {
-    const imgSrc = directive(cspFor({ remoteImages: true }), "img-src");
-    expect(imgSrc).toBe("'self' https:");
-    expect(imgSrc).not.toContain("http:/");
-    expect(imgSrc).not.toContain("data:");
-    expect(imgSrc).not.toContain("*");
+  it("a post without refs keeps the old policy EXACTLY", () => {
+    expect(cspFor({ imageOrigins: [] })).toBe(PUBLIC_PAGE_CSP);
+    expect(cspFor({})).toBe(PUBLIC_PAGE_CSP);
+    expect(directive(PUBLIC_PAGE_CSP, "img-src")).toBe("'self' " + CDN);
+    expect(directive(SIGNUP_PAGE_CSP, "img-src")).toBe("'self' " + CDN);
+  });
+
+  it("a post with refs gets only those origins, added to the old policy", () => {
+    expect(imgSrcOf(["https://i.example.com", "https://j.example.com:8443"])).toBe(
+      "'self' " + CDN + " https://i.example.com https://j.example.com:8443",
+    );
+  });
+
+  // Mutation that must fail: allow an origin the cards did not name (an author or commenter markdown image).
+  it("an origin that appears only in author markdown is NOT allowed", () => {
+    const refs = { ABCDEFGHIJKL: card("https://i.example.com/a.png") };
+    const imgSrc = imgSrcOf(cardImageOrigins(refs));
+    expect(imgSrc).toContain("https://i.example.com");
+    expect(imgSrc).not.toContain("tracker.example.net");
   });
 
   it("the post policy differs from the public one in img-src ONLY", () => {
     const rest = (csp: string) => csp.split(";").map((p) => p.trim()).filter((p) => !p.startsWith("img-src"));
-    expect(POST_PAGE_CSP).not.toBe(PUBLIC_PAGE_CSP);
-    expect(rest(POST_PAGE_CSP)).toEqual(rest(PUBLIC_PAGE_CSP));
+    expect(rest(cspFor({ imageOrigins: ["https://i.example.com"] }))).toEqual(rest(PUBLIC_PAGE_CSP));
+  });
+
+  describe("cardImageOrigins", () => {
+    it("takes the https origin of each remote card image, deduplicated, in order", () => {
+      const refs = {
+        AAAAAAAAAAAA: card("https://i.example.com/a.png"),
+        BBBBBBBBBBBB: card("https://i.example.com/b.png?x=1"),
+        CCCCCCCCCCCC: card("https://u:p@j.example.com:8443/c.png"),
+      };
+      expect(cardImageOrigins(refs)).toEqual(["https://i.example.com", "https://j.example.com:8443"]);
+    });
+
+    it("ignores http, javascript, data, stored images, null cards and cards with no image", () => {
+      const refs: Record<string, RefCard | null> = {
+        AAAAAAAAAAAA: card("http://i.example.com/a.png"),
+        BBBBBBBBBBBB: card("javascript:alert(1)"),
+        CCCCCCCCCCCC: card("data:image/png;base64,AAAA"),
+        DDDDDDDDDDDD: card("", "stored"),
+        EEEEEEEEEEEE: null,
+        FFFFFFFFFFFF: { kind: "web", deepLink: "https://example.com/p", title: "T" },
+        GGGGGGGGGGGG: card("not a url"),
+      };
+      expect(cardImageOrigins(refs)).toEqual([]);
+    });
+
+    // Mutation that must fail: build the origin from the raw string instead of URL.origin plus the shape check.
+    it.each([
+      "https://a.com;script-src *;/x.png",
+      "https://a.com;evil.com/x.png",
+      "https://a.com,evil.com/x.png",
+      "https://a.com%3Bscript-src/x.png",
+      "https://a.com/x.png;script-src *",
+      "https://[::1]/x.png",
+    ])("header injection is impossible: %s adds no directive and no separator", (url) => {
+      const origins = cardImageOrigins({ AAAAAAAAAAAA: card(url) });
+      for (const o of origins) expect(o).toMatch(/^https:\/\/[a-z0-9.-]+(:\d+)?$/);
+      const csp = cspFor({ imageOrigins: origins });
+      expect(csp.split(";").length).toBe(PUBLIC_PAGE_CSP.split(";").length);
+      expect(directive(csp, "script-src")).toBe(directive(PUBLIC_PAGE_CSP, "script-src"));
+    });
   });
 });
 
@@ -76,8 +136,9 @@ describe("the post page hands the api's refs to the renderer", () => {
     expect(code).toContain("renderMarkdown(post.markdownSource, { refs: new Map(Object.entries(post.refs ?? {})) })");
   });
 
-  it("opts in to remote images on the post page's CSP", () => {
-    expect(code).toContain("setPublicPageCsp(Astro, { remoteImages: true })");
+  it("derives the CSP image origins from post.refs, per request", () => {
+    expect(code).toContain("cardImageOrigins(post.refs ?? {})");
+    expect(code).toContain("setPublicPageCsp(Astro, { imageOrigins })");
   });
 
   it("the api's wire type is accepted by the renderer (a compile-time pin of the two structural RefCards)", async () => {

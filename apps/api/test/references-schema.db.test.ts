@@ -146,7 +146,7 @@ describe("post_references", () => {
   });
 
   // Mutation that must fail: drop the token CHECK (12 unpadded base32 characters).
-  it.each(["abcdefghijkl", "ABCDEFGHIJK", "ABCDEFGHIJKLM", "ABCDEFGHIJK1", "ABCDEFGH===="])("refuses the malformed token %s", async (token) => {
+  it.each(["abcdefghijkl", "ABCDEFGHIJK", "ABCDEFGHIJKLM", "ABCDEFGHIJK1", "ABCDEFGH====", "ABCDEFGHIJK0", "ABCDEFGHIJK8", "ABCDEFGHIJK9", "ABCDEFGHIJKL\n", "\nABCDEFGHIJKL", "ABCDEFGHIJK\n"])("refuses the malformed token %s", async (token) => {
     await expect(attach(await newPost(), await newReference(), token)).rejects.toThrow(/post_references_token|check constraint/i);
   });
 });

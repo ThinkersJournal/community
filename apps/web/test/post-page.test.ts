@@ -158,7 +158,7 @@ describe("cacheability + purge tags", () => {
 
 describe("security headers + the ld+json escape", () => {
   it("applies the public-page CSP", () => {
-    expect(code).toContain("setPublicPageCsp(Astro, { remoteImages: true })");
+    expect(code).toContain("setPublicPageCsp(Astro, { imageOrigins })");
   });
 
   it("⚠️ serialises ld+json through jsonLdScript, never a bare JSON.stringify", () => {

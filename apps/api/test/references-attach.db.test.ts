@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import { ConnectorError, MAX_REFERENCES_PER_POST, type FetchCtx, type FetchedPage } from "@thinkersjournal/shared";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { attachReference, type AttachDeps } from "../src/references/attach";
+import { attachReference, encodeBase32, newRefToken, type AttachDeps } from "../src/references/attach";
 import { withOriginLimit, type LimiterLike } from "../src/references/origin-limit";
 
 /**
@@ -158,6 +159,56 @@ describe("attachReference: dedupe (spec 4.1)", () => {
   });
 });
 
+describe("attachReference: a takedown sticks", () => {
+  // Mutation that must fail: DO UPDATE SET snapshot = EXCLUDED.snapshot (a re-attach would refill a nulled snapshot).
+  it("a nulled snapshot stays null when identical content is attached again", async () => {
+    const [a, b] = [await newAuthor(), await newAuthor()];
+    const url = unique();
+    const d = door((u) => page({ finalUrl: u, body: html("Same") }));
+    const one = await attachReference(client, { postId: a.postId, authorId: a.userId, url }, deps(d.ctx));
+    expect(one.ok).toBe(true);
+    if (!one.ok) return;
+    await client.query('UPDATE "references" SET snapshot = NULL WHERE id = $1', [one.referenceId]);
+    const two = await attachReference(client, { postId: b.postId, authorId: b.userId, url }, deps(d.ctx));
+    expect(two.ok && two.referenceId === one.referenceId).toBe(true);
+    expect(d.calls).toHaveLength(2); // a null snapshot is never "fresh": it was resolved again...
+    const { rows } = await client.query('SELECT snapshot FROM "references" WHERE id = $1', [one.referenceId]);
+    expect(rows[0]?.snapshot).toBeNull(); // ...and still not refilled
+  });
+});
+
+describe("token generation", () => {
+  // Mutation that must fail: map with b % 31 (or any non-uniform mapping).
+  it("maps every byte 0..255 with b & 31: each of the 32 symbols exactly 8 times", () => {
+    const all = Uint8Array.from({ length: 256 }, (_, i) => i);
+    const encoded = encodeBase32(all);
+    expect(encoded).toHaveLength(256);
+    const counts = new Map<string, number>();
+    for (const ch of encoded) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+    expect(counts.size).toBe(32);
+    expect([...counts.values()].every((n) => n === 8)).toBe(true);
+    expect(encoded.slice(0, 32)).toBe("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567");
+  });
+
+  it("newRefToken draws its bytes from the injected generator, 12 of them", () => {
+    let asked = 0;
+    const token = newRefToken((bytes) => {
+      asked = bytes.length;
+      bytes.fill(255);
+      return bytes;
+    });
+    expect(asked).toBe(12);
+    expect(token).toBe("7".repeat(12));
+  });
+
+  // Mutation that must fail: use Math.random anywhere in attach.ts.
+  it("attach.ts never uses Math.random", () => {
+    const source = readFileSync(new URL("../src/references/attach.ts", import.meta.url), "utf8");
+    expect(source).toContain("getRandomValues"); // positive control: the scan reads the real file
+    expect(source).not.toContain("Math.random");
+  });
+});
+
 describe("attachReference: tokens", () => {
   // Mutation that must fail: do not retry on a unique violation.
   it("retries with a fresh token when the first collides within the post", async () => {
@@ -228,6 +279,62 @@ describe("attachReference: a failed resolve never loses the post (spec 4.2)", ()
     const out = await attachReference(client, { postId: a.postId, authorId: b.userId, url: unique() }, deps(d.ctx));
     expect(out).toEqual({ ok: false, reason: "post_not_found" });
     expect(d.calls).toEqual([]);
+  });
+});
+
+describe("attachReference: the cap is serialised by the post row lock", () => {
+  async function waitForLockWaiter(): Promise<void> {
+    for (let i = 0; i < 200; i += 1) {
+      const { rows } = await client.query<{ n: number }>(
+        "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM posts WHERE id%FOR UPDATE%'",
+      );
+      if ((rows[0]?.n ?? 0) >= 1) return;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error("no attach ever waited on the post lock");
+  }
+
+  // Mutation that must fail: drop FOR UPDATE from the post lock (B would not wait, and both would be accepted).
+  it("a second attach waits for the first to commit, and the 11th is then refused", async () => {
+    const a = await newAuthor();
+    const seed = door();
+    for (let i = 0; i < MAX_REFERENCES_PER_POST - 1; i += 1) {
+      expect((await attachReference(client, { postId: a.postId, authorId: a.userId, url: unique() }, deps(seed.ctx))).ok).toBe(true);
+    }
+    const [c1, c2] = await Promise.all([0, 1].map(async () => {
+      const c = new Client({ connectionString: TEST_DATABASE_URL });
+      await c.connect();
+      return c;
+    }));
+    try {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let holding: () => void = () => undefined;
+      const holdingLock = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+      const first = attachReference(
+        c1!,
+        { postId: a.postId, authorId: a.userId, url: unique() },
+        deps(seed.ctx, { afterLock: async () => { holding(); await gate; } }),
+      );
+      await holdingLock; // A holds the post lock, inside its transaction, with 9 uses stored
+      let secondDone = false;
+      const second = attachReference(c2!, { postId: a.postId, authorId: a.userId, url: unique() }, deps(seed.ctx)).then((r) => {
+        secondDone = true;
+        return r;
+      });
+      await waitForLockWaiter(); // B is provably blocked on the lock, not merely slow
+      expect(secondDone).toBe(false);
+      release();
+      expect((await first).ok).toBe(true);
+      expect(await second).toEqual({ ok: false, reason: "too_many_references" });
+      expect(await useCount(a.postId)).toBe(MAX_REFERENCES_PER_POST);
+    } finally {
+      await Promise.all([c1!.end(), c2!.end()]);
+    }
   });
 });
 

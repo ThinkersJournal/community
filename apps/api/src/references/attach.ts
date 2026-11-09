@@ -61,6 +61,8 @@ export interface AttachDeps {
   registry?: Registry;
   now?: () => Date;
   newToken?: () => string;
+  /** Test seam: awaited inside the transaction right after the post row lock is taken. */
+  afterLock?: () => Promise<void>;
 }
 
 interface AttachInput {
@@ -69,8 +71,13 @@ interface AttachInput {
   url: string;
 }
 
+/** STUB (red-first). */
+export function encodeBase32(_bytes: Uint8Array): string {
+  return "";
+}
+
 /** 12 characters of unpadded base32 from a CSPRNG, never derived from the URL (spec 2). 256 is a multiple of 32: no bias. */
-export function newRefToken(): string {
+export function newRefToken(_fill?: (bytes: Uint8Array) => Uint8Array): string {
   const bytes = crypto.getRandomValues(new Uint8Array(TOKEN_LENGTH));
   return Array.from(bytes, (b) => BASE32.charAt(b & 31)).join("");
 }

@@ -127,6 +127,22 @@ describe("web connector: resolve", () => {
     expect(out.resourceKey).toBe(`web:${URL_A}`);
   });
 
+  // Mutation that must fail: drop the pathname check (a same-host page /~evil claims /~victim/post).
+  it("a same-origin canonical with a DIFFERENT path is ignored (shared hosts: /~evil cannot claim /~victim)", async () => {
+    const { ctx } = ctxOf(() =>
+      page({ finalUrl: "https://host.example.com/~evil", body: HTML('<title>t</title><link rel="canonical" href="https://host.example.com/~victim/post">') }),
+    );
+    const out = await webConnector.resolve(identified("https://host.example.com/~evil"), ctx);
+    expect(out.resourceKey).toBe("web:https://host.example.com/~evil");
+  });
+
+  it("a same-path canonical still works when only the query, hash or trailing slash differ", async () => {
+    const keyFor = async (href: string) =>
+      (await webConnector.resolve(identified(URL_A), ctxOf(() => page({ body: HTML(`<title>t</title><link rel="canonical" href="${href}">`) })).ctx)).resourceKey;
+    expect(await keyFor("https://example.com/post/1?utm=x")).toBe("web:https://example.com/post/1?utm=x");
+    expect(await keyFor("https://example.com/post/1#frag")).toBe("web:https://example.com/post/1");
+  });
+
   it("a canonical pointing at our own origin is ignored (spec 5 rule 8)", async () => {
     const { ctx } = ctxOf(() => page({ body: HTML('<title>t</title><link rel="canonical" href="https://community.thinkersjournal.com/x">') }));
     const out = await webConnector.resolve(identified(URL_A), ctx);

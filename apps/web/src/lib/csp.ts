@@ -70,6 +70,8 @@
  * it is assignable from the real `Astro` global, and it lets test/csp.test.ts
  * build one without standing up a renderer.
  */
+import type { RefCard } from "@thinkersjournal/shared";
+
 export interface CspContext {
   response: { headers: Headers };
 }
@@ -148,7 +150,15 @@ export const POST_PAGE_CSP = buildCsp(false, true);
  * on a response can rescue an edge leak once that happens.
  * test/page-cache-inventory.test.ts (sweep B) enforces this across all of src/.
  */
-export function setPublicPageCsp(context: CspContext, opts: { turnstile?: boolean; remoteImages?: boolean } = {}): void {
+/** STUB (red-first). */
+export function cardImageOrigins(_refs: Readonly<Record<string, RefCard | null>>): string[] {
+  return [];
+}
+
+export function setPublicPageCsp(
+  context: CspContext,
+  opts: { turnstile?: boolean; remoteImages?: boolean; imageOrigins?: readonly string[] } = {},
+): void {
   context.response.headers.set(
     "content-security-policy",
     opts.turnstile ? SIGNUP_PAGE_CSP : opts.remoteImages ? POST_PAGE_CSP : PUBLIC_PAGE_CSP,
