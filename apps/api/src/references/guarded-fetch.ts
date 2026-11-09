@@ -21,7 +21,7 @@ import { assertPublicHttpUrl, isBlockedIpAddress, normaliseIPv4 } from "./ssrf";
 export const BOT_USER_AGENT = "ThinkersJournalBot/1.0 (+https://community.thinkersjournal.com/bot)";
 export const GUARD_DEFAULTS = {
   timeoutMs: 5000,
-  maxBytes: 512 * 1024,
+  maxBytes: 4 * 512 * 1024,
   maxRedirects: 3,
 } as const;
 
