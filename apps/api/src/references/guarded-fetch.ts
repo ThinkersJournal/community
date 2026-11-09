@@ -27,10 +27,9 @@ export const GUARD_DEFAULTS = {
 
 /** Fixed public resolver for the DNS check. */
 export const DOH_ENDPOINT = "https://cloudflare-dns.com/dns-query";
-/** Our own hosts: a URL pointing at them is `unsupported` (spec 5 rule 8). */
+/** Our own host (the api Worker has no public route, apps/api/wrangler.jsonc): pointing at it is `unsupported` (spec 5 rule 8). */
 export const DEFAULT_SELF_HOSTS: readonly string[] = [
   "community.thinkersjournal.com",
-  "api.community.thinkersjournal.com",
 ];
 
 const DEFAULT_TYPES: readonly string[] = ["text/html", "application/xhtml+xml"];

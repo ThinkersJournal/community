@@ -148,7 +148,7 @@ describe("guarded fetch: redirects", () => {
     expect(await codeOf(guard(first, { selfHosts: [own] })(`https://${own}/p/1`))).toBe("unsupported");
     expect(first.calls).toHaveLength(0);
 
-    const hop = recorder((url) => (url.includes(own) ? page("x") : redirect(`https://${own}/api/me`)));
+    const hop = recorder((url) => (new URL(url).hostname === own ? page("x") : redirect(`https://${own}/api/me`)));
     expect(await codeOf(guard(hop, { selfHosts: [own] })("https://example.com/"))).toBe("unsupported");
     expect(hop.calls).toHaveLength(1);
   });

@@ -157,7 +157,7 @@ export function truncateText(text: string, max: number): string {
 }
 
 function capStrings<T extends object>(value: T, caps: Readonly<Record<string, number>>): T {
-  const out: Record<string, unknown> = { ...value };
+  const out: Record<string, unknown> = Object.fromEntries(Object.entries(value));
   for (const [key, max] of Object.entries(caps)) {
     const current = out[key];
     if (typeof current === "string") out[key] = truncateText(current, max);
