@@ -259,7 +259,7 @@ function firstText(cap: number, ...raws: ReadonlyArray<string | undefined>): str
 }
 
 /** Extract the card fields from page HTML. Never throws; absent fields are simply missing from the result. */
-export function parseOpenGraph(html: string, finalUrl: string): OgFields {
+export function parseOpenGraph(html: string, finalUrl: string, _selfHosts?: readonly string[]): OgFields {
   const found = scan(html.length > MAX_INPUT_CHARS ? html.slice(0, MAX_INPUT_CHARS) : html);
   const fields: OgFields = {};
   const title = firstText(SNAPSHOT_CAPS.title, found.meta.get("og:title"), found.title);

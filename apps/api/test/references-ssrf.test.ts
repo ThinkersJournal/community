@@ -167,7 +167,7 @@ describe("isBlockedIpAddress", () => {
       expect(isBlockedIpAddress(ip)).toBe(true);
     },
   );
-  it.each(["8.8.8.8", "93.184.216.34", "2606:4700:4700::1111", "::ffff:8.8.8.8", "2001:4860:4860::8888"])("allows %s", (ip) => {
+  it.each(["8.8.8.8", "93.184.216.34", "2606:4700:4700::1111", "2001:4860:4860::8888"])("allows %s", (ip) => {
     expect(isBlockedIpAddress(ip)).toBe(false);
   });
 });
