@@ -34,6 +34,7 @@ import { visit } from "unist-util-visit";
 
 import { getHighlighter, HIGHLIGHT_THEME } from "./highlight";
 import { rehypeLanguageAllowlist } from "./lang-allowlist";
+import { rehypeRefCards } from "./ref-plugin";
 
 import type { RefMap } from "./ref-card";
 import type { Element, Root } from "hast";
@@ -48,7 +49,7 @@ import type { HighlighterCore } from "shiki/core";
  * edge cache key (apps/web/src/lib/cache.ts); bump it whenever the pipeline's
  * OUTPUT changes for the same input.
  */
-export const PIPELINE_VERSION = "v1";
+export const PIPELINE_VERSION = "v2";
 
 /**
  * ⚠️ defaultSchema IS NOT OUR POLICY. Every override below is load-bearing.
@@ -201,8 +202,11 @@ function buildRenderer(highlighter: HighlighterCore) {
       // so a sanitizer running after this would strip every token colour. Safe
       // because Shiki emits HAST — it never round-trips through a string parser.
       .use(rehypeShikiFromHighlighter, highlighter, { theme: HIGHLIGHT_THEME })
-      // M3 inserts the ref-card plugin here.
-      .use(rehypeStringify)
+      // The reference cards (M3.1b). AFTER the sanitizer and after external-links, on purpose: the card HTML is
+      // app-generated (renderRefCard escapes everything), carries its own rel, and must not be stripped or re-decorated.
+      // The only raw nodes in the tree are the ones this makes, hence allowDangerousHtml below.
+      .use(rehypeRefCards)
+      .use(rehypeStringify, { allowDangerousHtml: true })
   );
 }
 
@@ -234,17 +238,17 @@ async function buildRendererAsync(): Promise<ReturnType<typeof buildRenderer>> {
   return buildRenderer(await getHighlighter());
 }
 
-/** Render `markdown` to HTML that is safe to embed. */
 export interface RenderOptions {
   /** Prepared by the caller from Postgres: a known token renders its card, an unknown one renders nothing. Omitted = tokens stay literal text. */
   refs?: RefMap;
 }
 
-export async function renderMarkdown(markdown: string, _options: RenderOptions = {}): Promise<string> {
+/** Render `markdown` to HTML that is safe to embed. */
+export async function renderMarkdown(markdown: string, options: RenderOptions = {}): Promise<string> {
   rendererPromise ??= buildRendererAsync().catch((error: unknown) => {
     rendererPromise = null;
     throw error;
   });
   const renderer = await rendererPromise;
-  return String(await renderer.process(markdown));
+  return String(await renderer.process({ value: markdown, data: { refs: options.refs } }));
 }
