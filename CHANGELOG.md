@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.126
+
+M3.1a: the reference engine's pure foundation (no database, no migration, no UI). Contract types, `capSnapshot` and `contentHash` in `packages/shared`; the SSRF URL guard, the guarded fetch door (manual redirects, DNS-over-HTTPS check, 5 s timeout, 512 KB counted body cap, content-type and robots.txt checks) and the tolerant Open Graph extractor in `apps/api/src/references`; a source-scan test that no connector calls global `fetch`. Nothing calls them yet (M3.1b wires the web connector). The version number is a placeholder, the PM allocates it.
+
 ## 0.1.124
 
 Two one-page runbooks for CireSnave: registering the GitHub App (M3.3) and the GitLab OAuth application (M3.6), with exact settings, read-only permissions and vault names. Docs only. The version number is a placeholder, the PM allocates it.
