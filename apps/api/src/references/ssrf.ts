@@ -118,13 +118,21 @@ function embeddedV4(high: number, low: number): number {
 
 function isBlockedV6(g: readonly number[]): boolean {
   const at = (i: number): number => g[i] ?? 0;
-  if (g.slice(0, 6).every((x) => x === 0)) return true; // ::, ::1 and the deprecated ::a.b.c.d form
+  const zeros = (from: number, to: number): boolean => g.slice(from, to).every((x) => x === 0);
+  if (zeros(0, 6)) return true; // ::/96: ::, ::1 and the deprecated ::a.b.c.d form
+  if (zeros(0, 5) && at(5) === 0xffff) return true; // ::ffff:0:0/96 IPv4-mapped: no public AAAA answer looks like this
   if ((at(0) & 0xfe00) === 0xfc00) return true; // fc00::/7 unique local
   if ((at(0) & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+  if ((at(0) & 0xffc0) === 0xfec0) return true; // fec0::/10 deprecated site-local
   if ((at(0) & 0xff00) === 0xff00) return true; // ff00::/8 multicast
-  const mapped = g.slice(0, 5).every((x) => x === 0) && at(5) === 0xffff; // ::ffff:a.b.c.d
-  const nat64 = at(0) === 0x64 && at(1) === 0xff9b && g.slice(2, 6).every((x) => x === 0); // 64:ff9b::/96
-  if (mapped || nat64) return isBlockedV4Number(embeddedV4(at(6), at(7)));
+  if (at(0) === 0x100 && zeros(1, 4)) return true; // 100::/64 discard-only
+  if (at(0) === 0x2001 && at(1) === 0) return true; // 2001::/32 Teredo
+  if (at(0) === 0x2001 && at(1) === 0xdb8) return true; // 2001:db8::/32 documentation
+  if (at(0) === 0x64 && at(1) === 0xff9b) {
+    if (at(2) === 1) return true; // 64:ff9b:1::/48 local-use NAT64
+    if (at(2) === 0 && zeros(3, 6)) return isBlockedV4Number(embeddedV4(at(6), at(7))); // 64:ff9b::/96 NAT64
+    return false;
+  }
   if (at(0) === 0x2002) return isBlockedV4Number(embeddedV4(at(1), at(2))); // 6to4
   return false;
 }

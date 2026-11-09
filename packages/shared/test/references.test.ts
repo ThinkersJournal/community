@@ -65,7 +65,7 @@ describe("capSnapshot", () => {
 
     const b = capSnapshot(repo({ excerpt: "x".repeat(50_000) }));
     if (b.kind === "web") throw new Error("kind changed");
-    expect(b.excerpt?.length).toBe(SNAPSHOT_CAPS.excerptChars);
+    expect(b.excerpt?.length).toBe(SNAPSHOT_CAPS.excerptUtf16Units);
   });
 
   // Mutation that must fail this: drop the total-size pass.

@@ -142,10 +142,40 @@ export const SNAPSHOT_CAPS = {
   ref: 64,
   alt: 300,
   url: 2048,
-  excerptChars: 4096,
+  /** 4 KB in the spec; enforced as 4096 UTF-16 code units (JavaScript string length), not bytes. The 16 KB total is in bytes. */
+  excerptUtf16Units: 4096,
+  capturedAt: 40,
+  imageKey: 512,
   excerptLines: 40,
   totalJsonBytes: 16 * 1024,
 } as const;
+
+/**
+ * Characters that render as nothing or reorder text: bidi embeddings, overrides, isolates and marks (U+202A-202E,
+ * U+2066-2069, U+200E, U+200F, U+061C), zero-width characters (U+200B-200D), U+180E, line/paragraph separators and the
+ * byte order mark. Untrusted text must not carry them (an RLO makes "evil‮gnp.exe" display as "evilexe.png").
+ */
+export function isInvisibleControl(code: number): boolean {
+  return (
+    (code >= 0x200b && code <= 0x200f) ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2066 && code <= 0x2069) ||
+    code === 0x061c ||
+    code === 0x180e ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0xfeff
+  );
+}
+
+/** `text` without its invisible/bidi control characters. Newlines are kept (excerpts need them). */
+export function stripInvisibleControls(text: string): string {
+  let out = "";
+  for (const ch of text) {
+    if (!isInvisibleControl(ch.codePointAt(0) ?? 0)) out += ch;
+  }
+  return out;
+}
 
 /** Cut to at most `max` UTF-16 units without leaving half of a surrogate pair at the end. */
 export function truncateText(text: string, max: number): string {
@@ -167,13 +197,31 @@ function capStrings<T extends object>(value: T, caps: Readonly<Record<string, nu
 
 function capImage(image: ImageRef): ImageRef | undefined {
   if (image.storage === "remote" && image.url.length > SNAPSHOT_CAPS.url) return undefined;
+  if (image.storage === "stored" && image.key.length > SNAPSHOT_CAPS.imageKey) return undefined;
   return capStrings(image, { alt: SNAPSHOT_CAPS.alt });
 }
 
 function capExcerpt(excerpt: string): string {
   const lines = excerpt.split("\n");
   const kept = lines.length > SNAPSHOT_CAPS.excerptLines ? lines.slice(0, SNAPSHOT_CAPS.excerptLines).join("\n") : excerpt;
-  return truncateText(kept, SNAPSHOT_CAPS.excerptChars);
+  return truncateText(kept, SNAPSHOT_CAPS.excerptUtf16Units);
+}
+
+const TEXT_FIELDS = ["title", "description", "siteName", "author", "state", "path", "ref", "excerpt"] as const;
+
+function cleanImage(image: ImageRef): ImageRef {
+  return image.alt === undefined ? image : { ...image, alt: stripInvisibleControls(image.alt) };
+}
+
+/** Strip invisible controls from every free-text field (top level and the image's alt). */
+function cleanText(snapshot: Snapshot): Snapshot {
+  const out: Record<string, unknown> = Object.fromEntries(Object.entries(snapshot));
+  for (const field of TEXT_FIELDS) {
+    const value = out[field];
+    if (typeof value === "string") out[field] = stripInvisibleControls(value);
+  }
+  const cleaned = out as unknown as Snapshot;
+  return cleaned.kind === "web" && cleaned.image ? { ...cleaned, image: cleanImage(cleaned.image) } : cleaned;
 }
 
 function capFields(snapshot: Snapshot): Snapshot {
@@ -194,6 +242,7 @@ function capFields(snapshot: Snapshot): Snapshot {
     author: SNAPSHOT_CAPS.author,
     path: SNAPSHOT_CAPS.path,
     ref: SNAPSHOT_CAPS.ref,
+    capturedAt: SNAPSHOT_CAPS.capturedAt,
   });
   return capped.excerpt === undefined ? capped : { ...capped, excerpt: capExcerpt(capped.excerpt) };
 }
@@ -220,10 +269,28 @@ function fitTotal(snapshot: Snapshot): Snapshot {
     // Every UTF-16 unit costs at least one byte of JSON, so cutting `over` units always removes `over` bytes.
     current = withField(current, field, truncateText(value, value.length - over));
   }
-  if (jsonBytes(current) > SNAPSHOT_CAPS.totalJsonBytes && current.kind === "web" && current.image) {
-    current = { ...current, image: undefined };
+  return hardFallback(current);
+}
+
+/** Optional fields dropped, in this order, if shortening was not enough. */
+const DROP_ORDER = ["image", "lines", "ref", "path", "author", "siteName", "description", "excerpt"] as const;
+/** Required fields shortened as a last resort. */
+const SHRINK_LAST = ["finalUrl", "capturedAt", "state", "title"] as const;
+
+/** The invariant "total JSON <= 16 KB" holds for ANY input: this is what makes it unconditional. */
+function hardFallback(snapshot: Snapshot): Snapshot {
+  const copy: Record<string, unknown> = Object.fromEntries(Object.entries(snapshot));
+  for (const field of DROP_ORDER) {
+    if (jsonBytes(copy) <= SNAPSHOT_CAPS.totalJsonBytes) return copy as unknown as Snapshot;
+    delete copy[field];
   }
-  return current;
+  for (const field of SHRINK_LAST) {
+    const over = jsonBytes(copy) - SNAPSHOT_CAPS.totalJsonBytes;
+    if (over <= 0) break;
+    const value = copy[field];
+    if (typeof value === "string") copy[field] = truncateText(value, value.length - over);
+  }
+  return copy as unknown as Snapshot;
 }
 
 /**
@@ -231,7 +298,7 @@ function fitTotal(snapshot: Snapshot): Snapshot {
  * fields in a fixed order. It NEVER rejects: a post is never lost because a page had a long title.
  */
 export function capSnapshot(snapshot: Snapshot): Snapshot {
-  return fitTotal(capFields(snapshot));
+  return fitTotal(capFields(cleanText(snapshot)));
 }
 
 function canonicalJson(value: unknown): string {

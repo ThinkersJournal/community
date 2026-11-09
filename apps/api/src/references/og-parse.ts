@@ -11,8 +11,9 @@
  * surprises. Output strings are plain text (entities decoded, control characters removed, whitespace collapsed) and
  * hard-capped; they are escaped again at render.
  */
-import { ConnectorError, SNAPSHOT_CAPS, truncateText, type ImageRef } from "@thinkersjournal/shared";
+import { ConnectorError, isInvisibleControl, SNAPSHOT_CAPS, truncateText, type ImageRef } from "@thinkersjournal/shared";
 
+import { DEFAULT_SELF_HOSTS } from "./guarded-fetch";
 import { assertPublicHttpUrl } from "./ssrf";
 
 const MAX_INPUT_CHARS = 512 * 1024;
@@ -122,7 +123,7 @@ function decodeEntities(text: string): string {
 }
 
 function isControl(c: number): boolean {
-  return c < 32 || (c >= 0x7f && c <= 0x9f) || (c >= 0x200b && c <= 0x200f) || c === 0x2028 || c === 0x2029 || c === 0xfeff;
+  return c < 32 || (c >= 0x7f && c <= 0x9f) || isInvisibleControl(c);
 }
 
 /** Plain text, capped: entities decoded, whitespace collapsed to single spaces, control and zero-width characters gone. */
@@ -243,10 +244,12 @@ function pickImage(candidates: ReadonlyArray<string | undefined>, base: string):
   return undefined;
 }
 
-function pickCanonical(href: string | undefined, base: string): string | undefined {
+/** Kept only if https, public by the URL rules, and not one of our own hosts (no self-referencing card). */
+function pickCanonical(href: string | undefined, base: string, selfHosts: ReadonlySet<string>): string | undefined {
   if (href === undefined) return undefined;
   const url = resolveUrl(href, base);
-  return url && passesUrlRules(url) ? url.href : undefined;
+  if (!url || url.protocol !== "https:" || !passesUrlRules(url)) return undefined;
+  return selfHosts.has(url.hostname.toLowerCase().replace(/[.]$/, "")) ? undefined : url.href;
 }
 
 function firstText(cap: number, ...raws: ReadonlyArray<string | undefined>): string | undefined {
@@ -259,13 +262,13 @@ function firstText(cap: number, ...raws: ReadonlyArray<string | undefined>): str
 }
 
 /** Extract the card fields from page HTML. Never throws; absent fields are simply missing from the result. */
-export function parseOpenGraph(html: string, finalUrl: string, _selfHosts?: readonly string[]): OgFields {
+export function parseOpenGraph(html: string, finalUrl: string, selfHosts: readonly string[] = DEFAULT_SELF_HOSTS): OgFields {
   const found = scan(html.length > MAX_INPUT_CHARS ? html.slice(0, MAX_INPUT_CHARS) : html);
   const fields: OgFields = {};
   const title = firstText(SNAPSHOT_CAPS.title, found.meta.get("og:title"), found.title);
   const description = firstText(SNAPSHOT_CAPS.description, found.meta.get("og:description"));
   const siteName = firstText(SNAPSHOT_CAPS.siteName, found.meta.get("og:site_name"));
-  const canonicalUrl = pickCanonical(found.canonicalHref, finalUrl);
+  const canonicalUrl = pickCanonical(found.canonicalHref, finalUrl, new Set(selfHosts.map((h) => h.toLowerCase())));
   const image = pickImage([found.meta.get("og:image"), found.meta.get("twitter:image")], finalUrl);
   if (title !== undefined) fields.title = title;
   if (description !== undefined) fields.description = description;

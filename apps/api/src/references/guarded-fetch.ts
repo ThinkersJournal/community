@@ -34,6 +34,8 @@ export const DEFAULT_SELF_HOSTS: readonly string[] = [
 
 const DEFAULT_TYPES: readonly string[] = ["text/html", "application/xhtml+xml"];
 const ROBOTS_TOKEN = "thinkersjournalbot";
+const MAX_ROBOTS_RULES = 5000;
+const MAX_MATCH_URL_CHARS = 2048;
 const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
@@ -74,7 +76,7 @@ interface Deadline {
 interface Call {
   cfg: Config;
   deadline: Deadline;
-  robots: Map<string, Promise<boolean>>;
+  robots: Map<string, Promise<RobotsPolicy>>;
   skipRobots: boolean;
 }
 
@@ -119,34 +121,50 @@ async function dnsCheck(call: Call, host: string): Promise<void> {
   if (answers.some(isBlockedIpAddress)) throw new ConnectorError("blocked_target", "host resolves to a blocked address");
 }
 
-async function robotsFor(call: Call, url: URL): Promise<boolean> {
-  const injected = call.cfg.robotsAllowed;
-  if (injected) return call.deadline.race(injected(url, call.deadline.signal));
+interface RobotsPolicy {
+  mode: "allow-all" | "deny-all" | "rules";
+  text: string;
+}
+const ALLOW_ALL: RobotsPolicy = { mode: "allow-all", text: "" };
+const DENY_ALL: RobotsPolicy = { mode: "deny-all", text: "" };
+
+/** 2xx: the rules. Other 4xx except 429: no robots.txt, so allowed. 429, 5xx and anything odd: fail closed. */
+function policyFromStatus(status: number, body: string): RobotsPolicy {
+  if (status >= 200 && status < 300) return { mode: "rules", text: body };
+  if (status >= 400 && status < 500 && status !== 429) return ALLOW_ALL;
+  return DENY_ALL;
+}
+
+async function loadRobots(call: Call, url: URL): Promise<RobotsPolicy> {
   const robotsUrl = new URL("/robots.txt", url.origin);
   try {
-    const page = await runHops(
-      { ...call, skipRobots: true },
-      robotsUrl,
-      { allowedTypes: ["*"], overflow: "truncate" },
-    );
-    if (page.status >= 200 && page.status < 300) return isAllowedByRobots(page.body, url.pathname + url.search);
-    return page.status >= 400 && page.status < 500; // no robots.txt: allowed. A 5xx or odd status: be polite, refuse.
+    const page = await runHops({ ...call, skipRobots: true }, robotsUrl, { allowedTypes: ["*"], overflow: "truncate" });
+    return policyFromStatus(page.status, page.body);
   } catch (e) {
     if (e instanceof ConnectorError && e.code === "timeout") throw e;
-    return false;
+    return DENY_ALL;
   }
+}
+
+/** The origin's policy is fetched once per call and cached; every hop's path and query is evaluated against it. */
+async function robotsAllows(call: Call, url: URL): Promise<boolean> {
+  const injected = call.cfg.robotsAllowed;
+  if (injected) return call.deadline.race(injected(url, call.deadline.signal));
+  let pending = call.robots.get(url.origin);
+  if (pending === undefined) {
+    pending = loadRobots(call, url);
+    call.robots.set(url.origin, pending);
+  }
+  const policy = await pending;
+  if (policy.mode !== "rules") return policy.mode === "allow-all";
+  return isAllowedByRobots(policy.text, url.pathname + url.search);
 }
 
 async function checkTarget(call: Call, url: URL): Promise<void> {
   if (call.cfg.selfHosts.has(hostOf(url))) throw new ConnectorError("unsupported", "our own origin");
   await dnsCheck(call, hostOf(url));
   if (call.skipRobots) return;
-  let verdict = call.robots.get(url.origin);
-  if (verdict === undefined) {
-    verdict = robotsFor(call, url);
-    call.robots.set(url.origin, verdict);
-  }
-  if (!(await verdict)) throw new ConnectorError("blocked_target", "disallowed by robots.txt");
+  if (!(await robotsAllows(call, url))) throw new ConnectorError("blocked_target", "disallowed by robots.txt");
 }
 
 async function send(call: Call, url: URL, init: FetchInit): Promise<Response> {
@@ -183,8 +201,17 @@ interface Hop {
   url: URL;
 }
 
-async function followRedirects(call: Call, start: URL, init: FetchInit): Promise<Hop> {
+/** Caller headers that may follow a redirect to another origin (credentials and custom headers may not). */
+const CROSS_ORIGIN_HEADERS: ReadonlySet<string> = new Set(["accept", "accept-language"]);
+
+function crossOriginInit(init: FetchInit): FetchInit {
+  const kept = Object.entries(init.headers ?? {}).filter(([name]) => CROSS_ORIGIN_HEADERS.has(name.toLowerCase()));
+  return { ...init, headers: Object.fromEntries(kept) };
+}
+
+async function followRedirects(call: Call, start: URL, firstInit: FetchInit): Promise<Hop> {
   let current = start;
+  let init = firstInit;
   for (let followed = 0; ; followed += 1) {
     current = assertPublicHttpUrl(current);
     await checkTarget(call, current);
@@ -192,7 +219,9 @@ async function followRedirects(call: Call, start: URL, init: FetchInit): Promise
     if (!REDIRECT_STATUSES.has(res.status)) return { res, url: current };
     discard(res);
     if (followed >= call.cfg.maxRedirects) throw new ConnectorError("upstream", "too many redirects");
-    current = nextHop(res, current);
+    const next = nextHop(res, current);
+    if (next.origin !== current.origin) init = crossOriginInit(init);
+    current = next;
   }
 }
 
@@ -272,8 +301,12 @@ async function toPage(call: Call, hop: Hop, init: FetchInit): Promise<FetchedPag
     discard(res);
     throw new ConnectorError("unsupported", "content type not accepted");
   }
-  const { bytes, truncated } = await readCapped(res.body, call.cfg.maxBytes, init.overflow ?? "too_large", call.deadline);
-  return { ...base, body: decode(bytes, contentType), truncated };
+  try {
+    const { bytes, truncated } = await readCapped(res.body, call.cfg.maxBytes, init.overflow ?? "too_large", call.deadline);
+    return { ...base, body: decode(bytes, contentType), truncated };
+  } catch (e) {
+    throw toConnectorError(e, call.deadline); // a mid-body network error is a TypeError from the stream
+  }
 }
 
 async function runHops(call: Call, start: URL, init: FetchInit): Promise<FetchedPage> {
@@ -363,6 +396,14 @@ interface RobotsGroup {
   rules: RobotsRule[];
 }
 
+/** Fold percent-escapes of UNRESERVED characters (%7E is ~) so a rule and a path spell the same character the same way. */
+function normaliseEscapes(text: string): string {
+  return text.replace(/%([0-9a-f]{2})/gi, (_match, hex: string) => {
+    const ch = String.fromCharCode(Number.parseInt(hex, 16));
+    return /^[A-Za-z0-9._~-]$/.test(ch) ? ch : `%${hex.toUpperCase()}`;
+  });
+}
+
 function parseRobots(text: string): RobotsGroup[] {
   const groups: RobotsGroup[] = [];
   let current: RobotsGroup | undefined;
@@ -382,7 +423,7 @@ function parseRobots(text: string): RobotsGroup[] {
       lastWasAgent = true;
     } else if (field === "allow" || field === "disallow") {
       lastWasAgent = false;
-      if (current && value !== "") current.rules.push({ allow: field === "allow", pattern: value });
+      if (current && value !== "") current.rules.push({ allow: field === "allow", pattern: normaliseEscapes(value) });
     }
   }
   return groups;
@@ -409,8 +450,11 @@ function patternMatches(rawPattern: string, path: string): boolean {
  * Does the robots.txt text allow our UA to fetch `path` (path plus query)? The group naming our UA wins over `*`; the
  * longest matching rule wins; Allow beats Disallow on a tie; no matching rule means allowed.
  */
-export function isAllowedByRobots(robotsTxt: string, path: string): boolean {
+export function isAllowedByRobots(robotsTxt: string, rawPath: string): boolean {
+  if (rawPath.length > MAX_MATCH_URL_CHARS) return false; // fail closed
+  const path = normaliseEscapes(rawPath);
   const groups = parseRobots(robotsTxt);
+  if (groups.reduce((n, g) => n + g.rules.length, 0) > MAX_ROBOTS_RULES) return false; // fail closed
   const ours = groups.filter((g) => g.agents.includes(ROBOTS_TOKEN));
   const chosen = ours.length > 0 ? ours : groups.filter((g) => g.agents.includes("*"));
   let best: RobotsRule | undefined;
