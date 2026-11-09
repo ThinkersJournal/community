@@ -97,8 +97,8 @@ function parseStartTag(input: string, start: number): StartTag {
 }
 
 const NAMED_ENTITIES: Readonly<Record<string, string>> = {
-  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", ndash: "–", mdash: "—", hellip: "…",
-  lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", copy: "©", middot: "·",
+  amp: "&", lt: "<", gt: ">", quot: """, apos: "'", nbsp: " ", ndash: "–", mdash: "—",
+  hellip: "…", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", copy: "©", middot: "·",
 };
 
 function decodeEntities(text: string): string {
