@@ -7,6 +7,10 @@ All five workspace packages carry one version number. The log starts at 0.1.68; 
 
 M3.1a: the reference engine's pure foundation (no database, no migration, no UI). Contract types, `capSnapshot` and `contentHash` in `packages/shared`; the SSRF URL guard, the guarded fetch door (manual redirects, DNS-over-HTTPS check, 5 s timeout, 512 KB counted body cap, content-type and robots.txt checks) and the tolerant Open Graph extractor in `apps/api/src/references`; a source-scan test that no connector calls global `fetch`. Nothing calls them yet (M3.1b wires the web connector). The per-origin rate limit of spec section 5 rule 6 is deferred to M3.1b; this change does not include it. The version number is a placeholder, the PM allocates it.
 
+## 0.1.125
+
+M3.0: the connector contract spec (`docs/superpowers/specs/2026-11-09-m3-connector-contract.md`), Q1-Q5 recorded in the plan, ROADMAP R11 and S1 updated (launch set shrunk; unfurl images store the address only, with a seam for a stored copy). Docs only, no code. The version number is a placeholder, the PM allocates it.
+
 ## 0.1.124
 
 Two one-page runbooks for CireSnave: registering the GitHub App (M3.3) and the GitLab OAuth application (M3.6), with exact settings, read-only permissions and vault names. Docs only. The version number is a placeholder, the PM allocates it.
