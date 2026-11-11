@@ -12,7 +12,8 @@
  *
  * ⚠️ THE CANONICAL LINK IS UNTRUSTED. The resource key names the stored row that other posts REUSE (spec 4.1), so a
  * page that claimed another site's URL as its canonical would plant its own snapshot under that key. A canonical is
- * therefore accepted only when it is on the SAME ORIGIN as the page it came from (and never our own origin).
+ * therefore accepted only when it is the SAME PAGE: same origin, path and (tracking parameters aside) query, and
+ * never our own origin.
  */
 import {
   capSnapshot,
@@ -29,7 +30,7 @@ import {
 } from "@thinkersjournal/shared";
 
 import { DEFAULT_SELF_HOSTS } from "../guarded-fetch";
-import { parseOpenGraph } from "../og-parse";
+import { parseOpenGraph, type OgFields } from "../og-parse";
 import { OriginRateLimitedError } from "../origin-limit";
 
 import type { Connector } from "../connector";
@@ -65,8 +66,7 @@ function failure(page: FetchedPage): ConnectorError {
   return new ConnectorError("upstream", `page answered ${page.status}`, retryable);
 }
 
-function snapshotOf(page: FetchedPage, selfHosts: readonly string[]): WebSnapshot {
-  const og = parseOpenGraph(page.body, page.finalUrl, selfHosts);
+function snapshotOf(page: FetchedPage, og: OgFields): WebSnapshot {
   const snapshot: WebSnapshot = { kind: "web", title: og.title ?? hostOf(new URL(page.finalUrl)), finalUrl: page.finalUrl };
   if (og.description !== undefined) snapshot.description = og.description;
   if (og.siteName !== undefined) snapshot.siteName = og.siteName;
@@ -76,16 +76,40 @@ function snapshotOf(page: FetchedPage, selfHosts: readonly string[]): WebSnapsho
 }
 
 /**
- * The key the row is stored under: the canonical link if the page has one AND it is the same page (same origin and same
- * path; query and hash may differ), else the final URL. Same origin alone is not enough on a shared host: /~evil could
- * otherwise claim /~victim/post and plant its snapshot under that key.
+ * The key the row is stored under: the canonical link if the page has one AND it is the same page (same origin, same
+ * path and same query once tracking parameters are dropped; the hash may differ), else the final URL. Same origin alone
+ * is not enough on a shared host: /~evil could otherwise claim /~victim/post, and on a query-routed host /p?u=evil could
+ * claim /p?u=victim, and plant its snapshot under that key.
  */
-function keyOf(page: FetchedPage, selfHosts: readonly string[]): string {
+function keyOf(page: FetchedPage, og: OgFields, selfHosts: readonly string[]): string {
   const final = new URL(page.finalUrl);
-  const raw = parseOpenGraph(page.body, page.finalUrl, selfHosts).canonicalUrl;
+  const raw = og.canonicalUrl;
   const canonical = raw === undefined ? null : parseOrNull(raw);
-  const trusted = canonical !== null && isHttp(canonical) && canonical.origin === final.origin && samePath(canonical, final) && !selfHosts.includes(hostOf(canonical));
+  const trusted =
+    canonical !== null &&
+    isHttp(canonical) &&
+    canonical.origin === final.origin &&
+    samePath(canonical, final) &&
+    sameQuery(canonical, final) &&
+    !selfHosts.includes(hostOf(canonical));
   return KEY_PREFIX + normalise(trusted ? canonical : final);
+}
+
+/** Parameters that name a campaign or a click, not a page. Dropped before two queries are compared. */
+function isTrackingParam(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.startsWith("utm_") || n === "fbclid" || n === "gclid";
+}
+
+/** Same query once tracking parameters are dropped (order-insensitive, repeated names kept). */
+function sameQuery(a: URL, b: URL): boolean {
+  const shape = (u: URL): string =>
+    [...u.searchParams.entries()]
+      .filter(([k]) => !isTrackingParam(k))
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .sort()
+      .join("&");
+  return shape(a) === shape(b);
 }
 
 /** Same path, ignoring query, hash and one trailing slash (`/a/` and `/a` are the same page). */
@@ -126,7 +150,7 @@ function validators(page: FetchedPage): { etag?: string; lastModified?: string }
 }
 
 async function liveFrom(ref: StoredReference, page: FetchedPage, selfHosts: readonly string[]): Promise<LiveResult> {
-  const snapshot = snapshotOf(page, selfHosts);
+  const snapshot = snapshotOf(page, parseOpenGraph(page.body, page.finalUrl, selfHosts));
   const hash = await contentHash(snapshot);
   return { access: "ok", diff: hash === ref.contentHash ? "unchanged" : "changed", snapshot, contentHash: hash, ...validators(page) };
 }
@@ -145,8 +169,9 @@ export function createWebConnector(selfHosts: readonly string[] = DEFAULT_SELF_H
     async resolve(id: Identified, ctx: FetchCtx): Promise<Resolved> {
       const page = await ctx.fetch(id.canonicalUrl);
       if (page.status < 200 || page.status >= 300) throw failure(page);
-      const snapshot = snapshotOf(page, ownHosts);
-      return { resourceKey: keyOf(page, ownHosts), snapshot, contentHash: await contentHash(snapshot), ...validators(page) };
+      const og = parseOpenGraph(page.body, page.finalUrl, ownHosts);
+      const snapshot = snapshotOf(page, og);
+      return { resourceKey: keyOf(page, og, ownHosts), snapshot, contentHash: await contentHash(snapshot), ...validators(page) };
     },
 
     async fetchLive(ref: StoredReference, ctx: FetchCtx): Promise<LiveResult> {

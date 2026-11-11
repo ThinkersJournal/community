@@ -19,7 +19,8 @@
  *     binding in production, keyed on the author's id). Conservative: a person adds a handful of cards a minute at most,
  *     and each attach can cost an outbound fetch.
  *   - per post: `MAX_REFERENCES_PER_POST` (10).
- *   - per origin: see origin-limit.ts; it lives in the `ctx.fetch` the caller passes in.
+ *   - per origin: see origin-limit.ts; it lives in the `ctx.fetch` the caller passes in. NOT YET WIRED: nothing in
+ *     production wraps `ctx.fetch` with it until the wiring PR (M3.4), so only the per-user limit applies today.
  */
 import { ConnectorError, MAX_REFERENCES_PER_POST, type FetchCtx, type Resolved } from "@thinkersjournal/shared";
 
