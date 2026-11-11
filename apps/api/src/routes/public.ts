@@ -52,6 +52,7 @@ import { withClient } from "../db/client";
 import { isInvalidTextRepresentation } from "../db/errors";
 import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
+import { loadRefCards } from "../references/load-cards";
 // The write path's slug canonicalizer. Reused here so a read (`?slug=`) and a
 // write (which mints the slug the `tag:<slug>` purge emits) canonicalize
 // IDENTICALLY — see slugifyBase's own comment and handlePublicTag's header.
@@ -65,6 +66,7 @@ import type {
   RecentPost,
   TagPage,
 } from "@thinkersjournal/shared";
+import type { Client } from "pg";
 
 const PAGE_SIZE = 20;
 /** Bounded because sitemap/RSS consume this; real pagination is M2. */
@@ -109,6 +111,17 @@ function notFound(): Response {
   return errorResponse("NOT_FOUND", 404);
 }
 
+/**
+ * Add the post's reference cards (M3.1b), read from Postgres only. Skipped when the markdown has no `{{ref:` marker, so
+ * an ordinary post costs no extra query, and `refs` is absent (not empty) when there is nothing to show. A hidden or draft
+ * post never gets here: the query above already refused it, which is what hides its cards.
+ */
+async function withRefs(c: Client, post: PublicPost): Promise<PublicPost> {
+  if (!post.markdownSource.includes("{{ref:")) return post;
+  const cards = await loadRefCards(c, [post.id]);
+  return cards.size === 0 ? post : { ...post, refs: Object.fromEntries(cards) };
+}
+
 export async function handlePublicPost(
   request: Request,
   env: Env,
@@ -131,7 +144,8 @@ export async function handlePublicPost(
         WHERE pr.username = $1 AND p.slug = $2 AND p.status = 'published' AND p.hidden_at IS NULL`,
       [username, slug],
     );
-    return (rows[0] ?? null) as PublicPost | null;
+    const found = (rows[0] ?? null) as PublicPost | null;
+    return found === null ? null : withRefs(c, found);
   });
   // ⚠️ `status = 'published'` is IN the query, not a filter afterwards: a draft
   // must be indistinguishable from a nonexistent post to everyone, its author
