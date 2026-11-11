@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.129
+
+Docs only: HANDOFF refreshed after M3.1b; M3.2 (the refresh engine) is next. The version number is a placeholder, the PM allocates it.
+
 ## 0.1.128
 
 Test only, no behaviour change. Proves the query-mismatch tests added in 0.1.127 fail without the fix: CI read them red when `keyOf` ignored the query match (`references-web-connector.test.ts`, the two new tests), then green again after the revert. The version number is a placeholder, the PM allocates it.
