@@ -139,10 +139,27 @@ describe("web connector: resolve", () => {
   it("a same-path canonical still works when only the query, hash or trailing slash differ", async () => {
     const keyFor = async (href: string) =>
       (await webConnector.resolve(identified(URL_A), ctxOf(() => page({ body: HTML(`<title>t</title><link rel="canonical" href="${href}">`) })).ctx)).resourceKey;
-    expect(await keyFor("https://example.com/post/1?utm=x")).toBe("web:https://example.com/post/1?utm=x");
+    expect(await keyFor("https://example.com/post/1?utm_source=x&fbclid=y")).toBe("web:https://example.com/post/1?utm_source=x&fbclid=y");
     expect(await keyFor("https://example.com/post/1#frag")).toBe("web:https://example.com/post/1");
     expect(await keyFor("https://example.com/post/1/")).toBe("web:https://example.com/post/1/");
     expect(await keyFor("https://example.com/post/10")).toBe("web:https://example.com/post/1");
+  });
+
+  // Mutation that must fail: compare path only again (query-routed hosts: /p?u=evil claims /p?u=victim).
+  it("a same-path canonical with a DIFFERENT non-tracking query is ignored (query-routed hosts)", async () => {
+    const evil = "https://host.example.com/p?u=evil";
+    const { ctx } = ctxOf(() => page({ finalUrl: evil, body: HTML('<title>t</title><link rel="canonical" href="https://host.example.com/p?u=victim">') }));
+    const out = await webConnector.resolve(identified(evil), ctx);
+    expect(out.resourceKey).toBe(`web:${evil}`);
+  });
+
+  it("tracking parameters do not count toward the query match, other parameters do", async () => {
+    const final = "https://host.example.com/p?id=7&utm_medium=mail";
+    const keyFor = async (href: string) =>
+      (await webConnector.resolve(identified(final), ctxOf(() => page({ finalUrl: final, body: HTML(`<title>t</title><link rel="canonical" href="${href}">`) })).ctx)).resourceKey;
+    expect(await keyFor("https://host.example.com/p?id=7")).toBe("web:https://host.example.com/p?id=7");
+    expect(await keyFor("https://host.example.com/p?id=8")).toBe(`web:${final}`);
+    expect(await keyFor("https://host.example.com/p?id=7&gclid=z")).toBe("web:https://host.example.com/p?id=7&gclid=z");
   });
 
   it("a canonical pointing at our own origin is ignored (spec 5 rule 8)", async () => {
