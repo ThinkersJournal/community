@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.129
+
+Docs only: HANDOFF refreshed after M3.1b; M3.2 (the refresh engine) is next. The version number is a placeholder, the PM allocates it.
+
 ## 0.1.127
 
 M3.1b: the reference store and render. **NEW MIGRATION 0042** (`0042_references.sql`: the `"references"` and `post_references` tables, additive). `renderMarkdown(markdown, { refs })` renders `{{ref:TOKEN}}` as a card (pure `renderRefCard` in `packages/markdown`; an unknown token renders nothing; tokens in code stay literal; `PIPELINE_VERSION` is now v2 because a post with an unknown token renders differently); the `web` connector, the connector registry, `attachReference` (dedupe, 10 per post, per-user limit, never loses the post), `loadRefCards`, and `GET /public/posts` carrying `refs`; the post page passes them to the renderer with a CSP `img-src https:` allowance for card images on that page only; the `/bot` page. The per-origin fetch rate limit deferred from M3.1a is now implemented (`withOriginLimit`, injected limiter). Not wired yet: the `POST /posts/:id/references` route and the rate-limit bindings (M3.4, with the picker). The version number is a placeholder, the PM allocates it.
