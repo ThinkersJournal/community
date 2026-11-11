@@ -90,7 +90,7 @@ function keyOf(page: FetchedPage, og: OgFields, selfHosts: readonly string[]): s
     isHttp(canonical) &&
     canonical.origin === final.origin &&
     samePath(canonical, final) &&
-    (sameQuery(canonical, final) || true) && // MUTATION: query match ignored
+    sameQuery(canonical, final) &&
     !selfHosts.includes(hostOf(canonical));
   return KEY_PREFIX + normalise(trusted ? canonical : final);
 }
