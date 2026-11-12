@@ -167,6 +167,10 @@ and only then for both Workers.
 
 `0042_references.sql` adds the `"references"` and `post_references` tables (M3.1b). It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above. The new code reads `post_references` only for a post whose markdown contains a `{{ref:` marker, and nothing writes a marker until the picker ships (M3.4), so skew affects no post today; apply it before the deploy anyway. No grants are needed (default privileges give the runtime role DML on new tables). **Rollback** is the file's `-- Down Migration` (it drops both tables and every stored snapshot).
 
+## Reference refresh counter: `0043` must be applied BEFORE the deploy
+
+`0043_references_refresh_failures.sql` adds `"references".refresh_failures integer NOT NULL DEFAULT 0` (M3.2c). It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above. Nothing reads or writes the column until the refresh runner ships (M3.2c-2), so skew affects nothing; apply it before the deploy anyway. **Rollback** is the file's `-- Down Migration` (it drops the column and the retry counts with it).
+
 ## Terms acceptance record: `0039` must be applied BEFORE the deploy
 
 `0039_terms_acceptances.sql` adds the `terms_acceptances` table (one row per account and Terms version). It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above. The new signup writes a row inside its transaction, so deploying the code against a database without `0039` fails every signup. **Rollback** is the file's `-- Down Migration`.
