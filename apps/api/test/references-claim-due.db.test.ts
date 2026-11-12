@@ -93,6 +93,29 @@ describe("claimDueRefreshes", () => {
     expect(new Set([...a, ...b])).toEqual(new Set(ids));
   });
 
+  it("skips rows another transaction holds locked, without waiting for it (mutation: drop FOR UPDATE SKIP LOCKED)", async () => {
+    // Deterministic overlap, not a race: a third connection locks 3 due rows and keeps its transaction open while a sweep runs.
+    const ids: string[] = [];
+    for (let i = 0; i < 6; i++) ids.push(await seed({ next: minutes(-200 + i) }));
+    const holder = new Client({ connectionString: TEST_DATABASE_URL });
+    await holder.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(`SELECT id FROM "references" WHERE id = ANY($1::uuid[]) FOR UPDATE`, [ids.slice(0, 3)]);
+      // Without SKIP LOCKED this statement waits for the holder; the race makes it fail in 5 s instead of hanging the file.
+      const claimed = await Promise.race([
+        claimDueRefreshes(second, NOW, 10),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the sweep waited on a locked row")), 5000)),
+      ]);
+      expect(new Set(claimed)).toEqual(new Set(ids.slice(3)));
+    } finally {
+      await holder.query("ROLLBACK");
+      await holder.end();
+    }
+    // The locked rows were left alone, so the next sweep (after the holder let go) still finds them due.
+    expect(new Set(await claimDueRefreshes(client, NOW, 10))).toEqual(new Set(ids.slice(0, 3)));
+  });
+
   it("has a sane default batch size", () => {
     expect(SWEEP_BATCH).toBeGreaterThan(0);
     expect(SWEEP_BATCH).toBeLessThanOrEqual(500);
