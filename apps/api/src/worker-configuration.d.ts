@@ -82,6 +82,7 @@ interface __BaseEnv_Env {
 	// 131 picks a transport, so they are optional.
 	SECURITY_COUNTER: DurableObjectNamespace<import("./index").SecurityCounterDO>;
 	SECURITY_LEDGER: DurableObjectNamespace<import("./index").SecurityLedgerDO>;
+	AUTHOR_BUDGET: DurableObjectNamespace<import("./index").AuthorBudgetDO>;
 	SECURITY_COUNTING: string;
 	SECURITY_ALERTS_ENABLED: string;
 	ACCOUNT_NOTICES_ENABLED: string;
@@ -109,7 +110,7 @@ interface __BaseEnv_Env {
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./index");
-		durableNamespaces: "UserSecurityDO" | "NotifyDO" | "PostLiveDO" | "SecurityCounterDO" | "SecurityLedgerDO";
+		durableNamespaces: "UserSecurityDO" | "NotifyDO" | "PostLiveDO" | "SecurityCounterDO" | "SecurityLedgerDO" | "AuthorBudgetDO";
 	}
 	interface Env extends __BaseEnv_Env {}
 }
