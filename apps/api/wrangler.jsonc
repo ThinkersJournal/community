@@ -350,7 +350,10 @@
     // The "updated Terms" notice (ROADMAP R12; GET /account/terms). "1" = on; ANYTHING else, including a
     // missing var, is off, and off means needsAcceptance is always false so no member is shown the notice.
     // Keep it "0" until the Terms text has a page to link to (R1, /terms) and launch is open.
-    "TERMS_NOTICE": "0"
+    "TERMS_NOTICE": "0",
+    // The GitHub App's ID (M3.3; docs/runbooks/register-github-app.md section 4). PUBLIC (it is on the app's page and in
+    // its install URLs), so a plain var, not a secret. The private key is the only secret (Worker secret GITHUB_APP_PRIVATE_KEY).
+    "GITHUB_APP_ID": "5732881"
   },
   // Build-identity (2026-09-24) — GET /health/build reads this. Cloudflare's
   // OWN version registry populates `id`/`tag`/`timestamp` on every deploy
