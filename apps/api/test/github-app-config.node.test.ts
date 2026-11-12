@@ -23,7 +23,11 @@ describe("GitHub App config: wrangler.jsonc", () => {
     expect(api.vars?.GITHUB_APP_ID).toMatch(/^\d+$/);
   });
 
-  it("never carries the private key (a secret belongs in `wrangler secret put`)", () => {
-    expect(raw).not.toMatch(/GITHUB_APP_PRIVATE_KEY|BEGIN [A-Z ]*PRIVATE KEY/);
+  it("carries the GitLab Application ID as the plain var GITLAB_CLIENT_ID (CireSnave, 2026-11-12), 64 hex digits", () => {
+    expect(api.vars?.GITLAB_CLIENT_ID).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("never carries a private key or a client secret (secrets belong in `wrangler secret put`)", () => {
+    expect(raw).not.toMatch(/GITHUB_APP_PRIVATE_KEY|GITLAB_CLIENT_SECRET|BEGIN [A-Z ]*PRIVATE KEY/);
   });
 });
