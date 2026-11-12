@@ -38,19 +38,22 @@ No Account permissions. No Organization permissions. **Subscribe to events:** no
 4. Left menu → **Install App** → install it on your own account, choosing **Only select repositories** and picking one repo (any).
    The app mints its tokens through this installation. Our public-only reads need no access to other people's repos.
 
-## 4. Where the secrets go (never in a repo, a PR, chat or an issue)
-Vault names follow the portfolio convention (`<SERVICE>_<PROJECT>_<PURPOSE>`); `--env` hands the tool its variable name:
+## 4. Where things go
+**Only the private key is a secret.** The App ID is public (it is on the app's page and in its install URLs), and `with-secret`
+refuses values under 12 characters anyway, so it does NOT go in the vault. Never put the key in a repo, a PR, chat or an issue.
 
-| Vault NAME | Holds | `--env` | Worker secret (`wrangler secret put … --name thinkersjournal-api`) |
-|---|---|---|---|
-| `GITHUB_TJCOMMUNITY_APP_ID` | the App ID | `GITHUB_APP_ID` | `GITHUB_APP_ID` |
-| `GITHUB_TJCOMMUNITY_APP_PRIVATE_KEY` | the whole `.pem` text | `GITHUB_APP_PRIVATE_KEY` | `GITHUB_APP_PRIVATE_KEY` |
+| What | Where | Name |
+|---|---|---|
+| the whole `.pem` text | the vault, then a Worker secret | vault `GITHUB_TJCOMMUNITY_APP_PRIVATE_KEY`, `--env GITHUB_APP_PRIVATE_KEY`; Worker secret `GITHUB_APP_PRIVATE_KEY` (`wrangler secret put GITHUB_APP_PRIVATE_KEY --name thinkersjournal-api`) |
+| the App ID | a plain Worker var, committed in `apps/api/wrangler.jsonc` `vars` | `GITHUB_APP_ID` |
 
-Store both with `with-secret vault set NAME --env VAR --access read` and a `--rotate-by` date, then delete the downloaded `.pem`.
-The PM sets the Worker secrets when M3.3 reaches deploy.
+Store the key with `with-secret vault set GITHUB_TJCOMMUNITY_APP_PRIVATE_KEY --env GITHUB_APP_PRIVATE_KEY --access read` and a
+`--rotate-by` date, then delete the downloaded `.pem`. The PM sets the Worker secret when M3.3 reaches deploy. The App ID goes
+in the M3.3 PR that adds the `vars` entry (the PM tells the lane the number in chat; it is not sensitive). A var in the file
+cannot drift, and a dashboard edit would be reset by the next deploy, so change it in the file.
 
 ## 5. Tell the PM
-"GitHub App registered." Nothing else; never the App ID or key.
+"GitHub App registered." The App ID may follow in the same chat message (it is public); never the key.
 
 ## Notes for the lane (not for CireSnave)
 - Assumption to confirm in M3.3's first build: an installation token reads public repositories outside the installation. If it
