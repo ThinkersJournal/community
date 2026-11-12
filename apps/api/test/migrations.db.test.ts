@@ -249,6 +249,8 @@ describe("0001 users + profiles migration", () => {
       // 0042_references.sql — the reference store (M3.1b).
       expect(await tableExists(client, "references")).toBe(true);
       expect(await tableExists(client, "post_references")).toBe(true);
+      // 0043_references_refresh_failures.sql - the refresh backoff counter (M3.2c).
+      expect(await columnExists(client, "references", "refresh_failures")).toBe(true);
     });
 
     await migrate("down");
@@ -288,6 +290,8 @@ describe("0001 users + profiles migration", () => {
       // 0042 — both tables are gone.
       expect(await tableExists(client, "references")).toBe(false);
       expect(await tableExists(client, "post_references")).toBe(false);
+      // 0043 - went with the references table (a full down drops it).
+      expect(await columnExists(client, "references", "refresh_failures")).toBe(false);
     });
 
     // THE ISOLATION PROPERTY, pinned. The stack is torn down above — in OUR
@@ -361,6 +365,8 @@ describe("0001 users + profiles migration", () => {
       // 0042 — re-applied by the round-trip.
       expect(await tableExists(client, "references")).toBe(true);
       expect(await tableExists(client, "post_references")).toBe(true);
+      // 0043 — re-applied by the round-trip.
+      expect(await columnExists(client, "references", "refresh_failures")).toBe(true);
     });
     // Intentionally left in the migrated (up) state.
   });
