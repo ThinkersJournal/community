@@ -33,7 +33,7 @@ export async function claimDueRefreshes(db: Client, now: Date, limit: number = S
          WHERE next_check_at <= $1 AND gone_at IS NULL
          ORDER BY next_check_at, id
          LIMIT $3
-         FOR UPDATE SKIP LOCKED)
+        )
       RETURNING id`,
     [now, new Date(now.getTime() + LEASE_MS), limit],
   );
