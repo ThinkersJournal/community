@@ -105,14 +105,18 @@
       // reachable from a route. apps/web binds SECURITY_COUNTER cross-script, so
       // this Worker must deploy the classes BEFORE web deploys the binding.
       { "name": "SECURITY_COUNTER", "class_name": "SecurityCounterDO" },
-      { "name": "SECURITY_LEDGER", "class_name": "SecurityLedgerDO" }
+      { "name": "SECURITY_LEDGER", "class_name": "SecurityLedgerDO" },
+      // AUTHOR_BUDGET — M3.2b per-author reference-refresh budget (a token bucket, one instance
+      // per author id). Not reachable from a route; the refresh runner (M3.2c) is its only caller.
+      { "name": "AUTHOR_BUDGET", "class_name": "AuthorBudgetDO" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["UserSecurityDO"] },
     { "tag": "v2", "new_sqlite_classes": ["NotifyDO"] },
     { "tag": "v3", "new_sqlite_classes": ["PostLiveDO"] },
-    { "tag": "v4", "new_sqlite_classes": ["SecurityCounterDO", "SecurityLedgerDO"] }
+    { "tag": "v4", "new_sqlite_classes": ["SecurityCounterDO", "SecurityLedgerDO"] },
+    { "tag": "v5", "new_sqlite_classes": ["AuthorBudgetDO"] }
   ],
   // ⚠️ THE PURGE HOP — api CANNOT purge web's cache.
   // Workers Cache purge is scoped to the Worker+entrypoint that OWNS the cache:

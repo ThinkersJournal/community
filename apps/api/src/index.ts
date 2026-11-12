@@ -25,6 +25,7 @@ export { NotifyDO } from "./durable-objects/NotifyDO";
 export { PostLiveDO } from "./durable-objects/PostLiveDO";
 export { SecurityCounterDO } from "./durable-objects/SecurityCounterDO";
 export { SecurityLedgerDO } from "./durable-objects/SecurityLedgerDO";
+export { AuthorBudgetDO } from "./durable-objects/AuthorBudgetDO";
 
 /**
  * ⚠️ THIS FILE ONLY DISPATCHES. Do not add an `if` here: every route belongs in

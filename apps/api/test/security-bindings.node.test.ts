@@ -40,8 +40,12 @@ describe("api wrangler.jsonc", () => {
 
   it("adds migration v4 AFTER v3, creating exactly the two classes", () => {
     const tags = api.migrations?.map((m) => m.tag);
-    expect(tags?.slice(-2)).toEqual(["v3", "v4"]);
-    expect(api.migrations?.at(-1)?.new_sqlite_classes).toEqual(["SecurityCounterDO", "SecurityLedgerDO"]);
+    expect(tags?.slice(-3, -1)).toEqual(["v3", "v4"]);
+    expect(api.migrations?.find((m) => m.tag === "v4")?.new_sqlite_classes).toEqual(["SecurityCounterDO", "SecurityLedgerDO"]);
+  });
+
+  it("adds migration v5 AFTER v4 for the M3.2b author-budget class only (and it is the latest)", () => {
+    expect(api.migrations?.at(-1)).toEqual({ tag: "v5", new_sqlite_classes: ["AuthorBudgetDO"] });
   });
 
   it("ships every flag off but counting and the login challenge (spec §6 phase 1 + S10), and never TEST_ROUTES", () => {
