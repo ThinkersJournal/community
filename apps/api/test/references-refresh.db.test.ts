@@ -37,11 +37,11 @@ async function newAuthor(): Promise<Author> {
   await client.query("INSERT INTO profiles (user_id, username) VALUES ($1, $2)", [uid, `r${uid.replace(/-/g, "").slice(0, 20)}`]);
   return { userId: uid };
 }
-async function newPost(author: Author): Promise<string> {
+async function newPost(author: Author, status: "published" | "draft" = "published"): Promise<string> {
   const { rows } = await client.query<{ id: string }>(
     `INSERT INTO posts (author_id, slug, title, markdown_source, status, published_at)
-     VALUES ($1, $2, 'A title', 'body', 'published', now()) RETURNING id`,
-    [author.userId, `s-${randomUUID()}`],
+     VALUES ($1, $2, 'A title', 'body', $3, CASE WHEN $3 = 'published' THEN now() END) RETURNING id`,
+    [author.userId, `s-${randomUUID()}`, status],
   );
   return rows[0]!.id;
 }
@@ -193,6 +193,15 @@ describe("refreshReference: who pays (the author of the NEWEST use)", () => {
     const b = fakeBudget();
     await run(id, fakeConnector("web", { access: "ok", diff: "unchanged" }), b);
     expect(b.charged).toEqual([newA.userId]);
+  });
+
+  it("a use on a DRAFT post still pays: the payer is status-blind by decision (mutation: add a published-only filter)", async () => {
+    const a = await newAuthor();
+    const id = await newReference();
+    await useRef(await newPost(a, "draft"), id, NOW);
+    const b = fakeBudget();
+    expect(await run(id, fakeConnector("web", { access: "ok", diff: "unchanged" }), b)).toBe("refreshed");
+    expect(b.charged).toEqual([a.userId]);
   });
 
   it("breaks a timestamp tie by the LOWEST post id (mutation: DESC, or no tie-break)", async () => {

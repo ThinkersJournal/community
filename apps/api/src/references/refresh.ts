@@ -10,7 +10,10 @@
  *
  * WHO PAYS. The per-author budget is charged to the author of the NEWEST use of the reference (latest
  * `post_references.created_at`; a tie goes to the lowest post id, so the answer is stable). A removed use drops out of
- * the query by itself, so the next newest author pays. A reference with no uses at all is an orphan: nobody can be
+ * the query by itself, so the next newest author pays. The payer is STATUS-BLIND on purpose (decided with the PM,
+ * 2026-11-12): a draft's use still pays, because it is the author's own budget and a draft cannot spend anyone else's.
+ * Making it published-only would be a deliberate change (the test "a use on a DRAFT post still pays" pins it).
+ * A reference with no uses at all is an orphan: nobody can be
  * charged and nothing needs it, so it goes dormant (`next_check_at` NULL) for the garbage-collection sweep (2d).
  */
 import { ConnectorError, type FetchCtx, type LiveResult, type SourceKind, type StoredReference } from "@thinkersjournal/shared";
