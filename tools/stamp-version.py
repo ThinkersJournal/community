@@ -153,7 +153,8 @@ def stamp_manifest(t, old, new, ws_old):
 
 def manifest_changes(root, old, new):
     out, names = [], []
-    ws_old = workspace_version(read(os.path.join(root, "Cargo.toml"))[0]) == old
+    root_cargo = os.path.join(root, "Cargo.toml")
+    ws_old = os.path.exists(root_cargo) and workspace_version(read(root_cargo)[0]) == old
     for rel in tracked(root, "*Cargo.toml"):
         p = os.path.join(root, rel)
         t, crlf = read(p)
@@ -330,7 +331,10 @@ def pick_kind(kinds):
 
 def newest_entry(root):
     p = os.path.join(root, "CHANGELOG.md")
-    t, crlf = read(p)
+    if os.path.exists(p):
+        t, crlf = read(p)
+    else:  # a repo with no changelog yet: start one with a baseline heading the stamp can insert above
+        t, crlf = "# Changelog\n\n## [0.0.0] - baseline created by the stamp kit\n\nNo earlier entries were written.\n", False
     m = re.search(r"(?m)^## (\[?)`?\d+\.\d+\.\d+", t)
     return (p, t, crlf, m) if m else die("CHANGELOG.md has no version heading to put the entry above")
 
