@@ -13,12 +13,16 @@ Compares HEAD with the merge base of <base-ref>. A PR must do exactly one of:
 Doing both, adding two fragments, or doing neither fails, with the reason. Standard library only.
 """
 import re
-import subprocess
+import shutil
+import subprocess  # nosec B404 - runs `git` with fixed arguments in a developer or CI checkout
 import sys
 
 
 def git(*args):
-    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
+    exe = shutil.which("git")
+    if not exe:
+        raise SystemExit("check-fragment: git is not on PATH")
+    return subprocess.run([exe, *args], check=True, capture_output=True, text=True).stdout  # nosec B603 - fixed arguments
 
 
 def version_lines(diff):
@@ -27,9 +31,13 @@ def version_lines(diff):
         if re.match(r'^[+-]\s*version\s*=\s*"\d+\.\d+\.\d+[^"]*"', l)
         and not re.search(r"path\s*=|git\s*=|registry\s*=", l)
     ]
-    # a package.json's own `"version": "X.Y.Z"` (an npm package versioned with the project; its dependencies are `"name": "^1.2.3"`)
+    # a package.json's own `"version": "X.Y.Z"` (its dependencies are `"name": "^1.2.3"`)
     npm = [l for l in diff.splitlines() if re.match(r'^[+-]\s*"version"\s*:\s*"\d+\.\d+\.\d+[^"]*"', l)]
     return toml + npm
+
+
+def is_manifest(path):
+    return path.endswith(("Cargo.toml", "package.json")) and not path.endswith("-package.json")
 
 
 def judge(added_fragments, version_changed):
@@ -49,7 +57,7 @@ def main():
     base = git("merge-base", sys.argv[1], "HEAD").strip()
     names = git("diff", "--name-status", "--diff-filter=A", base, "HEAD").splitlines()
     added = [n.split("\t", 1)[1] for n in names if re.match(r"^A\tchangelog\.d/(?!README\.md$)[^/]+\.md$", n)]
-    manifests = [p for p in git("diff", "--name-only", base, "HEAD").splitlines() if p.endswith(("Cargo.toml", "package.json")) and not p.endswith("-package.json")]
+    manifests = [p for p in git("diff", "--name-only", base, "HEAD").splitlines() if is_manifest(p)]
     changed = any(version_lines(git("diff", "-U0", base, "HEAD", "--", p)) for p in manifests)
     why = judge(added, changed)
     if why:

@@ -13,10 +13,10 @@ Write one fragment per change instead, `changelog.d/<topic>.md`:
 - The PM allocates the number and the gate runs `python tools/stamp-version.py <version>` (add `--dry-run` to preview):
   it sets every crate version that equals the project's current one, the matching `Cargo.lock` entries, writes one entry
   above the newest CHANGELOG entry from all fragments, and deletes them.
-- A repo that also versions npm packages (Humboldt) gets them stamped too: every `package.json` at the project's version, and the
-  `package-lock.json` beside it. A PR must not edit those versions either (`check-fragment` counts a `package.json` version edit as
-  a manual bump). With the crate outside the root, `tools/stamp-current.txt` holds its manifest path (`backend/Cargo.toml`).
 - Exactly one fragment per PR. Two PRs never touch the same line, so stacked and parallel PRs stop conflicting on version
   lines.
 - Pins written as `=X.Y.Z` in other files (README install lines): list the file in `tools/stamp-extra.txt`, one path per line.
+- The fragment body is copied **verbatim** into `CHANGELOG.md`, so every path or link in it must be a full repo-relative
+  path (`crates/foo/tests/bar.rs`), never a bare file name: a doc-path check (mlmf's `core-gates`) resolves them from the
+  repository root and fails on `bar.rs` (2026-11-12, mlmf#235).
 - Thinker's Journal Community has no Cargo: `tools/stamp-current.txt` names `package.json`, and the five version lines (`package.json`, `apps/api`, `apps/web`, `packages/markdown`, `packages/shared`) are stamped together. pnpm's lockfile does not record them.
