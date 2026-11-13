@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.140 — GitHub App ID and GitLab Application ID are public config, not vault secrets
+
+Both IDs are public identifiers, and the vault refuses values under 12 characters. `apps/api/wrangler.jsonc` `vars` now carries `GITHUB_APP_ID` and `GITLAB_CLIENT_ID`; only the GitHub private key and the GitLab client secret are secrets (Worker secrets, set by the PM at deploy). `docs/runbooks/register-github-app.md` and `docs/runbooks/register-gitlab-oauth-app.md` are corrected to match. Pinned in `apps/api/test/github-app-config.node.test.ts` (red-first on CI), which also fails if a key or secret name enters the file. No code reads the vars yet; the M3.3 PR that does adds the named-error-on-missing-id test.
+
 ## 0.1.139 — deploy runbook waiting-migrations table, pinned
 
 The "Migrations waiting" table in `docs/runbooks/deploy.md` said "(none), applied through 0040" while production lacked 0041 to 0043, because the PRs for 0042 and 0043 added prose sections but no rows. The table now reads applied through 0043 (2026-11-12), and `apps/api/test/deploy-runbook.node.test.ts` fails when a migration newer than the marker has no row. Verified red-first (2 of 3 tests failed on CI before the table was fixed).

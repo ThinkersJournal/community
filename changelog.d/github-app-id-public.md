@@ -1,3 +1,0 @@
-kind: GitHub App ID and GitLab Application ID are public config, not vault secrets
----
-Both IDs are public identifiers, and the vault refuses values under 12 characters. `apps/api/wrangler.jsonc` `vars` now carries `GITHUB_APP_ID` and `GITLAB_CLIENT_ID`; only the GitHub private key and the GitLab client secret are secrets (Worker secrets, set by the PM at deploy). `docs/runbooks/register-github-app.md` and `docs/runbooks/register-gitlab-oauth-app.md` are corrected to match. Pinned in `apps/api/test/github-app-config.node.test.ts` (red-first on CI), which also fails if a key or secret name enters the file. No code reads the vars yet; the M3.3 PR that does adds the named-error-on-missing-id test.
