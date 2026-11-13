@@ -13,7 +13,7 @@ One list, so they can be applied in one go. Add a row in the PR that adds a migr
 
 | Migration | PR | What it adds | Without it |
 |---|---|---|---|
-| (none) | | Applied through `0040_dmca.sql` on 2026-10-25 (PM, with CireSnave's approval); `0039` and `0040` must stay byte-identical to what was applied | |
+| (none) | | Applied through `0043_references_refresh_failures.sql` on 2026-11-12 (PM, with CireSnave's approval; `0041` was already in, `0042` and `0043` went in together); applied files must stay byte-identical. `apps/api/test/deploy-runbook.node.test.ts` fails when a migration newer than this marker has no row here, so the PR that adds a migration adds its row | |
 
 ## How a deploy works now
 
