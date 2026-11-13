@@ -350,7 +350,13 @@
     // The "updated Terms" notice (ROADMAP R12; GET /account/terms). "1" = on; ANYTHING else, including a
     // missing var, is off, and off means needsAcceptance is always false so no member is shown the notice.
     // Keep it "0" until the Terms text has a page to link to (R1, /terms) and launch is open.
-    "TERMS_NOTICE": "0"
+    "TERMS_NOTICE": "0",
+    // The GitHub App's ID (M3.3; docs/runbooks/register-github-app.md section 4). PUBLIC (it is on the app's page and in
+    // its install URLs), so a plain var, not a secret. The app's private key is the only secret and lives as a Worker secret.
+    "GITHUB_APP_ID": "5732881",
+    // The GitLab OAuth Application ID (M3.6; docs/runbooks/register-gitlab-oauth-app.md). PUBLIC (it is in every authorize URL),
+    // so a plain var. The client secret is the only secret and lives as a Worker secret.
+    "GITLAB_CLIENT_ID": "f0af17837ab96137697c1ff51fbc56a3554c8808b9029865455a106182e1dc25"
   },
   // Build-identity (2026-09-24) — GET /health/build reads this. Cloudflare's
   // OWN version registry populates `id`/`tag`/`timestamp` on every deploy

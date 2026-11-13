@@ -21,18 +21,22 @@
 The Redirect URI is the path M3.6 will serve. It is only a reservation; GitLab lets you edit it later, so if the lane picks a
 different path the PM will ask you for a one-field edit.
 
-## 2. Where the secrets go (never in a repo, a PR, chat or an issue)
+## 2. Where things go
+**Only the client Secret is a secret.** The Application ID is public (it is in every authorize URL), and `with-secret` refuses
+values under 12 characters anyway, so the ID does NOT go in the vault. Never put the Secret in a repo, a PR, chat or an issue.
 GitLab shows the **Application ID** and the **Secret** once on the saved page; copy both now.
 
-| Vault NAME | Holds | `--env` | Worker secret (`wrangler secret put … --name thinkersjournal-api`) |
-|---|---|---|---|
-| `GITLAB_TJCOMMUNITY_CLIENT_ID` | Application ID | `GITLAB_CLIENT_ID` | `GITLAB_CLIENT_ID` |
-| `GITLAB_TJCOMMUNITY_CLIENT_SECRET` | Secret | `GITLAB_CLIENT_SECRET` | `GITLAB_CLIENT_SECRET` |
+| What | Where | Name |
+|---|---|---|
+| the Secret | the vault, then a Worker secret | vault `GITLAB_TJCOMMUNITY_CLIENT_SECRET`, `--env GITLAB_CLIENT_SECRET`; Worker secret `GITLAB_CLIENT_SECRET` (`wrangler secret put GITLAB_CLIENT_SECRET --name thinkersjournal-api`) |
+| the Application ID | a plain Worker var, committed in `apps/api/wrangler.jsonc` `vars` | `GITLAB_CLIENT_ID` |
 
-Store with `with-secret vault set NAME --env VAR --access read` and a `--rotate-by` date. The PM sets the Worker secrets at deploy.
+Store the Secret with `with-secret vault set GITLAB_TJCOMMUNITY_CLIENT_SECRET --env GITLAB_CLIENT_SECRET --access read` and a
+`--rotate-by` date. The PM sets the Worker secret at deploy. The Application ID goes in the M3.6 PR that adds the `vars` entry
+(CireSnave tells the PM the number in chat; it is not sensitive).
 
 ## 3. Tell the PM
-"GitLab app registered." Nothing else; never the ID or secret.
+"GitLab app registered." The Application ID may follow in the same chat message (it is public); never the Secret.
 
 ## Notes for the lane (not for CireSnave)
 - `read_api` is the narrowest scope that reads issues, merge requests, files and pipelines; GitLab has no read-only-public-only
