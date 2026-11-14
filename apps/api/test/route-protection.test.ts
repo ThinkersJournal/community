@@ -180,6 +180,7 @@ const EXPECTED_DISPATCHER_BODY =
   'import { purgeExpiredNoticeRecords } from "./moderation/notice-records"; ' +
   'import { drainNoticeOutbox, purgeExpiredNoticeOutbox } from "./moderation/notice-outbox"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
+  'import { handleRefreshQueue, sweepDueReferences } from "./references/refresh-wiring"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
   // Security alerting (spec §2.2 item 3): the cron's one ledger call, and the
@@ -240,9 +241,15 @@ const EXPECTED_DISPATCHER_BODY =
   "ctx.waitUntil(ensureLedgerAlarm(env)); " +
   // Notice outbox PR 1: the drain rides the two-minute tick.
   "ctx.waitUntil(drainNoticeOutbox(env, ctx)); " +
+  // Reference refresh sweep (M3.2c-3c), dark unless REFERENCE_REFRESH is "1".
+  "ctx.waitUntil(sweepDueReferences(env, ctx)); " +
   "} " +
   'const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant"; ' +
   "ctx.waitUntil(runEmailDrain(env, ctx, disposition)); " +
+  "}, " +
+  // Reference-refresh Queue consumer (M3.2c-3c).
+  "async queue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext): Promise<void> { " +
+  "await handleRefreshQueue(batch, env, ctx); " +
   "}, } satisfies ExportedHandler<Env>;";
 
 describe("route inventory", () => {

@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.142 — M3.2c-3c reference-refresh wiring: queue, consumer, cron sweep (sweep OFF)
+
+Wires the refresh engine into the Worker: the `reference-refresh` queue producer (`REFRESH_QUEUE`) and consumer in `apps/api/wrangler.jsonc`, a `queue()` handler, and the cron sweep on the two-minute tick, which claims due references and sends one message each. The sweep ships OFF (`REFERENCE_REFRESH` = "0"); the consumer is inert without messages. DEPLOY-GATED: the queue must exist before this deploys. Glue in `apps/api/src/references/refresh-wiring.ts`; red-first in `apps/api/test/references-wiring.test.ts` and `apps/api/test/references-wiring-config.node.test.ts`.
+
 ## 0.1.141 — HANDOFF rewritten for the post-M3.2c-3b state
 
 Rewrites `HANDOFF.md` to the current state only: M3.2 merged through 2c-3b, the fragment and stamp flow, production migration state, the 2c-3c wiring plan, and the open waits. No code change.

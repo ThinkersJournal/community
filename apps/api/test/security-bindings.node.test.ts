@@ -57,6 +57,7 @@ describe("api wrangler.jsonc", () => {
       ACCOUNT_NOTICES_ENABLED: "0",
       LOGIN_CHALLENGE: "1",
       TERMS_NOTICE: "0", // R12 updated-Terms notice, dark until /terms exists (R1)
+      REFERENCE_REFRESH: "0", // M3.2c-3c refresh sweep switch, dark until the queue exists
       GITHUB_APP_ID: "5732881", // public id; pinned in github-app-config.node.test.ts
       GITLAB_CLIENT_ID: "f0af17837ab96137697c1ff51fbc56a3554c8808b9029865455a106182e1dc25", // public id; pinned in github-app-config.node.test.ts
     });
