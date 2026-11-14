@@ -1,0 +1,3 @@
+kind: M3.2c-3c reference-refresh wiring: queue, consumer, cron sweep (sweep OFF)
+---
+Wires the refresh engine into the Worker: the `reference-refresh` queue producer (`REFRESH_QUEUE`) and consumer in `apps/api/wrangler.jsonc`, a `queue()` handler, and the cron sweep on the two-minute tick, which claims due references and sends one message each. The sweep ships OFF (`REFERENCE_REFRESH` = "0"); the consumer is inert without messages. DEPLOY-GATED: the queue must exist before this deploys. Glue in `apps/api/src/references/refresh-wiring.ts`; red-first in `apps/api/test/references-wiring.test.ts` and `apps/api/test/references-wiring-config.node.test.ts`.
