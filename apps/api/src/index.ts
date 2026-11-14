@@ -14,6 +14,7 @@ import { eraseClosedDmcaCases } from "./moderation/dmca-retention";
 import { purgeExpiredNoticeRecords } from "./moderation/notice-records";
 import { drainNoticeOutbox, purgeExpiredNoticeOutbox } from "./moderation/notice-outbox";
 import { runEmailDrain } from "./notifications/email-drain";
+import { handleRefreshQueue, sweepDueReferences } from "./references/refresh-wiring";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
 import { sweepForgottenAccounts } from "./security/forget-sweep";
@@ -121,8 +122,14 @@ export default {
       /* Notice outbox — sends the moderation notices queued in the decisions'
          own transactions (src/moderation/notice-outbox.ts). Never throws. */
       ctx.waitUntil(drainNoticeOutbox(env, ctx));
+      /* Reference refresh sweep (M3.2c-3c; dark unless REFERENCE_REFRESH is "1"). Never throws. */
+      ctx.waitUntil(sweepDueReferences(env, ctx));
     }
     const disposition = controller.cron === "0 14 * * *" ? "digest" : "instant";
     ctx.waitUntil(runEmailDrain(env, ctx, disposition));
+  },
+  /* Reference-refresh Queue consumer (M3.2c-3c): src/references/refresh-wiring.ts. */
+  async queue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext): Promise<void> {
+    await handleRefreshQueue(batch, env, ctx);
   },
 } satisfies ExportedHandler<Env>;

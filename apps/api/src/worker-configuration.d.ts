@@ -83,6 +83,8 @@ interface __BaseEnv_Env {
 	SECURITY_COUNTER: DurableObjectNamespace<import("./index").SecurityCounterDO>;
 	SECURITY_LEDGER: DurableObjectNamespace<import("./index").SecurityLedgerDO>;
 	AUTHOR_BUDGET: DurableObjectNamespace<import("./index").AuthorBudgetDO>;
+	REFRESH_QUEUE: Queue;
+	REFERENCE_REFRESH: string;
 	SECURITY_COUNTING: string;
 	SECURITY_ALERTS_ENABLED: string;
 	ACCOUNT_NOTICES_ENABLED: string;

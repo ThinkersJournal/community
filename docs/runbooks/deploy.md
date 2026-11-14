@@ -171,6 +171,11 @@ and only then for both Workers.
 
 `0043_references_refresh_failures.sql` adds `"references".refresh_failures integer NOT NULL DEFAULT 0` (M3.2c). It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above. Nothing reads or writes the column until the refresh runner ships (M3.2c-2), so skew affects nothing; apply it before the deploy anyway. **Rollback** is the file's `-- Down Migration` (it drops the column and the retry counts with it).
 
+## Reference refresh queue: create it BEFORE the deploy, then flip the flag
+M3.2c-3c adds a Queue producer (`REFRESH_QUEUE`) and consumer for the queue `reference-refresh` to `apps/api/wrangler.jsonc`. **A Worker that names a queue that does not exist fails its deploy**, so the PM creates it first: `npx wrangler queues create reference-refresh` (the Cloudflare token wrangler already uses), then read it back with `npx wrangler queues list` (the name must be listed). Merge and let Workers Builds deploy the api; read `/health/build` for a new version.
+
+The sweep ships OFF: `REFERENCE_REFRESH` in `vars` is `"0"`, so nothing is sent and the consumer is idle. To turn it on, change it to `"1"` in the file, merge and deploy (a dashboard edit is reset by the next deploy). Read back by looking at the queue's backlog and the api's logs for `references: refresh sweep failed` (absent when it works). **Rollback:** set the flag back to `"0"`; for the code, `wrangler rollback` to the previous api version. Delete the queue only after no deployed version names it.
+
 ## Terms acceptance record: `0039` must be applied BEFORE the deploy
 
 `0039_terms_acceptances.sql` adds the `terms_acceptances` table (one row per account and Terms version). It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above. The new signup writes a row inside its transaction, so deploying the code against a database without `0039` fails every signup. **Rollback** is the file's `-- Down Migration`.
