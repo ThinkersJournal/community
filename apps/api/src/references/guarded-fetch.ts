@@ -325,6 +325,14 @@ function resolveConfig(opts: GuardedFetchOptions): Config {
   };
 }
 
+/**
+ * The production `FetchCtx`: the guarded fetch over the real network. It lives HERE because this is the one file under
+ * src/references/ allowed to reach the network (test/connector-door.node.test.ts); everything else takes a `FetchCtx`.
+ */
+export function productionFetchCtx(): FetchCtx {
+  return { fetch: createGuardedFetch({ fetchImpl: (input, init) => fetch(input, init) }) };
+}
+
 /** Build the guarded `FetchCtx.fetch`. One deadline covers DNS, robots.txt, every hop and the body read. */
 export function createGuardedFetch(opts: GuardedFetchOptions): FetchCtx["fetch"] {
   const cfg = resolveConfig(opts);

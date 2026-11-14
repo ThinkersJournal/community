@@ -8,14 +8,12 @@
  * while nothing is sent. A claimed id whose message never reaches the queue is simply retried when its lease ends
  * (refresh-queue.ts), so a failed send is logged, never fatal.
  */
-import { createGuardedFetch } from "./guarded-fetch";
+import { productionFetchCtx } from "./guarded-fetch";
 import { claimDueRefreshes, type RefreshMessage } from "./refresh-queue";
 import { consumeRefreshBatch } from "./refresh-consumer";
 import { refreshReference, type RefreshBudget } from "./refresh";
 import { defaultRegistry } from "./registry";
 import { withClient } from "../db/client";
-
-import type { FetchCtx } from "@thinkersjournal/shared";
 
 /** The per-author budget, backed by the author's own Durable Object (one bucket per author id). */
 export function budgetFromEnv(env: Pick<Env, "AUTHOR_BUDGET">): RefreshBudget {
@@ -46,7 +44,7 @@ export async function sweepDueReferences(env: Env, ctx: ExecutionContext): Promi
 
 /** The Queue consumer: one database connection per batch, one refresh per distinct reference id. */
 export async function handleRefreshQueue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext): Promise<void> {
-  const fetchCtx: FetchCtx = { fetch: createGuardedFetch({ fetchImpl: (input, init) => fetch(input, init) }) };
+  const fetchCtx = productionFetchCtx();
   const budget = budgetFromEnv(env);
   await withClient(env.HYPERDRIVE_FRESH, ctx, (db) =>
     consumeRefreshBatch(batch.messages, (id) => refreshReference(db, id, { registry: defaultRegistry, ctx: fetchCtx, budget, now: new Date() })),
