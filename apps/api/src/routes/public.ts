@@ -53,6 +53,7 @@ import { isInvalidTextRepresentation } from "../db/errors";
 import { clientIp } from "../http/client-ip";
 import { errorResponse } from "../http/errors";
 import { loadRefCards } from "../references/load-cards";
+import { touchViewed } from "../references/view-touch";
 // The write path's slug canonicalizer. Reused here so a read (`?slug=`) and a
 // write (which mints the slug the `tag:<slug>` purge emits) canonicalize
 // IDENTICALLY — see slugifyBase's own comment and handlePublicTag's header.
@@ -116,9 +117,18 @@ function notFound(): Response {
  * an ordinary post costs no extra query, and `refs` is absent (not empty) when there is nothing to show. A hidden or draft
  * post never gets here: the query above already refused it, which is what hides its cards.
  */
-async function withRefs(c: Client, post: PublicPost): Promise<PublicPost> {
+async function withRefs(c: Client, post: PublicPost, recordView: boolean): Promise<PublicPost> {
   if (!post.markdownSource.includes("{{ref:")) return post;
   const cards = await loadRefCards(c, [post.id]);
+  // M3.2d part 2: a view wakes a dormant reference. Behind the refresh flag (the sweep is what acts on it), and a failed
+  // write must never fail the read, so it is logged and dropped.
+  if (recordView && cards.size > 0) {
+    try {
+      await touchViewed(c, [post.id], new Date());
+    } catch (err) {
+      console.error("references: view touch failed", err);
+    }
+  }
   return cards.size === 0 ? post : { ...post, refs: Object.fromEntries(cards) };
 }
 
@@ -145,7 +155,7 @@ export async function handlePublicPost(
       [username, slug],
     );
     const found = (rows[0] ?? null) as PublicPost | null;
-    return found === null ? null : withRefs(c, found);
+    return found === null ? null : withRefs(c, found, env.REFERENCE_REFRESH === "1");
   });
   // ⚠️ `status = 'published'` is IN the query, not a filter afterwards: a draft
   // must be indistinguishable from a nonexistent post to everyone, its author
