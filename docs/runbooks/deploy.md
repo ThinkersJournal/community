@@ -13,7 +13,9 @@ One list, so they can be applied in one go. Add a row in the PR that adds a migr
 
 | Migration | PR | What it adds | Without it |
 |---|---|---|---|
-| (none) | | Applied through `0043_references_refresh_failures.sql` on 2026-11-12 (PM, with CireSnave's approval; `0041` was already in, `0042` and `0043` went in together); applied files must stay byte-identical. `apps/api/test/deploy-runbook.node.test.ts` fails when a migration newer than this marker has no row here, so the PR that adds a migration adds its row | |
+| `0044_moderation_snapshot_cards.sql` | PR for the evidence-card copy | Adds `moderation_snapshots.card_snapshots jsonb` (nullable). Additive; apply BEFORE the deploy that writes it | The new code's delete of a post under moderation fails (the INSERT names the column) until it is applied; the migration gate holds the deploy for exactly this |
+
+Applied through `0043_references_refresh_failures.sql` on 2026-11-12 (PM, with CireSnave's approval; `0041` was already in, `0042` and `0043` went in together); applied files must stay byte-identical. `apps/api/test/deploy-runbook.node.test.ts` fails when a migration newer than this marker has no row here, so the PR that adds a migration adds its row | |
 
 ## How a deploy works now
 
