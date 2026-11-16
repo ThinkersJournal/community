@@ -8,7 +8,7 @@ import { GC_BATCH, GC_RETENTION_MS, gcOrphanReferences } from "../src/references
 
 /**
  * gcOrphanReferences (M3.2d): deletes `"references"` rows that no `post_references` row uses, once they are older than
- * the grace window. Every row sits in the year 2000 and `now` is in 2000 too, so rows other test files leave are never
+ * the retention year. Every row sits in the year 2000 and `now` is in 2000 too, so rows other test files leave are never
  * old enough to be touched here.
  */
 const TEST_DATABASE_URL =
@@ -73,7 +73,7 @@ afterAll(async () => {
 });
 
 describe("gcOrphanReferences", () => {
-  it("deletes an unused reference older than the grace window and returns the count", async () => {
+  it("deletes an unused reference past the retention year and returns the count", async () => {
     const orphan = await seed();
     const n = await gcOrphanReferences(client, NOW);
     expect(n).toBeGreaterThanOrEqual(1);
