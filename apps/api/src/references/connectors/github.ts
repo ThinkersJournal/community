@@ -8,6 +8,14 @@
 import { ConnectorError, type Identified, type LiveResult, type Resolved } from "@thinkersjournal/shared";
 
 import type { Connector } from "../connector";
+import type { InstallationAuth } from "../github-installation-auth";
+
+export interface GithubConnectorOptions {
+  /** The installation-token provider. Without it resolve/fetchLive say `unsupported` (identify and deepLink still work). */
+  auth?: InstallationAuth;
+  /** The clock for `capturedAt`; injected for tests. */
+  now?: () => Date;
+}
 
 const HOSTS = new Set(["github.com", "www.github.com"]);
 const OWNER = /^[a-z0-9](?:[a-z0-9-]{0,38})$/i;
@@ -52,7 +60,7 @@ function identify(url: URL): Identified | null {
   return null;
 }
 
-export function createGithubConnector(): Connector<"github"> {
+export function createGithubConnector(_opts: GithubConnectorOptions = {}): Connector<"github"> {
   return {
     kind: "github",
     identify,
