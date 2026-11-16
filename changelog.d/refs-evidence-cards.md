@@ -1,3 +1,0 @@
-kind: NEW MIGRATION 0044 `moderation_snapshots.card_snapshots`: reference cards kept in the evidence copy
----
-Adds `apps/api/migrations/0044_moderation_snapshot_cards.sql` (nullable `card_snapshots jsonb`, additive). When an author deletes a post that is under moderation, `apps/api/src/routes/posts.ts` copies the card metadata of the post's references (token, kind, resource key, content hash, position and the whole stored card) into the moderation snapshot in the same statement, so the evidence no longer depends on the shared `"references"` row that `apps/api/src/references/gc.ts` may collect after a year. Tested in `apps/api/test/moderation-snapshot.test.ts`.
