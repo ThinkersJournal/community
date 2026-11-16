@@ -13,7 +13,9 @@ One list, so they can be applied in one go. Add a row in the PR that adds a migr
 
 | Migration | PR | What it adds | Without it |
 |---|---|---|---|
-| (none) | | Applied through `0043_references_refresh_failures.sql` on 2026-11-12 (PM, with CireSnave's approval; `0041` was already in, `0042` and `0043` went in together); applied files must stay byte-identical. `apps/api/test/deploy-runbook.node.test.ts` fails when a migration newer than this marker has no row here, so the PR that adds a migration adds its row | |
+| `0044_moderation_snapshot_cards.sql` | PR for the evidence-card copy | Adds `moderation_snapshots.card_snapshots jsonb` (nullable). Additive; apply BEFORE the deploy that writes it | The new code's delete of a post under moderation fails (the INSERT names the column) until it is applied; the migration gate holds the deploy for exactly this |
+
+Applied through `0043_references_refresh_failures.sql` on 2026-11-12 (PM, with CireSnave's approval; `0041` was already in, `0042` and `0043` went in together); applied files must stay byte-identical. `apps/api/test/deploy-runbook.node.test.ts` fails when a migration newer than this marker has no row here, so the PR that adds a migration adds its row | |
 
 ## How a deploy works now
 
@@ -170,6 +172,15 @@ and only then for both Workers.
 ## Reference refresh counter: `0043` must be applied BEFORE the deploy
 
 `0043_references_refresh_failures.sql` adds `"references".refresh_failures integer NOT NULL DEFAULT 0` (M3.2c). It is additive and inert for the old code, so apply it first with the steps in "Shipping a PR with an additive migration" above. Nothing reads or writes the column until the refresh runner ships (M3.2c-2), so skew affects nothing; apply it before the deploy anyway. **Rollback** is the file's `-- Down Migration` (it drops the column and the retry counts with it).
+
+## Evidence cards: `0044` must be applied BEFORE the code that names it ships
+
+`0044_moderation_snapshot_cards.sql` adds `moderation_snapshots.card_snapshots jsonb` (nullable, no default; M3.2d follow-up). It is additive and inert for the OLD code, but the NEW code's delete of a post under moderation (`handleDeletePost`) names the column, so that delete errors until it exists. The migration gate holds the deploy for exactly this, so the order is the one in "Shipping a PR with an additive migration": merge, both builds fail at the gate, apply, retry.
+
+- **Apply:** step 2 above, unchanged (`DATABASE_URL="$TJ_PROD_DATABASE_URL" node apps/api/scripts/migrate.mjs dev up --allow-remote`); read the printed `migrate dev up: <host>:<port>/<database>` line first.
+- **Read back that it applied:** `GET /health/schema?migration=0044_moderation_snapshot_cards` answers `{"applied":true}`; and on the production database `SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'moderation_snapshots' AND column_name = 'card_snapshots';` returns exactly one row: `card_snapshots | jsonb | YES`.
+- **Rollback:** the file's `-- Down Migration`, `ALTER TABLE moderation_snapshots DROP COLUMN IF EXISTS card_snapshots;`. Never automated. Redeploy the previous code FIRST: with the new code live, dropping the column makes the delete of a moderated post fail. Dropping it also discards the copied card evidence, so do not roll back once a moderated post has been deleted without asking.
+- **Not gated on the reference-refresh queue:** `0044` and the card copy do not touch `REFRESH_QUEUE`. The queue `reference-refresh` was created and the API deployed on 2026-11-14T04:12Z (lane state; the PM can confirm with `npx wrangler queues list`), and this PR changes no binding.
 
 ## Reference refresh queue: create it BEFORE the deploy, then flip the flag
 M3.2c-3c adds a Queue producer (`REFRESH_QUEUE`) and consumer for the queue `reference-refresh` to `apps/api/wrangler.jsonc`. **A Worker that names a queue that does not exist fails its deploy**, so the PM creates it first: `npx wrangler queues create reference-refresh` (the Cloudflare token wrangler already uses), then read it back with `npx wrangler queues list` (the name must be listed). Merge and let Workers Builds deploy the api; read `/health/build` for a new version.
