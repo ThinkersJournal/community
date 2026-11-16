@@ -395,8 +395,13 @@ describe("PATCH /comments/:id", () => {
     const created = await createComment(spammer, { postId: modPostId, markdownSource: "v0" });
     const { id } = (await created.json()) as { id: string };
 
+    // ⚠️ The loop bound is 25, not 12 (issue #300). The emulated limiter uses FIXED windows aligned to the wall clock
+    // (miniflare's ratelimit-object.worker.js: `epoch = floor(now / (period * 1000))`, the count resets when the epoch
+    // changes), and COMMENT_LIMITER allows 10 per 60 s. The create above plus 12 PATCHes is 13 calls, so when a window
+    // boundary fell between the 3rd and the 10th call neither window passed 10 and no 429 was ever seen. 25 PATCHes can
+    // span at most two windows (20 allowed), so a 429 is certain; the loop still stops at the first one.
     let sawRateLimited = false;
-    for (let i = 0; i < 12 && !sawRateLimited; i++) {
+    for (let i = 0; i < 25 && !sawRateLimited; i++) {
       const response = await updateComment(spammer, id, `v${i}`);
       if (response.status === 429) {
         expect(((await response.json()) as { code: string }).code).toBe("RATE_LIMITED");
