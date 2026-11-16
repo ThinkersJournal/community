@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import worker from "../src";
 import { withClient } from "../src/db/client";
+import { gcOrphanReferences } from "../src/references/gc";
 import { createPublished, createVerifiedActor, deleteCreatedUsers } from "./actor";
 
 import type { Actor } from "./actor";
@@ -202,5 +203,45 @@ describe("#58 — DELETE /comments/:id under moderation keeps a snapshot", () =>
     expect((await fetchWorker(mutating(author, "DELETE", `/comments/${commentId}`))).status).toBe(200);
     expect((await fetchWorker(mutating(author, "DELETE", `/comments/${commentId}`))).status).toBe(200);
     expect((await commentSnapshots(commentId)).map((s) => s.body_markdown)).toEqual(["said once"]);
+  });
+});
+
+describe("M3.2d — a moderated post's reference cards are kept in the evidence copy", () => {
+  it("hide a post that has a reference card, delete it, run GC two years on: the snapshot still shows the card and the shared row is gone", async () => {
+    const author = await createVerifiedActor();
+    const postId = await createPublished(author);
+    const card = { kind: "web", title: "Card title", description: "Card description", image: "https://example.com/i.png" };
+    const [ref] = await sql<{ id: string }>(
+      `INSERT INTO "references" (kind, resource_key, content_hash, snapshot)
+       VALUES ('web', $1, $2, $3::jsonb) RETURNING id`,
+      [`web:https://example.com/${crypto.randomUUID()}`, crypto.randomUUID(), JSON.stringify(card)],
+    );
+    await sql(`INSERT INTO post_references (post_id, reference_id, token) VALUES ($1, $2, 'BBBBBBBBBBBB')`, [postId, ref!.id]);
+    await autoHide(postId);
+
+    expect((await fetchWorker(mutating(author, "DELETE", `/posts/${postId}`))).status).toBe(200);
+
+    // The use cascaded away with the post; age the shared row two years and let the real sweep collect it.
+    await sql(`UPDATE "references" SET created_at = now() - interval '2 years', updated_at = now() - interval '2 years' WHERE id = $1`, [ref!.id]);
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => gcOrphanReferences(c, new Date()));
+    await waitOnExecutionContext(ctx);
+    expect(await sql(`SELECT 1 FROM "references" WHERE id = $1`, [ref!.id])).toEqual([]);
+
+    const rows = await sql<{ card_snapshots: unknown }>(`SELECT card_snapshots FROM moderation_snapshots WHERE post_id = $1`, [postId]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.card_snapshots).toEqual([
+      expect.objectContaining({ token: "BBBBBBBBBBBB", kind: "web", position: 0, snapshot: card }),
+    ]);
+  });
+
+  it("CONTROL: a post under moderation with no cards snapshots with card_snapshots NULL", async () => {
+    const author = await createVerifiedActor();
+    const postId = await createPublished(author);
+    await autoHide(postId);
+    expect((await fetchWorker(mutating(author, "DELETE", `/posts/${postId}`))).status).toBe(200);
+    const rows = await sql<{ card_snapshots: unknown }>(`SELECT card_snapshots FROM moderation_snapshots WHERE post_id = $1`, [postId]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.card_snapshots).toBeNull();
   });
 });

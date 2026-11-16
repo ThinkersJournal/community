@@ -8,6 +8,7 @@
  * while nothing is sent. A claimed id whose message never reaches the queue is simply retried when its lease ends
  * (refresh-queue.ts), so a failed send is logged, never fatal.
  */
+import { gcOrphanReferences } from "./gc";
 import { productionFetchCtx } from "./guarded-fetch";
 import { claimDueRefreshes, type RefreshMessage } from "./refresh-queue";
 import { consumeRefreshBatch } from "./refresh-consumer";
@@ -39,6 +40,17 @@ export async function sweepDueReferences(env: Env, ctx: ExecutionContext): Promi
     await withClient(env.HYPERDRIVE_FRESH, ctx, (db) => enqueueDue(() => claimDueRefreshes(db, new Date()), env.REFRESH_QUEUE));
   } catch (err) {
     console.error("references: refresh sweep failed", err);
+  }
+}
+
+/** The daily orphan sweep (M3.2d), behind the same flag as the refresh sweep. Never throws (it runs under `waitUntil`). */
+export async function gcReferencesDaily(env: Env, ctx: ExecutionContext): Promise<void> {
+  if (env.REFERENCE_REFRESH !== "1") return;
+  try {
+    const n = await withClient(env.HYPERDRIVE_FRESH, ctx, (db) => gcOrphanReferences(db, new Date()));
+    if (n > 0) console.log(`references: gc removed ${n} orphan(s)`);
+  } catch (err) {
+    console.error("references: gc sweep failed", err);
   }
 }
 

@@ -3,6 +3,18 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.145 — NEW MIGRATION 0044 `moderation_snapshots.card_snapshots`: reference cards kept in the evidence copy
+
+Adds `apps/api/migrations/0044_moderation_snapshot_cards.sql` (nullable `card_snapshots jsonb`, additive). When an author deletes a post that is under moderation, `apps/api/src/routes/posts.ts` copies the card metadata of the post's references (token, kind, resource key, content hash, position and the whole stored card) into the moderation snapshot in the same statement, so the evidence no longer depends on the shared `"references"` row that `apps/api/src/references/gc.ts` may collect after a year. Tested in `apps/api/test/moderation-snapshot.test.ts`.
+
+## 0.1.144 — M3.2d orphan-reference garbage collection
+
+Adds `apps/api/src/references/gc.ts` (`gcOrphanReferences`): deletes `"references"` rows that no `post_references` row uses, once untouched for one year (the later of `created_at` and `updated_at`; the named constant `GC_RETENTION_MS`), at most 500 per run, `FOR UPDATE SKIP LOCKED`. The year is the retention floor from the #58 ruling (CireSnave: "minimum of 1 year"): a hard-deleted post's uses cascade away, so an orphan cannot be traced to a post, and no legal-hold table can name a reference. The evidence for a moderated post is kept in `moderation_snapshots`; a reference row is shared third-party page metadata, an ordinary cache past the floor. A NULL snapshot is not a reason to keep a row. Runs from `apps/api/src/references/refresh-wiring.ts` (`gcReferencesDaily`) on the existing `15 4 * * *` cron, dark unless `REFERENCE_REFRESH` is "1". No migration, no wrangler change. Tested in `apps/api/test/references-gc.db.test.ts`.
+
+## 0.1.143 — CodeRipper pin moved to 0.47.5; rule ids migrated
+
+The portfolio workflow pin in `.github/workflows/ci.yml` moves to coderipper c72a6e0 (0.47.5), and the `licence` waivers in `.coderipper.toml` use the new rule id `SUP-016` (via `tools/migrate-rule-ids.py`, idempotent). Pin and rename ship together because the old binary rejects numbered ids.
+
 ## 0.1.142 — M3.2c-3c reference-refresh wiring: queue, consumer, cron sweep (sweep OFF)
 
 Wires the refresh engine into the Worker: the `reference-refresh` queue producer (`REFRESH_QUEUE`) and consumer in `apps/api/wrangler.jsonc`, a `queue()` handler, and the cron sweep on the two-minute tick, which claims due references and sends one message each. The sweep ships OFF (`REFERENCE_REFRESH` = "0"); the consumer is inert without messages. DEPLOY-GATED: the queue must exist before this deploys. Glue in `apps/api/src/references/refresh-wiring.ts`; red-first in `apps/api/test/references-wiring.test.ts` and `apps/api/test/references-wiring-config.node.test.ts`.
