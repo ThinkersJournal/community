@@ -99,3 +99,44 @@ describe("GET /public/posts: refs", () => {
     expect(await hidden.text()).not.toContain("Secret card");
   });
 });
+
+describe("GET /public/posts: view-time wake (M3.2d part 2)", () => {
+  async function viewState(referenceId: string): Promise<{ viewed: Date | null; next: Date | null }> {
+    const ctx = createExecutionContext();
+    const rows = await withClient(env.HYPERDRIVE_FRESH, ctx, async (c) =>
+      (await c.query<{ last_viewed_at: Date | null; next_check_at: Date | null }>(
+        `SELECT last_viewed_at, next_check_at FROM "references" WHERE id = $1`,
+        [referenceId],
+      )).rows,
+    );
+    await waitOnExecutionContext(ctx);
+    return { viewed: rows[0]!.last_viewed_at, next: rows[0]!.next_check_at };
+  }
+
+  async function viewedPost(flag: string): Promise<string> {
+    const { id, slug } = await create(actor, `Intro
+
+{{ref:${TOKEN}}}
+`);
+    await useReference(id, TOKEN, { kind: "web", title: "Card title", finalUrl: "https://example.com/p" });
+    const referenceId = referenceIds[referenceIds.length - 1]!;
+    const before = (env as { REFERENCE_REFRESH: string }).REFERENCE_REFRESH;
+    (env as { REFERENCE_REFRESH: string }).REFERENCE_REFRESH = flag;
+    try {
+      expect((await getPost(actor, slug)).status).toBe(200);
+    } finally {
+      (env as { REFERENCE_REFRESH: string }).REFERENCE_REFRESH = before;
+    }
+    return referenceId;
+  }
+
+  it('with REFERENCE_REFRESH "1" a view records last_viewed_at and wakes the dormant reference', async () => {
+    const state = await viewState(await viewedPost("1"));
+    expect(state.viewed).not.toBeNull();
+    expect(state.next).not.toBeNull();
+  });
+
+  it('CONTROL: with REFERENCE_REFRESH "0" (the shipped value) a view writes nothing', async () => {
+    expect(await viewState(await viewedPost("0"))).toEqual({ viewed: null, next: null });
+  });
+});
