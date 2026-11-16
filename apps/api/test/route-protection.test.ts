@@ -180,7 +180,7 @@ const EXPECTED_DISPATCHER_BODY =
   'import { purgeExpiredNoticeRecords } from "./moderation/notice-records"; ' +
   'import { drainNoticeOutbox, purgeExpiredNoticeOutbox } from "./moderation/notice-outbox"; ' +
   'import { runEmailDrain } from "./notifications/email-drain"; ' +
-  'import { handleRefreshQueue, sweepDueReferences } from "./references/refresh-wiring"; ' +
+  'import { gcReferencesDaily, handleRefreshQueue, sweepDueReferences } from "./references/refresh-wiring"; ' +
   'import { ROUTES } from "./routes"; ' +
   'import { findRoute } from "./routing"; ' +
   // Security alerting (spec §2.2 item 3): the cron's one ledger call, and the
@@ -225,6 +225,8 @@ const EXPECTED_DISPATCHER_BODY =
   "} " +
   'if (controller.cron === "15 4 * * *") { ' +
   "ctx.waitUntil(reapOrphanMedia(env, ctx)); " +
+  // Orphan references (M3.2d), dark unless REFERENCE_REFRESH is "1".
+  "ctx.waitUntil(gcReferencesDaily(env, ctx)); " +
   "return; " +
   "} " +
   'if (controller.cron === "20 4 * * *") { ' +

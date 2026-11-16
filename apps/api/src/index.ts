@@ -14,7 +14,7 @@ import { eraseClosedDmcaCases } from "./moderation/dmca-retention";
 import { purgeExpiredNoticeRecords } from "./moderation/notice-records";
 import { drainNoticeOutbox, purgeExpiredNoticeOutbox } from "./moderation/notice-outbox";
 import { runEmailDrain } from "./notifications/email-drain";
-import { handleRefreshQueue, sweepDueReferences } from "./references/refresh-wiring";
+import { gcReferencesDaily, handleRefreshQueue, sweepDueReferences } from "./references/refresh-wiring";
 import { ROUTES } from "./routes";
 import { findRoute } from "./routing";
 import { sweepForgottenAccounts } from "./security/forget-sweep";
@@ -97,6 +97,8 @@ export default {
     }
     if (controller.cron === "15 4 * * *") {
       ctx.waitUntil(reapOrphanMedia(env, ctx));
+      /* Orphan references (M3.2d; dark unless REFERENCE_REFRESH is "1"). Never throws. */
+      ctx.waitUntil(gcReferencesDaily(env, ctx));
       return;
     }
     if (controller.cron === "20 4 * * *") {
