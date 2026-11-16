@@ -15,9 +15,12 @@ function b64(bytes: Uint8Array): string {
 function pem(label: string, der: Uint8Array): string {
   return `-----BEGIN ${label}-----\n${b64(der)}\n-----END ${label}-----\n`;
 }
-function unb64url(s: string): Uint8Array {
+function unb64url(s: string): Uint8Array<ArrayBuffer> {
   const std = s.replace(/-/g, "+").replace(/_/g, "/");
-  return Uint8Array.from(atob(std + "=".repeat((4 - (std.length % 4)) % 4)), (c) => c.charCodeAt(0));
+  const bin = atob(std + "=".repeat((4 - (std.length % 4)) % 4));
+  const out = new Uint8Array(new ArrayBuffer(bin.length));
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 function decode(part: string): Record<string, unknown> {
   return JSON.parse(new TextDecoder().decode(unb64url(part))) as Record<string, unknown>;
