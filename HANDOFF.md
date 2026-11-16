@@ -14,7 +14,7 @@
 - Shell: CRLF files need python scripts (`newline=""`/bytes) for edits; run scratch scripts from the scratchpad, not the repo; Python on Windows can't open bash `/tmp` paths. Trailers: "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" + the "Claude-Session:" line from the session reminder; PR bodies end with "🤖 Generated with [Claude Code](https://claude.com/claude-code)" + the session URL.
 
 ## State (2026-11-16): main 385d3244 (deployed sha 385d324; 0044 applied on prod). #308-#314 all MERGED and cleaned up. API refresh sweep OFF (`REFERENCE_REFRESH="0"`), queue `reference-refresh` 1 producer/1 consumer.
-- **The day's one PR (CireSnave 2026-11-16: one PR per project per day): #315**, branch `lane/community-m3-2d`, worktree `C:\Projects\ThinkersJournal-Community-wt-2d2`. Holds M3.2d view-time wake (`references/view-touch.ts`, `touchViewed` from `handlePublicPost`, flag-gated) + the deploy-runbook edit (0044 applied) + fragment `changelog.d/refs-view-touch.md`. After it merges: status clean, remove worktree + prune, delete branch via API, read back 404 (live-ref control), ff primary.
+- **#315 (view-time wake) MERGED 2026-11-16 (4ecea5c2); cleaned up.** Today's one PR is used. **Working branch for M3.3: `lane/community-m3-3`, worktree `C:\Projects\ThinkersJournal-Community-wt-m33`** (commit freely; ONE PR per day; PR only on a new day or hotfix).
 - **Ruling applied (PM 2026-11-16):** retention is CireSnave's #58 Q1/Q2 (1-year floor, then only on legal sign-off); evidence for a moderated post lives in `moderation_snapshots`; a reference row is shared third-party metadata, an ordinary cache past a year. No takedown flag (PR #310 withdrawn). If the PM says a card can be evidence for a never-hidden post, that changes #309.
 - **Next unblocked:** M3.3 GitHub connector (own batch on the next day's working branch). Flag flip "0" to "1" only when the PM says. M3.3 PR must add a missing-ID named-error test and regenerate `src/worker-configuration.d.ts`.
 - **M3.3 / M3.6 credentials unblocked** (vault, read access lanes pm,community): `GITHUB_TJCOMMUNITY_APP_PRIVATE_KEY`, `GITLAB_TJCOMMUNITY_CLIENT_SECRET`; PM sets the Worker secrets at deploy. Open: confirm in M3.3's first build that an installation token reads public repos outside the installation.
@@ -27,7 +27,5 @@
 Read THROTTLE.md; `git fetch`; [STATUS] to `pm` over Synapse with `model=sonnet`; `gh pr list`; `lane-restart waits` and arm a timer per line; clean up any merged PR's worktree; then the next unblocked row.
 
 ## Waits (armed at each start with `lane-restart waits`)
-WAIT: PM merges #315 (the day's one PR; mark ready first) | check: gh pr view 315 --json state,isDraft | wake: 2026-11-17T06:00:00Z
-WAIT: PM merges #315 (the day's one PR; mark ready first) | check: gh pr view 315 --json state,isDraft | wake: 2026-11-17T06:00:00Z
 WAIT: rollback-check run on main by CireSnave, then tell the PM (Synapse) to set AUTO_ROLLBACK_ENABLED=1 | check: gh run list --workflow rollback-check --limit 5 (no runs as of 2026-11-16) | wake: 2026-11-17T06:00:00Z
 WAIT: PM reports S3 checker UNKNOWN field shapes (CSAM scanner response) | check: mcp__synapse__fetch for PM messages (none as of 2026-11-16) | wake: 2026-11-17T06:00:00Z
