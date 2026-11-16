@@ -3,6 +3,18 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.147 — test: fix the comments PATCH throttle flake (#300)
+
+`apps/api/test/comments.test.ts` "throttles rapid PATCHes" looped 12 times after one create (13 calls) against a limiter of 10 per 60 s. The emulated limiter uses fixed wall-clock windows, so a window boundary inside those calls reset the count and no 429 appeared. The loop now allows 25 PATCHes, which cannot fit in one window of 10 or in two (20). Test only; no production code changed.
+
+## 0.1.146 — docs: HANDOFF rewritten for 2026-11-16
+
+Rewrites `HANDOFF.md` for the post-#307 state: open PRs #308, #309 and #311 with the PM, the retention ruling applied, the next row and refreshed waits. No code change.
+
+## 0.1.145 — NEW MIGRATION 0044 `moderation_snapshots.card_snapshots`: reference cards kept in the evidence copy
+
+Adds `apps/api/migrations/0044_moderation_snapshot_cards.sql` (nullable `card_snapshots jsonb`, additive). When an author deletes a post that is under moderation, `apps/api/src/routes/posts.ts` copies the card metadata of the post's references (token, kind, resource key, content hash, position and the whole stored card) into the moderation snapshot in the same statement, so the evidence no longer depends on the shared `"references"` row that `apps/api/src/references/gc.ts` may collect after a year. Tested in `apps/api/test/moderation-snapshot.test.ts`.
+
 ## 0.1.144 — M3.2d orphan-reference garbage collection
 
 Adds `apps/api/src/references/gc.ts` (`gcOrphanReferences`): deletes `"references"` rows that no `post_references` row uses, once untouched for one year (the later of `created_at` and `updated_at`; the named constant `GC_RETENTION_MS`), at most 500 per run, `FOR UPDATE SKIP LOCKED`. The year is the retention floor from the #58 ruling (CireSnave: "minimum of 1 year"): a hard-deleted post's uses cascade away, so an orphan cannot be traced to a post, and no legal-hold table can name a reference. The evidence for a moderated post is kept in `moderation_snapshots`; a reference row is shared third-party page metadata, an ordinary cache past the floor. A NULL snapshot is not a reason to keep a row. Runs from `apps/api/src/references/refresh-wiring.ts` (`gcReferencesDaily`) on the existing `15 4 * * *` cron, dark unless `REFERENCE_REFRESH` is "1". No migration, no wrangler change. Tested in `apps/api/test/references-gc.db.test.ts`.

@@ -119,7 +119,7 @@ const ALLOWLIST: readonly AllowEntry[] = [
   },
   {
     file: "posts.ts",
-    match: "INSERT INTO moderation_snapshots (post_id, author_id, title, body_markdown)",
+    match: "INSERT INTO moderation_snapshots (post_id, author_id, title, body_markdown, card_snapshots)",
     why:
       "handleDeletePost (#58 Q1): the author's OWN delete, scoped to author_id = session.userId. " +
       "Its `t` CTE must see a HIDDEN post — copying a post under moderation into " +
