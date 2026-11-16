@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.146 — docs: HANDOFF rewritten for 2026-11-16
+
+Rewrites `HANDOFF.md` for the post-#307 state: open PRs #308, #309 and #311 with the PM, the retention ruling applied, the next row and refreshed waits. No code change.
+
 ## 0.1.145 — NEW MIGRATION 0044 `moderation_snapshots.card_snapshots`: reference cards kept in the evidence copy
 
 Adds `apps/api/migrations/0044_moderation_snapshot_cards.sql` (nullable `card_snapshots jsonb`, additive). When an author deletes a post that is under moderation, `apps/api/src/routes/posts.ts` copies the card metadata of the post's references (token, kind, resource key, content hash, position and the whole stored card) into the moderation snapshot in the same statement, so the evidence no longer depends on the shared `"references"` row that `apps/api/src/references/gc.ts` may collect after a year. Tested in `apps/api/test/moderation-snapshot.test.ts`.
