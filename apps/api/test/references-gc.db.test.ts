@@ -105,15 +105,22 @@ describe("gcOrphanReferences", () => {
     expect(await exists(ref)).toBe(false);
   });
 
-  it("keeps a taken-down unreferenced row (snapshot nulled) as a tombstone, and deletes a plain orphan beside it", async () => {
-    const takenDown = await seed({ snapshot: null });
-    const jsonNull = await seed();
-    await client.query(`UPDATE "references" SET snapshot = 'null'::jsonb WHERE id = $1`, [jsonNull]);
+  it("keeps a flagged (takedown_at) unreferenced row as a tombstone, and deletes a plain orphan beside it", async () => {
+    const flagged = await seed();
+    await client.query(`UPDATE "references" SET takedown_at = $2 WHERE id = $1`, [flagged, ago(GC_GRACE_MS * 3)]);
     const plain = await seed();
     await gcOrphanReferences(client, NOW);
-    expect(await exists(takenDown)).toBe(true);
-    expect(await exists(jsonNull)).toBe(true);
+    expect(await exists(flagged)).toBe(true);
     expect(await exists(plain)).toBe(false);
+  });
+
+  it("deletes an unflagged orphan whose snapshot is NULL or JSON null: a NULL snapshot is not a takedown marker", async () => {
+    const sqlNull = await seed({ snapshot: null });
+    const jsonNull = await seed();
+    await client.query(`UPDATE "references" SET snapshot = 'null'::jsonb WHERE id = $1`, [jsonNull]);
+    await gcOrphanReferences(client, NOW);
+    expect(await exists(sqlNull)).toBe(false);
+    expect(await exists(jsonNull)).toBe(false);
   });
 
   it("deletes at most GC_BATCH rows per call", async () => {

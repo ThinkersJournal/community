@@ -13,7 +13,9 @@ One list, so they can be applied in one go. Add a row in the PR that adds a migr
 
 | Migration | PR | What it adds | Without it |
 |---|---|---|---|
-| (none) | | Applied through `0043_references_refresh_failures.sql` on 2026-11-12 (PM, with CireSnave's approval; `0041` was already in, `0042` and `0043` went in together); applied files must stay byte-identical. `apps/api/test/deploy-runbook.node.test.ts` fails when a migration newer than this marker has no row here, so the PR that adds a migration adds its row | |
+| `0044_references_takedown_flag.sql` | PR for the GC takedown flag | Adds `"references".takedown_at timestamptz` (nullable). Additive; apply BEFORE the deploy that turns `REFERENCE_REFRESH` on (the orphan sweep reads it) | Nothing breaks while the flag is "0"; with the flag "1" the daily orphan sweep errors (logged, never thrown) until it is applied |
+
+Applied through `0043_references_refresh_failures.sql` on 2026-11-12 (PM, with CireSnave's approval; `0041` was already in, `0042` and `0043` went in together); applied files must stay byte-identical. `apps/api/test/deploy-runbook.node.test.ts` fails when a migration newer than this marker has no row here, so the PR that adds a migration adds its row | |
 
 ## How a deploy works now
 
