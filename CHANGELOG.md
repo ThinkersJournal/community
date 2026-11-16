@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.148 — docs: ROADMAP restated true at origin/main bdc4d9f6 (0.1.144)
+
+Restates `docs/ROADMAP.md`: the header (as of 0.1.144), the production-migration line in section 1 (0001-0043 applied, 0044 not, read back with `GET /health/schema`), the launch-gate bullet (`APP.live` is not readable from this repository, so the bullet now says what the repo can and cannot show) and the R11 row (M3.2 through the orphan GC, each done step with its test file, each open step with its blocker). No code change.
+
 ## 0.1.147 — test: fix the comments PATCH throttle flake (#300)
 
 `apps/api/test/comments.test.ts` "throttles rapid PATCHes" looped 12 times after one create (13 calls) against a limiter of 10 per 60 s. The emulated limiter uses fixed wall-clock windows, so a window boundary inside those calls reset the count and no 429 appeared. The loop now allows 25 PATCHes, which cannot fit in one window of 10 or in two (20). Test only; no production code changed.
