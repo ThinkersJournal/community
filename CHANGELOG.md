@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.149 — M3.2d part 2: a public view wakes dormant references
+
+Adds `apps/api/src/references/view-touch.ts` (`touchViewed`): a public read of a post records `last_viewed_at` on the references the post uses (throttled to one write a minute per reference) and wakes a dormant one by making `next_check_at` due now, so the next sweep tick claims it (plan decision 22). Wired into `apps/api/src/routes/public.ts` behind `REFERENCE_REFRESH`. Tested in `apps/api/test/references-view-touch.db.test.ts`.
+
 ## 0.1.148 — docs: ROADMAP restated true at origin/main bdc4d9f6 (0.1.144)
 
 Restates `docs/ROADMAP.md`: the header (as of 0.1.144), the production-migration line in section 1 (0001-0043 applied, 0044 not, read back with `GET /health/schema`), the launch-gate bullet (`APP.live` is not readable from this repository, so the bullet now says what the repo can and cannot show) and the R11 row (M3.2 through the orphan GC, each done step with its test file, each open step with its blocker). No code change.
