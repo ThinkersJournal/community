@@ -12,6 +12,11 @@
  * compose in progress cannot lose its reference. The residual race is an attach that upserts, then this DELETE, then the
  * `post_references` INSERT; it needs the row to be older than the window AND untouched, which the upsert's own bump rules out.
  *
+ * ⚠️ TOMBSTONES ARE KEPT (PM ruling, 2026-11-16). A takedown nulls `snapshot` in place (migration 0042; no separate
+ * marker exists), and that row is the evidence that a takedown happened and what it covered, and what stops re-ingestion.
+ * So a row whose snapshot is SQL NULL or JSON null is never deleted, used or not. How long tombstones may live is a policy
+ * question for CireSnave (privacy notice wording), not decided here.
+ *
  * `FOR UPDATE SKIP LOCKED` so two sweeps never fight over a row. The FK from `post_references` has no cascade, so a use
  * inserted after the NOT EXISTS check makes the DELETE fail rather than lose data.
  */
@@ -30,6 +35,7 @@ export async function gcOrphanReferences(db: Client, now: Date, limit: number = 
         SELECT r.id FROM "references" r
          WHERE GREATEST(r.created_at, r.updated_at) < $1
            AND NOT EXISTS (SELECT 1 FROM post_references pr WHERE pr.reference_id = r.id)
+           AND r.snapshot IS NOT NULL AND r.snapshot <> 'null'::jsonb
          ORDER BY r.created_at, r.id
          LIMIT $2
          FOR UPDATE OF r SKIP LOCKED)`,

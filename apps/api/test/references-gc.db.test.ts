@@ -22,12 +22,18 @@ const referenceIds: string[] = [];
 const postIds: string[] = [];
 const userIds: string[] = [];
 
-async function seed(opts: { created?: Date; updated?: Date } = {}): Promise<string> {
+async function seed(opts: { created?: Date; updated?: Date; snapshot?: object | null } = {}): Promise<string> {
   const created = opts.created ?? ago(GC_GRACE_MS + 60_000);
   const { rows } = await client.query<{ id: string }>(
-    `INSERT INTO "references" (kind, resource_key, content_hash, created_at, updated_at)
-     VALUES ('web', $1, $2, $3, $4) RETURNING id`,
-    [`web:https://example.com/${randomUUID()}`, randomUUID(), created, opts.updated ?? created],
+    `INSERT INTO "references" (kind, resource_key, content_hash, created_at, updated_at, snapshot)
+     VALUES ('web', $1, $2, $3, $4, $5::jsonb) RETURNING id`,
+    [
+      `web:https://example.com/${randomUUID()}`,
+      randomUUID(),
+      created,
+      opts.updated ?? created,
+      opts.snapshot === null ? null : JSON.stringify(opts.snapshot ?? { title: "t" }),
+    ],
   );
   referenceIds.push(rows[0]!.id);
   return rows[0]!.id;
@@ -97,6 +103,17 @@ describe("gcOrphanReferences", () => {
     await client.query(`DELETE FROM posts WHERE id = ANY($1::uuid[])`, [postIds]);
     await gcOrphanReferences(client, NOW);
     expect(await exists(ref)).toBe(false);
+  });
+
+  it("keeps a taken-down unreferenced row (snapshot nulled) as a tombstone, and deletes a plain orphan beside it", async () => {
+    const takenDown = await seed({ snapshot: null });
+    const jsonNull = await seed();
+    await client.query(`UPDATE "references" SET snapshot = 'null'::jsonb WHERE id = $1`, [jsonNull]);
+    const plain = await seed();
+    await gcOrphanReferences(client, NOW);
+    expect(await exists(takenDown)).toBe(true);
+    expect(await exists(jsonNull)).toBe(true);
+    expect(await exists(plain)).toBe(false);
   });
 
   it("deletes at most GC_BATCH rows per call", async () => {
