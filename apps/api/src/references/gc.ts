@@ -24,6 +24,8 @@ import type { Client } from "pg";
 
 /** An unused row younger than this survives (24 h, like the orphan-media reaper). */
 export const GC_GRACE_MS = 24 * 60 * 60 * 1000;
+/** RED-FIRST: named for B, not yet used by the query. */
+export const GC_RETENTION_MS = 365 * 24 * 60 * 60 * 1000;
 /** One run's cap, so a backlog is finished over later runs and never one unbounded statement. */
 export const GC_BATCH = 500;
 

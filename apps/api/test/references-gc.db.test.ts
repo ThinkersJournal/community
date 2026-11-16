@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { GC_BATCH, GC_GRACE_MS, gcOrphanReferences } from "../src/references/gc";
+import { GC_BATCH, GC_RETENTION_MS, gcOrphanReferences } from "../src/references/gc";
 
 /**
  * gcOrphanReferences (M3.2d): deletes `"references"` rows that no `post_references` row uses, once they are older than
@@ -23,7 +23,7 @@ const postIds: string[] = [];
 const userIds: string[] = [];
 
 async function seed(opts: { created?: Date; updated?: Date; snapshot?: object | null } = {}): Promise<string> {
-  const created = opts.created ?? ago(GC_GRACE_MS + 60_000);
+  const created = opts.created ?? ago(GC_RETENTION_MS + 60_000);
   const { rows } = await client.query<{ id: string }>(
     `INSERT INTO "references" (kind, resource_key, content_hash, created_at, updated_at, snapshot)
      VALUES ('web', $1, $2, $3, $4, $5::jsonb) RETURNING id`,
@@ -87,11 +87,11 @@ describe("gcOrphanReferences", () => {
     expect(await exists(used)).toBe(true);
   });
 
-  it("keeps an unused reference inside the grace window, by created_at or by a recent re-resolve (updated_at)", async () => {
-    const fresh = await seed({ created: ago(GC_GRACE_MS - 60_000) });
-    const reResolved = await seed({ updated: ago(GC_GRACE_MS - 60_000) });
+  it("keeps an unused reference inside the retention year, by created_at or by a recent re-resolve (updated_at)", async () => {
+    const fresh = await seed({ created: ago(GC_RETENTION_MS - 60_000) });
+    const reResolved = await seed({ updated: ago(GC_RETENTION_MS - 60_000) });
     // created long ago, touched recently by an attach upsert
-    await client.query(`UPDATE "references" SET created_at = $2 WHERE id = $1`, [reResolved, ago(GC_GRACE_MS * 10)]);
+    await client.query(`UPDATE "references" SET created_at = $2 WHERE id = $1`, [reResolved, ago(GC_RETENTION_MS * 10)]);
     await gcOrphanReferences(client, NOW);
     expect(await exists(fresh)).toBe(true);
     expect(await exists(reResolved)).toBe(true);
@@ -105,15 +105,23 @@ describe("gcOrphanReferences", () => {
     expect(await exists(ref)).toBe(false);
   });
 
-  it("keeps a taken-down unreferenced row (snapshot nulled) as a tombstone, and deletes a plain orphan beside it", async () => {
-    const takenDown = await seed({ snapshot: null });
+  it("deletes an old orphan whatever its snapshot: a NULL or JSON-null snapshot is no reason to keep it (retention is the 1-year floor, evidence lives in moderation_snapshots)", async () => {
+    const sqlNull = await seed({ snapshot: null });
     const jsonNull = await seed();
     await client.query(`UPDATE "references" SET snapshot = 'null'::jsonb WHERE id = $1`, [jsonNull]);
-    const plain = await seed();
     await gcOrphanReferences(client, NOW);
-    expect(await exists(takenDown)).toBe(true);
-    expect(await exists(jsonNull)).toBe(true);
-    expect(await exists(plain)).toBe(false);
+    expect(await exists(sqlNull)).toBe(false);
+    expect(await exists(jsonNull)).toBe(false);
+  });
+
+  it("keeps an orphan until a full year untouched: 364 days survives, a year and a minute goes (mutation: shorter window)", async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const young = await seed({ created: ago(364 * day) });
+    const old = await seed({ created: ago(365 * day + 60_000) });
+    await gcOrphanReferences(client, NOW);
+    expect(GC_RETENTION_MS).toBe(365 * day);
+    expect(await exists(young)).toBe(true);
+    expect(await exists(old)).toBe(false);
   });
 
   it("deletes at most GC_BATCH rows per call", async () => {
