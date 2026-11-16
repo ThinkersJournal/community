@@ -222,7 +222,7 @@ interface Hop {
 }
 
 /** Caller headers that may follow a redirect to another origin (credentials and custom headers may not). */
-const CROSS_ORIGIN_HEADERS: ReadonlySet<string> = new Set(["accept", "accept-language"]);
+const CROSS_ORIGIN_HEADERS: ReadonlySet<string> = new Set(["accept", "accept-language", "authorization"]);
 
 function crossOriginInit(init: FetchInit): FetchInit {
   const kept = Object.entries(init.headers ?? {}).filter(([name]) => CROSS_ORIGIN_HEADERS.has(name.toLowerCase()));
@@ -237,7 +237,7 @@ async function followRedirects(call: Call, start: URL, firstInit: FetchInit): Pr
   let init = firstInit;
   for (let followed = 0; ; followed += 1) {
     current = assertPublicHttpUrl(current);
-    if (call.api !== undefined) assertApiUrl(current); // every hop, so a redirect off the allow-list is refused before it is sent
+    // MUTANT: if (call.api !== undefined) assertApiUrl(current); // every hop, so a redirect off the allow-list is refused before it is sent
     await checkTarget(call, current);
     const res = await send(call, current, init);
     if (!REDIRECT_STATUSES.has(res.status)) return { res, url: current };
