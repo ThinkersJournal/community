@@ -50,6 +50,7 @@ import {
   handleAppealSignedIn,
   handlePeekAppealToken,
 } from "./routes/appeals";
+import { handleAttachReference } from "./routes/post-references";
 import { handleBlock, handleBlockStatus, handleListBlocks, handleUnblock } from "./routes/blocks";
 import { handleCreateComment, handleDeleteComment, handleUpdateComment } from "./routes/comments";
 import { handlePublicComments } from "./routes/comments-public";
@@ -308,6 +309,10 @@ export const ROUTES: readonly RouteDef[] = [
   // src/routes/blocks.ts. Same literal-vs-dynamic shape as /follows above
   // (different methods, no shadow risk).
   { method: "POST", pattern: "/blocks", handler: handleBlock },
+
+  // Attach a reference card to the author's own post (M3.4a). `/references` is a literal segment under
+  // `/posts/:id`, same shape as `/hide` above. See src/routes/post-references.ts.
+  { method: "POST", pattern: "/posts/:id/references", handler: handleAttachReference },
   { method: "DELETE", pattern: "/blocks/:blockedId", handler: handleUnblock },
 
   // GET reads (endpoint/UI audit, 2026-09-24) — /blocks/status mirrors
