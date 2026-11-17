@@ -14,7 +14,7 @@
  *
  * Every network call goes through the injected `fetchImpl`, so tests use a fake and nothing here touches global fetch.
  */
-import { ConnectorError, type FetchCtx, type FetchedPage, type FetchInit } from "@thinkersjournal/shared";
+import { type ApiCall, ConnectorError, type FetchCtx, type FetchedPage, type FetchInit } from "@thinkersjournal/shared";
 
 import { assertPublicHttpUrl, isBlockedIpAddress, normaliseIPv4 } from "./ssrf";
 
@@ -37,6 +37,12 @@ const ROBOTS_TOKEN = "thinkersjournalbot";
 const MAX_ROBOTS_RULES = 5000;
 const MAX_MATCH_URL_CHARS = 2048;
 const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * The ONLY hosts the authenticated-API path may reach (PM ruling 2026-11-16, option A). A constant in code: never
+ * configuration, never caller input. Adding a host is a reviewed code change.
+ */
+export const API_HOSTS: readonly string[] = ["api.github.com"];
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 /** Resolves a host name to its A and AAAA addresses (text). */
@@ -74,6 +80,8 @@ interface Deadline {
 }
 
 interface Call {
+  /** Set only on the authenticated-API path; robots.txt is skipped ONLY then. */
+  api: ApiCall | undefined;
   cfg: Config;
   deadline: Deadline;
   robots: Map<string, Promise<RobotsPolicy>>;
@@ -93,6 +101,13 @@ function startDeadline(ms: number): Deadline {
     clear: () => clearTimeout(timer),
     race: (work) => Promise.race([work, expired]),
   };
+}
+
+/** The api path's own door: https, no userinfo, default port, and a host from the constant allow-list. Typed refusal. */
+function assertApiUrl(url: URL): URL {
+  const ok = url.protocol === "https:" && url.username === "" && url.password === "" && url.port === "" && API_HOSTS.includes(hostOf(url));
+  if (!ok) throw new ConnectorError("blocked_target", "not an allow-listed API endpoint");
+  return url;
 }
 
 function toConnectorError(e: unknown, deadline: Deadline): ConnectorError {
@@ -171,11 +186,16 @@ async function send(call: Call, url: URL, init: FetchInit): Promise<Response> {
   if (call.deadline.signal.aborted) throw new ConnectorError("timeout", "deadline passed");
   const headers = new Headers(init.headers);
   headers.set("user-agent", BOT_USER_AGENT);
-  if (!headers.has("accept")) headers.set("accept", "text/html,application/xhtml+xml");
+  const api = call.api;
+  if (api !== undefined) {
+    headers.delete("authorization"); // only the credential below may set it
+    if (api.credential !== undefined) headers.set("authorization", api.credential.reveal());
+  }
+  if (!headers.has("accept")) headers.set("accept", api !== undefined ? "application/json" : "text/html,application/xhtml+xml");
+  const request: RequestInit = { method: api?.method ?? "GET", redirect: "manual", headers, signal: call.deadline.signal };
+  if (api?.body !== undefined) request.body = api.body;
   try {
-    return await call.deadline.race(
-      call.cfg.fetchImpl(url.href, { method: "GET", redirect: "manual", headers, signal: call.deadline.signal }),
-    );
+    return await call.deadline.race(call.cfg.fetchImpl(url.href, request));
   } catch (e) {
     throw toConnectorError(e, call.deadline);
   }
@@ -206,7 +226,10 @@ const CROSS_ORIGIN_HEADERS: ReadonlySet<string> = new Set(["accept", "accept-lan
 
 function crossOriginInit(init: FetchInit): FetchInit {
   const kept = Object.entries(init.headers ?? {}).filter(([name]) => CROSS_ORIGIN_HEADERS.has(name.toLowerCase()));
-  return { ...init, headers: Object.fromEntries(kept) };
+  const out: FetchInit = { headers: Object.fromEntries(kept) }; // built field by field: no credential (`api`) can ride along
+  if (init.overflow !== undefined) out.overflow = init.overflow;
+  if (init.allowedTypes !== undefined) out.allowedTypes = init.allowedTypes;
+  return out;
 }
 
 async function followRedirects(call: Call, start: URL, firstInit: FetchInit): Promise<Hop> {
@@ -214,10 +237,12 @@ async function followRedirects(call: Call, start: URL, firstInit: FetchInit): Pr
   let init = firstInit;
   for (let followed = 0; ; followed += 1) {
     current = assertPublicHttpUrl(current);
+    if (call.api !== undefined) assertApiUrl(current); // every hop, so a redirect off the allow-list is refused before it is sent
     await checkTarget(call, current);
     const res = await send(call, current, init);
     if (!REDIRECT_STATUSES.has(res.status)) return { res, url: current };
     discard(res);
+    if (call.api?.method === "POST") throw new ConnectorError("upstream", "a POST is never redirected");
     if (followed >= call.cfg.maxRedirects) throw new ConnectorError("upstream", "too many redirects");
     const next = nextHop(res, current);
     if (next.origin !== current.origin) init = crossOriginInit(init);
@@ -338,9 +363,10 @@ export function createGuardedFetch(opts: GuardedFetchOptions): FetchCtx["fetch"]
   const cfg = resolveConfig(opts);
   return async (input, init = {}) => {
     const deadline = startDeadline(cfg.timeoutMs);
-    const call: Call = { cfg, deadline, robots: new Map(), skipRobots: false };
+    const call: Call = { api: init.api, cfg, deadline, robots: new Map(), skipRobots: init.api !== undefined };
     try {
       const start = assertPublicHttpUrl(input);
+      if (call.api !== undefined) assertApiUrl(start);
       return await deadline.race(runHops(call, start, init));
     } finally {
       deadline.clear();

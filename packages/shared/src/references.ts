@@ -107,7 +107,44 @@ export class ConnectorError extends Error {
 }
 
 /** Options a connector may pass through the guarded door; the guard's own limits are not overridable upward. */
+/**
+ * A credential for an authenticated API call (M3.3). OPAQUE on purpose: it carries the Authorization value but never shows
+ * it: `String()`, `JSON.stringify` and console inspection all give "[redacted]", so it cannot reach a log or an error string by
+ * accident. Only the guarded door calls `reveal()`, and only on the `api` path.
+ */
+export class ApiCredential {
+  readonly #value: string;
+  constructor(scheme: "Bearer", token: string) {
+    this.#value = `${scheme} ${token}`;
+  }
+  reveal(): string {
+    return this.#value;
+  }
+  toString(): string {
+    return "[redacted]";
+  }
+  toJSON(): string {
+    return "[redacted]";
+  }
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    return "[redacted]";
+  }
+}
+
+/**
+ * The authenticated-API path of the one door (PM ruling 2026-11-16, option A). The host is checked against a CONSTANT
+ * allow-list in guarded-fetch.ts (api.github.com), never against config or caller input.
+ */
+export interface ApiCall {
+  /** Default GET. A POST is never redirected. */
+  method?: "GET" | "POST";
+  body?: string;
+  credential?: ApiCredential;
+}
+
 export interface FetchInit {
+  /** Authenticated API call: only an allow-listed API host, no robots.txt, every other guard unchanged. */
+  api?: ApiCall;
   headers?: Record<string, string>;
   /** `too_large` (default): exceeding the byte cap throws. `truncate`: keep the first `maxBytes` and stop reading. */
   overflow?: "too_large" | "truncate";

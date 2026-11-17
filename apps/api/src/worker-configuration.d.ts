@@ -85,6 +85,11 @@ interface __BaseEnv_Env {
 	AUTHOR_BUDGET: DurableObjectNamespace<import("./index").AuthorBudgetDO>;
 	REFRESH_QUEUE: Queue;
 	REFERENCE_REFRESH: string;
+	// M3.3 — added by hand (same established pattern as RESET_LIMITER above: a full `wrangler types` regeneration in this
+	// checkout drops other vars and pulls in an unrelated diff). GITHUB_APP_ID is a plain var in wrangler.jsonc; the private key
+	// is a Worker secret the PM sets, so it is optional (unset = the github connector stays off, see registryFromEnv).
+	GITHUB_APP_ID: string;
+	GITHUB_APP_PRIVATE_KEY?: string;
 	SECURITY_COUNTING: string;
 	SECURITY_ALERTS_ENABLED: string;
 	ACCOUNT_NOTICES_ENABLED: string;

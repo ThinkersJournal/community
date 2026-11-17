@@ -10,7 +10,7 @@
  * are read defensively: anything that is not the expected shape is the "no longer available" card (null), never a throw
  * that would turn one bad row into a 500 for the whole post.
  */
-import { defaultRegistry, type Registry } from "./registry";
+import { renderRegistry, type Registry } from "./registry";
 
 import type { ImageRef, RefCard, SourceKind, StoredReference } from "@thinkersjournal/shared";
 import type { Client } from "pg";
@@ -101,7 +101,7 @@ function cardOf(row: Row, registry: Registry): RefCard | null {
 export async function loadRefCards(
   db: Client,
   postIds: readonly string[],
-  registry: Registry = defaultRegistry,
+  registry: Registry = renderRegistry,
 ): Promise<Map<string, RefCard | null>> {
   const cards = new Map<string, RefCard | null>();
   if (postIds.length === 0) return cards;
