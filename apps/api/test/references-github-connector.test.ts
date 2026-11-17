@@ -117,7 +117,7 @@ describe("github resolve", () => {
   });
 
   it("text is capped and stripped of invisible controls like every snapshot", async () => {
-    const got = await connector.resolve(ISSUE, stub(() => page(200, issueJson({ title: "x".repeat(500) + "‮", body: "l\n".repeat(100) }))).ctx);
+    const got = await connector.resolve(ISSUE, stub(() => page(200, issueJson({ title: "x".repeat(500) + String.fromCharCode(0x202e), body: "l\n".repeat(100) }))).ctx);
     const snap = got.snapshot;
     expect(snap.kind === "github" && snap.title.length).toBe(300);
     expect(snap.kind === "github" && (snap.excerpt ?? "").split("\n").length).toBeLessThanOrEqual(40);

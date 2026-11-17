@@ -153,7 +153,7 @@ describe("api path: the credential stays secret (condition 2)", () => {
   it("on the ordinary GET path an Authorization header the caller passed is not copied to another origin on redirect", async () => {
     const rec = recorder((url) => {
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
-      return url.startsWith("https://a.test") ? redirect("https://b.test/y") : json("{}", 200, { "content-type": "text/html" });
+      return new URL(url).hostname === "a.test" ? redirect("https://b.test/y") : json("{}", 200, { "content-type": "text/html" });
     });
     await guard(rec)("https://a.test/x", { headers: { authorization: "Bearer caller" }, allowedTypes: ["text/html"] });
     const toB = rec.calls.filter((c) => c.url === "https://b.test/y");

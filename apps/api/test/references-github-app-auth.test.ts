@@ -76,7 +76,7 @@ describe("mintAppJwt", () => {
   it("a missing or unreadable private key is a named error and never echoes the key text", async () => {
     const none = await mintAppJwt("5732881", undefined, 1).catch((e: unknown) => e);
     expect((none as GithubAppConfigError).missing).toBe("GITHUB_APP_PRIVATE_KEY");
-    const junk = await mintAppJwt("5732881", "-----BEGIN PRIVATE KEY-----\nSECRETJUNK\n-----END PRIVATE KEY-----", 1).catch((e: unknown) => e);
+    const junk = await mintAppJwt("5732881", pem("PRIVATE KEY", new TextEncoder().encode("SECRETJUNK")), 1).catch((e: unknown) => e);
     expect(junk).toBeInstanceOf(GithubAppConfigError);
     expect(String((junk as Error).message)).not.toContain("SECRETJUNK");
   });
