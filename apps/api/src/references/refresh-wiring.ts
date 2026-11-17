@@ -13,7 +13,7 @@ import { productionFetchCtx } from "./guarded-fetch";
 import { claimDueRefreshes, type RefreshMessage } from "./refresh-queue";
 import { consumeRefreshBatch } from "./refresh-consumer";
 import { refreshReference, type RefreshBudget } from "./refresh";
-import { defaultRegistry } from "./registry";
+import { registryFromEnv } from "./registry";
 import { withClient } from "../db/client";
 
 /** The per-author budget, backed by the author's own Durable Object (one bucket per author id). */
@@ -59,6 +59,6 @@ export async function handleRefreshQueue(batch: MessageBatch<unknown>, env: Env,
   const fetchCtx = productionFetchCtx();
   const budget = budgetFromEnv(env);
   await withClient(env.HYPERDRIVE_FRESH, ctx, (db) =>
-    consumeRefreshBatch(batch.messages, (id) => refreshReference(db, id, { registry: defaultRegistry, ctx: fetchCtx, budget, now: new Date() })),
+    consumeRefreshBatch(batch.messages, (id) => refreshReference(db, id, { registry: registryFromEnv(env), ctx: fetchCtx, budget, now: new Date() })),
   );
 }
