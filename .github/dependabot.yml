@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # One weekly PR for the whole pnpm workspace instead of one PR per package (same shape as OverMind's /probe group).
+  # Dependabot opens no changelog.d fragment, so its PRs fail "One fragment per PR" and cannot merge as they are:
+  # a lane folds the grouped PR's bumps into its own daily PR and closes the Dependabot PR with a pointer to it.
+  - package-ecosystem: "npm"
+    directories:
+      - "/"
+      - "/apps/api"
+      - "/apps/web"
+      - "/packages/markdown"
+      - "/packages/shared"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-weekly:
+        patterns:
+          - "*"
