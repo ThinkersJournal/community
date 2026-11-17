@@ -62,6 +62,14 @@ describe("POST /posts/:id/references", () => {
     const body = (await res.json()) as { code: string; reason: string };
     expect([res.status, body.code, body.reason]).toEqual([422, "REFERENCE_FAILED", "unsupported"]);
   });
+  it.each(["http://169.254.169.254/latest", "http://127.0.0.1:8080/admin", "http://[::1]/"])(
+    "422 blocked_target for a private address %s (the door refuses it before any network call)",
+    async (url) => {
+      const res = await call(author, postId, { url });
+      const body = (await res.json()) as { code: string; reason: string };
+      expect([res.status, body.code, body.reason]).toEqual([422, "REFERENCE_FAILED", "blocked_target"]);
+    },
+  );
   it("404 NOT_FOUND for someone else's post (mutation: drop the author check)", async () => {
     const res = await call(other, postId, { url: "https://example.com/a" });
     expect([res.status, await codeOf(res)]).toEqual([404, "NOT_FOUND"]);

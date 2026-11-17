@@ -5,8 +5,9 @@
  * limiter, reuse of a fresh stored row, the transaction). This file only authenticates, parses, builds the door and
  * translates the typed result.
  *
- * ⚠️ A FAILURE NEVER LOSES THE POST AND IS NOT A SERVER ERROR. The post is already saved; a blocked target, a timeout
- * or a bad page comes back as 422 REFERENCE_FAILED with `reason`, and the caller leaves the URL as an ordinary link.
+ * ⚠️ A FAILURE NEVER LOSES THE POST. The post is already saved; a blocked target, a timeout or a bad page comes back
+ * as 422 REFERENCE_FAILED with `reason`, and the caller leaves the URL as an ordinary link. The one exception to
+ * "not a server error" is `internal` (our own bug, already logged by attachReference): that is 500 REFERENCE_FAILED.
  * `rate_limited` is the one 429 and `post_not_found` the one 404 (the same answer for a stranger's post and a missing
  * one). The door is `productionFetchCtx()` wrapped in the per-origin limiter; nothing here reaches the network itself.
  */

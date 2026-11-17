@@ -309,11 +309,11 @@ export const ROUTES: readonly RouteDef[] = [
   // src/routes/blocks.ts. Same literal-vs-dynamic shape as /follows above
   // (different methods, no shadow risk).
   { method: "POST", pattern: "/blocks", handler: handleBlock },
+  { method: "DELETE", pattern: "/blocks/:blockedId", handler: handleUnblock },
 
   // Attach a reference card to the author's own post (M3.4a). `/references` is a literal segment under
   // `/posts/:id`, same shape as `/hide` above. See src/routes/post-references.ts.
   { method: "POST", pattern: "/posts/:id/references", handler: handleAttachReference },
-  { method: "DELETE", pattern: "/blocks/:blockedId", handler: handleUnblock },
 
   // GET reads (endpoint/UI audit, 2026-09-24) — /blocks/status mirrors
   // /follows/status exactly (same GET/no-CSRF/readCurrentSession shape); GET
