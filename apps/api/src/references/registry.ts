@@ -34,3 +34,17 @@ export function createRegistry(connectors: readonly Connector[]): Registry {
 }
 
 export const defaultRegistry: Registry = createRegistry([webConnector]);
+
+/** The App settings the github connector needs (`GITHUB_APP_ID` is a plain var, the key a Worker secret). */
+export interface GithubEnv {
+  GITHUB_APP_ID?: string | undefined;
+  GITHUB_APP_PRIVATE_KEY?: string | undefined;
+}
+
+/** STUB at this commit (red-first): returns the default registry; the env-aware registry follows. */
+export function registryFromEnv(_env: GithubEnv): Registry {
+  return defaultRegistry;
+}
+
+/** STUB at this commit (red-first). Reads of stored cards need `deepLink` for every kind, configured or not. */
+export const renderRegistry: Registry = defaultRegistry;
