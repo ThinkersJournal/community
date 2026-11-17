@@ -3,7 +3,7 @@
  * The `github` connector (M3.3, spec 3): public issues, pull requests, files with a line range, and CI check runs.
  * `identify` is pure (no I/O): it claims only github.com URLs that name ONE resource (issue, pull request, check run,
  * or a file WITH a line anchor) and answers null for everything else, so those URLs fall through to `web`.
- * resolve/fetchLive cover issues, pull requests and check runs (files with a line range follow).
+ * resolve/fetchLive cover issues, pull requests, check runs, and files with a line range (pinned to a commit SHA).
  *
  * ⚠️ THE ONLY DOOR IS `ctx.fetch` with its `api` path (the guarded door; this file never names the global `fetch`).
  * ⚠️ NO TEXT FROM GITHUB IS EVER CARRIED INTO AN ERROR: a status is named, a body never is.
@@ -20,6 +20,7 @@ import {
   type LiveResult,
   type RepoSnapshot,
   type Resolved,
+  SNAPSHOT_CAPS,
   type StoredReference,
 } from "@thinkersjournal/shared";
 
@@ -179,6 +180,56 @@ function accessForError(e: unknown): LiveResult {
   return { access: "error", diff: "unknown" };
 }
 
+const FILE_KEY = /^github:([a-z0-9._-]+\/[a-z0-9._-]+)#file:(.+)#L([0-9]+)-L([0-9]+)$/;
+const GH_JSON = "application/vnd.github+json";
+const GH_RAW = "application/vnd.github.raw+json";
+const RAW_TYPES = [GH_RAW, "application/vnd.github.raw", "text/plain", "application/octet-stream"];
+const SHA_RE = /^[0-9a-f]{40}$/;
+
+interface FileTarget {
+  slug: string;
+  /** `<ref>/<path>` exactly as the URL had it: a ref may contain slashes, so the split is found by asking GitHub. */
+  where: string;
+  a: number;
+  b: number;
+}
+
+function fileTargetOf(resourceKey: string): FileTarget | null {
+  const m = FILE_KEY.exec(resourceKey);
+  if (m === null) return null;
+  return { slug: m[1] as string, where: m[2] as string, a: Number(m[3]), b: Number(m[4]) };
+}
+
+function encodePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+/** Lines a..b of `body` (1-based, at most 40, clamped to the file). null when the file has no line `a`. */
+function sliceLines(body: string, a: number, b: number): { end: number; excerpt: string } | null {
+  const lines = body.split("\n").map((l) => l.replace(/\r$/, ""));
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  if (a > lines.length) return null;
+  const end = Math.min(b, lines.length, a + SNAPSHOT_CAPS.excerptLines - 1);
+  return { end, excerpt: lines.slice(a - 1, end).join("\n") };
+}
+
+function fileSnapshot(path: string, sha: string, a: number, end: number, excerpt: string, at: Date): RepoSnapshot {
+  const snapshot: RepoSnapshot = {
+    kind: "github",
+    type: "file",
+    title: path.split("/").pop() ?? path,
+    state: "file",
+    path,
+    ref: sha,
+    lines: [a, end],
+    capturedAt: at.toISOString(),
+  };
+  if (excerpt !== "") snapshot.excerpt = excerpt;
+  const capped = capSnapshot(snapshot);
+  if (capped.kind !== "github") throw new ConnectorError("upstream", "github answer unreadable", false);
+  return capped;
+}
+
 /** The answer to a response that is not a 2xx. Only a definitive 404/410 is `gone`. */
 function accessForStatus(page: FetchedPage): LiveResult {
   const s = page.status;
@@ -193,22 +244,83 @@ export function createGithubConnector(opts: GithubConnectorOptions = {}): Connec
   const now = opts.now ?? ((): Date => new Date());
   const { auth } = opts;
 
-  async function get(ctx: FetchCtx, t: Target, etag?: string): Promise<FetchedPage> {
+  /** The one authenticated GET (through the guarded door's api path). */
+  async function api(ctx: FetchCtx, url: string, accept: string, types: readonly string[], etag?: string): Promise<FetchedPage> {
     if (auth === undefined) throw new ConnectorError("unsupported", "github is not configured", false);
     const credential = await auth.credential(ctx);
-    const headers: Record<string, string> = { accept: "application/vnd.github+json" };
+    const headers: Record<string, string> = { accept };
     if (etag !== undefined) headers["if-none-match"] = etag;
-    return ctx.fetch(`https://api.github.com/repos/${t.slug}/${ENDPOINT[t.type]}/${t.num}`, {
-      api: { credential },
-      headers,
-      allowedTypes: ["application/json"],
-    });
+    return ctx.fetch(url, { api: { credential }, headers, allowedTypes: types });
+  }
+
+  function get(ctx: FetchCtx, t: Target, etag?: string): Promise<FetchedPage> {
+    return api(ctx, `https://api.github.com/repos/${t.slug}/${ENDPOINT[t.type]}/${t.num}`, GH_JSON, ["application/json"], etag);
+  }
+
+  async function headSha(ctx: FetchCtx, slug: string, ref: string): Promise<{ page: FetchedPage; sha?: string }> {
+    const page = await api(ctx, `https://api.github.com/repos/${slug}/commits/${encodePath(ref)}`, GH_JSON, ["application/json"]);
+    if (page.status < 200 || page.status >= 300) return { page };
+    const sha = parseJson(page)["sha"];
+    if (typeof sha !== "string" || !SHA_RE.test(sha)) throw new ConnectorError("upstream", "github answer unreadable", false);
+    return { page, sha };
+  }
+
+  /** `<ref>/<path>` has no marked split: try one segment as the ref, then two (at most four), first commit that exists wins. */
+  async function pin(ctx: FetchCtx, f: FileTarget): Promise<{ sha: string; path: string }> {
+    const segs = f.where.split("/");
+    for (let k = 1; k <= Math.min(4, segs.length - 1); k += 1) {
+      const { page, sha } = await headSha(ctx, f.slug, segs.slice(0, k).join("/"));
+      if (sha !== undefined) return { sha, path: segs.slice(k).join("/") };
+      if (page.status !== 404 && page.status !== 422) throw failure(page);
+    }
+    throw new ConnectorError("not_found", "no such ref", false);
+  }
+
+  function rawFile(ctx: FetchCtx, f: FileTarget, path: string, ref: string, etag?: string): Promise<FetchedPage> {
+    return api(ctx, `https://api.github.com/repos/${f.slug}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`, GH_RAW, RAW_TYPES, etag);
+  }
+
+  async function resolveFile(id: Identified, f: FileTarget, ctx: FetchCtx): Promise<Resolved> {
+    const { sha, path } = await pin(ctx, f);
+    const page = await rawFile(ctx, f, path, sha);
+    if (page.status < 200 || page.status >= 300) throw failure(page);
+    if (page.body.includes("\u0000")) throw new ConnectorError("unsupported", "binary file", false);
+    const cut = sliceLines(page.body, f.a, f.b);
+    if (cut === null) throw new ConnectorError("not_found", "no such line", false);
+    const snapshot = fileSnapshot(path, sha, f.a, cut.end, cut.excerpt, now());
+    return { resourceKey: id.resourceKey, snapshot, contentHash: await contentHash(snapshot) };
+  }
+
+  /** Re-read the branch the author linked. Same text at the same lines is unchanged even if the branch moved. */
+  async function liveFile(ref: StoredReference, f: FileTarget, ctx: FetchCtx): Promise<LiveResult> {
+    const was = ref.snapshot;
+    if (was === null || was.kind !== "github" || was.type !== "file" || was.path === undefined) return { access: "error", diff: "unknown" };
+    if (!f.where.endsWith(`/${was.path}`)) return { access: "error", diff: "unknown" };
+    const refName = f.where.slice(0, f.where.length - was.path.length - 1);
+    const page = await rawFile(ctx, f, was.path, refName, ref.etag);
+    if (page.status < 200 || page.status >= 300) return accessForStatus(page);
+    if (page.body.includes("\u0000")) return { access: "error", diff: "unknown" };
+    const cut = sliceLines(page.body, f.a, f.b);
+    const excerpt = cut?.excerpt ?? "";
+    if (excerpt === (was.excerpt ?? "")) return { access: "ok", diff: "unchanged", ...etagOf(page) };
+    const head = await headSha(ctx, f.slug, refName);
+    if (head.sha === undefined) return { access: "error", diff: "unknown" };
+    const snapshot = fileSnapshot(was.path, head.sha, f.a, cut?.end ?? f.a, excerpt, now());
+    return { access: "ok", diff: "changed", snapshot, contentHash: await contentHash(snapshot), ...etagOf(page) };
   }
 
   return {
     kind: "github",
     identify,
     async resolve(id: Identified, ctx: FetchCtx): Promise<Resolved> {
+      const file = fileTargetOf(id.resourceKey);
+      if (file !== null) {
+        try {
+          return await resolveFile(id, file, ctx);
+        } catch (e) {
+          throw asConnectorError(e);
+        }
+      }
       const t = targetOf(id.resourceKey);
       if (t === null) throw new ConnectorError("unsupported", "github resource kind not supported yet", false);
       let page: FetchedPage;
@@ -222,6 +334,14 @@ export function createGithubConnector(opts: GithubConnectorOptions = {}): Connec
       return { resourceKey: id.resourceKey, snapshot, contentHash: await contentHash(snapshot), ...etagOf(page) };
     },
     async fetchLive(ref: StoredReference, ctx: FetchCtx): Promise<LiveResult> {
+      const file = fileTargetOf(ref.resourceKey);
+      if (file !== null) {
+        try {
+          return await liveFile(ref, file, ctx);
+        } catch (e) {
+          return accessForError(e);
+        }
+      }
       const t = targetOf(ref.resourceKey);
       if (t === null) return { access: "error", diff: "unknown" };
       let page: FetchedPage;
