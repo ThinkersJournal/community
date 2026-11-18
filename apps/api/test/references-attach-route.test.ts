@@ -76,8 +76,8 @@ describe("POST /posts/:id/references", () => {
     const ctx = createExecutionContext();
     await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [hiddenId]));
     await waitOnExecutionContext(ctx);
-    // An unsupported URL would be 422 if the moderation gate were missing: the 403 proves the gate runs first.
-    const res = await call(author, hiddenId, { url: "ftp://example.com/a" });
+    // A supported URL: without the gate this would go on to fetch, so the 403 proves the gate refuses BEFORE any network call.
+    const res = await call(author, hiddenId, { url: "https://example.com/a" });
     expect([res.status, await codeOf(res)]).toEqual([403, "POST_UNDER_MODERATION"]);
   });
   it("404 NOT_FOUND for someone else's post (mutation: drop the author check)", async () => {
