@@ -61,6 +61,11 @@ export async function handleAttachReference(
     });
   }
   if (outcome.reason === "post_not_found") return errorResponse("NOT_FOUND", 404);
+  if (outcome.reason === "under_moderation") {
+    return errorResponse("POST_UNDER_MODERATION", 403, {
+      message: "This post is hidden pending review or by moderator decision, and cannot be changed.",
+    });
+  }
   if (outcome.reason === "rate_limited") return errorResponse("RATE_LIMITED", 429);
   if (outcome.reason === "internal") return errorResponse("REFERENCE_FAILED", 500, { reason: outcome.reason });
   return errorResponse("REFERENCE_FAILED", 422, { reason: outcome.reason });

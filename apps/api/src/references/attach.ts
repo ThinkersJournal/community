@@ -25,6 +25,7 @@
 import { ConnectorError, MAX_REFERENCES_PER_POST, type FetchCtx, type Resolved } from "@thinkersjournal/shared";
 
 import { isUniqueViolation } from "../db/errors";
+import { POST_NOT_UNDER_MODERATION_SQL } from "../moderation/author-hide";
 import { OriginRateLimitedError, type LimiterLike } from "./origin-limit";
 import { defaultRegistry, type Registry } from "./registry";
 
@@ -50,6 +51,7 @@ export type AttachFailure =
   | "rate_limited"
   | "too_many_references"
   | "post_not_found"
+  | "under_moderation"
   | "internal";
 
 export type AttachResult = { ok: true; token: string; referenceId: string; reused: boolean } | { ok: false; reason: AttachFailure };
@@ -92,9 +94,19 @@ function reasonOf(e: unknown): AttachFailure {
   return "internal";
 }
 
-async function ownsPost(db: Client, postId: string, authorId: string): Promise<boolean> {
-  const { rowCount } = await db.query("SELECT 1 FROM posts WHERE id = $1 AND author_id = $2", [postId, authorId]);
-  return rowCount === 1;
+/**
+ * "ok" when the author owns the post and no moderator (or pending auto-hide) controls its visibility. A card changes what
+ * readers see, so the same freeze as an edit applies (#58: the moderator must rule on the version that was reported);
+ * `POST_NOT_UNDER_MODERATION_SQL` is the one definition of that (author-hide.ts) and expects the post aliased `t`.
+ * Only the confirmed owner can get "under_moderation", so it leaks nothing a stranger could not see.
+ */
+async function postState(db: Client, postId: string, authorId: string, forUpdate = false): Promise<"ok" | "not_found" | "under_moderation"> {
+  const { rows } = await db.query<{ free: boolean }>(
+    `SELECT (${POST_NOT_UNDER_MODERATION_SQL}) IS TRUE AS free FROM posts t WHERE t.id = $1 AND t.author_id = $2${forUpdate ? " FOR UPDATE OF t" : ""}`,
+    [postId, authorId],
+  );
+  if (rows[0] === undefined) return "not_found";
+  return rows[0].free ? "ok" : "under_moderation";
 }
 
 async function useCount(db: Client, postId: string): Promise<number> {
@@ -171,10 +183,10 @@ async function store(
 ): Promise<AttachResult> {
   await db.query("BEGIN");
   try {
-    const locked = await db.query("SELECT 1 FROM posts WHERE id = $1 AND author_id = $2 FOR UPDATE", [input.postId, input.authorId]);
-    if (locked.rowCount !== 1) {
+    const state = await postState(db, input.postId, input.authorId, true);
+    if (state !== "ok") {
       await rollback(db);
-      return fail("post_not_found");
+      return fail(state === "not_found" ? "post_not_found" : "under_moderation");
     }
     if (afterLock !== undefined) await afterLock();
     if ((await useCount(db, input.postId)) >= MAX_REFERENCES_PER_POST) {
@@ -200,7 +212,9 @@ async function attach(db: Client, input: AttachInput, deps: AttachDeps): Promise
   }
   const hit = (deps.registry ?? defaultRegistry).identify(url);
   if (hit === null) return fail("unsupported");
-  if (!(await ownsPost(db, input.postId, input.authorId))) return fail("post_not_found");
+  const state = await postState(db, input.postId, input.authorId);
+  if (state === "not_found") return fail("post_not_found");
+  if (state === "under_moderation") return fail("under_moderation");
   // The per-user limiter is charged BEFORE the cache lookup, so a reuse of a stored row costs a unit too. Deliberate:
   // it keeps the check cheap and stops a user from probing which URLs are already stored.
   if (deps.limiter !== undefined) {
