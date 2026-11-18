@@ -3,6 +3,7 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import worker from "../src";
+import { withClient } from "../src/db/client";
 import { createPublished, createVerifiedActor, deleteCreatedUsers } from "./actor";
 
 import type { Actor } from "./actor";
@@ -70,6 +71,15 @@ describe("POST /posts/:id/references", () => {
       expect([res.status, body.code, body.reason]).toEqual([422, "REFERENCE_FAILED", "blocked_target"]);
     },
   );
+  it("403 POST_UNDER_MODERATION while an auto-hide is pending review (#58: the reported version must not change)", async () => {
+    const hiddenId = await createPublished(author);
+    const ctx = createExecutionContext();
+    await withClient(env.HYPERDRIVE_FRESH, ctx, (c) => c.query("UPDATE posts SET hidden_at = now() WHERE id = $1", [hiddenId]));
+    await waitOnExecutionContext(ctx);
+    // An unsupported URL would be 422 if the moderation gate were missing: the 403 proves the gate runs first.
+    const res = await call(author, hiddenId, { url: "ftp://example.com/a" });
+    expect([res.status, await codeOf(res)]).toEqual([403, "POST_UNDER_MODERATION"]);
+  });
   it("404 NOT_FOUND for someone else's post (mutation: drop the author check)", async () => {
     const res = await call(other, postId, { url: "https://example.com/a" });
     expect([res.status, await codeOf(res)]).toEqual([404, "NOT_FOUND"]);
