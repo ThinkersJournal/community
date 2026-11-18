@@ -25,7 +25,7 @@
 import { ConnectorError, MAX_REFERENCES_PER_POST, type FetchCtx, type Resolved } from "@thinkersjournal/shared";
 
 import { isUniqueViolation } from "../db/errors";
-import { POST_NOT_UNDER_MODERATION_SQL } from "../moderation/author-hide";
+import { POST_NOT_UNDER_MODERATION_SQL } from "../moderation/post-moderation-sql";
 import { OriginRateLimitedError, type LimiterLike } from "./origin-limit";
 import { defaultRegistry, type Registry } from "./registry";
 
