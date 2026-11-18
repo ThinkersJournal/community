@@ -20,6 +20,8 @@ export interface ErrorResponseInit {
    */
   headers?: Record<string, string>;
   message?: string;
+  /** For REFERENCE_FAILED: the attach failure that stopped the card. */
+  reason?: string;
   fields?: string[];
   /** For USERNAME_TAKEN: a few available handle suggestions. Advisory; never branch on it. */
   suggestions?: string[];
@@ -34,6 +36,7 @@ export function errorResponse(
 ): Response {
   const body: Record<string, unknown> = { code };
   if (init.message !== undefined) body.message = init.message;
+  if (init.reason !== undefined) body.reason = init.reason;
   if (init.fields !== undefined) body.fields = init.fields;
   if (init.suggestions !== undefined) body.suggestions = init.suggestions;
   if (init.barred !== undefined) body.barred = init.barred;

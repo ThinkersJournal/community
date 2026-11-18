@@ -286,7 +286,7 @@ describe("attachReference: the cap is serialised by the post row lock", () => {
   async function waitForLockWaiter(): Promise<void> {
     for (let i = 0; i < 200; i += 1) {
       const { rows } = await client.query<{ n: number }>(
-        "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM posts WHERE id%FOR UPDATE%'",
+        "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM posts t WHERE t.id%FOR UPDATE OF t%'",
       );
       if ((rows[0]?.n ?? 0) >= 1) return;
       await new Promise((r) => setTimeout(r, 25));

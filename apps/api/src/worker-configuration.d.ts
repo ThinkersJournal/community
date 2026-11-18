@@ -18,6 +18,8 @@ interface __BaseEnv_Env {
 	REACTION_LIMITER: RateLimit;
 	REPORT_LIMITER: RateLimit;
 	BLOCK_LIMITER: RateLimit;
+	REF_ATTACH_LIMITER: RateLimit;
+	REF_ORIGIN_LIMITER: RateLimit;
 	// #70 — added by hand rather than by rerunning `wrangler types`: the last
 	// regeneration in this checkout also dropped CF_ACCESS_*/CACHE_PURGE_*
 	// below (this checkout's `.dev.vars` does not declare them) and pulled in

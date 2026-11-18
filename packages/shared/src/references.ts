@@ -5,6 +5,11 @@
  * sections 3 and 4.3. No I/O in this file.
  */
 
+import { z } from "zod";
+
+/** `POST /posts/:id/references` body (M3.4a). The URL is parsed again by the connector registry. */
+export const AttachReferenceInput = z.object({ url: z.string().min(1).max(2048) });
+
 export type SourceKind = "web" | "github" | "gitlab";
 
 export interface Identified {

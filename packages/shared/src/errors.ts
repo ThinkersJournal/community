@@ -137,10 +137,15 @@ export type ApiErrorCode =
   | "APPEAL_SUPERSEDED"
   // 409 — POST /admin/notices/:id/resend: the notice has no live account to
   // send to (a reporter row, or an anonymised or vanished recipient).
-  | "NOT_RESENDABLE";
+  | "NOT_RESENDABLE"
+  // 422 — POST /posts/:id/references (M3.4): the URL could not become a card. The body carries `reason`
+  // (an attach failure); the author's URL simply stays an ordinary link, so this never loses the post.
+  | "REFERENCE_FAILED";
 
 export interface ApiErrorBody {
   code: ApiErrorCode;
+  /** For REFERENCE_FAILED: why the card could not be made. Branch on this, never on `message`. */
+  reason?: string;
   /** Human-facing only. Never branch on it; never put a submitted value in it. */
   message?: string;
   /** For INVALID_INPUT: the offending FIELD NAMES only — never their values. */

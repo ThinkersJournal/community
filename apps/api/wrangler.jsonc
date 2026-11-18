@@ -307,6 +307,18 @@
       "name": "LOGIN_CHALLENGE_IP_LIMITER",
       "namespace_id": "1018",
       "simple": { "limit": 15, "period": 60 }
+    },
+    {
+      "name": "REF_ATTACH_LIMITER",
+      "namespace_id": "1019",
+      "simple": { "limit": 10, "period": 60 }
+    },
+    // Per-origin outbound fetch cap for card unfurls (references/origin-limit.ts), keyed on the target host so one
+    // slow site cannot be hammered through us. 6 a minute per host per location.
+    {
+      "name": "REF_ORIGIN_LIMITER",
+      "namespace_id": "1020",
+      "simple": { "limit": 6, "period": 60 }
     }
   ],
   // Email outbox drains (M2.3c) — api's FIRST cron. */2 = instant pass; the daily
