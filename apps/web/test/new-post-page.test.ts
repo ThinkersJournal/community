@@ -624,3 +624,37 @@ describe("⚠️ Idempotency-Key on the create form (design 2026-10-13) — REND
     expect(code).toMatch(/initEditorPrefill\(\)/);
   });
 });
+
+describe("M3.4b link-card control — RENDERED, edit mode only", () => {
+  async function html(url: string): Promise<string> {
+    const res = await renderPage(NewPost, {
+      url,
+      api: (u) => {
+        const path = new URL(u).pathname;
+        if (path === "/auth/csrf") return json(200, { csrfToken: "tok" });
+        if (path === "/posts/p1") return json(200, { id: "p1", title: "T", markdownSource: "b", status: "draft", tags: [], hiddenAt: null, hiddenReason: null });
+        return json(500, { code: "UNEXPECTED_TEST_PATH", message: path });
+      },
+    });
+    expect(res.status).toBe(200);
+    return res.text();
+  }
+
+  it("edit mode shows the control, outside the editor form, carrying the post id", async () => {
+    const page = await html("http://localhost/new-post?post=p1");
+    expect(page).toContain("Insert a link card");
+    expect(page).toMatch(/id="ref-url"/);
+    expect(page).toMatch(/id="ref-status" role="status"/);
+    expect(page).toContain('data-post-id="p1"');
+    const formEnd = page.indexOf("</form>");
+    expect(page.indexOf("Insert a link card")).toBeGreaterThan(formEnd);
+    expect(page.indexOf("Insert an image")).toBeLessThan(formEnd); // control: the image fieldset is still inside
+  });
+
+  it("create mode shows only the hint, no control", async () => {
+    const page = await html("http://localhost/new-post");
+    expect(page).toContain("Save a draft first to add link cards");
+    expect(page).not.toContain('id="ref-url"');
+    expect(page).toContain('id="media-file"'); // control: the page rendered the editor
+  });
+});
