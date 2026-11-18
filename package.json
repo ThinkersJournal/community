@@ -13,9 +13,9 @@
     "smoke:deploy": "node scripts/deploy-smoke.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.63.0",
-    "@types/node": "26.6.4",
-    "typescript": "6.0.3"
+    "@playwright/test": "^1.65.1",
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
   },
   "pnpm": {
     "overrides": {
