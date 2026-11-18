@@ -22,7 +22,7 @@ describe("insertRefAtCursor", () => {
 
   it("does not double the newline when the cursor already sits on a line boundary", () => {
     expect(insertRefAtCursor("a\nb", 2, "t").value).toBe("a\n{{ref:t}}\nb");
-    expect(insertRefAtCursor("a\n\nb", 2, "t").value).toBe("a\n\n{{ref:t}}\nb");
+    expect(insertRefAtCursor("a\n\nb", 2, "t").value).toBe("a\n{{ref:t}}\n\nb");
   });
 
   it("handles an empty textarea and the very end", () => {

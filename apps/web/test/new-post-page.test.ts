@@ -646,7 +646,7 @@ describe("M3.4b link-card control — RENDERED, edit mode only", () => {
     expect(page).toMatch(/id="ref-url"/);
     expect(page).toMatch(/id="ref-status" role="status"/);
     expect(page).toContain('data-post-id="p1"');
-    const formEnd = page.indexOf("</form>");
+    const formEnd = page.indexOf("</form>", page.indexOf('id="editor-form"'));
     expect(page.indexOf("Insert a link card")).toBeGreaterThan(formEnd);
     expect(page.indexOf("Insert an image")).toBeLessThan(formEnd); // control: the image fieldset is still inside
   });
