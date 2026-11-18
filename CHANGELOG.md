@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.152 — M3.4b author-side "Insert a link card" control in the post editor
+
+The post editor now has an "Insert a link card" control (edit mode only: a card needs a saved post, so create mode shows "Save a draft first to add link cards"). The author pastes a URL; the island `apps/web/src/scripts/reference-picker.ts` posts it through the new same-origin proxy `apps/web/src/pages/api/post-reference.ts` (cookie, Origin and CSRF forwarded; `postId` uuid-checked and stripped from the forwarded body) to `POST /posts/:id/references` and inserts `{{ref:TOKEN}}` on its own line at the cursor of the Markdown box. A 404, 422, 429 or network failure only shows a status message; the textarea is never touched. The control sits outside the editor form and is a bundled script, so the page CSP (`script-src 'self'`) holds. Verified by `apps/web/test/reference-picker.test.ts` (helpers, proxy, island source scan) and the rendered edit/create cases in `apps/web/test/new-post-page.test.ts`.
+
 ## 0.1.151 — M3.4a: attach a reference card to your own post (POST /posts/:id/references)
 
 A verified author can ask for a card for a URL on their own post: `apps/api/src/routes/post-references.ts` wraps `attachReference` (`apps/api/src/references/attach.ts`) with the session pipeline, the shared `AttachReferenceInput` body (`packages/shared/src/references.ts`), a per-user limiter (`REF_ATTACH_LIMITER`, 10 a minute) and a per-origin limiter on the fetch door (`REF_ORIGIN_LIMITER`, 6 a minute per host), both in `apps/api/wrangler.jsonc`. A failure is 422 `REFERENCE_FAILED` with a `reason` and never loses the post. Pinned by `apps/api/test/references-attach-route.test.ts` (red first at f540c17, 5 of 6 failing with the missing route). The editor picker is M3.4b. NEW BINDINGS, no migration.

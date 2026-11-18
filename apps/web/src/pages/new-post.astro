@@ -440,6 +440,20 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
             </div>
           </form>
 
+          {/* M3.4b — link cards. OUTSIDE the editor form (no nested forms; Enter must not submit the post). Needs a
+              SAVED post id, so edit mode only; create mode gets a hint. The island (reference-picker.ts) inserts
+              `{{ref:TOKEN}}` into the textarea. */}
+          {postId !== null ? (
+            <fieldset id="ref-picker" class="ref-picker" data-post-id={postId}>
+              <legend>Insert a link card</legend>
+              <input type="url" id="ref-url" placeholder="https://github.com/owner/repo" aria-label="Link to turn into a card" />
+              <button type="button" id="ref-add" class="btn btn-ghost">Add card</button>
+              <p id="ref-status" role="status" />
+            </fieldset>
+          ) : (
+            <p class="ref-hint">Save a draft first to add link cards</p>
+          )}
+
           {/* #71 — a two-step confirm, the SAME no-JS <details>/<summary>
               pattern as Delete below (the issue's own suggested precedent),
               not a bare link. A plain "Discard" link that silently destroys
@@ -586,6 +600,10 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     // Prefill from a `#cr=` fragment (CodeRipper route A) — create form only.
     import { initEditorPrefill } from "../scripts/editor-prefill";
     initEditorPrefill();
+
+    // Link-card picker (M3.4b) — edit mode only; a no-op when the fieldset is absent.
+    import { initReferencePicker } from "../scripts/reference-picker";
+    initReferencePicker();
   </script>
 </BaseLayout>
 <style>
@@ -597,6 +615,10 @@ const loginHref = `/login?next=${encodeURIComponent(Astro.url.pathname + Astro.u
     padding:11px 13px;color:var(--text);font:inherit}
   .form input:focus-visible,
   .form textarea:focus-visible{border-color:var(--green)}
+  .ref-picker{border:1px solid var(--line);border-radius:8px;padding:16px;margin:0 0 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .ref-picker input{flex:1 1 260px;background:var(--ink2);border:1px solid var(--line);border-radius:8px;padding:11px 13px;color:var(--text);font:inherit}
+  .ref-picker p{flex-basis:100%;margin:0}
+  .ref-hint{color:var(--muted);font-size:14px}
   .form fieldset{border:1px solid var(--line);border-radius:8px;padding:16px;
     display:flex;flex-direction:column;gap:8px}
   .form legend{color:var(--muted);font-size:14px;padding:0 6px}
