@@ -54,7 +54,7 @@ describe("collapseNotifications", () => {
     ];
     const [g] = collapseNotifications(rows);
     expect(g!.actorCount).toBe(3);
-    expect(g!.leadActor.username).toBe("a"); // first occurrence leads
+    expect(g!.leadActor?.username).toBe("a"); // first occurrence leads
     expect(g!.reactionKind).toBeNull(); // tone dropped once collapsed
   });
 
