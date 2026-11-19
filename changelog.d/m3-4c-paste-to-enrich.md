@@ -1,0 +1,3 @@
+kind: Paste-to-enrich in the post editor (M3.4c)
+---
+Pasting a bare http(s) link into the Markdown editor of a saved post fills the link-card box (`apps/web/src/scripts/reference-picker.ts`) and offers a card in the status line; the paste itself is never altered. If the author presses Add card, the URL's own line becomes the `{{ref:TOKEN}}` marker (`replaceUrlLineWithRef` in `apps/web/src/scripts/paste-enrich.ts`); if that line was edited meanwhile, the marker is inserted at the cursor as before. Prose, several links, and non-http(s) schemes are ignored. Create mode is unchanged (it still says to save a draft first). Pinned by `apps/web/test/paste-enrich.test.ts` (helpers and an island source scan).

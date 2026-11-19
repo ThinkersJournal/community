@@ -10,6 +10,8 @@
  * `.value` / `.textContent`, never innerHTML.
  */
 
+import { bareUrl, replaceUrlLineWithRef } from "./paste-enrich";
+
 export interface Inserted {
   value: string;
   cursor: number;
@@ -46,6 +48,10 @@ export function initReferencePicker(): void {
   const postId = fieldset?.dataset.postId;
   if (!fieldset || !input || !button || !status || !textarea || !tokenField || !postId) return;
 
+  // M3.4c: the last bare link pasted into the editor. The paste itself is never altered; accepting the offer turns
+  // that URL's own line into the card marker.
+  let pasted: string | null = null;
+
   const submit = async (): Promise<void> => {
     const url = input.value.trim();
     if (url === "") {
@@ -71,10 +77,13 @@ export function initReferencePicker(): void {
         status.textContent = messageForFailure(response.status, data);
         return;
       }
+      // ONE textarea write, on this success path only (pinned by reference-picker.test.ts).
+      const replaced = url === pasted ? replaceUrlLineWithRef(textarea.value, url, token) : null;
       const at = textarea.selectionStart ?? textarea.value.length;
-      const next = insertRefAtCursor(textarea.value, at, token);
+      const next = replaced !== null ? { value: replaced, cursor: Math.min(at, replaced.length) } : insertRefAtCursor(textarea.value, at, token);
       textarea.value = next.value;
       textarea.setSelectionRange(next.cursor, next.cursor);
+      pasted = null;
       input.value = "";
       status.textContent = "Card added. It shows when you save.";
     } catch {
@@ -84,6 +93,13 @@ export function initReferencePicker(): void {
     }
   };
 
+  textarea.addEventListener("paste", (event) => {
+    const url = bareUrl(event.clipboardData?.getData("text/plain") ?? "");
+    if (url === null) return;
+    pasted = url;
+    input.value = url;
+    status.textContent = "Link pasted. Press Add card to turn it into a card, or ignore this to keep it as a link.";
+  });
   button.addEventListener("click", () => void submit());
   // Enter in the URL box adds the card; it must not submit the editor (we are outside the form, but be explicit).
   input.addEventListener("keydown", (event) => {
