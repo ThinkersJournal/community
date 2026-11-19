@@ -84,6 +84,68 @@ describe("notifications schema", () => {
     await client.query("DELETE FROM notifications WHERE recipient_id=$1", [alice]);
   });
 
+  describe("reference_changed (M3.9, migration 0045)", () => {
+    async function makeReference(): Promise<string> {
+      const { rows } = await client.query<{ id: string }>(
+        `INSERT INTO "references" (kind, resource_key, content_hash, snapshot)
+         VALUES ('web', $1, 'h', '{}'::jsonb) RETURNING id`,
+        [`web:https://example.com/${crypto.randomUUID()}`],
+      );
+      return rows[0]!.id;
+    }
+
+    it("accepts a system event: NULL actor, reference_id and reference_event set", async () => {
+      const ref = await makeReference();
+      await insertNotif({
+        recipient_id: alice, actor_id: null, kind: "reference_changed",
+        post_id: postId, reference_id: ref, reference_event: "gone",
+      });
+      await client.query(`DELETE FROM "references" WHERE id=$1`, [ref]);
+      await client.query("DELETE FROM notifications WHERE recipient_id=$1", [alice]);
+    });
+
+    it("rejects a NULL actor on every other kind, and an actor on reference_changed (CHECK 23514)", async () => {
+      const ref = await makeReference();
+      await expect(insertNotif({ recipient_id: alice, actor_id: null, kind: "follow" })).rejects.toMatchObject({ code: "23514" });
+      await expect(
+        insertNotif({ recipient_id: alice, actor_id: bob, kind: "reference_changed", post_id: postId, reference_id: ref, reference_event: "gone" }),
+      ).rejects.toMatchObject({ code: "23514" });
+      await client.query(`DELETE FROM "references" WHERE id=$1`, [ref]);
+    });
+
+    it("rejects reference_changed without reference_id or reference_event (CHECK 23514)", async () => {
+      const ref = await makeReference();
+      await expect(
+        insertNotif({ recipient_id: alice, actor_id: null, kind: "reference_changed", post_id: postId, reference_event: "gone" }),
+      ).rejects.toMatchObject({ code: "23514" });
+      await expect(
+        insertNotif({ recipient_id: alice, actor_id: null, kind: "reference_changed", post_id: postId, reference_id: ref }),
+      ).rejects.toMatchObject({ code: "23514" });
+      await client.query(`DELETE FROM "references" WHERE id=$1`, [ref]);
+    });
+
+    it("dedupes on (reference_id, reference_event): same event collides (23505), a new event does not", async () => {
+      const ref = await makeReference();
+      const row = { recipient_id: alice, actor_id: null, kind: "reference_changed", post_id: postId, reference_id: ref };
+      await insertNotif({ ...row, reference_event: "changed:h1" });
+      await expect(insertNotif({ ...row, reference_event: "changed:h1" })).rejects.toMatchObject({ code: "23505" });
+      await insertNotif({ ...row, reference_event: "changed:h2" });
+      await client.query(`DELETE FROM "references" WHERE id=$1`, [ref]);
+      await client.query("DELETE FROM notifications WHERE recipient_id=$1", [alice]);
+    });
+
+    it("cascade-deletes when its reference is removed", async () => {
+      const ref = await makeReference();
+      await insertNotif({
+        recipient_id: alice, actor_id: null, kind: "reference_changed",
+        post_id: postId, reference_id: ref, reference_event: "gone",
+      });
+      await client.query(`DELETE FROM "references" WHERE id=$1`, [ref]);
+      const { rows } = await client.query("SELECT 1 FROM notifications WHERE reference_id=$1", [ref]);
+      expect(rows).toHaveLength(0);
+    });
+  });
+
   it("cascade-deletes when the recipient, actor, or post is removed", async () => {
     const tmpPost = await makePost(alice);
     await insertNotif({ recipient_id: alice, actor_id: bob, kind: "post_comment", post_id: tmpPost });
