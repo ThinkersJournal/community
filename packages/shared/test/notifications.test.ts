@@ -27,9 +27,9 @@ function group(over: Partial<CollapsedNotification>): CollapsedNotification {
 }
 
 describe("NOTIFICATION_KINDS", () => {
-  it("is the exact five-kind set", () => {
+  it("is the exact six-kind set", () => {
     expect(NOTIFICATION_KINDS).toEqual([
-      "post_comment", "comment_reply", "post_reaction", "comment_reaction", "follow",
+      "post_comment", "comment_reply", "post_reaction", "comment_reaction", "follow", "reference_changed",
     ]);
   });
 });

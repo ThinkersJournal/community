@@ -16,6 +16,8 @@ import type { ReactionKind } from "./engagement";
 
 export const NOTIFICATION_KINDS = [
   "post_comment", "comment_reply", "post_reaction", "comment_reaction", "follow",
+  // M3.9: a system event (a linked page changed or went away). It has NO actor and carries no snapshot text.
+  "reference_changed",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -28,7 +30,8 @@ export interface NotificationActor {
 export interface NotificationItem {
   id: string;
   kind: NotificationKind;
-  actor: NotificationActor;
+  /** null ONLY for `reference_changed` (a system event, no actor). */
+  actor: NotificationActor | null;
   postId: string | null;
   postTitle: string | null;
   postSlug: string | null;
@@ -36,9 +39,13 @@ export interface NotificationItem {
   postAuthorUsername: string | null;
   commentId: string | null;
   reactionKind: string | null;
+  /** `reference_changed` only: which event (the stored `changed:<hash>` is reduced to `changed`; the hash never leaves the server). */
+  referenceEvent?: ReferenceEventKind | null;
   createdAt: string;
   read: boolean;
 }
+
+export type ReferenceEventKind = "gone" | "changed";
 
 /** `GET /notifications` — keyset page of the viewer's notifications. */
 export interface NotificationsPage {
@@ -50,7 +57,8 @@ export interface NotificationsPage {
 export interface CollapsedNotification {
   key: string;
   kind: NotificationKind;
-  leadActor: NotificationActor;
+  /** null ONLY for `reference_changed`. */
+  leadActor: NotificationActor | null;
   actorCount: number;
   postId: string | null;
   postTitle: string | null;
@@ -60,6 +68,8 @@ export interface CollapsedNotification {
   commentId: string | null;
   /** The tone — present ONLY for a singleton group (one row). */
   reactionKind: string | null;
+  /** `reference_changed` only; absent otherwise. */
+  referenceEvent?: ReferenceEventKind;
   createdAt: string; // the newest (first) row's timestamp
   ids: string[]; // every underlying row id (for mark-read of the group)
   read: boolean; // false if ANY underlying row is unread
@@ -74,7 +84,8 @@ export function collapseNotifications(items: NotificationItem[]): CollapsedNotif
   const groups = new Map<string, CollapsedNotification & { actors: Set<string> }>();
   const order: string[] = [];
   for (const it of items) {
-    const key = `${it.kind}|${it.postId ?? ""}|${it.commentId ?? ""}`;
+    // A gone and a changed notice on one post read differently, so the event kind is part of the key (reference_changed only).
+    const key = `${it.kind}|${it.postId ?? ""}|${it.commentId ?? ""}` + (it.referenceEvent ? `|${it.referenceEvent}` : "");
     let g = groups.get(key);
     if (g === undefined) {
       g = {
@@ -83,12 +94,13 @@ export function collapseNotifications(items: NotificationItem[]): CollapsedNotif
         postAuthorUsername: it.postAuthorUsername,
         commentId: it.commentId, reactionKind: it.reactionKind,
         createdAt: it.createdAt, ids: [], read: true, actors: new Set<string>(),
+        ...(it.referenceEvent ? { referenceEvent: it.referenceEvent } : {}),
       };
       groups.set(key, g);
       order.push(key);
     }
     g.ids.push(it.id);
-    g.actors.add(it.actor.username);
+    g.actors.add(it.actor?.username ?? "");
     if (!it.read) g.read = false;
   }
   return order.map((key) => {
@@ -101,6 +113,7 @@ export function collapseNotifications(items: NotificationItem[]): CollapsedNotif
       commentId: g.commentId,
       reactionKind: g.ids.length === 1 ? g.reactionKind : null,
       createdAt: g.createdAt, ids: g.ids, read: g.read,
+      ...(g.referenceEvent ? { referenceEvent: g.referenceEvent } : {}),
     };
   });
 }
@@ -127,9 +140,14 @@ export interface NotificationLabel {
  * reacted.
  */
 export function notificationLabel(group: CollapsedNotification): NotificationLabel {
-  const leadUsername = group.leadActor.username;
-  const leadName = group.leadActor.displayName ?? group.leadActor.username;
   const title = group.postTitle ?? "(untitled)";
+  if (group.kind === "reference_changed") {
+    // Fixed copy plus the viewer's OWN post title. Never the linked page's text: that is third-party content (M3.9).
+    const gone = group.referenceEvent === "gone";
+    return { leadName: "A page you linked", leadUsername: "", rest: ` in «${title}» ${gone ? "is no longer available" : "changed"}` };
+  }
+  const leadUsername = group.leadActor?.username ?? "";
+  const leadName = group.leadActor?.displayName ?? leadUsername;
   const n = group.actorCount - 1;
   const others = group.actorCount > 1 ? ` and ${n} other${n === 1 ? "" : "s"}` : "";
 
@@ -172,7 +190,7 @@ export function notificationLabel(group: CollapsedNotification): NotificationLab
 /** The primary target a notification links to: the post for engagement kinds,
  *  the actor's profile for a follow. null when the post is gone (render plain). */
 export function notificationHref(group: CollapsedNotification): string | null {
-  if (group.kind === "follow") return `/@${group.leadActor.username}`;
+  if (group.kind === "follow") return group.leadActor === null ? null : `/@${group.leadActor.username}`;
   if (group.postAuthorUsername !== null && group.postSlug !== null) {
     return `/@${group.postAuthorUsername}/${group.postSlug}`;
   }

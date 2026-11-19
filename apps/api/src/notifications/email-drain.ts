@@ -19,7 +19,7 @@ import type { NotificationItem } from "@thinkersjournal/shared";
 interface DrainRow {
   id: string; recipientId: string; email: string;
   kind: NotificationItem["kind"];
-  username: string; displayName: string | null;
+  username: string | null; displayName: string | null; referenceEvent: string | null;
   postId: string | null; postTitle: string | null; postSlug: string | null; postAuthorUsername: string | null;
   commentId: string | null; reactionKind: string | null; createdAt: string;
 }
@@ -30,13 +30,14 @@ const SELECT_ELIGIBLE = `
   SELECT n.id, n.recipient_id AS "recipientId", u.email,
          n.kind,
          ap.username, ap.display_name AS "displayName",
+         n.reference_event AS "referenceEvent",
          n.post_id AS "postId", p.title AS "postTitle", p.slug AS "postSlug",
          pp.username AS "postAuthorUsername",
          n.comment_id AS "commentId", n.reaction_kind AS "reactionKind",
          n.created_at AS "createdAt"
     FROM notifications n
     JOIN users u ON u.id = n.recipient_id
-    JOIN profiles ap ON ap.user_id = n.actor_id
+    LEFT JOIN profiles ap ON ap.user_id = n.actor_id
     LEFT JOIN notification_prefs np ON np.user_id = n.recipient_id
     LEFT JOIN posts p ON p.id = n.post_id
     LEFT JOIN profiles pp ON pp.user_id = p.author_id
@@ -49,7 +50,7 @@ const SELECT_ELIGIBLE = `
      AND COALESCE(np.master_enabled, true) = true
      AND CASE
            WHEN n.kind IN ('post_comment','comment_reply')   THEN COALESCE(np.direct, 'instant')
-           WHEN n.kind IN ('post_reaction','comment_reaction') THEN COALESCE(np.reactions, 'digest')
+           WHEN n.kind IN ('post_reaction','comment_reaction','reference_changed') THEN COALESCE(np.reactions, 'digest')
            WHEN n.kind = 'follow'                             THEN COALESCE(np.follows, 'digest')
          END = $1::notification_channel
    ORDER BY n.recipient_id, n.created_at`;
@@ -57,10 +58,11 @@ const SELECT_ELIGIBLE = `
 function toItem(r: DrainRow): NotificationItem {
   return {
     id: r.id, kind: r.kind,
-    actor: { username: r.username, displayName: r.displayName },
+    actor: r.username === null ? null : { username: r.username, displayName: r.displayName },
     postId: r.postId, postTitle: r.postTitle, postSlug: r.postSlug,
     postAuthorUsername: r.postAuthorUsername,
     commentId: r.commentId, reactionKind: r.reactionKind,
+    ...(r.kind === "reference_changed" ? { referenceEvent: r.referenceEvent === "gone" ? ("gone" as const) : ("changed" as const) } : {}),
     createdAt: r.createdAt, read: false,
   };
 }

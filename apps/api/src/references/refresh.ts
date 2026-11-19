@@ -15,10 +15,18 @@
  * Making it published-only would be a deliberate change (the test "a use on a DRAFT post still pays" pins it).
  * A reference with no uses at all is an orphan: nobody can be
  * charged and nothing needs it, so it goes dormant (`next_check_at` NULL) for the garbage-collection sweep (2d).
+ *
+ * M3.9, WHO IS TOLD. After the live_state UPDATE commits, a definitive `gone` or `changed` look of a reference that ALREADY
+ * had a live_state (a first look has no baseline) notifies the authors of the PUBLISHED, non-hidden posts that use it, one
+ * notification per (author, post) (docs/superpowers/specs/2026-11-19-m3-9-reference-change-notifications.md). `resolved` and
+ * `unknown` never notify. This is the one place that decides it; it never fails the refresh. The flag REFERENCE_REFRESH is
+ * not read here: it gates whether refreshReference runs at all (refresh-wiring.ts).
  */
 import { ConnectorError, type FetchCtx, type LiveResult, type SourceKind, type StoredReference } from "@thinkersjournal/shared";
 
 import { mergeLive, nextCheckAt, retryAt, type LiveState } from "./refresh-schedule";
+
+import { notifyReferenceChange, type NotifyCtx, type NotifyEnv } from "../notifications/create";
 
 import type { SpendResult } from "./author-budget";
 import type { Registry } from "./registry";
@@ -34,6 +42,8 @@ export interface RefreshDeps {
   ctx: FetchCtx;
   budget: RefreshBudget;
   now: Date;
+  /** Where reference-change notifications are pushed (M3.9). Absent = no notifications (older callers and tests). */
+  notify?: { env: NotifyEnv; ctx: NotifyCtx };
 }
 
 export type RefreshOutcome = "missing" | "gone" | "orphan" | "throttled" | "unknown" | "refreshed";
@@ -80,6 +90,40 @@ async function payer(db: Client, referenceId: string): Promise<string | null> {
     [referenceId],
   );
   return rows[0]?.author_id ?? null;
+}
+
+/**
+ * Tell the authors of the live posts that use this reference (M3.9). Never throws. `changed` is keyed on the new content
+ * hash; without one there is nothing honest to dedupe on, so it is skipped and logged rather than invented.
+ */
+async function notifyAuthors(db: Client, referenceId: string, res: LiveResult, deps: RefreshDeps): Promise<void> {
+  if (deps.notify === undefined) return;
+  try {
+    let referenceEvent: string;
+    if (res.diff === "gone") referenceEvent = "gone";
+    else if (res.contentHash !== undefined && res.contentHash !== "") referenceEvent = `changed:${res.contentHash}`;
+    else {
+      console.error(`refreshReference ${referenceId}: changed with no contentHash, not notifying`);
+      return;
+    }
+    const { rows } = await db.query<{ author_id: string; post_id: string }>(
+      `SELECT DISTINCT p.author_id, p.id AS post_id
+         FROM post_references pr JOIN posts p ON p.id = pr.post_id
+        WHERE pr.reference_id = $1 AND p.status = 'published' AND p.hidden_at IS NULL
+        ORDER BY p.id`,
+      [referenceId],
+    );
+    for (const r of rows) {
+      await notifyReferenceChange(db, deps.notify.env, deps.notify.ctx, {
+        recipientId: r.author_id,
+        postId: r.post_id,
+        referenceId,
+        referenceEvent,
+      });
+    }
+  } catch (err) {
+    console.error(`refreshReference ${referenceId}: notifying authors failed`, err);
+  }
 }
 
 async function setNext(db: Client, id: string, next: Date | null, now: Date): Promise<void> {
@@ -153,5 +197,8 @@ export async function refreshReference(db: Client, referenceId: string, deps: Re
       now,
     ],
   );
+  if (row.live_state !== null && (res.diff === "gone" || res.diff === "changed")) {
+    await notifyAuthors(db, referenceId, res, deps);
+  }
   return "refreshed";
 }
