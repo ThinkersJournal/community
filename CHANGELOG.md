@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.153 — Dependabot npm-weekly group (#318, #320) folded, TypeScript held at 6.0.3
+
+Folds the grouped npm-weekly bumps from the Dependabot PRs (@playwright/test 1.65.1, @types/node 26.6.6, @cloudflare/vitest-plugin 1.8.2, vitest 5.1.0, wrangler 4.162.0, @astrojs/cloudflare 14.4.8, astro 7.4.12, fast-xml-parser 5.12.1, shiki 4.6.0, unist-util-visit 5.2.0) into one change. TypeScript stays at 6.0.3 (an override in package.json pins it) because `astro check` in apps/web refuses TypeScript 7 (verified in the Dependabot run log: "astro check does not currently support TypeScript 7.0"). `@emnapi/runtime` is pinned to 1.11.1 because a fresh resolve picked 2.0.0-beta.2, which crashes `astro check` (`this.bridge.setLastError is not a function`). Verified locally: `pnpm -r typecheck` clean; packages/shared and packages/markdown tests pass; apps/api tests need the CI database.
+
 ## 0.1.152 — M3.4b author-side "Insert a link card" control in the post editor
 
 The post editor now has an "Insert a link card" control (edit mode only: a card needs a saved post, so create mode shows "Save a draft first to add link cards"). The author pastes a URL; the island `apps/web/src/scripts/reference-picker.ts` posts it through the new same-origin proxy `apps/web/src/pages/api/post-reference.ts` (cookie, Origin and CSRF forwarded; `postId` uuid-checked and stripped from the forwarded body) to `POST /posts/:id/references` and inserts `{{ref:TOKEN}}` on its own line at the cursor of the Markdown box. A 404, 422, 429 or network failure only shows a status message; the textarea is never touched. The control sits outside the editor form and is a bundled script, so the page CSP (`script-src 'self'`) holds. Verified by `apps/web/test/reference-picker.test.ts` (helpers, proxy, island source scan) and the rendered edit/create cases in `apps/web/test/new-post-page.test.ts`.
