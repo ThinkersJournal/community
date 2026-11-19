@@ -1,6 +1,6 @@
 {
   "name": "thinkersjournal-community",
-  "version": "0.1.152",
+  "version": "0.1.153",
   "private": true,
   "license": "MIT OR Apache-2.0",
   "workspaces": [
@@ -13,13 +13,14 @@
     "smoke:deploy": "node scripts/deploy-smoke.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.63.0",
-    "@types/node": "26.6.4",
+    "@playwright/test": "^1.65.1",
+    "@types/node": "26.6.6",
     "typescript": "6.0.3"
   },
   "pnpm": {
     "overrides": {
       "@cloudflare/vite-plugin": "1.44.0",
+      "@emnapi/runtime": "1.11.1",
       "sharp": "^0.35.5",
       "undici": ">=7.29.1"
     },
