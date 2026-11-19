@@ -100,7 +100,7 @@ if [ -n "$ZONE_ID" ]; then
     # NOT `a // b`: jq's // treats false as missing, so a disabled tool would read as "no flag".
     en=$(jq -r '[.result.enabled, .result.value.enabled?] | map(select(. != null)) | if length == 0 then empty else (.[0] | tostring) end' <<<"$out" 2>/dev/null)
     case "$en" in
-      true) report PRESENT "CSAM Scanning Tool" "enabled (email verification: $(jq -r '.result.email_verification // .result.value.email_verification // "not reported"' <<<"$out"))";;
+      true) report PRESENT "CSAM Scanning Tool" "enabled (email_state: $(jq -r '.result.value.email_state // "not reported"' <<<"$out"); editable: $(jq -r '.result.editable // "not reported"' <<<"$out"), false means the zone may be locked by Trust and Safety)";;
       false) report ABSENT "CSAM Scanning Tool" "present but not enabled";;
       *) report UNKNOWN "CSAM Scanning Tool" "answered 200 but no enabled flag was readable";;
     esac
