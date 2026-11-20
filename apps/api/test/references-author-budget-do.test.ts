@@ -35,6 +35,18 @@ describe("AuthorBudgetDO", () => {
     });
   });
 
+  it("M3.10: hammering one author with concurrent spends beyond its budget never exceeds the cap", async () => {
+    await runInDurableObject(fresh(), async (b) => {
+      const attempts = AUTHOR_BUDGET.capacity * 3;
+      const results = await Promise.all(Array.from({ length: attempts }, () => b.takeAt(1, T0)));
+      // Same instant, so no refill: exactly `capacity` spends are granted, however the calls interleave.
+      expect(results.filter((r) => r.ok)).toHaveLength(AUTHOR_BUDGET.capacity);
+      expect(results.filter((r) => !r.ok)).toHaveLength(attempts - AUTHOR_BUDGET.capacity);
+      // And the bucket really is empty afterwards: the next spend at the same instant is refused.
+      expect((await b.takeAt(1, T0)).ok).toBe(false);
+    });
+  });
+
   it("authors are independent", async () => {
     const a = fresh();
     const other = fresh();
