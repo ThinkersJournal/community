@@ -65,10 +65,9 @@ public data through GitHub's API) so we can show a card. We identify ourselves a
 `ThinkersJournalBot` (see the [bot page](/bot)) and honour the site's `robots.txt`.
 We store, per link: the address, and a **snapshot** of what the page showed when
 fetched: its title, and where the page provides them a description, site name, a
-link to a preview image, and for a repository item its state, author, an excerpt
-and the commit it was read at. [[VERIFY with the reference engine owner before
-serving: exact snapshot fields and whether preview images are stored or only linked.]]
-We refresh a stored link in the background while it is being viewed, and tell the
+link to a preview image (we store the link, not a copy of the image), and for a
+repository item its state, author, an excerpt, the file path and line range, and the
+commit it was read at. We refresh a stored link in the background while it is being viewed, and tell the
 author of a published post when a linked page has changed or is no longer
 available; that notice never contains the page's text. We do not fetch links to
 private or internal addresses, and a page we cannot read is shown as "no longer
