@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ApiCredential } from "@thinkersjournal/shared";
 import { createGuardedFetch, type FetchLike } from "../src/references/guarded-fetch";
 
 /**
@@ -68,6 +69,27 @@ describe("ref_fetch log line", () => {
     const fetchLive = guard(async () => new Response("x".repeat(100), { status: 200, headers: HTML }), true, 10);
     await expect(fetchLive("https://example.com/big")).rejects.toMatchObject({ code: "too_large" });
     expect(refFetchLines()[0]).toMatchObject({ host: "example.com", outcome: "too_large" });
+  });
+
+  it("the authenticated-API path logs host and outcome only: no path, no token, and the result is the same as before", async () => {
+    const TOKEN = "ghs_SECRETTOKEN123";
+    const seen: string[] = [];
+    const fetchLive = guard(async (_u, init) => {
+      seen.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response('{"ok":true}', { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const got = await fetchLive("https://api.github.com/repos/octo/secret-repo/issues/1", {
+      api: { credential: new ApiCredential("Bearer", TOKEN) },
+    });
+    expect(seen).toEqual([`Bearer ${TOKEN}`]); // the credential still reaches the request: logging changed nothing
+    expect(got.body).toBe('{"ok":true}');
+    const out = refFetchLines();
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ event: "ref_fetch", host: "api.github.com", outcome: "ok", bytes: 11 });
+    const raw = lines.join("\n");
+    expect(raw).not.toContain(TOKEN);
+    expect(raw).not.toContain("secret-repo");
+    expect(raw).not.toContain("/repos");
   });
 
   it("an unparsable target logs host invalid and does not echo the text", async () => {
