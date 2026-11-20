@@ -66,6 +66,19 @@ The Service may display links or references to third-party content and sources. 
 do not control and are not responsible for third-party content. Your use of any
 linked service is governed by that service's own terms.
 
+**Links you attach.** You are responsible for the links you attach to your posts and
+for having the right to share them. When you attach a link, our servers fetch the
+page, honour its `robots.txt`, and store a snapshot (title, description and similar
+public details) to show a card and to keep a record for moderation and legal
+purposes. A card shows what the page showed when we last looked; it may be out of
+date, and we do not vouch for it. If the page changes or disappears we may
+update the card, mark it "no longer available", and tell you.
+
+**Takedowns.** If a post is hidden or removed, its cards go with it. If you or
+a rights holder complains about the page a card points to, the complaint is handled under
+the [DMCA Policy](dmca-policy.md) and the Community Guidelines like any other
+content. We may remove a card without removing your post.
+
 ## 7. Termination
 
 You may stop using the Service and request deletion of your account at any time
