@@ -26,6 +26,7 @@ import { imposeAccountHoldInTx } from "./account-holds";
 import { enqueueAuthorDecisionNotice, enqueueMemberReporterOutcomeNotices, enqueueReporterOutcomeNotices } from "./notice-enqueue";
 import { recordModerationAction, type ModerationActionKind, type ModerationSource, type ViolationCategory } from "./actions";
 import { loadPostTagSlugs, type PurgeTarget } from "./purge-target";
+import { postCardSnapshotsSql } from "../references/card-snapshots";
 
 export type DecisionKind = "restore" | "keep_hidden" | "remove";
 
@@ -172,6 +173,20 @@ export async function applyDecisionInTx(c: Client, input: DecisionInput): Promis
   // does not own the transaction, and a ROLLBACK would END the caller's
   // transaction, so its later writes would autocommit outside it.
   if (row === undefined) return null;
+
+  // M3.10: a REMOVED post's content and its reference cards are copied into `moderation_snapshots` (0021, 0044) in THIS
+  // transaction, as the author-delete path does (routes/posts.ts handleDeletePost; the cards subselect is shared,
+  // references/card-snapshots.ts). The post row survives a removal (it is only hidden), but the shared `"references"` row
+  // behind a card can be refreshed or collected, so the evidence must not depend on it. keep_hidden is a pending state,
+  // not a removal, and copies nothing. The DMCA takedown reaches here too (applyDecisionInTx). Nothing here is served.
+  if (input.subject === "post" && input.decision === "remove") {
+    await c.query(
+      `INSERT INTO moderation_snapshots (post_id, author_id, title, body_markdown, card_snapshots)
+       SELECT p.id, p.author_id, p.title, p.markdown_source, ${postCardSnapshotsSql("p.id")}
+         FROM posts p WHERE p.id = $1`,
+      [row.id],
+    );
+  }
 
   // #57 Q1 — WHAT PROMPTED THIS DECISION, derived BEFORE the action row is
   // appended (the new row would otherwise be its own "latest ruling") and
