@@ -147,8 +147,8 @@ signatures in it and keep only the case number, its dates and its outcome.
 
 - **Unverified accounts** are automatically deleted after 7 days if the
   email is never verified.
-- **Reference snapshots.** A stored link nobody uses any more is deleted after a
-  year without being viewed. If a post is removed by our moderators, or deleted by its
+- **Reference snapshots.** A stored link that no post uses any more is deleted once
+  a year has passed since it was last saved or updated. If a post is removed by our moderators, or deleted by its
   author after we had hidden or removed it, we keep a copy of its cards' snapshots
   with the private copy of the post (at least one year, and until we are advised it
   may be deleted), for appeals and legal obligations. It is not shown to anyone on
