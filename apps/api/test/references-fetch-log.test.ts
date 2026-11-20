@@ -79,6 +79,7 @@ describe("ref_fetch log line", () => {
       return new Response('{"ok":true}', { status: 200, headers: { "content-type": "application/json" } });
     });
     const got = await fetchLive("https://api.github.com/repos/octo/secret-repo/issues/1", {
+      allowedTypes: ["application/json"],
       api: { credential: new ApiCredential("Bearer", TOKEN) },
     });
     expect(seen).toEqual([`Bearer ${TOKEN}`]); // the credential still reaches the request: logging changed nothing
