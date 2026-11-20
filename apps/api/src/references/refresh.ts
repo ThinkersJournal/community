@@ -101,7 +101,7 @@ async function look(row: Row, kind: SourceKind, deps: RefreshDeps, id: string): 
   }
 }
 
-export async function refreshReference(db: Client, referenceId: string, deps: RefreshDeps): Promise<RefreshOutcome> {
+async function refreshOnce(db: Client, referenceId: string, deps: RefreshDeps): Promise<RefreshOutcome> {
   const { now } = deps;
   const { rows } = await db.query<Row>(
     `SELECT kind, resource_key, snapshot, content_hash, etag, last_modified, live_state, last_viewed_at, gone_at, refresh_failures
@@ -154,4 +154,20 @@ export async function refreshReference(db: Client, referenceId: string, deps: Re
     ],
   );
   return "refreshed";
+}
+
+/**
+ * M3.10 egress observability: ONE structured line per refresh, `ref_refresh` (outcome and duration only: no reference
+ * id, URL, host or snapshot text). The behaviour is `refreshOnce`, unchanged. A thrown error is logged as outcome
+ * "error" and rethrown.
+ */
+export async function refreshReference(db: Client, referenceId: string, deps: RefreshDeps): Promise<RefreshOutcome> {
+  const startedAt = Date.now();
+  let outcome: RefreshOutcome | "error" = "error";
+  try {
+    outcome = await refreshOnce(db, referenceId, deps);
+    return outcome;
+  } finally {
+    console.log(JSON.stringify({ event: "ref_refresh", outcome, durationMs: Date.now() - startedAt }));
+  }
 }

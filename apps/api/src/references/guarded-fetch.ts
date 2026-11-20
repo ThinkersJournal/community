@@ -86,6 +86,9 @@ interface Call {
   deadline: Deadline;
   robots: Map<string, Promise<RobotsPolicy>>;
   skipRobots: boolean;
+  /** Observability only (`ref_fetch` log): body bytes read, and a finer outcome than the error code where one exists. */
+  bytes: number;
+  outcomeHint: string | undefined;
 }
 
 function startDeadline(ms: number): Deadline {
@@ -179,7 +182,10 @@ async function checkTarget(call: Call, url: URL): Promise<void> {
   if (call.cfg.selfHosts.has(hostOf(url))) throw new ConnectorError("unsupported", "our own origin");
   await dnsCheck(call, hostOf(url));
   if (call.skipRobots) return;
-  if (!(await robotsAllows(call, url))) throw new ConnectorError("blocked_target", "disallowed by robots.txt");
+  if (!(await robotsAllows(call, url))) {
+    call.outcomeHint = "robots_denied";
+    throw new ConnectorError("blocked_target", "disallowed by robots.txt");
+  }
 }
 
 async function send(call: Call, url: URL, init: FetchInit): Promise<Response> {
@@ -328,6 +334,7 @@ async function toPage(call: Call, hop: Hop, init: FetchInit): Promise<FetchedPag
   }
   try {
     const { bytes, truncated } = await readCapped(res.body, call.cfg.maxBytes, init.overflow ?? "too_large", call.deadline);
+    call.bytes = bytes.byteLength;
     return { ...base, body: decode(bytes, contentType), truncated };
   } catch (e) {
     throw toConnectorError(e, call.deadline); // a mid-body network error is a TypeError from the stream
@@ -362,16 +369,46 @@ export function productionFetchCtx(): FetchCtx {
 export function createGuardedFetch(opts: GuardedFetchOptions): FetchCtx["fetch"] {
   const cfg = resolveConfig(opts);
   return async (input, init = {}) => {
+    const startedAt = Date.now();
     const deadline = startDeadline(cfg.timeoutMs);
-    const call: Call = { api: init.api, cfg, deadline, robots: new Map(), skipRobots: init.api !== undefined };
+    const call: Call = {
+      api: init.api,
+      cfg,
+      deadline,
+      robots: new Map(),
+      skipRobots: init.api !== undefined,
+      bytes: 0,
+      outcomeHint: undefined,
+    };
+    let outcome = "ok";
     try {
       const start = assertPublicHttpUrl(input);
       if (call.api !== undefined) assertApiUrl(start);
-      return await deadline.race(runHops(call, start, init));
+      const page = await deadline.race(runHops(call, start, init));
+      if (page.status < 200 || page.status >= 300) outcome = "non_2xx";
+      return page;
+    } catch (e) {
+      outcome = call.outcomeHint ?? (e instanceof ConnectorError ? e.code : "error");
+      throw e;
     } finally {
       deadline.clear();
+      logRefFetch(input, outcome, call.bytes, Date.now() - startedAt);
     }
   };
+}
+
+/**
+ * M3.10 egress observability: ONE structured line per fetch attempt, `ref_fetch`. ⚠️ HOST ONLY: never the URL, path,
+ * query, userinfo, headers or any body text (a path can carry a secret, and a card's text is third-party content).
+ */
+function logRefFetch(input: string, outcome: string, bytes: number, durationMs: number): void {
+  let host = "invalid";
+  try {
+    host = hostOf(new URL(input));
+  } catch {
+    // An unparsable target is logged as host "invalid"; its text is never echoed.
+  }
+  console.log(JSON.stringify({ event: "ref_fetch", host, outcome, bytes, durationMs }));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

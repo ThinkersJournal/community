@@ -267,6 +267,15 @@ The PM's reader read the independent claims of the five patents below from the s
 | US9648125B2 Akamai | needs-review (vendor feature) | claims 1 and 18 **read** on Cloudflare's cache with our tags and purge; claims 19 and 23 outside; counsel's question |
 | US20170046146A1 IBM | clear, watch the pending application | granted as US10656929B2; outside (binary search, global restore point, degradation detection absent) |
 
+## M3 live references (candidate ideas, NOT YET SEARCHED)
+
+Added 2026-11-19 by the community lane (Claude Sonnet 5.5) for M3.10 of `docs/superpowers/plans/2026-10-25-m3-reference-engine-plan.md`. These are the ideas the M3 reference engine adds, listed so the next sweep (process: `C:\Projects\PATENT-SWEEP-PROCESS.md`) searches them. No query has been run for any of them: this section records no hit, no zero-hit result and no clearance, and cites no patent.
+
+M1. **Live-reference refresh with an access-driven taper.** A stored card for a link is re-checked at an interval that grows while nobody views it and resets when it is viewed again; an unused reference is parked dormant and garbage-collected after a retention floor (`apps/api/src/references/refresh-schedule.ts`, `refresh.ts`, `gc.ts`). Status: NOT YET SEARCHED
+M2. **Per-author egress budget in a Durable Object.** Each refresh of a reference spends from a token budget keyed on the author of the newest post that uses it, so one author's links cannot exhaust the platform's outbound fetches (`apps/api/src/references/author-budget.ts`). Status: NOT YET SEARCHED
+M3. **Snapshot-as-evidence on takedown.** When a post is removed by a moderator or deleted by its author while under moderation, the stored card metadata of the references it used is copied into an append-only evidence table that outlives the shared reference row (`moderation_snapshots.card_snapshots`, migration 0044). Status: NOT YET SEARCHED
+M4. **Guarded fetch door.** The single network door for a reference connector: URL rules, a DNS-over-HTTPS address check, a robots.txt check per hop, a content-type check, and a counted body read under one deadline, with an authenticated-API path restricted to a code-constant host allow-list (`apps/api/src/references/guarded-fetch.ts`). Status: NOT YET SEARCHED
+
 ## Limitations
 - AI-assisted search and read, by one lane in one session. It is not legal advice and not a freedom-to-operate opinion; a lawyer's review is a separate, later purchase.
 - Search coverage is **thin**: about one query per idea, on Google Patents through a general web-search tool, so ranking is the tool's, not a patent search engine's. No USPTO, Espacenet or WIPO queries were run. No classification-code (CPC) search, no assignee-driven search (Meta, Google, Microsoft, Cloudflare, Trust & Safety vendors), no citation chasing.
