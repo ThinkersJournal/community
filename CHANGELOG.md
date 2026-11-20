@@ -3,6 +3,14 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.154 — Paste-to-enrich in the post editor (M3.4c), M3.9 design note, ROADMAP R11 notes
+
+**M3.4c.** Pasting a bare http(s) link into the Markdown editor of a saved post fills the link-card box (`apps/web/src/scripts/reference-picker.ts`) and offers a card in the status line; the paste itself is never altered. If the author presses Add card, the URL's own line becomes the `{{ref:TOKEN}}` marker (`replaceUrlLineWithRef` in `apps/web/src/scripts/paste-enrich.ts`); if that line was edited meanwhile, the marker is inserted at the cursor as before. Prose, several links and non-http(s) schemes are ignored. Pinned by `apps/web/test/paste-enrich.test.ts`.
+
+**M3.9 design note.** Adds `docs/superpowers/specs/2026-11-19-m3-9-reference-change-notifications.md`, a design only (no code, no migration), ruled by pm-web on 2026-11-19: who is told, for which diff states, the `notifications` shape, the channel and a per-author cap.
+
+**ROADMAP R11.** Records that M3.4c is built, that M3.6 GitLab is not built (ruled A2 on 2026-11-19: gitlab.com's robots.txt disallows `/api/v*`, so GitLab URLs stay generic web unfurls), and that Dependabot's TypeScript 7 bump is deferred because `astro check` rejects it.
+
 ## 0.1.153 — Dependabot npm-weekly group (#318, #320) folded, TypeScript held at 6.0.3
 
 Folds the grouped npm-weekly bumps from the Dependabot PRs (@playwright/test 1.65.1, @types/node 26.6.6, @cloudflare/vitest-plugin 1.8.2, vitest 5.1.0, wrangler 4.162.0, @astrojs/cloudflare 14.4.8, astro 7.4.12, fast-xml-parser 5.12.1, shiki 4.6.0, unist-util-visit 5.2.0) into one change. TypeScript stays at 6.0.3 (an override in package.json pins it) because `astro check` in apps/web refuses TypeScript 7 (verified in the Dependabot run log: "astro check does not currently support TypeScript 7.0"). `@emnapi/runtime` is pinned to 1.11.1 because a fresh resolve picked 2.0.0-beta.2, which crashes `astro check` (`this.bridge.setLastError is not a function`). Verified locally: `pnpm -r typecheck` clean; packages/shared and packages/markdown tests pass; apps/api tests need the CI database.
