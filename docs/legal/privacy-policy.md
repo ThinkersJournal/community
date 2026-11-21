@@ -59,6 +59,24 @@ This policy explains what we collect, why, who processes it, and your choices.
   location and camera data embedded in your photos are removed before storage.
 - We do not knowingly collect data from children below the minimum age in §7.
 
+**Links you attach (references).** When you attach a link to a post, or paste one and
+accept a card, our servers fetch that page (and, for a GitHub link, read its
+public data through GitHub's API) so we can show a card. We identify ourselves as
+`ThinkersJournalBot` (see the [bot page](/bot)) and honour the site's `robots.txt`.
+We store, per link: the address, and a **snapshot** of what the page showed when
+fetched: its title, and where the page provides them a description, site name, a
+link to a preview image (we store the link, not a copy of the image), and for a
+repository item its state, author, an excerpt, the file path and line range, and the
+commit it was read at. We refresh a stored link in the background while it is being viewed, and tell the
+author of a published post when a linked page has changed or is no longer
+available; that notice never contains the page's text. We do not fetch links to
+private or internal addresses, and a page we cannot read is shown as "no longer
+available" rather than guessed at.
+
+The page we fetch belongs to someone else. We keep our snapshot only to show the
+card and to keep a record of what a post said when it was moderated or taken
+down; see "Retention" for how long.
+
 ## 2. Why we use it
 
 - To operate the Service — create your account, publish your content, run the feed,
@@ -129,6 +147,12 @@ signatures in it and keep only the case number, its dates and its outcome.
 
 - **Unverified accounts** are automatically deleted after 7 days if the
   email is never verified.
+- **Reference snapshots.** A stored link that no post uses any more is deleted once
+  a year has passed since it was last saved or updated. If a post is removed by our moderators, or deleted by its
+  author after we had hidden or removed it, we keep a copy of its cards' snapshots
+  with the private copy of the post (at least one year, and until we are advised it
+  may be deleted), for appeals and legal obligations. It is not shown to anyone on
+  the Service.
 - **Individual content you delete** (a post or comment) is removed from the live
   Service, and any images that become unreferenced as a result are
   garbage-collected from storage. **Exception:** if our moderators had hidden or

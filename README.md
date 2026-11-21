@@ -479,6 +479,13 @@ Check every box before the first production deploy.
       Postmark alerting item above. ⚠️ Purge is **rate-limited to 5 requests/MINUTE on a
       Free zone** (burst 25, 100 ops/request). We batch every tag into one call per edit,
       but a burst of edits can still exhaust it. Pro raises it to 5/sec.
+- [ ] **Alert on the reference egress log lines (M3.10).** Every outbound fetch the reference engine makes leaves one
+      JSON line `{"event":"ref_fetch","host","outcome","bytes","durationMs"}` in the api's logs
+      (`apps/api/src/references/guarded-fetch.ts`), and every refresh one `{"event":"ref_refresh","outcome","durationMs"}`
+      (`refresh.ts`). Never the URL, path, query or card text. Alert on **spikes** in `ref_fetch` outcomes other than `ok`
+      (`blocked_target`, `robots_denied`, `timeout`, `too_large`, `upstream`) and on a sudden rise in total volume or in
+      one `host`: that is an abuse or SSRF-probing signal, and nothing else will show it. ⚠️ **Thresholds and the alert
+      destination are TBD by the PM.**
 - [ ] **Verify a real purge on real infra — nothing local can.** Workers Cache is **not**
       simulated by miniflare: locally `cache.purge` is not even a function
       (`TypeError: cache.purge is not a function`), so `POST /internal/purge` 500s under

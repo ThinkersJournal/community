@@ -50,6 +50,7 @@ import { applyMediaVisibilityChange } from "../media/visibility-hook";
 import { hidePost, POST_NOT_UNDER_MODERATION_SQL, unhidePost } from "../moderation/author-hide";
 import { hiddenReasonCaseSql } from "../moderation/hidden-reason";
 import { purgeTagsFor } from "../moderation/purge-target";
+import { postCardSnapshotsSql } from "../references/card-snapshots";
 import { randomSuffix } from "../util/random";
 
 import type { RouteParams } from "../routing";
@@ -624,12 +625,7 @@ export async function handleDeletePost(
            -- sub-statement of one WITH sees the same snapshot of the data, so they are still here. NULL when none.
            INSERT INTO moderation_snapshots (post_id, author_id, title, body_markdown, card_snapshots)
            SELECT t.id, t.author_id, t.title, t.markdown_source,
-                  (SELECT jsonb_agg(jsonb_build_object(
-                            'token', pr.token, 'kind', r.kind, 'resource_key', r.resource_key,
-                            'content_hash', r.content_hash, 'position', pr.position, 'snapshot', r.snapshot)
-                          ORDER BY pr.position, pr.id)
-                     FROM post_references pr JOIN "references" r ON r.id = pr.reference_id
-                    WHERE pr.post_id = t.id)
+                  ${postCardSnapshotsSql("t.id")}
              FROM t
             WHERE (${POST_NOT_UNDER_MODERATION_SQL}) IS NOT TRUE
          )

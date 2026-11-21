@@ -93,6 +93,29 @@ describe("claimDueRefreshes", () => {
     expect(new Set([...a, ...b])).toEqual(new Set(ids));
   });
 
+  it("M3.10: four concurrent sweeps, repeated, never claim the same reference twice and between them claim each once", async () => {
+    const extra = [new Client({ connectionString: TEST_DATABASE_URL }), new Client({ connectionString: TEST_DATABASE_URL })];
+    await Promise.all(extra.map((c) => c.connect()));
+    try {
+      const ids: string[] = [];
+      for (let i = 0; i < 40; i++) ids.push(await seed({ next: minutes(-1000 + i) }));
+      const sweepers = [client, second, ...extra];
+      const all: string[] = [];
+      // Each round, every connection sweeps at once with a limit that cannot drain the set in one round.
+      for (let round = 0; round < 5; round++) {
+        const claims = await Promise.all(sweepers.map((c) => claimDueRefreshes(c, NOW, 6)));
+        const flat = claims.flat();
+        expect(new Set(flat).size, `round ${round}: a row was claimed by two sweeps`).toBe(flat.length);
+        all.push(...flat);
+      }
+      // 40 due rows, at most 4 x 6 = 24 per round: nothing is claimed twice over all rounds either (a lease holds it).
+      expect(new Set(all).size).toBe(all.length);
+      expect(new Set(all)).toEqual(new Set(ids));
+    } finally {
+      await Promise.all(extra.map((c) => c.end()));
+    }
+  });
+
   it("skips rows another transaction holds locked, without waiting for it (mutation: drop FOR UPDATE SKIP LOCKED)", async () => {
     // Deterministic overlap, not a race: a third connection locks 3 due rows and keeps its transaction open while a sweep runs.
     const ids: string[] = [];
