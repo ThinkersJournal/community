@@ -36,6 +36,11 @@
  * gated on `rowCount`, not just "the query didn't throw". A duplicate event
  * succeeds as a no-op (`rowCount` 0) and pushes nothing; only a genuinely NEW
  * row (`rowCount` 1) pushes.
+ *
+ * M3.9: `notifyReferenceChange` (below) is the sibling for the one actor-less
+ * event, a refreshed reference that went away or changed. Same discipline: never
+ * throws, no push unless a row was born. It SKIPS the block check (there is no
+ * actor to block) and enforces the per-author daily cap in the INSERT itself.
  */
 import { isBlockedEitherWay } from "../moderation/is-blocked";
 
@@ -52,7 +57,7 @@ interface NotifyClient {
 // include src/worker-configuration.d.ts, so the global `Env` type is not in
 // scope there. This minimal shape typechecks in BOTH projects, and the real
 // `Env` (whose NOTIFY is DurableObjectNamespace<NotifyDO>) is assignable to it.
-interface NotifyEnv {
+export interface NotifyEnv {
   NOTIFY: { getByName(id: string): { push(kind: "notification" | "read"): void } };
 }
 
@@ -107,13 +112,58 @@ export async function notify(
   }
   if (!rowCount) return; // ON CONFLICT no-op (duplicate event) — nothing new to push
 
+  pushNudge(env, ctx, ev.recipientId, ev.kind);
+}
+
+function pushNudge(env: NotifyEnv, ctx: NotifyCtx, recipientId: string, kind: NotificationKind): void {
   ctx.waitUntil(
     (async () => {
       try {
-        await env.NOTIFY.getByName(ev.recipientId).push("notification");
+        await env.NOTIFY.getByName(recipientId).push("notification");
       } catch (err) {
-        console.error("notify push failed", { kind: ev.kind, err });
+        console.error("notify push failed", { kind, err });
       }
     })(),
   );
+}
+
+/** The most reference notifications one author is sent per rolling day; the rest are dropped, not queued (M3.9 ruling 5). */
+export const REFERENCE_NOTIFICATIONS_PER_DAY = 20;
+
+export interface ReferenceChangeEvent {
+  recipientId: string;
+  postId: string;
+  referenceId: string;
+  /** `gone`, or `changed:<content_hash>`: the dedupe key, so one state notifies once ever. */
+  referenceEvent: string;
+}
+
+/**
+ * Write one `reference_changed` notification (M3.9). Actor-less; NO snapshot text is ever stored or pushed. The cap is a
+ * guard inside the INSERT (count of this recipient's reference rows in the last day), so a duplicate that hits ON CONFLICT
+ * is a no-op and does not eat budget, and an author already at the cap gets rowCount 0 and no push.
+ */
+export async function notifyReferenceChange(
+  client: NotifyClient,
+  env: NotifyEnv,
+  ctx: NotifyCtx,
+  ev: ReferenceChangeEvent,
+): Promise<void> {
+  let rowCount: number | null;
+  try {
+    ({ rowCount } = await client.query(
+      `INSERT INTO notifications (recipient_id, actor_id, kind, post_id, reference_id, reference_event)
+       SELECT $1::uuid, NULL, 'reference_changed', $2::uuid, $3::uuid, $4::text
+        WHERE (SELECT count(*) FROM notifications
+                WHERE recipient_id = $1::uuid AND kind = 'reference_changed'
+                  AND created_at > now() - interval '1 day') < $5::int
+       ON CONFLICT ON CONSTRAINT notifications_event_unique DO NOTHING`,
+      [ev.recipientId, ev.postId, ev.referenceId, ev.referenceEvent, REFERENCE_NOTIFICATIONS_PER_DAY],
+    ));
+  } catch (err) {
+    console.error("notify failed", { kind: "reference_changed", err });
+    return;
+  }
+  if (!rowCount) return;
+  pushNudge(env, ctx, ev.recipientId, "reference_changed");
 }

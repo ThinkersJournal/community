@@ -16,6 +16,8 @@ export function categoryForKind(kind: NotificationKind): NotificationCategory {
       return "direct";
     case "post_reaction":
     case "comment_reaction":
+    // M3.9: a reference refresh event rides the existing reactions channel (default digest), never an instant email.
+    case "reference_changed":
       return "reactions";
     case "follow":
       return "follows";

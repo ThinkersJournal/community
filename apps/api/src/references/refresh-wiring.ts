@@ -59,6 +59,6 @@ export async function handleRefreshQueue(batch: MessageBatch<unknown>, env: Env,
   const fetchCtx = productionFetchCtx();
   const budget = budgetFromEnv(env);
   await withClient(env.HYPERDRIVE_FRESH, ctx, (db) =>
-    consumeRefreshBatch(batch.messages, (id) => refreshReference(db, id, { registry: registryFromEnv(env), ctx: fetchCtx, budget, now: new Date() })),
+    consumeRefreshBatch(batch.messages, (id) => refreshReference(db, id, { registry: registryFromEnv(env), ctx: fetchCtx, budget, now: new Date(), notify: { env, ctx } })),
   );
 }

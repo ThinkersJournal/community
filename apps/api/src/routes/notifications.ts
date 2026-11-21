@@ -25,8 +25,9 @@ function json(body: unknown, status = 200): Response {
 interface DbRow {
   id: string;
   kind: NotificationItem["kind"];
-  username: string;
+  username: string | null; // NULL for a system event (reference_changed: no actor)
   displayName: string | null;
+  referenceEvent: string | null;
   postId: string | null;
   postTitle: string | null;
   postSlug: string | null;
@@ -51,12 +52,13 @@ export async function handleListNotifications(
       const { rows } = await c.query<DbRow>(
         `SELECT n.id, n.kind,
                 ap.username, ap.display_name AS "displayName",
+                n.reference_event AS "referenceEvent",
                 n.post_id AS "postId", p.title AS "postTitle", p.slug AS "postSlug",
                 pp.username AS "postAuthorUsername",
                 n.comment_id AS "commentId", n.reaction_kind AS "reactionKind",
                 n.created_at AS "createdAt", (n.read_at IS NOT NULL) AS read
            FROM notifications n
-           JOIN profiles ap ON ap.user_id = n.actor_id
+           LEFT JOIN profiles ap ON ap.user_id = n.actor_id
            LEFT JOIN posts p ON p.id = n.post_id
            LEFT JOIN profiles pp ON pp.user_id = p.author_id
           WHERE n.recipient_id = $1 AND n.id < $2
@@ -69,13 +71,15 @@ export async function handleListNotifications(
       const notifications: NotificationItem[] = slice.map((r) => ({
         id: r.id,
         kind: r.kind,
-        actor: { username: r.username, displayName: r.displayName },
+        actor: r.username === null ? null : { username: r.username, displayName: r.displayName },
         postId: r.postId,
         postTitle: r.postTitle,
         postSlug: r.postSlug,
         postAuthorUsername: r.postAuthorUsername,
         commentId: r.commentId,
         reactionKind: r.reactionKind,
+        // The stored `changed:<hash>` is reduced to its kind: the content hash never leaves the server.
+        ...(r.kind === "reference_changed" ? { referenceEvent: r.referenceEvent === "gone" ? ("gone" as const) : ("changed" as const) } : {}),
         createdAt: r.createdAt,
         read: r.read,
       }));

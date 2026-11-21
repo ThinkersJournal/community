@@ -13,7 +13,8 @@ One list, so they can be applied in one go. Add a row in the PR that adds a migr
 
 | Migration | PR | What it adds | Without it |
 |---|---|---|---|
-| (none) | | Applied through `0044_moderation_snapshot_cards.sql` on 2026-11-16 (PM, with CireSnave's Windows Hello approval for `TJ_PROD_DATABASE_URL`; read back through `/health/schema`: `0044` true, `0043` true, a nonexistent `0099` false). Before that: `0042` and `0043` on 2026-11-12 (`0041` was already in). Applied files must stay byte-identical. `apps/api/test/deploy-runbook.node.test.ts` fails when a migration newer than this marker has no row here, so the PR that adds a migration adds its row | |
+| `0045_reference_change_notifications.sql` | M3.9 PR (lane `lane/m3-9-notifications`) | Reference-change notifications: `notifications.kind` gains `reference_changed`, `actor_id` becomes nullable, new `reference_id` (FK to `"references"`, cascade) and `reference_event` columns, the unique key `notifications_event_unique` re-added to include them, two CHECKs and a partial index. Drop-and-add on a pre-launch table | The NEW code's refresh runner inserts `reference_changed` rows and the bell/email reads select `reference_event`, so both error until it exists. Nothing writes the rows while `REFERENCE_REFRESH` is "0", but the notifications list query names the column, so apply BEFORE the deploy |
+| (none besides the row above) | | Applied through `0044_moderation_snapshot_cards.sql` on 2026-11-16 (PM, with CireSnave's Windows Hello approval for `TJ_PROD_DATABASE_URL`; read back through `/health/schema`: `0044` true, `0043` true, a nonexistent `0099` false). Before that: `0042` and `0043` on 2026-11-12 (`0041` was already in). Applied files must stay byte-identical. `apps/api/test/deploy-runbook.node.test.ts` fails when a migration newer than this marker has no row here, so the PR that adds a migration adds its row | |
 
 ## How a deploy works now
 
