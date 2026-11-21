@@ -401,7 +401,7 @@ export function createGuardedFetch(opts: GuardedFetchOptions): FetchCtx["fetch"]
  * M3.10 egress observability: ONE structured line per fetch attempt, `ref_fetch`. ⚠️ HOST ONLY: never the URL, path,
  * query, userinfo, headers or any body text (a path can carry a secret, and a card's text is third-party content).
  */
-function logRefFetch(input: string, outcome: string, bytes: number, durationMs: number): void {
+function logRefFetch(input: string | URL,outcome: string, bytes: number, durationMs: number): void {
   let host = "invalid";
   try {
     host = hostOf(new URL(input));

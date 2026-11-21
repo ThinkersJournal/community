@@ -93,6 +93,15 @@ describe("ref_fetch log line", () => {
     expect(raw).not.toContain("/repos");
   });
 
+  it("a URL object as the target logs the host only, like a string", async () => {
+    const fetchLive = guard(async () => new Response("<html></html>", { status: 200, headers: HTML }));
+    await fetchLive(new URL(`https://example.com${SECRET}`));
+    const out = refFetchLines();
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ event: "ref_fetch", host: "example.com", outcome: "ok" });
+    expect(lines.join("\n")).not.toContain("s3cr3t");
+  });
+
   it("an unparsable target logs host invalid and does not echo the text", async () => {
     const fetchLive = guard(async () => new Response("never reached"));
     await expect(fetchLive("not a url s3cr3t")).rejects.toBeDefined();
