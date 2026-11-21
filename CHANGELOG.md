@@ -3,6 +3,12 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.155 — Reference-change notifications (M3.9, NEW MIGRATION 0045), dark behind REFERENCE_REFRESH
+
+**M3.9.** When a reference refresh finds a linked page gone or changed, the authors of the published, non-hidden posts that use it get a bell notification (`apps/api/src/references/refresh.ts`, written through the one seam `notifyReferenceChange` in `apps/api/src/notifications/create.ts`). `gone` and `changed` notify; `resolved` and `unknown` never do; a reference's first look (no stored `live_state`) never does. One notification per (author, post); a `changed` notice is keyed on the new content hash, so the same state notifies once ever and a genuinely new one notifies again. Drafts, hidden (moderated) and removed posts notify nobody. At most 20 reference notifications per author per rolling day; extras are dropped. The notification carries fixed text plus the author's own post title and never any snapshot text from the linked page. It rides the existing `reactions` email channel (default digest). Ships dark: nothing refreshes until `REFERENCE_REFRESH` is "1".
+
+**NEW MIGRATION `apps/api/migrations/0045_reference_change_notifications.sql`** (apply before deploy; row added to `docs/runbooks/deploy.md`): `notifications.actor_id` becomes nullable, `kind` gains `reference_changed`, new `reference_id` and `reference_event` columns, the unique key is re-added to include them, plus a shape CHECK. The table is pre-launch, so the drop-and-add is cheap. Pinned by `apps/api/test/references-notify.db.test.ts` and `apps/api/test/notifications-schema.db.test.ts`.
+
 ## 0.1.154 — Paste-to-enrich in the post editor (M3.4c), M3.9 design note, ROADMAP R11 notes
 
 **M3.4c.** Pasting a bare http(s) link into the Markdown editor of a saved post fills the link-card box (`apps/web/src/scripts/reference-picker.ts`) and offers a card in the status line; the paste itself is never altered. If the author presses Add card, the URL's own line becomes the `{{ref:TOKEN}}` marker (`replaceUrlLineWithRef` in `apps/web/src/scripts/paste-enrich.ts`); if that line was edited meanwhile, the marker is inserted at the cursor as before. Prose, several links and non-http(s) schemes are ignored. Pinned by `apps/web/test/paste-enrich.test.ts`.

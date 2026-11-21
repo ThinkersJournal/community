@@ -206,7 +206,7 @@ describe("GET /notifications", () => {
     // Enrichment fields present (actor handle joined in).
     for (const n of page1.notifications) {
       expect(n.kind).toBe("follow");
-      expect(n.actor.username.startsWith("b")).toBe(true);
+      expect(n.actor?.username.startsWith("b")).toBe(true);
       expect(n.read).toBe(false);
     }
 
