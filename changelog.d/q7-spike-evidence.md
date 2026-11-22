@@ -1,3 +1,0 @@
-kind: docs: record the Q7 workerd spike evidence in ROADMAP S21
----
-Records, in `docs/ROADMAP.md` row S21, what the 2026-10-10 local `wrangler dev` spike of the pdq `.wasm` showed: a 512x512 `si_pdq_dihedral` loop returned 200 with rising latency (up to 10268ms) and then the workerd runtime crashed twice. The cause is undiagnosed, so the CPU and memory fit stays UNPROVEN and Q7 must be re-run on the published crate. Also adds `docs/ROADMAP.md` row R13 (legal text 468: wording on main, serving waits on the #114 passages and `REFERENCE_REFRESH=1`) and replaces two "attorney" phrasings in rows R9 and S7, since there is no attorney. Documentation only; no code or behaviour change.
