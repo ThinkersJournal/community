@@ -101,7 +101,8 @@ reliable.
 To the fullest extent permitted by law, [[LEGAL_ENTITY]] and its operators will not
 be liable for indirect, incidental, special, consequential, or punitive damages, or
 for lost profits or data, arising from your use of the Service. Our total liability
-for any claim is limited to [[LIABILITY_CAP]]. Some jurisdictions do not allow these
+for any claim is limited to the greater of the amount you paid us for the Service in
+the 12 months before the claim arose or US$100. Some jurisdictions do not allow these
 limits, so they may not fully apply to you.
 
 ## 10. Indemnity
@@ -111,10 +112,10 @@ Content or your violation of these Terms or the law, to the extent permitted by 
 
 ## 11. Governing law and disputes
 
-These Terms are governed by the laws of [[JURISDICTION]], without regard to conflict
-of laws. Any dispute about these Terms or the Service will be decided by the courts
-of [[JURISDICTION]]. These Terms contain no arbitration agreement and no class-action
-waiver: you keep any right you have to bring a claim in court and to take part in a
+These Terms are governed by the laws of the State of Arizona, United States, without
+regard to conflict of laws. Any dispute about these Terms or the Service will be
+decided by the courts of Yavapai County, Arizona. These Terms contain no arbitration
+agreement and no class-action waiver: you keep any right you have to bring a claim in court and to take part in a
 class or collective action. If the law where you live gives you the right to bring a
 claim in your own local courts, these Terms do not take that right away.
 
