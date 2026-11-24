@@ -1,6 +1,6 @@
 {
   "name": "@thinkersjournal/shared",
-  "version": "0.1.158",
+  "version": "0.1.159",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -17,6 +17,6 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   }
 }

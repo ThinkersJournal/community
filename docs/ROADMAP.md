@@ -1,6 +1,6 @@
 # Thinker's Journal Community — roadmap
 
-**As of:** `origin/main` bdc4d9f6 (package version 0.1.144), 2026-11-16. §1's migration line, the R11 row and the launch-gate bullet were re-checked on that date against the forge and production (commands in the row); the other rows in §3 and §7 reflect everything merged through #275 (0.1.116) and §2 predates it, so treat those as older than this header. This is the project's own view of order and
+**As of:** package version 0.1.158 (read from `package.json` at `origin/main` 26e247d0, 2026-11-24; the version is the only part of this header re-read then). The rest was checked 2026-11-16 at `origin/main` bdc4d9f6 (0.1.144). §1's migration line, the R11 row and the launch-gate bullet were re-checked on that date against the forge and production (commands in the row); the other rows in §3 and §7 reflect everything merged through #275 (0.1.116) and §2 predates it, so treat those as older than this header. This is the project's own view of order and
 state. The portfolio roadmap sits above it and wins on priority; CireSnave's decisions win on everything. It is a
 plan, not a promise: items are in the order the lane intends to take them, and anything marked **held** waits on a
 person, not on code.

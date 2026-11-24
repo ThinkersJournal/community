@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.159 — chore(deps): five npm-weekly bumps; TypeScript stays at 6.0.3
+
+Takes five of the six updates from Dependabot's npm-weekly group: `@cloudflare/vitest-plugin` 1.8.5, `vitest` 5.1.1, `wrangler` 4.165.0, `@astrojs/cloudflare` 14.4.9 and `astro` 7.4.13, as manifest and `pnpm-lock.yaml` changes. The sixth, `typescript` 7.0.2, is not taken: `astro check` in `apps/web` exits with "astro check does not currently support TypeScript 7.0" (job `test / build / typecheck`), so `typescript` stays at 6.0.3 until `@astrojs/check` supports 7 (see `docs/ROADMAP.md` row R11). `docs/ROADMAP.md` header corrected from 0.1.144 to the 0.1.158 read from `package.json`.
+
 ## 0.1.158 — docs(legal): fill JURISDICTION and LIABILITY_CAP in the Terms
 
 Fills the JURISDICTION and LIABILITY_CAP placeholders in docs/legal/terms-of-service.md (cherry-pick of fb3b2341 from pm/492-terms, board 492). The Terms still serve nothing: serving needs the NOT YET TRUE passage removed from docs/legal/privacy-policy.md and REFERENCE_REFRESH=1. Verified by reading the diff.
