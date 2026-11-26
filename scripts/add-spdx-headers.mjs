@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// Adds `SPDX-License-Identifier: MIT OR Apache-2.0` to the top of every tracked source file that lacks one in its
+// Adds the SPDX licence header (the expression is EXPRESSION below) to the top of every tracked source file that lacks one in its
 // first 15 lines (the window the CodeRipper `licence` rule reads; LICENSE.md section 1 names the expression).
 //
 //   node scripts/add-spdx-headers.mjs           add the missing headers

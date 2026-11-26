@@ -3,6 +3,12 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.161 — pin transitive fast-uri to 3.1.9
+
+Adds a pnpm override `fast-uri: ^3.1.9` in `package.json` so the transitive copy pulled by ajv@8 moves from 3.1.8 to the fixed 3.1.9 (stays on the 3.x line; unconstrained resolution jumped to 4.2.4). `pnpm-lock.yaml` regenerated with `pnpm install --lockfile-only`; no runtime code change.
+
+`scripts/add-spdx-headers.mjs`: reworded line 3 so the first 15 lines hold one SPDX identifier (line 1, MIT OR Apache-2.0); the prose mention was parsed by the licence rule as a foreign licence. Comment-only.
+
 ## 0.1.160 — CodeRipper pin moved to 0.48.1
 
 The portfolio workflow pin in `.github/workflows/ci.yml` moves from coderipper c72a6e0 (0.47.5) to 467fd25 (0.48.1, coderipper PR 375). Verified by reading the `portfolio` job's own checks by name on this PR.
