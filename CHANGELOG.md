@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.163 — deps: wrangler 4.167.0 and @cloudflare/vitest-plugin 1.9.1, TypeScript held at 6.0.3
+
+Took the wrangler (4.165.0 to 4.167.0, `apps/api/package.json` and `apps/web/package.json`) and `@cloudflare/vitest-plugin` (1.8.5 to 1.9.1, `apps/api/package.json`) bumps from the npm-weekly group. TypeScript 7.0.2 is not taken: `astro check` in `apps/web` exits "does not currently support TypeScript 7.0" (job 140232930491 on #334), the documented hold in `docs/ROADMAP.md` section 4. `pnpm-lock.yaml` regenerated with no `typescript@7` entry.
+
 ## 0.1.162 — docs: ROADMAP R13 and header version brought current
 
 Corrected `docs/ROADMAP.md` row R13: JURISDICTION and LIABILITY_CAP were filled in #329, so only LEGAL_ENTITY, EFFECTIVE_DATE and CONTACT_ADDRESS remain as Terms placeholders (checked at origin/main c427d1ea; the same grep finds those three and finds no JURISDICTION). Header package version set to 0.1.161.
