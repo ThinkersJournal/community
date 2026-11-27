@@ -1,6 +1,6 @@
 {
   "name": "@thinkersjournal/web",
-  "version": "0.1.162",
+  "version": "0.1.163",
   "private": true,
   "license": "MIT OR Apache-2.0",
   "type": "module",
@@ -25,6 +25,6 @@
     "fast-xml-parser": "5.12.1",
     "jsonc-parser": "3.3.1",
     "vitest": "5.1.1",
-    "wrangler": "4.165.0"
+    "wrangler": "4.167.0"
   }
 }
