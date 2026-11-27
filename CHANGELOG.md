@@ -3,6 +3,10 @@
 All five workspace packages carry one version number. The log starts at 0.1.68; earlier history is in `git log`
 (subjects name the PR). Pre-1.0, a breaking change moves the second number.
 
+## 0.1.162 — docs: ROADMAP R13 and header version brought current
+
+Corrected `docs/ROADMAP.md` row R13: JURISDICTION and LIABILITY_CAP were filled in #329, so only LEGAL_ENTITY, EFFECTIVE_DATE and CONTACT_ADDRESS remain as Terms placeholders (checked at origin/main c427d1ea; the same grep finds those three and finds no JURISDICTION). Header package version set to 0.1.161.
+
 ## 0.1.161 — pin transitive fast-uri to 3.1.9
 
 Adds a pnpm override `fast-uri: ^3.1.9` in `package.json` so the transitive copy pulled by ajv@8 moves from 3.1.8 to the fixed 3.1.9 (stays on the 3.x line; unconstrained resolution jumped to 4.2.4). `pnpm-lock.yaml` regenerated with `pnpm install --lockfile-only`; no runtime code change.
